@@ -1,0 +1,136 @@
+# 阿沐 - 赛博QQ群友配置文件
+
+# 基础配置
+app:
+  debug: true
+  log_level: "debug"  # debug, info, warn, error
+
+# 阿沐人格配置
+persona:
+  name: "沐沐"
+  alias_names:        # 别名列表，这些都可以触发@检测
+    - "mumu"
+    - "阿沐"
+    - "牢沐"
+  # 兴趣话题（更容易触发发言）
+  interests:
+    - "编程"
+    - "二次元"
+    - "单机游戏"
+    - "少女乐队番"
+    - "异世界番"
+    - "Minecraft"
+    - "音游"
+  # 语言风格提示
+  speaking_style: |
+    习惯发12个字以内的短句，很少发15个字以上的句子
+    幽默且犀利，但不要太浮夸
+    说话风格口语化，不用书面语
+    不使用markdown格式
+    不解释自己是AI
+    不使用"作为一个..."这类开头
+    很少使用语气词
+    标点符号一般只用逗号，偶尔也会用空格代替逗号
+    喜欢在句子后面加左圆括号，即（，但是也不会每次都加
+    偶尔会玩些互联网流行梗
+    偶尔会骂点脏话（如啥比、傻福、你妈）或是用些口头语（如666、牛逼、nb）
+    不会每句话都回复
+    不会没话找话，不要无厘头，发言内容与群内话题强相关
+  # 详细人格描述（可选，用于更丰富的人设）
+  personality: "是一个大二在读男大学生，现在正在上网和群友聊天"
+
+# OneBot配置（NapCat）
+onebot:
+  ws_url: "ws://127.0.0.1:3001"
+  access_token: ""
+  reconnect_interval: 5  # 秒
+
+# 监听的群
+groups:
+  - group_id: 123456789
+    enabled: true
+    extra_prompt: ""        # 群专属额外提示词（可选）
+
+# Agent决策配置
+agent:
+  observe_window: 30        # 观察窗口时间（秒）
+  think_interval: 5        # 决策间隔（秒）
+  message_buffer_size: 100   # 消息缓冲区大小
+  speak_cooldown: 0         # 发言冷却时间（秒）
+  max_step: 12              # ReAct 最大步数
+
+# 聊天行为配置
+chat:
+  talk_frequency: 0.7       # 聊天频率，0-1，越大越活跃
+  typing_simulation: true   # 是否模拟打字延迟
+  typing_speed: 10          # 每秒打字速度（字符）
+  enable_time_rules: false  # 是否启用时段规则
+  time_rules:               # 时段发言频率规则
+    - time_range: "03:00-10:00"
+      group_id: 0           # 0表示全局
+      talk_value: 0.2       # 夜间降低发言频率
+
+# LLM配置（统一使用 OpenAI 兼容格式）
+llm:
+  api_key: ""        # 留空则使用 AMU_LLM_API_KEY 环境变量
+  base_url: ""
+  model: ""
+
+# Embedding模型配置（用于记忆检索）
+embedding:
+  enabled: true
+  api_key: ""        # 留空则使用 AMU_EMBEDDING_API_KEY 或 AMU_LLM_API_KEY 环境变量
+  base_url: ""
+  model: ""
+
+# 多模态视觉模型配置（用于理解图片和表情包）
+vision_llm:
+  enabled: true     # 是否启用图片理解
+  api_key: ""        # 留空则使用 AMU_VISION_API_KEY 环境变量 或 AMU_LLM_API_KEY 环境变量
+  base_url: ""
+  model: ""    # 支持视觉的模型
+
+# 记忆系统配置
+memory:
+  # MySQL 数据库配置
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    user: "root"
+    password: ""            # 留空则使用 AMU_MYSQL_PASSWORD 环境变量
+    db_name: "amu_bot"
+
+  # Milvus 向量数据库配置
+  milvus:
+    enabled: true           # 是否启用 Milvus 向量存储
+    address: "localhost:19530"
+    db_name: "default"
+    collection_name: "amu_memories"
+    vector_dim: 1024        # embedding 维度
+    metric_type: "COSINE"   # 相似度度量类型: IP, L2, COSINE
+
+  # 短期记忆
+  short_term:
+    max_messages: 100       # 最大缓存消息数
+
+  # 长期记忆
+  long_term:
+    top_k: 10               # 检索返回数量
+    similarity_threshold: 0.7
+    importance_threshold: 0.5  # 记忆重要性阈值（低于此值不存入长期记忆）
+
+# HTTP服务配置（用于健康检查等）
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# 调试配置
+debug:
+  show_prompt: true        # 显示系统提示词
+  show_thinking: true      # 显示思考过程
+  show_memory: true        # 显示记忆检索
+  show_tool_calls: true    # 显示工具调用
+
+web:
+  enabled: true
+  bing_api_key: ""  # 留空则使用 AMU_BING_API_KEY 环境变量

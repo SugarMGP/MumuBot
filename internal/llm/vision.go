@@ -1,0 +1,95 @@
+package llm
+
+import (
+	"amu-bot/internal/config"
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/schema"
+)
+
+// VisionClient 多模态视觉模型客户端
+type VisionClient struct {
+	cfg        *config.VisionLLMConfig
+	model      *openai.ChatModel
+	httpClient *http.Client
+}
+
+// NewVisionClient 创建视觉模型客户端
+func NewVisionClient(cfg *config.VisionLLMConfig) (*VisionClient, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	model, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Model:   cfg.Model,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("创建VisionModel失败: %w", err)
+	}
+
+	return &VisionClient{
+		cfg:   cfg,
+		model: model,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}, nil
+}
+
+// DescribeImage 描述图片内容
+func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (string, error) {
+	if v == nil || v.model == nil {
+		return "[图片]", nil
+	}
+
+	// 构建多模态消息（使用新 API）
+	msg := &schema.Message{
+		Role: schema.User,
+		UserInputMultiContent: []schema.MessageInputPart{
+			{
+				Type: schema.ChatMessagePartTypeImageURL,
+				Image: &schema.MessageInputImage{
+					MessagePartCommon: schema.MessagePartCommon{
+						URL: &imageURL,
+					},
+					Detail: schema.ImageURLDetailAuto,
+				},
+			},
+			{
+				Type: schema.ChatMessagePartTypeText,
+				Text: "请用简短的中文描述这张图片的内容，不超过50字。如果是表情包请描述表情、情绪和文字。若画面中有明确角色（例如卡通/动漫/游戏/电影人物），请补充说明角色类型或出处（若能判断）、当前情绪状态、整体风格或用途（如吐槽、害怕、搞笑）",
+			},
+		},
+	}
+
+	resp, err := v.model.Generate(ctx, []*schema.Message{msg})
+	if err != nil {
+		return "[图片:识别失败]", nil
+	}
+
+	desc := strings.TrimSpace(resp.Content)
+	if desc == "" {
+		return "[图片]", nil
+	}
+	return fmt.Sprintf("[图片:%s]", desc), nil
+}
+
+// DescribeFace 描述QQ表情
+// 优先使用名称，如果没有则显示ID
+func DescribeFace(id int, name string) string {
+	if name != "" {
+		return fmt.Sprintf("[表情:%s]", name)
+	}
+	if id > 0 {
+		return fmt.Sprintf("[表情:%d]", id)
+	}
+	return "[表情]"
+}

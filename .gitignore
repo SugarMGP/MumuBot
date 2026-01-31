@@ -1,0 +1,49 @@
+# 二进制文件
+amu
+amu.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试
+*.test
+
+# 输出
+*.out
+
+# 依赖
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 配置（敏感信息）
+config/config.local.yaml
+config/*.local.yaml
+
+# 数据目录
+data/
+*.db
+*.db-journal
+
+# 日志
+*.log
+logs/
+
+# 环境变量
+.env
+.env.local
+
+config.yaml
+napcat_onebot_11_http_api.json
+prompt.txt
