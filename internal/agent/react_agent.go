@@ -406,6 +406,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	if isMention {
 		thinkPrompt += "\n\n注意：有人@你了，可能在找你说话，你可以看情况回复。"
 	}
+	thinkPrompt += "\n\n请注意：speak 和 stayQuiet 应该在最后调用。调用完成后必须立刻停止本轮思考，不要再调用任何工具。"
 
 	// 记录当前缓冲区中的最后一条消息时间，作为新的“已读”位置
 	bufMsgs := a.getBuffer(groupID)
