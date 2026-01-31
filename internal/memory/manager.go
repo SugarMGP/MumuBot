@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -25,10 +24,6 @@ type Manager struct {
 	cfg       *config.Config
 	embedding EmbeddingProvider
 	milvus    *vector.MilvusClient // Milvus 向量存储
-
-	// 短期记忆（群ID -> 消息列表）
-	shortTerm   map[int64][]MessageLog
-	shortTermMu sync.RWMutex
 }
 
 // NewManager 创建记忆管理器
@@ -61,11 +56,9 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 	// 迁移所有表
 	if err := db.AutoMigrate(
 		&Memory{},
-		&TopicSummary{},
 		&MemberProfile{},
 		&Expression{},
 		&Jargon{},
-		&GroupInfo{},
 		&MessageLog{},
 	); err != nil {
 		return nil, fmt.Errorf("数据库迁移失败: %w", err)
@@ -95,7 +88,6 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 		cfg:       cfg,
 		embedding: embedding,
 		milvus:    milvusClient,
-		shortTerm: make(map[int64][]MessageLog),
 	}
 
 	go m.cleanupLoop()
@@ -106,42 +98,23 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 
 // AddMessage 添加消息到短期记忆
 func (m *Manager) AddMessage(msg MessageLog) error {
-	m.shortTermMu.Lock()
-	msgs := m.shortTerm[msg.GroupID]
-	msgs = append(msgs, msg)
-	maxSize := m.cfg.Memory.ShortTerm.MaxMessages
-	if len(msgs) > maxSize {
-		msgs = msgs[len(msgs)-maxSize:]
-	}
-	m.shortTerm[msg.GroupID] = msgs
-	m.shortTermMu.Unlock()
-
 	return m.db.Create(&msg).Error
 }
 
-// GetRecentMessages 获取最近消息
-func (m *Manager) GetRecentMessages(groupID int64, limit int) []MessageLog {
-	m.shortTermMu.RLock()
-	msgs := m.shortTerm[groupID]
-	m.shortTermMu.RUnlock()
-
-	if len(msgs) == 0 {
-		var dbMsgs []MessageLog
-		m.db.Where("group_id = ?", groupID).Order("created_at DESC").Limit(limit).Find(&dbMsgs)
-		// 反转
-		for i, j := 0, len(dbMsgs)-1; i < j; i, j = i+1, j-1 {
-			dbMsgs[i], dbMsgs[j] = dbMsgs[j], dbMsgs[i]
-		}
-		return dbMsgs
+// GetRecentMessages 获取最近的消息记录
+func (m *Manager) GetRecentMessages(groupID int64, limit, offset int) []MessageLog {
+	var dbMsgs []MessageLog
+	q := m.db.Where("group_id = ?", groupID).Order("created_at DESC").Limit(limit)
+	if offset > 0 {
+		q = q.Offset(offset)
 	}
+	q.Find(&dbMsgs)
 
-	start := 0
-	if len(msgs) > limit {
-		start = len(msgs) - limit
+	// 反转，按时间正序排列
+	for i, j := 0, len(dbMsgs)-1; i < j; i, j = i+1, j-1 {
+		dbMsgs[i], dbMsgs[j] = dbMsgs[j], dbMsgs[i]
 	}
-	result := make([]MessageLog, len(msgs[start:]))
-	copy(result, msgs[start:])
-	return result
+	return dbMsgs
 }
 
 // ==================== 长期记忆 ====================
@@ -159,7 +132,7 @@ func (m *Manager) SaveMemory(ctx context.Context, mem *Memory) error {
 	mem.LastAccess = time.Now()
 
 	// 保存到 MySQL
-	if err := m.db.Create(mem).Error; err != nil {
+	if err := m.db.Save(mem).Error; err != nil {
 		return err
 	}
 
@@ -191,8 +164,8 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 	if memType != "" {
 		q = q.Where("type = ?", memType)
 	}
-	err := q.Where("content LIKE ? OR summary LIKE ? OR keywords LIKE ?",
-		"%"+query+"%", "%"+query+"%", "%"+query+"%").
+	err := q.Where("content LIKE ? OR keywords LIKE ?",
+		"%"+query+"%", "%"+query+"%").
 		Order("importance DESC, updated_at DESC").
 		Limit(limit).
 		Find(&memories).Error
@@ -258,16 +231,6 @@ func (m *Manager) GetMemoriesByType(groupID int64, memType MemoryType, limit int
 	return memories, err
 }
 
-// ==================== 话题概括 ====================
-
-// GetRecentTopics 获取近期话题概括
-func (m *Manager) GetRecentTopics(groupID int64, limit int) ([]TopicSummary, error) {
-	var topics []TopicSummary
-	err := m.db.Where("group_id = ?", groupID).
-		Order("end_time DESC").Limit(limit).Find(&topics).Error
-	return topics, err
-}
-
 // ==================== 表达学习 ====================
 
 // GetExpressions 获取表达方式（已验证的优先）
@@ -276,6 +239,11 @@ func (m *Manager) GetExpressions(groupID int64, limit int) ([]Expression, error)
 	err := m.db.Where("group_id = ? AND rejected = ?", groupID, false).
 		Order("count DESC, updated_at DESC").Limit(limit).Find(&expressions).Error
 	return expressions, err
+}
+
+// SaveExpression 保存表达方式
+func (m *Manager) SaveExpression(exp *Expression) error {
+	return m.db.Save(exp).Error
 }
 
 // ==================== 黑话管理 ====================

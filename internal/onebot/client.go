@@ -784,27 +784,6 @@ func (c *Client) callAPI(ctx context.Context, action string, params map[string]i
 	}
 }
 
-// callAPIAsync 异步调用 API（不等待响应）
-func (c *Client) callAPIAsync(action string, params map[string]interface{}) error {
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
-
-	if c.conn == nil {
-		return fmt.Errorf("未连接到OneBot服务")
-	}
-
-	req := map[string]interface{}{
-		"action": action,
-		"params": params,
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-
-	return c.conn.WriteMessage(websocket.TextMessage, data)
-}
-
 // handleDisconnect 处理断开连接
 func (c *Client) handleDisconnect() {
 	if c.reconnecting {

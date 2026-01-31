@@ -6,8 +6,11 @@ import (
 	"amu-bot/internal/onebot"
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
+	"github.com/cloudwego/eino-ext/components/tool/bingsearch"
+	getreq "github.com/cloudwego/eino-ext/components/tool/httprequest/get"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"go.uber.org/zap"
@@ -107,7 +110,6 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 		GroupID:    tc.GroupID,
 		UserID:     input.RelatedUserID,
 		Content:    input.Content,
-		Summary:    input.Content,
 		Importance: importance,
 	}
 
@@ -821,4 +823,174 @@ func NewRecallMessageTool() (tool.InvokableTool, error) {
 		"撤回你自己发的消息。当你发错消息、说错话、或者想收回刚才的发言时使用。只能撤回自己的消息且时间有限制。",
 		recallMessageFunc,
 	)
+}
+
+// ==================== 保存表达方式工具 ====================
+
+type SaveExpressionInput struct {
+	Situation string `json:"situation" jsonschema:"description=使用场景，例如：打招呼、吐槽、表达惊讶等"`
+	Style     string `json:"style" jsonschema:"description=表达风格或具体的口头禅"`
+	Example   string `json:"example,omitempty" jsonschema:"description=具体的例子"`
+}
+
+type SaveExpressionOutput struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func saveExpressionFunc(ctx context.Context, input *SaveExpressionInput) (*SaveExpressionOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &SaveExpressionOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	exp := &memory.Expression{
+		GroupID:   tc.GroupID,
+		Situation: input.Situation,
+		Style:     input.Style,
+		Examples:  input.Example,
+		LastUsed:  time.Now(),
+	}
+
+	if err := tc.MemoryMgr.SaveExpression(exp); err != nil {
+		output := &SaveExpressionOutput{Success: false, Message: err.Error()}
+		logToolCall("saveExpression", input, output, err)
+		return output, nil
+	}
+
+	output := &SaveExpressionOutput{Success: true, Message: "已记住这种表达方式"}
+	logToolCall("saveExpression", input, output, nil)
+	return output, nil
+}
+
+func NewSaveExpressionTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"saveExpression",
+		"保存你学到的群友表达方式或口头禅。当你发现群友在特定场景下有独特的说话习惯时，可以记录下来以便模仿。",
+		saveExpressionFunc,
+	)
+}
+
+// ==================== 获取表达方式工具 ====================
+
+type GetExpressionsInput struct {
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
+}
+
+type GetExpressionsOutput struct {
+	Success     bool     `json:"success"`
+	Expressions []string `json:"expressions,omitempty"`
+	Message     string   `json:"message,omitempty"`
+}
+
+func getExpressionsFunc(ctx context.Context, input *GetExpressionsInput) (*GetExpressionsOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetExpressionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+
+	exps, err := tc.MemoryMgr.GetExpressions(tc.GroupID, limit)
+	if err != nil {
+		output := &GetExpressionsOutput{Success: false, Message: err.Error()}
+		logToolCall("getExpressions", input, output, err)
+		return output, nil
+	}
+
+	results := make([]string, 0, len(exps))
+	for _, e := range exps {
+		results = append(results, fmt.Sprintf("[%s]: %s (示例: %s)", e.Situation, e.Style, e.Examples))
+	}
+
+	output := &GetExpressionsOutput{
+		Success:     true,
+		Expressions: results,
+	}
+	logToolCall("getExpressions", input, output, nil)
+	return output, nil
+}
+
+func NewGetExpressionsTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getExpressions",
+		"查看你学到的群友表达方式和口头禅。在你想模仿群友说话或者不知道该怎么表达时使用。",
+		getExpressionsFunc,
+	)
+}
+
+// ==================== 获取短期记忆工具 ====================
+
+type GetRecentMessagesInput struct {
+	Limit  int `json:"limit,omitempty" jsonschema:"description=返回消息条数，默认10"`
+	Offset int `json:"offset,omitempty" jsonschema:"description=偏移量，用于访问更早的记录。例如 offset=10 表示跳过最近的10条消息"`
+}
+
+type GetRecentMessagesOutput struct {
+	Success  bool                     `json:"success"`
+	Messages []map[string]interface{} `json:"messages,omitempty"`
+	Message  string                   `json:"message,omitempty"`
+}
+
+func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (*GetRecentMessagesOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetRecentMessagesOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	msgs := tc.MemoryMgr.GetRecentMessages(tc.GroupID, limit, input.Offset)
+	results := make([]map[string]interface{}, 0, len(msgs))
+	for _, m := range msgs {
+		results = append(results, map[string]interface{}{
+			"user_id":    m.UserID,
+			"nickname":   m.Nickname,
+			"content":    m.Content,
+			"time":       m.CreatedAt.Format("15:04:05"),
+			"is_mention": m.MentionAmu,
+		})
+	}
+
+	output := &GetRecentMessagesOutput{
+		Success:  true,
+		Messages: results,
+	}
+	logToolCall("getRecentMessages", input, output, nil)
+	return output, nil
+}
+
+func NewGetRecentMessagesTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getRecentMessages",
+		"获取最近的聊天记录（短期记忆）。当你需要了解更早之前的对话背景时使用。",
+		getRecentMessagesFunc,
+	)
+}
+
+// ==================== Bing Search 工具 ====================
+
+func NewBingSearchTool(apiKey string) (tool.BaseTool, error) {
+	return bingsearch.NewTool(context.Background(), &bingsearch.Config{
+		ToolName:   "bing_search",
+		ToolDesc:   "在必应上搜索相关信息。当你需要查找最新的事实性信息、新闻、数据等时使用。",
+		APIKey:     apiKey,
+		Region:     bingsearch.RegionCN,
+		SafeSearch: bingsearch.SafeSearchOff,
+	})
+}
+
+// ==================== Http Request 工具 ====================
+
+func NewHttpRequestTool() (tool.BaseTool, error) {
+	return getreq.NewTool(context.Background(), &getreq.Config{
+		ToolName: "request_get",
+		ToolDesc: "获取网页内容。当你需要查看某个网页的具体内容时使用，输入应为完整的URL（如：https://www.baidu.com ）。",
+	})
 }

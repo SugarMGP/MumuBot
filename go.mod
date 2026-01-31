@@ -158,5 +158,7 @@ require (
 require (
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260129100151-33cdd47ff03a
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.8
+	github.com/cloudwego/eino-ext/components/tool/bingsearch v0.0.0-20260129100151-33cdd47ff03a
+	github.com/cloudwego/eino-ext/components/tool/httprequest v0.0.0-20260129100151-33cdd47ff03a
 	go.uber.org/zap v1.27.1
 )

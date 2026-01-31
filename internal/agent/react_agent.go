@@ -41,6 +41,13 @@ type Agent struct {
 	lastSpeak   map[int64]time.Time
 	lastSpeakMu sync.RWMutex
 
+	// 正在处理中的群组（防止重复思考）
+	processing   map[int64]bool
+	processingMu sync.Mutex
+
+	// 最后处理消息的时间（用于区分新旧消息）
+	lastProcessedTime map[int64]time.Time
+
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
@@ -55,15 +62,17 @@ func New(
 	bot *onebot.Client,
 ) (*Agent, error) {
 	a := &Agent{
-		cfg:       cfg,
-		persona:   p,
-		memory:    mem,
-		model:     m,
-		vision:    vision,
-		bot:       bot,
-		buffers:   make(map[int64][]*onebot.GroupMessage),
-		lastSpeak: make(map[int64]time.Time),
-		stopCh:    make(chan struct{}),
+		cfg:               cfg,
+		persona:           p,
+		memory:            mem,
+		model:             m,
+		vision:            vision,
+		bot:               bot,
+		buffers:           make(map[int64][]*onebot.GroupMessage),
+		lastSpeak:         make(map[int64]time.Time),
+		processing:        make(map[int64]bool),
+		lastProcessedTime: make(map[int64]time.Time),
+		stopCh:            make(chan struct{}),
 	}
 
 	if err := a.initTools(); err != nil {
@@ -83,6 +92,9 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSaveJargonTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateMemberProfileTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMemberInfoTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetExpressionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewSaveExpressionTool() },
 		// 发言相关
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -94,6 +106,14 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewPokeTool() },
 		func() (tool.BaseTool, error) { return tools.NewReactToMessageTool() },
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
+	}
+
+	// Web 增强工具（根据配置启用）
+	if a.cfg.Web.Enabled {
+		toolBuilders = append(toolBuilders,
+			func() (tool.BaseTool, error) { return tools.NewBingSearchTool(a.cfg.Web.BingApiKey) },
+			func() (tool.BaseTool, error) { return tools.NewHttpRequestTool() },
+		)
 	}
 
 	for _, build := range toolBuilders {
@@ -139,12 +159,16 @@ func (a *Agent) Stop() {
 }
 
 func (a *Agent) onMessage(msg *onebot.GroupMessage) {
-	if !a.cfg.IsGroupEnabled(msg.GroupID) || msg.UserID == a.bot.GetSelfID() {
+	if !a.cfg.IsGroupEnabled(msg.GroupID) {
 		return
 	}
 
+	// 自身发送的消息也进入缓冲区和记录，但不触发思考
+	isSelf := msg.UserID == a.bot.GetSelfID()
+
 	// 检测是否通过名字或别名提及了阿沐
 	mentionByName := a.persona.IsMentioned(msg.Content)
+	isMention := msg.MentionAmu || mentionByName
 
 	a.addBuffer(msg)
 	a.memory.AddMessage(memory.MessageLog{
@@ -154,11 +178,20 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		Nickname:   msg.Nickname,
 		Content:    msg.Content,
 		MsgType:    msg.MessageType,
-		MentionAmu: msg.MentionAmu || mentionByName,
+		MentionAmu: isMention,
 		CreatedAt:  msg.Time,
 	})
 
+	if isSelf {
+		return
+	}
+
 	go a.updateMember(msg)
+
+	// 如果被 @ 了，立即触发一次思考（跳过等待）
+	if isMention {
+		go a.think(msg.GroupID, true)
+	}
 }
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
@@ -211,8 +244,6 @@ func (a *Agent) thinkLoop() {
 			return
 		case <-ticker.C:
 			a.thinkCycle()
-		default:
-			time.Sleep(50 * time.Millisecond)
 		}
 	}
 }
@@ -226,7 +257,28 @@ func (a *Agent) thinkCycle() {
 		if len(msgs) == 0 {
 			continue
 		}
-		if time.Since(msgs[len(msgs)-1].Time) > time.Duration(a.cfg.Agent.ObserveWindow)*time.Second {
+
+		lastMsg := msgs[len(msgs)-1]
+
+		// 如果该消息的时间不晚于最后处理时间，说明是旧消息，跳过
+		a.processingMu.Lock()
+		lastTime := a.lastProcessedTime[gc.GroupID]
+		a.processingMu.Unlock()
+		if !lastMsg.Time.After(lastTime) {
+			continue
+		}
+
+		// 如果最后一条消息是自己发的，跳过
+		if lastMsg.UserID == a.bot.GetSelfID() {
+			continue
+		}
+
+		// 如果最后一条消息是 @提及，已经在 onMessage 中触发了即时思考，这里跳过
+		if a.persona.IsMentioned(lastMsg.Content) || lastMsg.MentionAmu {
+			continue
+		}
+
+		if time.Since(lastMsg.Time) > time.Duration(a.cfg.Agent.ObserveWindow)*time.Second {
 			continue
 		}
 		// 获取当前的发言概率（考虑时段规则）
@@ -295,6 +347,21 @@ func (a *Agent) recordSpeak(groupID int64) {
 
 // think 进行思考和决策
 func (a *Agent) think(groupID int64, isMention bool) {
+	// 并发锁：确保同一时间一个群只有一个思考进程
+	a.processingMu.Lock()
+	if a.processing[groupID] {
+		a.processingMu.Unlock()
+		return
+	}
+	a.processing[groupID] = true
+	a.processingMu.Unlock()
+
+	defer func() {
+		a.processingMu.Lock()
+		a.processing[groupID] = false
+		a.processingMu.Unlock()
+	}()
+
 	ctx := tools.WithToolContext(context.Background(), &tools.ToolContext{
 		GroupID:   groupID,
 		MemoryMgr: a.memory,
@@ -325,8 +392,28 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	}
 
 	thinkPrompt := a.persona.GetThinkPrompt(chatContext, memberInfo)
+
+	// 获取最后处理时间并注入提示词
+	a.processingMu.Lock()
+	lastTime := a.lastProcessedTime[groupID]
+	a.processingMu.Unlock()
+
+	if !lastTime.IsZero() {
+		thinkPrompt += fmt.Sprintf("\n\n注意：你上次处理消息的时间是 [%s]，在那之后的消息是新发生的。请结合上下文判断是否需要回复新消息。",
+			lastTime.Format("15:04:05"))
+	}
+
 	if isMention {
 		thinkPrompt += "\n\n注意：有人@你了，可能在找你说话，你可以看情况回复。"
+	}
+
+	// 记录当前缓冲区中的最后一条消息时间，作为新的“已读”位置
+	bufMsgs := a.getBuffer(groupID)
+	if len(bufMsgs) > 0 {
+		lastMsg := bufMsgs[len(bufMsgs)-1]
+		a.processingMu.Lock()
+		a.lastProcessedTime[groupID] = lastMsg.Time
+		a.processingMu.Unlock()
 	}
 
 	// 调试：显示系统提示词
@@ -427,7 +514,7 @@ func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatConte
 		var lines []string
 		for _, m := range mems {
 			// 使用 ImportanceThreshold 过滤低重要性记忆
-			if m.Importance >= a.cfg.Memory.ImportanceThreshold {
+			if m.Importance >= a.cfg.Memory.LongTerm.ImportanceThreshold {
 				lines = append(lines, fmt.Sprintf("- [%s] %s", m.Type, m.Content))
 			}
 		}
@@ -438,15 +525,6 @@ func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatConte
 				zap.L().Debug("检索到相关记忆", zap.Int("count", len(lines)))
 			}
 		}
-	}
-
-	// 获取近期话题
-	if topics, err := a.memory.GetRecentTopics(groupID, 3); err == nil && len(topics) > 0 {
-		var lines []string
-		for _, t := range topics {
-			lines = append(lines, fmt.Sprintf("- %s: %s", t.Topic, t.Summary))
-		}
-		pc.RecentTopics = strings.Join(lines, "\n")
 	}
 
 	return pc
@@ -509,5 +587,4 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) {
 
 	a.recordSpeak(groupID)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
-	a.clearBuffer(groupID)
 }

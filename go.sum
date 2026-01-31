@@ -86,6 +86,10 @@ github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260129100151-
 github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260129100151-33cdd47ff03a/go.mod h1:SajSFFRIXJXIbxadAAlSUIS5KTY8R/jzJg9RNSOXCCI=
 github.com/cloudwego/eino-ext/components/model/openai v0.1.8 h1:uVCE8nNvbhD37xGFgdKESWjvChDSkCAMA+DodhFRBaM=
 github.com/cloudwego/eino-ext/components/model/openai v0.1.8/go.mod h1:K6g2VgULehhJC5dgFdPW3u7gZNZ1p6DhnfA5UhkRpNY=
+github.com/cloudwego/eino-ext/components/tool/bingsearch v0.0.0-20260129100151-33cdd47ff03a h1:0fUyOtoGx+O6intHpYrrLXiNWky45Sw+O+6WJRZvbO4=
+github.com/cloudwego/eino-ext/components/tool/bingsearch v0.0.0-20260129100151-33cdd47ff03a/go.mod h1:0TISLP4ohxhkVCxTN/caLW9f4K/iOGzWZ0C2GAR7utI=
+github.com/cloudwego/eino-ext/components/tool/httprequest v0.0.0-20260129100151-33cdd47ff03a h1:tD7E8mvsxNOpkeNnMZ61CmvP5LixgCqsGWqCY3cO4ik=
+github.com/cloudwego/eino-ext/components/tool/httprequest v0.0.0-20260129100151-33cdd47ff03a/go.mod h1:4YHp/Tzdfu7dvEkZzxmJ70A4BUWuMvDWJq9UQvtQwmc=
 github.com/cloudwego/eino-ext/libs/acl/openai v0.1.13 h1:z0bI5TH3nE+uDQiRhxBQMvk2HswlDUM3xP38+VSgpSQ=
 github.com/cloudwego/eino-ext/libs/acl/openai v0.1.13/go.mod h1:1xMQZ8eE11pkEoTAEy8UlaAY817qGVMvjpDPGSIO3Ns=
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=

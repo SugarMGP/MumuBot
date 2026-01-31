@@ -26,7 +26,6 @@ type Memory struct {
 	GroupID     int64      `gorm:"index" json:"group_id"`
 	UserID      int64      `gorm:"index" json:"user_id,omitempty"`
 	Content     string     `gorm:"type:text" json:"content"`
-	Summary     string     `gorm:"type:varchar(500)" json:"summary"`
 	Keywords    string     `gorm:"type:varchar(500)" json:"keywords"` // 关键词，逗号分隔
 	Importance  float64    `gorm:"default:0.5" json:"importance"`
 	AccessCount int        `gorm:"default:0" json:"access_count"`
@@ -37,27 +36,6 @@ type Memory struct {
 }
 
 func (Memory) TableName() string { return "memories" }
-
-// TopicSummary 话题概括（参考 MaiBot ChatHistorySummarizer）
-type TopicSummary struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-
-	GroupID      int64     `gorm:"index" json:"group_id"`
-	Topic        string    `gorm:"type:varchar(200)" json:"topic"`
-	Summary      string    `gorm:"type:text" json:"summary"`
-	Keywords     string    `gorm:"type:varchar(500)" json:"keywords"`
-	KeyPoints    string    `gorm:"type:text" json:"key_points"`
-	Participants string    `gorm:"type:varchar(500)" json:"participants"`
-	StartTime    time.Time `json:"start_time"`
-	EndTime      time.Time `json:"end_time"`
-	MsgCount     int       `gorm:"default:0" json:"msg_count"`
-	// 向量存储在 Milvus 中（如需要），不再存储在此表
-}
-
-func (TopicSummary) TableName() string { return "topic_summaries" }
 
 // MemberProfile 成员画像
 type MemberProfile struct {
@@ -116,25 +94,6 @@ type Jargon struct {
 
 func (Jargon) TableName() string { return "jargons" }
 
-// GroupInfo 群信息
-type GroupInfo struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-
-	GroupID     int64  `gorm:"uniqueIndex" json:"group_id"`
-	GroupName   string `gorm:"type:varchar(200)" json:"group_name"`
-	Topic       string `gorm:"type:text" json:"topic"`
-	HotTopics   string `gorm:"type:text" json:"hot_topics"`
-	Admins      string `gorm:"type:text" json:"admins"`
-	Rules       string `gorm:"type:text" json:"rules"`
-	Atmosphere  string `gorm:"type:text" json:"atmosphere"`
-	MemberCount int    `gorm:"default:0" json:"member_count"`
-}
-
-func (GroupInfo) TableName() string { return "group_infos" }
-
 // MessageLog 消息日志
 type MessageLog struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
@@ -147,7 +106,6 @@ type MessageLog struct {
 	Content    string `gorm:"type:text" json:"content"`
 	MsgType    string `gorm:"type:varchar(50)" json:"msg_type"`
 	MentionAmu bool   `gorm:"default:false" json:"mention_amu"`
-	Processed  bool   `gorm:"default:false" json:"processed"`
 	Summarized bool   `gorm:"default:false" json:"summarized"`
 }
 
