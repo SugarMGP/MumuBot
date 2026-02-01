@@ -54,9 +54,9 @@ groups:
 
 # Agent决策配置
 agent:
-  observe_window: 30        # 观察窗口时间（秒）
-  think_interval: 5        # 决策间隔（秒）
-  message_buffer_size: 20   # 消息缓冲区大小
+  observe_window: 20        # 观察窗口时间（秒）
+  think_interval: 2        # 决策间隔（秒）
+  message_buffer_size: 15   # 消息缓冲区大小
   speak_cooldown: 0         # 发言冷却时间（秒）
   max_step: 7              # ReAct 最大步数
 

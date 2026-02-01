@@ -1103,13 +1103,11 @@ func (c *Client) GetMessageReactions(messageID int64) ([]EmojiReaction, error) {
 			continue
 		}
 		reaction := EmojiReaction{}
-		if emojiID, ok := emojiData["emoji_id"].(float64); ok {
-			reaction.EmojiID = int(emojiID)
-		} else if emojiID, ok := emojiData["emoji_id"].(string); ok {
+		if emojiID, ok := emojiData["emoji_id"].(string); ok {
 			reaction.EmojiID, _ = strconv.Atoi(emojiID)
 		}
-		if count, ok := emojiData["count"].(float64); ok {
-			reaction.Count = int(count)
+		if count, ok := emojiData["likes_cnt"].(string); ok {
+			reaction.Count, _ = strconv.Atoi(count)
 		}
 		if reaction.EmojiID > 0 {
 			reactions = append(reactions, reaction)

@@ -1362,7 +1362,7 @@ func NewSendStickerTool() (tool.InvokableTool, error) {
 // ==================== 获取群公告工具 ====================
 
 type GetGroupNoticesInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认3"`
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
 }
 
 type GroupNoticeSummary struct {
@@ -1396,7 +1396,7 @@ func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*Get
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = 3
+		limit = 5
 	}
 	if len(notices) > limit {
 		notices = notices[:limit]
@@ -1428,7 +1428,7 @@ func NewGetGroupNoticesTool() (tool.InvokableTool, error) {
 // ==================== 获取群精华消息工具 ====================
 
 type GetEssenceMessagesInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认8"`
 }
 
 type EssenceMessageSummary struct {
@@ -1463,7 +1463,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = 5
+		limit = 8
 	}
 	if len(messages) > limit {
 		messages = messages[:limit]
