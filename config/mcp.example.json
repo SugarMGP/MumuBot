@@ -1,0 +1,18 @@
+{
+    "servers": [
+        {
+            "name": "example-mcp-server-sse",
+            "enabled": false,
+            "type": "sse",
+            "url": "http://localhost:3333/sse"
+        },
+        {
+            "name": "example-mcp-server-stdio",
+            "enabled": false,
+            "type": "stdio",
+            "command": "",
+            "args": [],
+            "env": []
+        }
+    ]
+}

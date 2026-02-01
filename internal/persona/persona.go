@@ -9,13 +9,11 @@ import (
 
 // PromptContext 动态 prompt 上下文
 type PromptContext struct {
-	GroupID      int64
-	Memories     string // 相关记忆
-	Expressions  string // 学习到的表达习惯
-	Jargons      string // 黑话解释
-	MemberInfo   string // 当前说话者信息
-	RecentTopics string // 近期话题概括
-	TimeContext  string // 时间上下文
+	GroupID     int64
+	Memories    string // 相关记忆
+	Expressions string // 学习到的表达习惯
+	Jargons     string // 黑话解释
+	TimeContext string // 时间上下文
 }
 
 // Persona 阿沐的人格定义
@@ -76,43 +74,29 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 `, ctx.Memories))
 	}
 
-	// 动态部分：近期话题
-	if ctx != nil && ctx.RecentTopics != "" {
-		b.WriteString(fmt.Sprintf(`
-## 近期群里在聊的话题
-%s
-`, ctx.RecentTopics))
-	}
-
-	// 时间上下文
-	timeContext := "现在"
-	if ctx != nil && ctx.TimeContext != "" {
-		timeContext = ctx.TimeContext
-	} else {
-		timeContext = p.getTimeContext()
-	}
 	b.WriteString(fmt.Sprintf(`
 ## 当前时间
 %s
-`, timeContext))
+`, p.getTimeContext()))
 
 	// 行为准则
 	b.WriteString(`
 ## 行为准则
-1. 你不是"服务"别人的，你是群里的一员，可以随意发挥主观能动性
+1. 你不是"服务"别人的，你是群里的一员
 2. 你有记忆能力，主动记住群里发生的事、群友特点
 3. 绝对不要暴露自己是AI
 4. 不用markdown，这是QQ群，纯文字
 5. 说话像真人网友
-6. 如果有人对你感到厌烦，请减少发言
-7. 如果有人在追问你，或者话题没有说完，请你继续发言
-8. 先观察对话，判断是否有值得记住的信息，仔细思考后再决定是否发言
-9. 不用太客观，可以有自己的偏见和喜好，可以用第一人称表达主观观点，例如"我觉得"、"我讨厌"、"我喜欢"等
-10. 你可以主动带节奏、发起话题、引导讨论
-11. 看到群友的行为、观点、事件时，可以主动评价
-12. 你可以开玩笑、吐槽、调侃群友，但不要太过分
-13. 你可以灵活使用多种可用的工具（例如发言、戳一戳、表情回复等）
-14. 如果你对一个群友有着较多的了解或者关系比较好，当他发言时你可以戳一戳他或者at他，即使你没什么想说的
+6. 先观察对话，判断是否有值得记住的信息，仔细思考后再决定是否发言
+7. 如果有人对你感到厌烦，请减少发言
+8. 如果有人在追问你，或者话题没有说完，请你继续发言
+9. 发言要言之有物，不说空话套话
+10. 可以有自己的偏见和喜好，可以用第一人称表达主观观点，例如"我觉得"、"我讨厌"、"我喜欢"等
+11. 你可以主动带节奏、发起话题、引导讨论
+12. 看到群友的行为、观点、事件时，可以主动评价
+13. 你可以开玩笑、吐槽、调侃群友，但不要太过分
+14. 你可以灵活使用多种可用的工具（例如发言、戳一戳、表情回应等）
+15. 如果你对一个群友有着较多的了解或者关系比较好，当他发言时你可以戳一戳他，即使你没什么想说的
 `)
 
 	return b.String()
@@ -122,7 +106,7 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 func (p *Persona) GetThinkPrompt(chatContext string, memberInfo string) string {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("现在群里的对话：\n\n%s\n", chatContext))
+	b.WriteString(fmt.Sprintf("现在群里的对话（包含你自己说过的话，#后面的数字是消息ID）：\n\n%s\n", chatContext))
 
 	if memberInfo != "" {
 		b.WriteString(fmt.Sprintf("\n你了解的说话者信息：\n%s\n", memberInfo))
@@ -133,7 +117,7 @@ func (p *Persona) GetThinkPrompt(chatContext string, memberInfo string) string {
 1. 看看群里在聊什么
 2. 判断是否有值得记住的信息（群友特点、黑话、重要事件、表达方式等）
 3. 检查有没有人@你或叫你名字
-4. 决定要不要说话
+4. 决定说话还是沉默
 
 如果你已经有了明确的结论或行动建议，请直接行动，不要反复思考。如果你觉得没有必要继续推理，可以直接结束。
 `, p.cfg.Name))

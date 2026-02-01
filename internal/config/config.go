@@ -26,7 +26,6 @@ type Config struct {
 	Memory    MemoryConfig    `yaml:"memory"`
 	Server    ServerConfig    `yaml:"server"`
 	Debug     DebugConfig     `yaml:"debug"` // 调试配置
-	Web       WebConfig       `yaml:"web"`   // 上网服务配置
 }
 
 // AppConfig 应用基础配置
@@ -108,10 +107,9 @@ type VisionLLMConfig struct {
 
 // MemoryConfig 记忆系统配置
 type MemoryConfig struct {
-	MySQL     MySQLConfig     `yaml:"mysql"`
-	Milvus    MilvusConfig    `yaml:"milvus"`
-	ShortTerm ShortTermConfig `yaml:"short_term"`
-	LongTerm  LongTermConfig  `yaml:"long_term"`
+	MySQL    MySQLConfig    `yaml:"mysql"`
+	Milvus   MilvusConfig   `yaml:"milvus"`
+	LongTerm LongTermConfig `yaml:"long_term"`
 }
 
 // MySQLConfig MySQL 数据库配置
@@ -133,11 +131,6 @@ type MilvusConfig struct {
 	MetricType     string `yaml:"metric_type"` // IP, L2, COSINE
 }
 
-// ShortTermConfig 短期记忆配置
-type ShortTermConfig struct {
-	MaxMessages int `yaml:"max_messages"`
-}
-
 // LongTermConfig 长期记忆配置
 type LongTermConfig struct {
 	TopK                int     `yaml:"top_k"`                // 检索返回数量
@@ -157,12 +150,6 @@ type DebugConfig struct {
 	ShowThinking  bool `yaml:"show_thinking"`   // 显示思考过程
 	ShowMemory    bool `yaml:"show_memory"`     // 显示记忆检索
 	ShowToolCalls bool `yaml:"show_tool_calls"` // 显示工具调用
-}
-
-// WebConfig 上网服务配置
-type WebConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	BingApiKey string `yaml:"bing_api_key"`
 }
 
 // Load 加载配置文件
@@ -203,9 +190,6 @@ func Load(path string) (*Config, error) {
 		// MySQL 密码
 		if password := os.Getenv("AMU_MYSQL_PASSWORD"); password != "" {
 			cfg.Memory.MySQL.Password = password
-		}
-		if bing := os.Getenv("AMU_BING_API_KEY"); bing != "" {
-			cfg.Web.BingApiKey = bing
 		}
 	})
 	return cfg, err

@@ -164,8 +164,7 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 	if memType != "" {
 		q = q.Where("type = ?", memType)
 	}
-	err := q.Where("content LIKE ? OR keywords LIKE ?",
-		"%"+query+"%", "%"+query+"%").
+	err := q.Where("content LIKE ?", "%"+query+"%").
 		Order("importance DESC, updated_at DESC").
 		Limit(limit).
 		Find(&memories).Error
@@ -246,13 +245,34 @@ func (m *Manager) SaveExpression(exp *Expression) error {
 	return m.db.Save(exp).Error
 }
 
+// ReviewExpression 审核表达方式
+func (m *Manager) ReviewExpression(id uint, approve bool) error {
+	updates := map[string]any{
+		"checked": true,
+	}
+	if approve {
+		updates["rejected"] = false
+	} else {
+		updates["rejected"] = true
+	}
+	return m.db.Model(&Expression{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// GetUncheckedExpressions 获取待审核的表达方式
+func (m *Manager) GetUncheckedExpressions(groupID int64, limit int) ([]Expression, error) {
+	var expressions []Expression
+	err := m.db.Where("group_id = ? AND checked = ?", groupID, false).
+		Order("count DESC").Limit(limit).Find(&expressions).Error
+	return expressions, err
+}
+
 // ==================== 黑话管理 ====================
 
-// GetJargons 获取黑话列表
+// GetJargons 获取黑话列表（优先返回已验证的）
 func (m *Manager) GetJargons(groupID int64, limit int) ([]Jargon, error) {
 	var jargons []Jargon
 	err := m.db.Where("group_id = ?", groupID).
-		Order("count DESC").Limit(limit).Find(&jargons).Error
+		Order("verified DESC, count DESC").Limit(limit).Find(&jargons).Error
 	return jargons, err
 }
 
@@ -268,11 +288,32 @@ func (m *Manager) SaveJargon(jargon *Jargon) error {
 	}
 
 	// 已存在，更新含义和上下文，增加计数
-	return m.db.Model(&existing).Updates(map[string]any{
+	// 如果被引用次数超过3次，自动标记为已验证
+	updates := map[string]any{
 		"count":   gorm.Expr("count + 1"),
 		"meaning": jargon.Meaning,
 		"context": jargon.Context,
-	}).Error
+	}
+	if existing.Count >= 3 {
+		updates["verified"] = true
+	}
+	return m.db.Model(&existing).Updates(updates).Error
+}
+
+// ReviewJargon 审核黑话
+func (m *Manager) ReviewJargon(id uint, approve bool) error {
+	updates := map[string]any{
+		"verified": approve,
+	}
+	return m.db.Model(&Jargon{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// GetUnverifiedJargons 获取待审核的黑话
+func (m *Manager) GetUnverifiedJargons(groupID int64, limit int) ([]Jargon, error) {
+	var jargons []Jargon
+	err := m.db.Where("group_id = ? AND verified = ?", groupID, false).
+		Order("count DESC").Limit(limit).Find(&jargons).Error
+	return jargons, err
 }
 
 // ==================== 成员画像 ====================
@@ -297,6 +338,8 @@ func (m *Manager) GetOrCreateMemberProfile(groupID, userID int64, nickname strin
 			GroupID:   groupID,
 			UserID:    userID,
 			Nickname:  nickname,
+			Activity:  0.5, // 初始活跃度
+			Intimacy:  0.3, // 初始亲密度
 			LastSpeak: time.Now(),
 		}
 		if err := m.db.Create(&profile).Error; err != nil {
@@ -309,6 +352,22 @@ func (m *Manager) GetOrCreateMemberProfile(groupID, userID int64, nickname strin
 
 // UpdateMemberProfile 更新成员画像
 func (m *Manager) UpdateMemberProfile(profile *MemberProfile) error {
+	// 计算活跃度：基于最近发言时间和消息数量
+	// 活跃度衰减：每天降低0.1，最低0.1
+	daysSinceLastSpeak := time.Since(profile.LastSpeak).Hours() / 24
+	if daysSinceLastSpeak > 0 {
+		profile.Activity -= 0.1 * daysSinceLastSpeak
+		if profile.Activity < 0.1 {
+			profile.Activity = 0.1
+		}
+	}
+	// 发言增加活跃度
+	if time.Since(profile.LastSpeak) < time.Hour {
+		profile.Activity += 0.05
+		if profile.Activity > 1.0 {
+			profile.Activity = 1.0
+		}
+	}
 	return m.db.Save(profile).Error
 }
 

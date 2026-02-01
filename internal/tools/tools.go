@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudwego/eino-ext/components/tool/bingsearch"
-	getreq "github.com/cloudwego/eino-ext/components/tool/httprequest/get"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"go.uber.org/zap"
@@ -350,7 +348,8 @@ type GetMemberInfoOutput struct {
 	SpeakStyle  string   `json:"speak_style,omitempty"`
 	Interests   []string `json:"interests,omitempty"`
 	CommonWords []string `json:"common_words,omitempty"`
-	Intimacy    float64  `json:"intimacy,omitempty"`
+	Activity    float64  `json:"activity,omitempty"` // 活跃度 0-1
+	Intimacy    float64  `json:"intimacy,omitempty"` // 亲密度 0-1
 	MsgCount    int      `json:"msg_count,omitempty"`
 }
 
@@ -393,6 +392,7 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 		SpeakStyle:  profile.SpeakStyle,
 		Interests:   interests,
 		CommonWords: commonWords,
+		Activity:    profile.Activity,
 		Intimacy:    profile.Intimacy,
 		MsgCount:    profile.MsgCount,
 	}
@@ -974,23 +974,210 @@ func NewGetRecentMessagesTool() (tool.InvokableTool, error) {
 	)
 }
 
-// ==================== Bing Search 工具 ====================
+// ==================== 审核表达方式工具 ====================
 
-func NewBingSearchTool(apiKey string) (tool.BaseTool, error) {
-	return bingsearch.NewTool(context.Background(), &bingsearch.Config{
-		ToolName:   "bing_search",
-		ToolDesc:   "在必应上搜索相关信息。当你需要查找最新的事实性信息、新闻、数据等时使用。",
-		APIKey:     apiKey,
-		Region:     bingsearch.RegionCN,
-		SafeSearch: bingsearch.SafeSearchOff,
-	})
+type GetUncheckedExpressionsInput struct {
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
 }
 
-// ==================== Http Request 工具 ====================
+type UncheckedExpressionItem struct {
+	ID        uint   `json:"id"`
+	Situation string `json:"situation"`
+	Style     string `json:"style"`
+	Examples  string `json:"examples"`
+	Count     int    `json:"count"`
+}
 
-func NewHttpRequestTool() (tool.BaseTool, error) {
-	return getreq.NewTool(context.Background(), &getreq.Config{
-		ToolName: "request_get",
-		ToolDesc: "获取网页内容。当你需要查看某个网页的具体内容时使用，输入应为完整的URL（如：https://www.baidu.com ）。",
-	})
+type GetUncheckedExpressionsOutput struct {
+	Success     bool                      `json:"success"`
+	Expressions []UncheckedExpressionItem `json:"expressions,omitempty"`
+	Message     string                    `json:"message,omitempty"`
+}
+
+func getUncheckedExpressionsFunc(ctx context.Context, input *GetUncheckedExpressionsInput) (*GetUncheckedExpressionsOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetUncheckedExpressionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+
+	exps, err := tc.MemoryMgr.GetUncheckedExpressions(tc.GroupID, limit)
+	if err != nil {
+		output := &GetUncheckedExpressionsOutput{Success: false, Message: err.Error()}
+		logToolCall("getUncheckedExpressions", input, output, err)
+		return output, nil
+	}
+
+	results := make([]UncheckedExpressionItem, 0, len(exps))
+	for _, e := range exps {
+		results = append(results, UncheckedExpressionItem{
+			ID:        e.ID,
+			Situation: e.Situation,
+			Style:     e.Style,
+			Examples:  e.Examples,
+			Count:     e.Count,
+		})
+	}
+
+	output := &GetUncheckedExpressionsOutput{Success: true, Expressions: results}
+	logToolCall("getUncheckedExpressions", input, output, nil)
+	return output, nil
+}
+
+func NewGetUncheckedExpressionsTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getUncheckedExpressions",
+		"查看待审核的表达方式。你可以定期检查并审核这些学到的表达习惯是否准确。",
+		getUncheckedExpressionsFunc,
+	)
+}
+
+// ==================== 审核表达方式 ====================
+
+type ReviewExpressionInput struct {
+	ID      uint `json:"id" jsonschema:"description=表达方式ID"`
+	Approve bool `json:"approve" jsonschema:"description=是否通过审核，true=通过，false=拒绝"`
+}
+
+type ReviewExpressionOutput struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func reviewExpressionFunc(ctx context.Context, input *ReviewExpressionInput) (*ReviewExpressionOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &ReviewExpressionOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	err := tc.MemoryMgr.ReviewExpression(input.ID, input.Approve)
+	if err != nil {
+		output := &ReviewExpressionOutput{Success: false, Message: err.Error()}
+		logToolCall("reviewExpression", input, output, err)
+		return output, nil
+	}
+
+	msg := "已拒绝该表达方式"
+	if input.Approve {
+		msg = "已通过该表达方式"
+	}
+	output := &ReviewExpressionOutput{Success: true, Message: msg}
+	logToolCall("reviewExpression", input, output, nil)
+	return output, nil
+}
+
+func NewReviewExpressionTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"reviewExpression",
+		"审核一条表达方式。如果你认为这个表达方式记录正确，可以通过；如果有误，可以拒绝。",
+		reviewExpressionFunc,
+	)
+}
+
+// ==================== 获取待审核黑话工具 ====================
+
+type GetUnverifiedJargonsInput struct {
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
+}
+
+type UnverifiedJargonItem struct {
+	ID      uint   `json:"id"`
+	Content string `json:"content"`
+	Meaning string `json:"meaning"`
+	Context string `json:"context"`
+	Count   int    `json:"count"`
+}
+
+type GetUnverifiedJargonsOutput struct {
+	Success bool                   `json:"success"`
+	Jargons []UnverifiedJargonItem `json:"jargons,omitempty"`
+	Message string                 `json:"message,omitempty"`
+}
+
+func getUnverifiedJargonsFunc(ctx context.Context, input *GetUnverifiedJargonsInput) (*GetUnverifiedJargonsOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetUnverifiedJargonsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+
+	jargons, err := tc.MemoryMgr.GetUnverifiedJargons(tc.GroupID, limit)
+	if err != nil {
+		output := &GetUnverifiedJargonsOutput{Success: false, Message: err.Error()}
+		logToolCall("getUnverifiedJargons", input, output, err)
+		return output, nil
+	}
+
+	results := make([]UnverifiedJargonItem, 0, len(jargons))
+	for _, j := range jargons {
+		results = append(results, UnverifiedJargonItem{
+			ID:      j.ID,
+			Content: j.Content,
+			Meaning: j.Meaning,
+			Context: j.Context,
+			Count:   j.Count,
+		})
+	}
+
+	output := &GetUnverifiedJargonsOutput{Success: true, Jargons: results}
+	logToolCall("getUnverifiedJargons", input, output, nil)
+	return output, nil
+}
+
+func NewGetUnverifiedJargonsTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getUnverifiedJargons",
+		"查看待审核的黑话/术语。你可以检查这些黑话的含义是否准确。",
+		getUnverifiedJargonsFunc,
+	)
+}
+
+// ==================== 审核黑话工具 ====================
+
+type ReviewJargonInput struct {
+	ID      uint `json:"id" jsonschema:"description=黑话ID"`
+	Approve bool `json:"approve" jsonschema:"description=是否通过审核，true=通过，false=拒绝"`
+}
+
+type ReviewJargonOutput struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func reviewJargonFunc(ctx context.Context, input *ReviewJargonInput) (*ReviewJargonOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &ReviewJargonOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	err := tc.MemoryMgr.ReviewJargon(input.ID, input.Approve)
+	if err != nil {
+		output := &ReviewJargonOutput{Success: false, Message: err.Error()}
+		logToolCall("reviewJargon", input, output, err)
+		return output, nil
+	}
+
+	msg := "已拒绝该黑话"
+	if input.Approve {
+		msg = "已验证该黑话"
+	}
+	output := &ReviewJargonOutput{Success: true, Message: msg}
+	logToolCall("reviewJargon", input, output, nil)
+	return output, nil
+}
+
+func NewReviewJargonTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"reviewJargon",
+		"审核一条黑话/术语。如果含义正确，可以通过验证；如果有误，可以拒绝。",
+		reviewJargonFunc,
+	)
 }

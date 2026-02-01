@@ -26,7 +26,6 @@ type Memory struct {
 	GroupID     int64      `gorm:"index" json:"group_id"`
 	UserID      int64      `gorm:"index" json:"user_id,omitempty"`
 	Content     string     `gorm:"type:text" json:"content"`
-	Keywords    string     `gorm:"type:varchar(500)" json:"keywords"` // 关键词，逗号分隔
 	Importance  float64    `gorm:"default:0.5" json:"importance"`
 	AccessCount int        `gorm:"default:0" json:"access_count"`
 	LastAccess  time.Time  `json:"last_access"`
@@ -106,7 +105,6 @@ type MessageLog struct {
 	Content    string `gorm:"type:text" json:"content"`
 	MsgType    string `gorm:"type:varchar(50)" json:"msg_type"`
 	MentionAmu bool   `gorm:"default:false" json:"mention_amu"`
-	Summarized bool   `gorm:"default:false" json:"summarized"`
 }
 
 func (MessageLog) TableName() string { return "message_logs" }

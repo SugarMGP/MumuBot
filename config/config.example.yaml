@@ -109,10 +109,6 @@ memory:
     vector_dim: 1024        # embedding 维度
     metric_type: "COSINE"   # 相似度度量类型: IP, L2, COSINE
 
-  # 短期记忆
-  short_term:
-    max_messages: 100       # 最大缓存消息数
-
   # 长期记忆
   long_term:
     top_k: 10               # 检索返回数量
@@ -130,7 +126,3 @@ debug:
   show_thinking: true      # 显示思考过程
   show_memory: true        # 显示记忆检索
   show_tool_calls: true    # 显示工具调用
-
-web:
-  enabled: true
-  bing_api_key: ""  # 留空则使用 AMU_BING_API_KEY 环境变量

@@ -3,6 +3,7 @@ package agent
 import (
 	"amu-bot/internal/config"
 	"amu-bot/internal/llm"
+	"amu-bot/internal/mcp"
 	"amu-bot/internal/memory"
 	"amu-bot/internal/onebot"
 	"amu-bot/internal/persona"
@@ -32,6 +33,7 @@ type Agent struct {
 	bot     *onebot.Client
 	react   *react.Agent
 	tools   []tool.BaseTool
+	mcpMgr  *mcp.MCPManager // MCP管理器
 
 	// 消息缓冲
 	buffers   map[int64][]*onebot.GroupMessage
@@ -75,6 +77,12 @@ func New(
 		stopCh:            make(chan struct{}),
 	}
 
+	// 初始化 MCP 管理器
+	a.mcpMgr = mcp.NewMCPManager()
+	if err := a.mcpMgr.LoadFromConfig("config/mcp.json"); err != nil {
+		zap.L().Warn("加载MCP配置失败", zap.Error(err))
+	}
+
 	if err := a.initTools(); err != nil {
 		return nil, err
 	}
@@ -95,6 +103,11 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetExpressionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveExpressionTool() },
+		// 审核工具
+		func() (tool.BaseTool, error) { return tools.NewGetUncheckedExpressionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReviewExpressionTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetUnverifiedJargonsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReviewJargonTool() },
 		// 发言相关
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -108,14 +121,6 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
 	}
 
-	// Web 增强工具（根据配置启用）
-	if a.cfg.Web.Enabled {
-		toolBuilders = append(toolBuilders,
-			func() (tool.BaseTool, error) { return tools.NewBingSearchTool(a.cfg.Web.BingApiKey) },
-			func() (tool.BaseTool, error) { return tools.NewHttpRequestTool() },
-		)
-	}
-
 	for _, build := range toolBuilders {
 		t, err := build()
 		if err != nil {
@@ -123,6 +128,14 @@ func (a *Agent) initTools() error {
 		}
 		a.tools = append(a.tools, t)
 	}
+
+	// 添加 MCP 工具
+	mcpTools := a.mcpMgr.GetTools()
+	if len(mcpTools) > 0 {
+		a.tools = append(a.tools, mcpTools...)
+		zap.L().Info("已加载MCP工具", zap.Int("count", len(mcpTools)))
+	}
+
 	return nil
 }
 
@@ -155,6 +168,10 @@ func (a *Agent) Start() {
 func (a *Agent) Stop() {
 	close(a.stopCh)
 	a.wg.Wait()
+	// 关闭 MCP 连接
+	if a.mcpMgr != nil {
+		a.mcpMgr.Close()
+	}
 	zap.L().Info("Agent已停止")
 }
 
@@ -446,9 +463,20 @@ func (a *Agent) buildChatContext(groupID int64) string {
 	var b strings.Builder
 
 	for _, m := range msgs {
-		mention := ""
+		// 构建@信息
+		var mentionParts []string
 		if m.MentionAmu {
-			mention = " [@阿沐]"
+			mentionParts = append(mentionParts, "@你")
+		}
+		// 显示@的其他用户
+		for _, atUserID := range m.AtList {
+			if atUserID != a.bot.GetSelfID() {
+				mentionParts = append(mentionParts, fmt.Sprintf("@%d", atUserID))
+			}
+		}
+		mention := ""
+		if len(mentionParts) > 0 {
+			mention = " [" + strings.Join(mentionParts, ",") + "]"
 		}
 
 		// 构建消息内容（包含图片和表情描述）
@@ -476,8 +504,9 @@ func (a *Agent) buildChatContext(groupID int64) string {
 			}
 		}
 
-		b.WriteString(fmt.Sprintf("[%s] %s(%d)%s: %s\n",
-			m.Time.Format("15:04:05"), m.Nickname, m.UserID, mention, content))
+		// 在消息开头添加消息ID，方便模型引用
+		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d)%s: %s\n",
+			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, mention, content))
 	}
 	return b.String()
 }
@@ -575,10 +604,11 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) {
 	}
 
 	var err error
+	var msgID int64
 	if replyTo > 0 {
-		_, err = a.bot.SendGroupMessageReply(groupID, content, replyTo)
+		msgID, err = a.bot.SendGroupMessageReply(groupID, content, replyTo)
 	} else {
-		_, err = a.bot.SendGroupMessage(groupID, content)
+		msgID, err = a.bot.SendGroupMessage(groupID, content)
 	}
 
 	if err != nil {
@@ -587,5 +617,16 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) {
 	}
 
 	a.recordSpeak(groupID)
+	msg := &onebot.GroupMessage{
+		MessageID:   msgID,
+		GroupID:     groupID,
+		UserID:      a.bot.GetSelfID(),
+		Nickname:    a.persona.GetName(),
+		Content:     content,
+		RawMessage:  content,
+		Time:        time.Now(),
+		MessageType: "group",
+	}
+	a.onMessage(msg)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
 }
