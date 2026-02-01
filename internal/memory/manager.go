@@ -129,8 +129,6 @@ func (m *Manager) SaveMemory(ctx context.Context, mem *Memory) error {
 		}
 	}
 
-	mem.LastAccess = time.Now()
-
 	// 保存到 MySQL
 	if err := m.db.Save(mem).Error; err != nil {
 		return err
@@ -202,7 +200,6 @@ func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, gr
 	for _, mem := range memories {
 		m.db.Model(&mem).Updates(map[string]any{
 			"access_count": gorm.Expr("access_count + 1"),
-			"last_access":  time.Now(),
 		})
 	}
 
@@ -236,7 +233,7 @@ func (m *Manager) GetMemoriesByType(groupID int64, memType MemoryType, limit int
 func (m *Manager) GetExpressions(groupID int64, limit int) ([]Expression, error) {
 	var expressions []Expression
 	err := m.db.Where("group_id = ? AND rejected = ?", groupID, false).
-		Order("count DESC, updated_at DESC").Limit(limit).Find(&expressions).Error
+		Order("checked DESC, updated_at DESC").Limit(limit).Find(&expressions).Error
 	return expressions, err
 }
 
@@ -262,7 +259,7 @@ func (m *Manager) ReviewExpression(id uint, approve bool) error {
 func (m *Manager) GetUncheckedExpressions(groupID int64, limit int) ([]Expression, error) {
 	var expressions []Expression
 	err := m.db.Where("group_id = ? AND checked = ?", groupID, false).
-		Order("count DESC").Limit(limit).Find(&expressions).Error
+		Limit(limit).Find(&expressions).Error
 	return expressions, err
 }
 
@@ -272,7 +269,7 @@ func (m *Manager) GetUncheckedExpressions(groupID int64, limit int) ([]Expressio
 func (m *Manager) GetJargons(groupID int64, limit int) ([]Jargon, error) {
 	var jargons []Jargon
 	err := m.db.Where("group_id = ?", groupID).
-		Order("verified DESC, count DESC").Limit(limit).Find(&jargons).Error
+		Order("verified DESC").Limit(limit).Find(&jargons).Error
 	return jargons, err
 }
 
@@ -287,15 +284,9 @@ func (m *Manager) SaveJargon(jargon *Jargon) error {
 		return err
 	}
 
-	// 已存在，更新含义和上下文，增加计数
-	// 如果被引用次数超过3次，自动标记为已验证
 	updates := map[string]any{
-		"count":   gorm.Expr("count + 1"),
 		"meaning": jargon.Meaning,
 		"context": jargon.Context,
-	}
-	if existing.Count >= 3 {
-		updates["verified"] = true
 	}
 	return m.db.Model(&existing).Updates(updates).Error
 }
@@ -312,7 +303,7 @@ func (m *Manager) ReviewJargon(id uint, approve bool) error {
 func (m *Manager) GetUnverifiedJargons(groupID int64, limit int) ([]Jargon, error) {
 	var jargons []Jargon
 	err := m.db.Where("group_id = ? AND verified = ?", groupID, false).
-		Order("count DESC").Limit(limit).Find(&jargons).Error
+		Limit(limit).Find(&jargons).Error
 	return jargons, err
 }
 
@@ -333,7 +324,7 @@ func (m *Manager) GetOrCreateMemberProfile(groupID, userID int64, nickname strin
 	var profile MemberProfile
 	err := m.db.Where("group_id = ? AND user_id = ?", groupID, userID).First(&profile).Error
 
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		profile = MemberProfile{
 			GroupID:   groupID,
 			UserID:    userID,
@@ -498,7 +489,6 @@ func (m *Manager) SearchStickers(keyword string, limit int) ([]Sticker, error) {
 func (m *Manager) UpdateStickerUsage(id uint) error {
 	return m.db.Model(&Sticker{}).Where("id = ?", id).Updates(map[string]any{
 		"use_count": gorm.Expr("use_count + 1"),
-		"last_used": time.Now(),
 	}).Error
 }
 

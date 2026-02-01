@@ -28,10 +28,6 @@ type Memory struct {
 	Content     string     `gorm:"type:text" json:"content"`
 	Importance  float64    `gorm:"default:0.5" json:"importance"`
 	AccessCount int        `gorm:"default:0" json:"access_count"`
-	LastAccess  time.Time  `json:"last_access"`
-	SourceMsgID string     `gorm:"type:varchar(100)" json:"source_msg_id,omitempty"`
-	Metadata    string     `gorm:"type:text" json:"metadata,omitempty"`
-	// 向量存储在 Milvus 中，不再存储在此表
 }
 
 func (Memory) TableName() string { return "memories" }
@@ -64,14 +60,12 @@ type Expression struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
-	GroupID   int64     `gorm:"index" json:"group_id"`
-	Situation string    `gorm:"type:varchar(200)" json:"situation"` // 使用场景
-	Style     string    `gorm:"type:varchar(200)" json:"style"`     // 表达风格
-	Examples  string    `gorm:"type:text" json:"examples"`          // 示例 JSON
-	Count     int       `gorm:"default:1" json:"count"`
-	LastUsed  time.Time `json:"last_used"`
-	Checked   bool      `gorm:"default:false" json:"checked"`
-	Rejected  bool      `gorm:"default:false" json:"rejected"`
+	GroupID   int64  `gorm:"index" json:"group_id"`
+	Situation string `gorm:"type:varchar(200)" json:"situation"` // 使用场景
+	Style     string `gorm:"type:varchar(200)" json:"style"`     // 表达风格
+	Examples  string `gorm:"type:text" json:"examples"`          // 示例 JSON
+	Checked   bool   `gorm:"default:false" json:"checked"`
+	Rejected  bool   `gorm:"default:false" json:"rejected"`
 }
 
 func (Expression) TableName() string { return "expressions" }
@@ -87,7 +81,6 @@ type Jargon struct {
 	Content  string `gorm:"type:varchar(100);index" json:"content"`
 	Meaning  string `gorm:"type:text" json:"meaning"`
 	Context  string `gorm:"type:text" json:"context"`
-	Count    int    `gorm:"default:1" json:"count"`
 	Verified bool   `gorm:"default:false" json:"verified"`
 }
 
@@ -116,12 +109,11 @@ type Sticker struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
-	FileName    string    `gorm:"type:varchar(100)" json:"file_name"`              // 本地文件名（uuid.ext）
-	OriginalURL string    `gorm:"type:varchar(500)" json:"original_url"`           // 原始URL
-	FileHash    string    `gorm:"type:varchar(64);uniqueIndex" json:"file_hash"`   // 文件MD5哈希（用于去重）
-	Description string    `gorm:"type:text" json:"description"`                    // Vision模型生成的描述
-	UseCount    int       `gorm:"default:0" json:"use_count"`                      // 使用次数
-	LastUsed    time.Time `json:"last_used"`                                       // 最后使用时间
+	FileName    string `gorm:"type:varchar(100)" json:"file_name"`            // 本地文件名（uuid.ext）
+	OriginalURL string `gorm:"type:varchar(500)" json:"original_url"`         // 原始URL
+	FileHash    string `gorm:"type:varchar(64);uniqueIndex" json:"file_hash"` // 文件MD5哈希（用于去重）
+	Description string `gorm:"type:text" json:"description"`                  // Vision模型生成的描述
+	UseCount    int    `gorm:"default:0" json:"use_count"`                    // 使用次数
 }
 
 func (Sticker) TableName() string { return "stickers" }

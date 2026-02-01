@@ -873,7 +873,6 @@ func saveExpressionFunc(ctx context.Context, input *SaveExpressionInput) (*SaveE
 		Situation: input.Situation,
 		Style:     input.Style,
 		Examples:  input.Example,
-		LastUsed:  time.Now(),
 	}
 
 	if err := tc.MemoryMgr.SaveExpression(exp); err != nil {
@@ -1009,7 +1008,6 @@ type UncheckedExpressionItem struct {
 	Situation string `json:"situation"`
 	Style     string `json:"style"`
 	Examples  string `json:"examples"`
-	Count     int    `json:"count"`
 }
 
 type GetUncheckedExpressionsOutput struct {
@@ -1043,7 +1041,6 @@ func getUncheckedExpressionsFunc(ctx context.Context, input *GetUncheckedExpress
 			Situation: e.Situation,
 			Style:     e.Style,
 			Examples:  e.Examples,
-			Count:     e.Count,
 		})
 	}
 
@@ -1117,7 +1114,6 @@ type UnverifiedJargonItem struct {
 	Content string `json:"content"`
 	Meaning string `json:"meaning"`
 	Context string `json:"context"`
-	Count   int    `json:"count"`
 }
 
 type GetUnverifiedJargonsOutput struct {
@@ -1151,7 +1147,6 @@ func getUnverifiedJargonsFunc(ctx context.Context, input *GetUnverifiedJargonsIn
 			Content: j.Content,
 			Meaning: j.Meaning,
 			Context: j.Context,
-			Count:   j.Count,
 		})
 	}
 

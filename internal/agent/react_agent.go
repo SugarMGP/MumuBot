@@ -733,7 +733,6 @@ func (a *Agent) autoSaveSticker(url string, description string) {
 		OriginalURL: url,
 		FileHash:    result.FileHash,
 		Description: description,
-		LastUsed:    time.Now(),
 	}
 
 	isDuplicate, err := a.memory.SaveSticker(sticker)
