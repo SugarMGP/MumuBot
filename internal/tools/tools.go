@@ -23,6 +23,7 @@ type ToolContext struct {
 	MemoryMgr     *memory.Manager
 	Bot           *onebot.Client
 	SpeakCallback SpeakCallback // 发言回调
+	StopThinking  func()        // 停止思考回调（用于 stayQuiet 强制停止）
 }
 
 // ctxKey 上下文键类型
@@ -43,8 +44,8 @@ func GetToolContext(ctx context.Context) *ToolContext {
 	return nil
 }
 
-// logToolCall 记录工具调用
-func logToolCall(toolName string, input interface{}, output interface{}, err error) {
+// LogToolCall 记录工具调用
+func LogToolCall(toolName string, input interface{}, output interface{}, err error) {
 	cfg := config.Get()
 	if cfg != nil && cfg.Debug.ShowToolCalls {
 		inputJSON, _ := json.Marshal(input)
@@ -113,12 +114,12 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 
 	if err := tc.MemoryMgr.SaveMemory(ctx, mem); err != nil {
 		output := &SaveMemoryOutput{Success: false, Message: err.Error()}
-		logToolCall("saveMemory", input, output, err)
+		LogToolCall("saveMemory", input, output, err)
 		return output, nil
 	}
 
 	output := &SaveMemoryOutput{Success: true, Message: "已记住"}
-	logToolCall("saveMemory", input, output, nil)
+	LogToolCall("saveMemory", input, output, nil)
 	return output, nil
 }
 
@@ -167,7 +168,7 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, tc.GroupID, memory.MemoryType(input.Type), 10)
 	if err != nil {
 		output := &QueryMemoryOutput{Success: false, Message: err.Error()}
-		logToolCall("queryMemory", input, output, err)
+		LogToolCall("queryMemory", input, output, err)
 		return output, nil
 	}
 
@@ -186,7 +187,7 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 		Count:    len(results),
 		Memories: results,
 	}
-	logToolCall("queryMemory", input, output, nil)
+	LogToolCall("queryMemory", input, output, nil)
 	return output, nil
 }
 
@@ -240,12 +241,12 @@ func saveJargonFunc(ctx context.Context, input *SaveJargonInput) (*SaveJargonOut
 
 	if err := tc.MemoryMgr.SaveJargon(jargon); err != nil {
 		output := &SaveJargonOutput{Success: false, Message: err.Error()}
-		logToolCall("saveJargon", input, output, err)
+		LogToolCall("saveJargon", input, output, err)
 		return output, nil
 	}
 
 	output := &SaveJargonOutput{Success: true, Message: "已记住这个黑话"}
-	logToolCall("saveJargon", input, output, nil)
+	LogToolCall("saveJargon", input, output, nil)
 	return output, nil
 }
 
@@ -314,12 +315,12 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 
 	if err := tc.MemoryMgr.UpdateMemberProfile(profile); err != nil {
 		output := &UpdateMemberProfileOutput{Success: false, Message: err.Error()}
-		logToolCall("updateMemberProfile", input, output, err)
+		LogToolCall("updateMemberProfile", input, output, err)
 		return output, nil
 	}
 
 	output := &UpdateMemberProfileOutput{Success: true, Message: "已更新对该群友的了解"}
-	logToolCall("updateMemberProfile", input, output, nil)
+	LogToolCall("updateMemberProfile", input, output, nil)
 	return output, nil
 }
 
@@ -370,7 +371,7 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 			Success: false,
 			Message: "不太了解这个人",
 		}
-		logToolCall("getMemberInfo", input, output, err)
+		LogToolCall("getMemberInfo", input, output, err)
 		return output, nil
 	}
 
@@ -396,7 +397,7 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 		Intimacy:    profile.Intimacy,
 		MsgCount:    profile.MsgCount,
 	}
-	logToolCall("getMemberInfo", input, output, nil)
+	LogToolCall("getMemberInfo", input, output, nil)
 	return output, nil
 }
 
@@ -448,7 +449,7 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 		ReplyTo:     input.ReplyTo,
 		Message:     "已发言",
 	}
-	logToolCall("speak", input, output, nil)
+	LogToolCall("speak", input, output, nil)
 	return output, nil
 }
 
@@ -456,7 +457,14 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在群里说话。只有当你真的想说什么的时候才用，不用强迫自己每次都说话。说话要自然，像个真人群友。",
+		`在群里说话。只有当你真的想说什么的时候才用，不用强迫自己每次都说话。说话要自然，像个真人群友。
+
+【重要】使用规则：
+- 每次调用speak只能发送**一条**消息，不要把多句话合并在一起
+- 如果你想说多句话，请多次调用speak
+- 不要用分号、句号或换行符连接多个独立的句子
+- 正确示例：先调用speak("你好")，再调用speak("今天天气真好")
+- 错误示例：speak("你好。今天天气真好") 或 speak("你好\n今天天气真好")`,
 		speakFunc,
 	)
 }
@@ -483,7 +491,14 @@ func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput
 		ShouldSpeak: false,
 		Reason:      input.Reason,
 	}
-	logToolCall("stayQuiet", input, output, nil)
+	LogToolCall("stayQuiet", input, output, nil)
+
+	// 调用 StopThinking 强制停止思考
+	tc := GetToolContext(ctx)
+	if tc != nil && tc.StopThinking != nil {
+		tc.StopThinking()
+	}
+
 	return output, nil
 }
 
@@ -491,7 +506,12 @@ func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput
 func NewStayQuietTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"stayQuiet",
-		"选择不说话，继续观察。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时使用。",
+		`选择不说话，继续观察。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时使用。
+
+【重要】使用规则：
+- stayQuiet 应该在你决定不发言时**最后调用**
+- 调用 stayQuiet 后必须立刻停止，不要再调用任何工具
+- 如果你想说话，请用 speak，不要在 stayQuiet 之后再 speak`,
 		stayQuietFunc,
 	)
 }
@@ -538,7 +558,7 @@ func getCurrentTimeFunc(ctx context.Context, input *GetCurrentTimeInput) (*GetCu
 		IsLate:    hour >= 23 || hour < 6,
 		IsWeekend: now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
 	}
-	logToolCall("getCurrentTime", input, output, nil)
+	LogToolCall("getCurrentTime", input, output, nil)
 	return output, nil
 }
 
@@ -571,19 +591,19 @@ func getGroupInfoFunc(ctx context.Context, input *GetGroupInfoInput) (*GetGroupI
 	tc := GetToolContext(ctx)
 	if tc == nil {
 		output := &GetGroupInfoOutput{Success: false, Message: "工具上下文未初始化"}
-		logToolCall("getGroupInfo", input, output, nil)
+		LogToolCall("getGroupInfo", input, output, nil)
 		return output, nil
 	}
 	if tc.Bot == nil {
 		output := &GetGroupInfoOutput{Success: false, Message: "Bot未连接"}
-		logToolCall("getGroupInfo", input, output, nil)
+		LogToolCall("getGroupInfo", input, output, nil)
 		return output, nil
 	}
 
 	info, err := tc.Bot.GetGroupInfo(tc.GroupID, false)
 	if err != nil {
 		output := &GetGroupInfoOutput{Success: false, Message: err.Error()}
-		logToolCall("getGroupInfo", input, output, err)
+		LogToolCall("getGroupInfo", input, output, err)
 		return output, nil
 	}
 
@@ -594,7 +614,7 @@ func getGroupInfoFunc(ctx context.Context, input *GetGroupInfoInput) (*GetGroupI
 		MemberCount:    info.MemberCount,
 		MaxMemberCount: info.MaxMemberCount,
 	}
-	logToolCall("getGroupInfo", input, output, nil)
+	LogToolCall("getGroupInfo", input, output, nil)
 	return output, nil
 }
 
@@ -644,7 +664,7 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 	info, err := tc.Bot.GetGroupMemberInfo(tc.GroupID, input.UserID, false)
 	if err != nil {
 		output := &GetGroupMemberDetailOutput{Success: false, Message: err.Error()}
-		logToolCall("getGroupMemberDetail", input, output, err)
+		LogToolCall("getGroupMemberDetail", input, output, err)
 		return output, nil
 	}
 
@@ -664,7 +684,7 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 		output.LastSentTime = time.Unix(info.LastSentTime, 0).Format("2006-01-02 15:04:05")
 	}
 
-	logToolCall("getGroupMemberDetail", input, output, nil)
+	LogToolCall("getGroupMemberDetail", input, output, nil)
 	return output, nil
 }
 
@@ -706,12 +726,12 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 
 	if err := tc.Bot.GroupPoke(tc.GroupID, input.UserID); err != nil {
 		output := &PokeOutput{Success: false, Message: err.Error()}
-		logToolCall("poke", input, output, err)
+		LogToolCall("poke", input, output, err)
 		return output, nil
 	}
 
 	output := &PokeOutput{Success: true, Message: "已戳一戳"}
-	logToolCall("poke", input, output, nil)
+	LogToolCall("poke", input, output, nil)
 	return output, nil
 }
 
@@ -758,12 +778,12 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 
 	if err := tc.Bot.SetMsgEmojiLike(input.MessageID, input.EmojiID); err != nil {
 		output := &ReactToMessageOutput{Success: false, Message: err.Error()}
-		logToolCall("reactToMessage", input, output, err)
+		LogToolCall("reactToMessage", input, output, err)
 		return output, nil
 	}
 
 	output := &ReactToMessageOutput{Success: true, Message: "已回应表情"}
-	logToolCall("reactToMessage", input, output, nil)
+	LogToolCall("reactToMessage", input, output, nil)
 	return output, nil
 }
 
@@ -807,12 +827,12 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 
 	if err := tc.Bot.DeleteMsg(input.MessageID); err != nil {
 		output := &RecallMessageOutput{Success: false, Message: err.Error()}
-		logToolCall("recallMessage", input, output, err)
+		LogToolCall("recallMessage", input, output, err)
 		return output, nil
 	}
 
 	output := &RecallMessageOutput{Success: true, Message: "已撤回消息"}
-	logToolCall("recallMessage", input, output, nil)
+	LogToolCall("recallMessage", input, output, nil)
 	return output, nil
 }
 
@@ -844,6 +864,13 @@ func saveExpressionFunc(ctx context.Context, input *SaveExpressionInput) (*SaveE
 		return &SaveExpressionOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 
+	if input.Situation == "" {
+		return &SaveExpressionOutput{Success: false, Message: "使用场景不能为空"}, nil
+	}
+	if input.Style == "" {
+		return &SaveExpressionOutput{Success: false, Message: "表达风格不能为空"}, nil
+	}
+
 	exp := &memory.Expression{
 		GroupID:   tc.GroupID,
 		Situation: input.Situation,
@@ -854,12 +881,12 @@ func saveExpressionFunc(ctx context.Context, input *SaveExpressionInput) (*SaveE
 
 	if err := tc.MemoryMgr.SaveExpression(exp); err != nil {
 		output := &SaveExpressionOutput{Success: false, Message: err.Error()}
-		logToolCall("saveExpression", input, output, err)
+		LogToolCall("saveExpression", input, output, err)
 		return output, nil
 	}
 
 	output := &SaveExpressionOutput{Success: true, Message: "已记住这种表达方式"}
-	logToolCall("saveExpression", input, output, nil)
+	LogToolCall("saveExpression", input, output, nil)
 	return output, nil
 }
 
@@ -897,7 +924,7 @@ func getExpressionsFunc(ctx context.Context, input *GetExpressionsInput) (*GetEx
 	exps, err := tc.MemoryMgr.GetExpressions(tc.GroupID, limit)
 	if err != nil {
 		output := &GetExpressionsOutput{Success: false, Message: err.Error()}
-		logToolCall("getExpressions", input, output, err)
+		LogToolCall("getExpressions", input, output, err)
 		return output, nil
 	}
 
@@ -910,7 +937,7 @@ func getExpressionsFunc(ctx context.Context, input *GetExpressionsInput) (*GetEx
 		Success:     true,
 		Expressions: results,
 	}
-	logToolCall("getExpressions", input, output, nil)
+	LogToolCall("getExpressions", input, output, nil)
 	return output, nil
 }
 
@@ -962,7 +989,7 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 		Success:  true,
 		Messages: results,
 	}
-	logToolCall("getRecentMessages", input, output, nil)
+	LogToolCall("getRecentMessages", input, output, nil)
 	return output, nil
 }
 
@@ -1008,7 +1035,7 @@ func getUncheckedExpressionsFunc(ctx context.Context, input *GetUncheckedExpress
 	exps, err := tc.MemoryMgr.GetUncheckedExpressions(tc.GroupID, limit)
 	if err != nil {
 		output := &GetUncheckedExpressionsOutput{Success: false, Message: err.Error()}
-		logToolCall("getUncheckedExpressions", input, output, err)
+		LogToolCall("getUncheckedExpressions", input, output, err)
 		return output, nil
 	}
 
@@ -1024,7 +1051,7 @@ func getUncheckedExpressionsFunc(ctx context.Context, input *GetUncheckedExpress
 	}
 
 	output := &GetUncheckedExpressionsOutput{Success: true, Expressions: results}
-	logToolCall("getUncheckedExpressions", input, output, nil)
+	LogToolCall("getUncheckedExpressions", input, output, nil)
 	return output, nil
 }
 
@@ -1054,10 +1081,14 @@ func reviewExpressionFunc(ctx context.Context, input *ReviewExpressionInput) (*R
 		return &ReviewExpressionOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 
+	if input.ID == 0 {
+		return &ReviewExpressionOutput{Success: false, Message: "表达方式ID不能为空"}, nil
+	}
+
 	err := tc.MemoryMgr.ReviewExpression(input.ID, input.Approve)
 	if err != nil {
 		output := &ReviewExpressionOutput{Success: false, Message: err.Error()}
-		logToolCall("reviewExpression", input, output, err)
+		LogToolCall("reviewExpression", input, output, err)
 		return output, nil
 	}
 
@@ -1066,7 +1097,7 @@ func reviewExpressionFunc(ctx context.Context, input *ReviewExpressionInput) (*R
 		msg = "已通过该表达方式"
 	}
 	output := &ReviewExpressionOutput{Success: true, Message: msg}
-	logToolCall("reviewExpression", input, output, nil)
+	LogToolCall("reviewExpression", input, output, nil)
 	return output, nil
 }
 
@@ -1112,7 +1143,7 @@ func getUnverifiedJargonsFunc(ctx context.Context, input *GetUnverifiedJargonsIn
 	jargons, err := tc.MemoryMgr.GetUnverifiedJargons(tc.GroupID, limit)
 	if err != nil {
 		output := &GetUnverifiedJargonsOutput{Success: false, Message: err.Error()}
-		logToolCall("getUnverifiedJargons", input, output, err)
+		LogToolCall("getUnverifiedJargons", input, output, err)
 		return output, nil
 	}
 
@@ -1128,7 +1159,7 @@ func getUnverifiedJargonsFunc(ctx context.Context, input *GetUnverifiedJargonsIn
 	}
 
 	output := &GetUnverifiedJargonsOutput{Success: true, Jargons: results}
-	logToolCall("getUnverifiedJargons", input, output, nil)
+	LogToolCall("getUnverifiedJargons", input, output, nil)
 	return output, nil
 }
 
@@ -1158,10 +1189,14 @@ func reviewJargonFunc(ctx context.Context, input *ReviewJargonInput) (*ReviewJar
 		return &ReviewJargonOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 
+	if input.ID == 0 {
+		return &ReviewJargonOutput{Success: false, Message: "黑话ID不能为空"}, nil
+	}
+
 	err := tc.MemoryMgr.ReviewJargon(input.ID, input.Approve)
 	if err != nil {
 		output := &ReviewJargonOutput{Success: false, Message: err.Error()}
-		logToolCall("reviewJargon", input, output, err)
+		LogToolCall("reviewJargon", input, output, err)
 		return output, nil
 	}
 
@@ -1170,7 +1205,7 @@ func reviewJargonFunc(ctx context.Context, input *ReviewJargonInput) (*ReviewJar
 		msg = "已验证该黑话"
 	}
 	output := &ReviewJargonOutput{Success: true, Message: msg}
-	logToolCall("reviewJargon", input, output, nil)
+	LogToolCall("reviewJargon", input, output, nil)
 	return output, nil
 }
 

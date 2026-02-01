@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"amu-bot/internal/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -135,8 +136,17 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 		return fmt.Errorf("获取MCP工具失败: %w", err)
 	}
 
+	// 包装工具以添加调用日志
+	wrappedTools := make([]tool.BaseTool, 0, len(tools))
+	for _, t := range tools {
+		wrappedTools = append(wrappedTools, &loggingToolWrapper{
+			BaseTool:   t,
+			serverName: cfg.Name,
+		})
+	}
+
 	m.clients = append(m.clients, cli)
-	m.tools = append(m.tools, tools...)
+	m.tools = append(m.tools, wrappedTools...)
 
 	zap.L().Info("已加载MCP工具",
 		zap.String("server", cfg.Name),
@@ -165,4 +175,25 @@ func (m *MCPManager) Close() {
 
 	m.clients = nil
 	m.tools = nil
+}
+
+// loggingToolWrapper 带日志的工具包装器
+type loggingToolWrapper struct {
+	tool.BaseTool
+	serverName string
+}
+
+// InvokableRun 包装 InvokableRun 方法以添加调用日志
+func (w *loggingToolWrapper) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if invokable, ok := w.BaseTool.(tool.InvokableTool); ok {
+		result, err := invokable.InvokableRun(ctx, argumentsInJSON, opts...)
+		// 截断返回结果到100字
+		truncatedResult := result
+		if len(truncatedResult) > 100 {
+			truncatedResult = truncatedResult[:100] + "..."
+		}
+		tools.LogToolCall(w.serverName, argumentsInJSON, truncatedResult, err)
+		return result, err
+	}
+	return "", fmt.Errorf("工具不支持 InvokableRun")
 }

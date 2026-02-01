@@ -8,6 +8,7 @@ import (
 	"amu-bot/internal/onebot"
 	"amu-bot/internal/persona"
 	"amu-bot/internal/tools"
+	"amu-bot/internal/utils"
 	"context"
 	"fmt"
 	"math/rand"
@@ -35,9 +36,9 @@ type Agent struct {
 	tools   []tool.BaseTool
 	mcpMgr  *mcp.MCPManager // MCP管理器
 
-	// 消息缓冲
-	buffers   map[int64][]*onebot.GroupMessage
-	buffersMu sync.RWMutex
+	// 消息缓冲（使用 ring buffer 避免扩容缩容开销）
+	buffers   map[int64]*utils.RingBuffer[*onebot.GroupMessage]
+	buffersMu sync.RWMutex // 保护 map 本身的并发访问
 
 	// 发言冷却
 	lastSpeak   map[int64]time.Time
@@ -70,7 +71,7 @@ func New(
 		model:             m,
 		vision:            vision,
 		bot:               bot,
-		buffers:           make(map[int64][]*onebot.GroupMessage),
+		buffers:           make(map[int64]*utils.RingBuffer[*onebot.GroupMessage]),
 		lastSpeak:         make(map[int64]time.Time),
 		processing:        make(map[int64]bool),
 		lastProcessedTime: make(map[int64]time.Time),
@@ -213,28 +214,30 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 	a.buffersMu.Lock()
-	defer a.buffersMu.Unlock()
-	buf := a.buffers[msg.GroupID]
-	buf = append(buf, msg)
-	if len(buf) > a.cfg.Agent.MessageBufferSize {
-		buf = buf[len(buf)-a.cfg.Agent.MessageBufferSize:]
+	buf, ok := a.buffers[msg.GroupID]
+	if !ok {
+		// 确保缓冲区大小有效
+		bufSize := a.cfg.Agent.MessageBufferSize
+		if bufSize <= 0 {
+			bufSize = 50 // 默认缓冲区大小
+		}
+		buf = utils.NewRingBuffer[*onebot.GroupMessage](bufSize)
+		a.buffers[msg.GroupID] = buf
 	}
-	a.buffers[msg.GroupID] = buf
+	a.buffersMu.Unlock()
+
+	buf.Push(msg)
 }
 
 func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
 	a.buffersMu.RLock()
-	defer a.buffersMu.RUnlock()
-	buf := a.buffers[groupID]
-	result := make([]*onebot.GroupMessage, len(buf))
-	copy(result, buf)
-	return result
-}
+	buf, ok := a.buffers[groupID]
+	a.buffersMu.RUnlock()
 
-func (a *Agent) clearBuffer(groupID int64) {
-	a.buffersMu.Lock()
-	a.buffers[groupID] = a.buffers[groupID][:0]
-	a.buffersMu.Unlock()
+	if !ok || buf.IsEmpty() {
+		return nil
+	}
+	return buf.GetAll()
 }
 
 func (a *Agent) updateMember(msg *onebot.GroupMessage) {
@@ -379,13 +382,18 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		a.processingMu.Unlock()
 	}()
 
-	ctx := tools.WithToolContext(context.Background(), &tools.ToolContext{
+	// 创建可取消的 context，用于 stayQuiet 强制停止思考
+	ctxWithCancel, cancelThinking := context.WithCancel(context.Background())
+	defer cancelThinking()
+
+	ctx := tools.WithToolContext(ctxWithCancel, &tools.ToolContext{
 		GroupID:   groupID,
 		MemoryMgr: a.memory,
 		Bot:       a.bot,
 		SpeakCallback: func(gid int64, content string, replyTo int64) {
 			a.doSpeak(gid, content, replyTo)
 		},
+		StopThinking: cancelThinking, // 传递取消函数
 	})
 
 	// 构建对话上下文
@@ -423,7 +431,6 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	if isMention {
 		thinkPrompt += "\n\n注意：有人@你了，可能在找你说话，你可以看情况回复。"
 	}
-	thinkPrompt += "\n\n请注意：speak 和 stayQuiet 应该在最后调用。调用完成后必须立刻停止本轮思考，不要再调用任何工具。"
 
 	// 记录当前缓冲区中的最后一条消息时间，作为新的“已读”位置
 	bufMsgs := a.getBuffer(groupID)
@@ -447,8 +454,21 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		schema.UserMessage(thinkPrompt),
 	}
 
-	if _, err := a.react.Generate(ctx, msgs); err != nil {
-		zap.L().Error("思考失败", zap.Error(err))
+	// 设置超时时间（默认60秒），防止LLM请求无限阻塞
+	timeout := 60 * time.Second
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, timeout)
+	defer cancelTimeout()
+
+	if _, err := a.react.Generate(ctxWithTimeout, msgs); err != nil {
+		// 区分是超时还是主动取消（stayQuiet）
+		if ctxWithTimeout.Err() == context.DeadlineExceeded {
+			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Duration("timeout", timeout))
+		} else if ctxWithCancel.Err() == context.Canceled {
+			// stayQuiet 触发的主动停止，这是正常行为，不记录错误
+			zap.L().Debug("思考结束（stayQuiet）", zap.Int64("group_id", groupID))
+		} else {
+			zap.L().Error("思考失败", zap.Int64("group_id", groupID), zap.Error(err))
+		}
 	}
 }
 
@@ -505,7 +525,7 @@ func (a *Agent) buildChatContext(groupID int64) string {
 		}
 
 		// 在消息开头添加消息ID，方便模型引用
-		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d)%s: %s\n",
+		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
 			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, mention, content))
 	}
 	return b.String()

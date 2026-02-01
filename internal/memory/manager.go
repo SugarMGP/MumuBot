@@ -90,7 +90,6 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 		milvus:    milvusClient,
 	}
 
-	go m.cleanupLoop()
 	return m, nil
 }
 
@@ -435,19 +434,6 @@ func (m *Manager) ListMessageLogs(groupID int64, page, pageSize int) ([]MessageL
 
 	err := q.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
 	return items, total, err
-}
-
-// ==================== 清理 ====================
-
-func (m *Manager) cleanupLoop() {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		// 清理7天前未概括的消息
-		m.db.Where("created_at < ? AND summarized = ?", time.Now().Add(-7*24*time.Hour), false).
-			Delete(&MessageLog{})
-	}
 }
 
 func (m *Manager) Close() error {
