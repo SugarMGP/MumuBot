@@ -840,7 +840,7 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 func NewRecallMessageTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"recallMessage",
-		"撤回你自己发的消息。当你发错消息、说错话、或者想收回刚才的发言时使用。只能撤回自己的消息且时间有限制。",
+		"撤回你自己发的消息。当你发错消息、说错话、或者想收回刚才的发言时使用。只能撤回自己两分钟内发的消息。",
 		recallMessageFunc,
 	)
 }
@@ -952,8 +952,8 @@ func NewGetExpressionsTool() (tool.InvokableTool, error) {
 // ==================== 获取短期记忆工具 ====================
 
 type GetRecentMessagesInput struct {
-	Limit  int `json:"limit,omitempty" jsonschema:"description=返回消息条数，默认10"`
-	Offset int `json:"offset,omitempty" jsonschema:"description=偏移量，用于访问更早的记录。例如 offset=10 表示跳过最近的10条消息"`
+	Limit  int `json:"limit,omitempty" jsonschema:"description=返回消息条数，默认40"`
+	Offset int `json:"offset,omitempty" jsonschema:"description=偏移量，用于跳过近期的记录。例如 offset=10 表示跳过最近的10条消息"`
 }
 
 type GetRecentMessagesOutput struct {
@@ -970,7 +970,7 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = 10
+		limit = 40
 	}
 
 	msgs := tc.MemoryMgr.GetRecentMessages(tc.GroupID, limit, input.Offset)
@@ -996,7 +996,7 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 func NewGetRecentMessagesTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"getRecentMessages",
-		"获取最近的聊天记录（短期记忆）。当你需要了解更早之前的对话背景时使用。",
+		"获取最近的聊天记录。当你需要了解更早之前的对话时使用。",
 		getRecentMessagesFunc,
 	)
 }

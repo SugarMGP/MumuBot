@@ -280,7 +280,7 @@ func (m *Manager) SaveJargon(jargon *Jargon) error {
 	var existing Jargon
 	err := m.db.Where("group_id = ? AND content = ?", jargon.GroupID, jargon.Content).First(&existing).Error
 
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return m.db.Create(jargon).Error
 	} else if err != nil {
 		return err
