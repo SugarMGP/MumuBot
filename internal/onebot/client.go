@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -104,7 +105,54 @@ type FaceInfo struct {
 
 // ReplyInfo 回复信息
 type ReplyInfo struct {
-	MessageID int64 `json:"message_id"`
+	MessageID int64  `json:"message_id"`
+	Content   string `json:"content,omitempty"`   // 被回复消息内容
+	SenderID  int64  `json:"sender_id,omitempty"` // 被回复消息发送者ID
+	Nickname  string `json:"nickname,omitempty"`  // 被回复消息发送者昵称
+}
+
+// CardMessage 卡片消息解析结果
+type CardMessage struct {
+	App   string `json:"app"`   // 应用标识
+	Title string `json:"title"` // 标题
+	Desc  string `json:"desc"`  // 描述
+	URL   string `json:"url"`   // 链接
+}
+
+// Format 格式化卡片消息为可读文本
+func (c *CardMessage) Format() string {
+	if c.URL != "" {
+		return fmt.Sprintf("[卡片:%s - %s 链接:%s]", c.Title, c.Desc, c.URL)
+	}
+	if c.Desc != "" {
+		return fmt.Sprintf("[卡片:%s - %s]", c.Title, c.Desc)
+	}
+	return fmt.Sprintf("[卡片:%s]", c.Title)
+}
+
+// EmojiReaction 表情回应
+type EmojiReaction struct {
+	EmojiID int `json:"emoji_id"`
+	Count   int `json:"count"`
+}
+
+// GroupNotice 群公告
+type GroupNotice struct {
+	NoticeID    string `json:"notice_id"`
+	SenderID    int64  `json:"sender_id"`
+	PublishTime int64  `json:"publish_time"`
+	Content     string `json:"content"`
+}
+
+// EssenceMessage 群精华消息
+type EssenceMessage struct {
+	MessageID    int64  `json:"message_id"`
+	SenderID     int64  `json:"sender_id"`
+	SenderNick   string `json:"sender_nick"`
+	OperatorID   int64  `json:"operator_id"`
+	OperatorNick string `json:"operator_nick"`
+	OperatorTime int64  `json:"operator_time"`
+	Content      string `json:"content"`
 }
 
 // GroupInfo 群信息
@@ -420,12 +468,28 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 
 		case "reply":
+			var replyMsgID int64
 			if id, ok := data["id"].(string); ok {
-				if msgID, err := strconv.ParseInt(id, 10, 64); err == nil {
-					msg.Reply = &ReplyInfo{MessageID: msgID}
-				}
+				replyMsgID, _ = strconv.ParseInt(id, 10, 64)
 			} else if id, ok := data["id"].(float64); ok {
-				msg.Reply = &ReplyInfo{MessageID: int64(id)}
+				replyMsgID = int64(id)
+			}
+			if replyMsgID > 0 {
+				msg.Reply = &ReplyInfo{MessageID: replyMsgID}
+				// 同步获取被回复消息内容
+				if replyData, err := c.GetMsg(replyMsgID); err == nil && replyData != nil {
+					if rawMsg, ok := replyData["raw_message"].(string); ok {
+						msg.Reply.Content = rawMsg
+					}
+					if sender, ok := replyData["sender"].(map[string]interface{}); ok {
+						if uid, ok := sender["user_id"].(float64); ok {
+							msg.Reply.SenderID = int64(uid)
+						}
+						if nick, ok := sender["nickname"].(string); ok {
+							msg.Reply.Nickname = nick
+						}
+					}
+				}
 			}
 
 		case "mface": // 商城表情/魔法表情
@@ -455,7 +519,16 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 
 		case "json": // JSON卡片消息
-			textParts = append(textParts, "[卡片消息]")
+			if jsonStr, ok := data["data"].(string); ok {
+				card := parseCardMessage(jsonStr)
+				if card != nil {
+					textParts = append(textParts, card.Format())
+				} else {
+					textParts = append(textParts, "[卡片消息]")
+				}
+			} else {
+				textParts = append(textParts, "[卡片消息]")
+			}
 
 		case "forward": // 合并转发
 			textParts = append(textParts, "[合并转发]")
@@ -837,4 +910,244 @@ func (c *Client) IsConnected() bool {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 	return c.conn != nil && !c.reconnecting
+}
+
+// parseCardMessage 解析JSON卡片消息
+func parseCardMessage(jsonStr string) *CardMessage {
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		return nil
+	}
+
+	card := &CardMessage{}
+
+	// 获取 app 类型
+	if app, ok := data["app"].(string); ok {
+		card.App = app
+	}
+
+	// 尝试从 meta 中提取信息（常见结构）
+	if meta, ok := data["meta"].(map[string]interface{}); ok {
+		// 遍历 meta 中的第一个子对象
+		for _, v := range meta {
+			if detail, ok := v.(map[string]interface{}); ok {
+				if title, ok := detail["title"].(string); ok {
+					card.Title = title
+				}
+				if desc, ok := detail["desc"].(string); ok {
+					card.Desc = desc
+				}
+				if jumpUrl, ok := detail["jumpUrl"].(string); ok {
+					card.URL = jumpUrl
+				} else if qqdocurl, ok := detail["qqdocurl"].(string); ok {
+					card.URL = qqdocurl
+				}
+				break
+			}
+		}
+	}
+
+	// 尝试从 prompt 获取标题（备用）
+	if card.Title == "" {
+		if prompt, ok := data["prompt"].(string); ok {
+			card.Title = prompt
+		}
+	}
+
+	// 尝试从 desc 获取描述（备用）
+	if card.Desc == "" {
+		if desc, ok := data["desc"].(string); ok {
+			card.Desc = desc
+		}
+	}
+
+	if card.Title == "" && card.Desc == "" {
+		return nil
+	}
+
+	return card
+}
+
+// GetGroupNotice 获取群公告
+func (c *Client) GetGroupNotice(groupID int64) ([]GroupNotice, error) {
+	resp, err := c.callAPI(context.Background(), "_get_group_notice", map[string]interface{}{
+		"group_id": groupID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	dataList := resp.DataList()
+	if dataList == nil {
+		return nil, nil
+	}
+
+	var notices []GroupNotice
+	for _, item := range dataList {
+		data, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		notice := GroupNotice{}
+		if noticeID, ok := data["notice_id"].(string); ok {
+			notice.NoticeID = noticeID
+		}
+		if senderID, ok := data["sender_id"].(float64); ok {
+			notice.SenderID = int64(senderID)
+		}
+		if publishTime, ok := data["publish_time"].(float64); ok {
+			notice.PublishTime = int64(publishTime)
+		}
+		if msg, ok := data["message"].(map[string]interface{}); ok {
+			if text, ok := msg["text"].(string); ok {
+				notice.Content = text
+			}
+		}
+		notices = append(notices, notice)
+	}
+	return notices, nil
+}
+
+// GetEssenceMessages 获取群精华消息
+func (c *Client) GetEssenceMessages(groupID int64) ([]EssenceMessage, error) {
+	resp, err := c.callAPI(context.Background(), "get_essence_msg_list", map[string]interface{}{
+		"group_id": groupID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	dataList := resp.DataList()
+	if dataList == nil {
+		return nil, nil
+	}
+
+	var messages []EssenceMessage
+	for _, item := range dataList {
+		data, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		msg := EssenceMessage{}
+		if msgID, ok := data["message_id"].(float64); ok {
+			msg.MessageID = int64(msgID)
+		}
+		if senderID, ok := data["sender_id"].(float64); ok {
+			msg.SenderID = int64(senderID)
+		}
+		if senderNick, ok := data["sender_nick"].(string); ok {
+			msg.SenderNick = senderNick
+		}
+		if operatorID, ok := data["operator_id"].(float64); ok {
+			msg.OperatorID = int64(operatorID)
+		}
+		if operatorNick, ok := data["operator_nick"].(string); ok {
+			msg.OperatorNick = operatorNick
+		}
+		if operatorTime, ok := data["operator_time"].(float64); ok {
+			msg.OperatorTime = int64(operatorTime)
+		}
+		// 解析消息内容
+		if content, ok := data["content"].([]interface{}); ok {
+			msg.Content = extractTextFromSegments(content)
+		}
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}
+
+// extractTextFromSegments 从消息段中提取文本内容
+func extractTextFromSegments(segments []interface{}) string {
+	var parts []string
+	for _, seg := range segments {
+		segMap, ok := seg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		segType, _ := segMap["type"].(string)
+		data, _ := segMap["data"].(map[string]interface{})
+		if data == nil {
+			continue
+		}
+		switch segType {
+		case "text":
+			if t, ok := data["text"].(string); ok {
+				parts = append(parts, t)
+			}
+		case "image":
+			parts = append(parts, "[图片]")
+		case "face":
+			parts = append(parts, "[表情]")
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// GetMessageReactions 获取消息的表情回应
+func (c *Client) GetMessageReactions(messageID int64) ([]EmojiReaction, error) {
+	// 通过 get_msg 获取消息详情，其中包含 emoji_likes_list
+	msgData, err := c.GetMsg(messageID)
+	if err != nil {
+		return nil, err
+	}
+
+	emojiList, ok := msgData["emoji_likes_list"].([]interface{})
+	if !ok || len(emojiList) == 0 {
+		return nil, nil
+	}
+
+	var reactions []EmojiReaction
+	for _, item := range emojiList {
+		emojiData, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		reaction := EmojiReaction{}
+		if emojiID, ok := emojiData["emoji_id"].(float64); ok {
+			reaction.EmojiID = int(emojiID)
+		} else if emojiID, ok := emojiData["emoji_id"].(string); ok {
+			reaction.EmojiID, _ = strconv.Atoi(emojiID)
+		}
+		if count, ok := emojiData["count"].(float64); ok {
+			reaction.Count = int(count)
+		}
+		if reaction.EmojiID > 0 {
+			reactions = append(reactions, reaction)
+		}
+	}
+	return reactions, nil
+}
+
+// SendImageMessage 发送图片/表情包消息
+// filePath: 本地文件绝对路径
+// isSticker: true 时作为表情包发送 (sub_type=1)
+func (c *Client) SendImageMessage(groupID int64, filePath string, isSticker bool) (int64, error) {
+	subType := 0
+	if isSticker {
+		subType = 1
+	}
+
+	message := []map[string]interface{}{
+		{
+			"type": "image",
+			"data": map[string]interface{}{
+				"file":     "file:///" + filePath,
+				"sub_type": subType,
+			},
+		},
+	}
+
+	resp, err := c.callAPI(context.Background(), "send_group_msg", map[string]interface{}{
+		"group_id": groupID,
+		"message":  message,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if data := resp.DataMap(); data != nil {
+		if msgID, ok := data["message_id"].(float64); ok {
+			return int64(msgID), nil
+		}
+	}
+	return 0, nil
 }

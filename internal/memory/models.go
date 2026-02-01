@@ -108,3 +108,20 @@ type MessageLog struct {
 }
 
 func (MessageLog) TableName() string { return "message_logs" }
+
+// Sticker 收集的表情包
+type Sticker struct {
+	ID        uint           `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	FileName    string    `gorm:"type:varchar(100)" json:"file_name"`              // 本地文件名（uuid.ext）
+	OriginalURL string    `gorm:"type:varchar(500)" json:"original_url"`           // 原始URL
+	FileHash    string    `gorm:"type:varchar(64);uniqueIndex" json:"file_hash"`   // 文件MD5哈希（用于去重）
+	Description string    `gorm:"type:text" json:"description"`                    // Vision模型生成的描述
+	UseCount    int       `gorm:"default:0" json:"use_count"`                      // 使用次数
+	LastUsed    time.Time `json:"last_used"`                                       // 最后使用时间
+}
+
+func (Sticker) TableName() string { return "stickers" }

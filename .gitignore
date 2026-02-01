@@ -34,6 +34,7 @@ config/*.local.yaml
 
 # 数据目录
 data/
+stickers/
 *.db
 *.db-journal
 

@@ -60,6 +60,7 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 		&Expression{},
 		&Jargon{},
 		&MessageLog{},
+		&Sticker{},
 	); err != nil {
 		return nil, fmt.Errorf("数据库迁移失败: %w", err)
 	}
@@ -449,3 +450,64 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) GetDB() *gorm.DB { return m.db }
+
+// ==================== 表情包管理 ====================
+
+// SaveSticker 保存表情包（通过哈希去重）
+func (m *Manager) SaveSticker(sticker *Sticker) (bool, error) {
+	// 先检查哈希是否已存在
+	var existing Sticker
+	err := m.db.Where("file_hash = ?", sticker.FileHash).First(&existing).Error
+	if err == nil {
+		// 已存在，返回重复标记
+		return true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, err
+	}
+
+	// 不存在，创建新记录
+	if err := m.db.Create(sticker).Error; err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// GetStickerByID 根据ID获取表情包
+func (m *Manager) GetStickerByID(id uint) (*Sticker, error) {
+	var sticker Sticker
+	err := m.db.First(&sticker, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &sticker, nil
+}
+
+// SearchStickers 搜索表情包
+func (m *Manager) SearchStickers(keyword string, limit int) ([]Sticker, error) {
+	var stickers []Sticker
+	q := m.db.Model(&Sticker{})
+	if keyword != "" {
+		q = q.Where("description LIKE ?", "%"+keyword+"%")
+	}
+	err := q.Order("use_count DESC, updated_at DESC").Limit(limit).Find(&stickers).Error
+	return stickers, err
+}
+
+// UpdateStickerUsage 更新表情包使用记录
+func (m *Manager) UpdateStickerUsage(id uint) error {
+	return m.db.Model(&Sticker{}).Where("id = ?", id).Updates(map[string]any{
+		"use_count": gorm.Expr("use_count + 1"),
+		"last_used": time.Now(),
+	}).Error
+}
+
+// GetStickerByHash 通过哈希获取表情包
+func (m *Manager) GetStickerByHash(hash string) (*Sticker, error) {
+	var sticker Sticker
+	err := m.db.Where("file_hash = ?", hash).First(&sticker).Error
+	if err != nil {
+		return nil, err
+	}
+	return &sticker, nil
+}

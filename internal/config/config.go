@@ -24,6 +24,7 @@ type Config struct {
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	VisionLLM VisionLLMConfig `yaml:"vision_llm"`
 	Memory    MemoryConfig    `yaml:"memory"`
+	Sticker   StickerConfig   `yaml:"sticker"` // 表情包配置
 	Server    ServerConfig    `yaml:"server"`
 	Debug     DebugConfig     `yaml:"debug"` // 调试配置
 }
@@ -136,6 +137,13 @@ type LongTermConfig struct {
 	TopK                int     `yaml:"top_k"`                // 检索返回数量
 	SimilarityThreshold float64 `yaml:"similarity_threshold"` // 相似度阈值
 	ImportanceThreshold float64 `yaml:"importance_threshold"` // 重要性阈值
+}
+
+// StickerConfig 表情包配置
+type StickerConfig struct {
+	AutoSave    bool   `yaml:"auto_save"`    // 是否自动保存收到的表情包，默认 true
+	StoragePath string `yaml:"storage_path"` // 表情包存储目录，默认 "data/stickers"
+	MaxSizeMB   int    `yaml:"max_size_mb"`  // 单个文件最大大小(MB)，默认 5
 }
 
 // ServerConfig HTTP服务配置

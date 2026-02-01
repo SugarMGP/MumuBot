@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -1209,5 +1211,347 @@ func NewReviewJargonTool() (tool.InvokableTool, error) {
 		"reviewJargon",
 		"审核一条黑话/术语。如果含义正确，可以通过验证；如果有误，可以拒绝。",
 		reviewJargonFunc,
+	)
+}
+
+// ==================== 搜索表情包工具 ====================
+
+type SearchStickersInput struct {
+	Keyword string `json:"keyword" jsonschema:"description=按描述关键词搜索，如：猫、开心、无语等"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"description=返回数量，默认10"`
+}
+
+type StickerSummary struct {
+	ID          uint   `json:"id"`
+	Description string `json:"description"`
+	UseCount    int    `json:"use_count"`
+}
+
+type SearchStickersOutput struct {
+	Success  bool             `json:"success"`
+	Stickers []StickerSummary `json:"stickers,omitempty"`
+	Message  string           `json:"message,omitempty"`
+}
+
+func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*SearchStickersOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &SearchStickersOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	stickers, err := tc.MemoryMgr.SearchStickers(input.Keyword, limit)
+	if err != nil {
+		output := &SearchStickersOutput{Success: false, Message: "搜索失败: " + err.Error()}
+		LogToolCall("searchStickers", input, output, err)
+		return output, nil
+	}
+
+	if len(stickers) == 0 {
+		output := &SearchStickersOutput{Success: true, Message: "没有找到相关表情包"}
+		LogToolCall("searchStickers", input, output, nil)
+		return output, nil
+	}
+
+	results := make([]StickerSummary, 0, len(stickers))
+	for _, s := range stickers {
+		results = append(results, StickerSummary{
+			ID:          s.ID,
+			Description: s.Description,
+			UseCount:    s.UseCount,
+		})
+	}
+
+	output := &SearchStickersOutput{Success: true, Stickers: results}
+	LogToolCall("searchStickers", input, output, nil)
+	return output, nil
+}
+
+func NewSearchStickersTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"searchStickers",
+		"搜索已保存的表情包。可以通过关键词搜索，如情绪（开心、无语）、内容（猫、狗）等。",
+		searchStickersFunc,
+	)
+}
+
+// ==================== 发送表情包工具 ====================
+
+type SendStickerInput struct {
+	StickerID uint `json:"sticker_id" jsonschema:"description=表情包ID（从searchStickers获取）"`
+}
+
+type SendStickerOutput struct {
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	MessageID int64  `json:"message_id,omitempty"`
+}
+
+func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendStickerOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &SendStickerOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+	if tc.Bot == nil {
+		return &SendStickerOutput{Success: false, Message: "Bot未连接"}, nil
+	}
+	if input.StickerID == 0 {
+		return &SendStickerOutput{Success: false, Message: "表情包ID不能为空"}, nil
+	}
+
+	// 获取表情包信息
+	sticker, err := tc.MemoryMgr.GetStickerByID(input.StickerID)
+	if err != nil {
+		output := &SendStickerOutput{Success: false, Message: "表情包不存在"}
+		LogToolCall("sendSticker", input, output, err)
+		return output, nil
+	}
+
+	// 构建文件路径
+	cfg := config.Get()
+	storagePath := cfg.Sticker.StoragePath
+	if storagePath == "" {
+		storagePath = "data/stickers"
+	}
+	filePath, err := filepath.Abs(filepath.Join(storagePath, sticker.FileName))
+	if err != nil {
+		output := &SendStickerOutput{Success: false, Message: "获取文件路径失败"}
+		LogToolCall("sendSticker", input, output, err)
+		return output, nil
+	}
+
+	// 检查文件是否存在
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		output := &SendStickerOutput{Success: false, Message: "表情包文件不存在"}
+		LogToolCall("sendSticker", input, output, err)
+		return output, nil
+	}
+
+	// 发送图片（作为表情包）
+	msgID, err := tc.Bot.SendImageMessage(tc.GroupID, filePath, true)
+	if err != nil {
+		output := &SendStickerOutput{Success: false, Message: "发送失败: " + err.Error()}
+		LogToolCall("sendSticker", input, output, err)
+		return output, nil
+	}
+
+	// 更新使用记录
+	_ = tc.MemoryMgr.UpdateStickerUsage(input.StickerID)
+
+	output := &SendStickerOutput{
+		Success:   true,
+		Message:   "表情包已发送",
+		MessageID: msgID,
+	}
+	LogToolCall("sendSticker", input, output, nil)
+	return output, nil
+}
+
+func NewSendStickerTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"sendSticker",
+		"发送一个已保存的表情包。先用searchStickers搜索找到合适的表情包，再用这个工具发送。",
+		sendStickerFunc,
+	)
+}
+
+// ==================== 获取群公告工具 ====================
+
+type GetGroupNoticesInput struct {
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认3"`
+}
+
+type GroupNoticeSummary struct {
+	NoticeID    string `json:"notice_id"`
+	SenderID    int64  `json:"sender_id"`
+	PublishTime string `json:"publish_time"`
+	Content     string `json:"content"`
+}
+
+type GetGroupNoticesOutput struct {
+	Success bool                 `json:"success"`
+	Notices []GroupNoticeSummary `json:"notices,omitempty"`
+	Message string               `json:"message,omitempty"`
+}
+
+func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*GetGroupNoticesOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetGroupNoticesOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+	if tc.Bot == nil {
+		return &GetGroupNoticesOutput{Success: false, Message: "Bot未连接"}, nil
+	}
+
+	notices, err := tc.Bot.GetGroupNotice(tc.GroupID)
+	if err != nil {
+		output := &GetGroupNoticesOutput{Success: false, Message: "获取群公告失败: " + err.Error()}
+		LogToolCall("getGroupNotices", input, output, err)
+		return output, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 3
+	}
+	if len(notices) > limit {
+		notices = notices[:limit]
+	}
+
+	results := make([]GroupNoticeSummary, 0, len(notices))
+	for _, n := range notices {
+		results = append(results, GroupNoticeSummary{
+			NoticeID:    n.NoticeID,
+			SenderID:    n.SenderID,
+			PublishTime: time.Unix(n.PublishTime, 0).Format("2006-01-02 15:04:05"),
+			Content:     n.Content,
+		})
+	}
+
+	output := &GetGroupNoticesOutput{Success: true, Notices: results}
+	LogToolCall("getGroupNotices", input, output, nil)
+	return output, nil
+}
+
+func NewGetGroupNoticesTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getGroupNotices",
+		"获取当前群的公告列表。可以了解群规、重要通知等信息。",
+		getGroupNoticesFunc,
+	)
+}
+
+// ==================== 获取群精华消息工具 ====================
+
+type GetEssenceMessagesInput struct {
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
+}
+
+type EssenceMessageSummary struct {
+	MessageID    int64  `json:"message_id"`
+	SenderNick   string `json:"sender_nick"`
+	OperatorNick string `json:"operator_nick"`
+	OperatorTime string `json:"operator_time"`
+	Content      string `json:"content"`
+}
+
+type GetEssenceMessagesOutput struct {
+	Success  bool                    `json:"success"`
+	Messages []EssenceMessageSummary `json:"messages,omitempty"`
+	Message  string                  `json:"message,omitempty"`
+}
+
+func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput) (*GetEssenceMessagesOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetEssenceMessagesOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+	if tc.Bot == nil {
+		return &GetEssenceMessagesOutput{Success: false, Message: "Bot未连接"}, nil
+	}
+
+	messages, err := tc.Bot.GetEssenceMessages(tc.GroupID)
+	if err != nil {
+		output := &GetEssenceMessagesOutput{Success: false, Message: "获取群精华消息失败: " + err.Error()}
+		LogToolCall("getEssenceMessages", input, output, err)
+		return output, nil
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	if len(messages) > limit {
+		messages = messages[:limit]
+	}
+
+	results := make([]EssenceMessageSummary, 0, len(messages))
+	for _, m := range messages {
+		results = append(results, EssenceMessageSummary{
+			MessageID:    m.MessageID,
+			SenderNick:   m.SenderNick,
+			OperatorNick: m.OperatorNick,
+			OperatorTime: time.Unix(m.OperatorTime, 0).Format("2006-01-02 15:04:05"),
+			Content:      m.Content,
+		})
+	}
+
+	output := &GetEssenceMessagesOutput{Success: true, Messages: results}
+	LogToolCall("getEssenceMessages", input, output, nil)
+	return output, nil
+}
+
+func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getEssenceMessages",
+		"获取当前群的精华消息列表。精华消息是被管理员设为精华的重要或有趣的消息。",
+		getEssenceMessagesFunc,
+	)
+}
+
+// ==================== 获取消息表情回应工具 ====================
+
+type GetMessageReactionsInput struct {
+	MessageID int64 `json:"message_id" jsonschema:"description=消息ID"`
+}
+
+type ReactionSummary struct {
+	EmojiID int `json:"emoji_id"`
+	Count   int `json:"count"`
+}
+
+type GetMessageReactionsOutput struct {
+	Success   bool              `json:"success"`
+	Reactions []ReactionSummary `json:"reactions,omitempty"`
+	Message   string            `json:"message,omitempty"`
+}
+
+func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInput) (*GetMessageReactionsOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &GetMessageReactionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+	if tc.Bot == nil {
+		return &GetMessageReactionsOutput{Success: false, Message: "Bot未连接"}, nil
+	}
+	if input.MessageID == 0 {
+		return &GetMessageReactionsOutput{Success: false, Message: "消息ID不能为空"}, nil
+	}
+
+	reactions, err := tc.Bot.GetMessageReactions(input.MessageID)
+	if err != nil {
+		output := &GetMessageReactionsOutput{Success: false, Message: "获取表情回应失败: " + err.Error()}
+		LogToolCall("getMessageReactions", input, output, err)
+		return output, nil
+	}
+
+	if len(reactions) == 0 {
+		output := &GetMessageReactionsOutput{Success: true, Message: "该消息暂无表情回应"}
+		LogToolCall("getMessageReactions", input, output, nil)
+		return output, nil
+	}
+
+	results := make([]ReactionSummary, 0, len(reactions))
+	for _, r := range reactions {
+		results = append(results, ReactionSummary{
+			EmojiID: r.EmojiID,
+			Count:   r.Count,
+		})
+	}
+
+	output := &GetMessageReactionsOutput{Success: true, Reactions: results}
+	LogToolCall("getMessageReactions", input, output, nil)
+	return output, nil
+}
+
+func NewGetMessageReactionsTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"getMessageReactions",
+		"获取某条消息的表情回应。可以看到大家对这条消息的反应。",
+		getMessageReactionsFunc,
 	)
 }

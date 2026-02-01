@@ -9,9 +9,11 @@ import (
 	"amu-bot/internal/persona"
 	"amu-bot/internal/tools"
 	"amu-bot/internal/utils"
+	fileutils "amu-bot/internal/utils"
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -44,12 +46,10 @@ type Agent struct {
 	lastSpeak   map[int64]time.Time
 	lastSpeakMu sync.RWMutex
 
-	// 正在处理中的群组（防止重复思考）
-	processing   map[int64]bool
-	processingMu sync.Mutex
-
-	// 最后处理消息的时间（用于区分新旧消息）
+	// 正在处理中的群组（防止重复思考）和最后处理时间
+	processing        map[int64]bool
 	lastProcessedTime map[int64]time.Time
+	processingMu      sync.RWMutex
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -120,6 +120,13 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewPokeTool() },
 		func() (tool.BaseTool, error) { return tools.NewReactToMessageTool() },
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
+		// 表情包相关
+		func() (tool.BaseTool, error) { return tools.NewSearchStickersTool() },
+		func() (tool.BaseTool, error) { return tools.NewSendStickerTool() },
+		// 群信息
+		func() (tool.BaseTool, error) { return tools.NewGetGroupNoticesTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
 	}
 
 	for _, build := range toolBuilders {
@@ -281,9 +288,9 @@ func (a *Agent) thinkCycle() {
 		lastMsg := msgs[len(msgs)-1]
 
 		// 如果该消息的时间不晚于最后处理时间，说明是旧消息，跳过
-		a.processingMu.Lock()
+		a.processingMu.RLock()
 		lastTime := a.lastProcessedTime[gc.GroupID]
-		a.processingMu.Unlock()
+		a.processingMu.RUnlock()
 		if !lastMsg.Time.After(lastTime) {
 			continue
 		}
@@ -396,8 +403,13 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		StopThinking: cancelThinking, // 传递取消函数
 	})
 
+	// 获取上次处理时间（用于判断哪些是新消息）
+	a.processingMu.RLock()
+	lastProcessedTime := a.lastProcessedTime[groupID]
+	a.processingMu.RUnlock()
+
 	// 构建对话上下文
-	chatContext := a.buildChatContext(groupID)
+	chatContext := a.buildChatContext(groupID, lastProcessedTime)
 	if chatContext == "" {
 		return
 	}
@@ -418,14 +430,10 @@ func (a *Agent) think(groupID int64, isMention bool) {
 
 	thinkPrompt := a.persona.GetThinkPrompt(chatContext, memberInfo)
 
-	// 获取最后处理时间并注入提示词
-	a.processingMu.Lock()
-	lastTime := a.lastProcessedTime[groupID]
-	a.processingMu.Unlock()
-
-	if !lastTime.IsZero() {
+	// 注入上次处理时间到提示词
+	if !lastProcessedTime.IsZero() {
 		thinkPrompt += fmt.Sprintf("\n\n注意：你上次处理消息的时间是 [%s]，在那之后的消息是新发生的。请结合上下文判断是否需要回复新消息。",
-			lastTime.Format("15:04:05"))
+			lastProcessedTime.Format("15:04:05"))
 	}
 
 	if isMention {
@@ -473,7 +481,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 }
 
 // buildChatContext 构建聊天上下文
-func (a *Agent) buildChatContext(groupID int64) string {
+func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) string {
 	msgs := a.getBuffer(groupID)
 	if len(msgs) == 0 {
 		return ""
@@ -483,6 +491,8 @@ func (a *Agent) buildChatContext(groupID int64) string {
 	var b strings.Builder
 
 	for _, m := range msgs {
+		// 判断是否是新消息（用于决定是否自动保存表情包）
+		isNewMessage := lastProcessedTime.IsZero() || m.Time.After(lastProcessedTime)
 		// 构建@信息
 		var mentionParts []string
 		if m.MentionAmu {
@@ -499,6 +509,21 @@ func (a *Agent) buildChatContext(groupID int64) string {
 			mention = " [" + strings.Join(mentionParts, ",") + "]"
 		}
 
+		// 构建回复信息
+		replyInfo := ""
+		if m.Reply != nil {
+			if m.Reply.Content != "" {
+				// 截断过长的内容
+				replyContent := m.Reply.Content
+				if len(replyContent) > 50 {
+					replyContent = replyContent[:50] + "..."
+				}
+				replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", m.Reply.MessageID, m.Reply.Nickname, replyContent)
+			} else {
+				replyInfo = fmt.Sprintf(" [回复 #%d]", m.Reply.MessageID)
+			}
+		}
+
 		// 构建消息内容（包含图片和表情描述）
 		content := m.Content
 
@@ -509,24 +534,45 @@ func (a *Agent) buildChatContext(groupID int64) string {
 
 		// 处理图片（调用 Vision 模型识别）
 		for _, img := range m.Images {
-			if a.vision != nil && img.URL != "" {
-				desc, err := a.vision.DescribeImage(ctx, img.URL)
-				if err == nil {
-					content += " " + desc
+			if img.SubType == 1 {
+				// 表情包类型 - 自动保存
+				var desc string
+				if a.vision != nil && img.URL != "" {
+					if d, err := a.vision.DescribeImage(ctx, img.URL); err == nil {
+						desc = d
+					}
+				}
+				if desc == "" && img.Summary != "" {
+					desc = img.Summary
+				}
+				// 自动保存表情包（仅对新消息且开启了自动保存）
+				if img.URL != "" && a.cfg.Sticker.AutoSave && isNewMessage {
+					go a.autoSaveSticker(img.URL, desc)
+				}
+				// 展示给 Agent
+				if desc != "" {
+					content += fmt.Sprintf(" [表情包 描述:%s]", desc)
+				} else {
+					content += " [表情包]"
+				}
+			} else {
+				// 普通图片
+				if a.vision != nil && img.URL != "" {
+					desc, err := a.vision.DescribeImage(ctx, img.URL)
+					if err == nil {
+						content += " " + desc
+					} else {
+						content += " [图片]"
+					}
 				} else {
 					content += " [图片]"
 				}
-			} else if img.Summary != "" {
-				// 使用图片摘要（商城表情等）
-				content += fmt.Sprintf(" [表情包:%s]", img.Summary)
-			} else {
-				content += " [图片]"
 			}
 		}
 
 		// 在消息开头添加消息ID，方便模型引用
-		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
-			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, mention, content))
+		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d):%s%s %s\n",
+			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, replyInfo, mention, content))
 	}
 	return b.String()
 }
@@ -650,4 +696,60 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) int64 {
 	a.onMessage(msg)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
 	return msgID
+}
+
+// autoSaveSticker 自动保存表情包（异步执行）
+func (a *Agent) autoSaveSticker(url string, description string) {
+	if url == "" {
+		return
+	}
+
+	// 获取配置
+	cfg := config.Get()
+	storagePath := cfg.Sticker.StoragePath
+	if storagePath == "" {
+		storagePath = "./stickers"
+	}
+	maxSizeMB := cfg.Sticker.MaxSizeMB
+	if maxSizeMB <= 0 {
+		maxSizeMB = 2
+	}
+
+	// 下载图片
+	result, err := fileutils.DownloadImage(url, storagePath, maxSizeMB)
+	if err != nil {
+		zap.L().Debug("下载表情包失败", zap.String("url", url), zap.Error(err))
+		return
+	}
+
+	// 如果没有描述，使用默认描述
+	if description == "" {
+		description = "未描述的表情包"
+	}
+
+	// 保存到数据库
+	sticker := &memory.Sticker{
+		FileName:    result.FileName,
+		OriginalURL: url,
+		FileHash:    result.FileHash,
+		Description: description,
+		LastUsed:    time.Now(),
+	}
+
+	isDuplicate, err := a.memory.SaveSticker(sticker)
+	if err != nil {
+		// 保存失败，删除已下载的文件
+		os.Remove(result.FilePath)
+		zap.L().Warn("保存表情包失败", zap.Error(err))
+		return
+	}
+
+	if isDuplicate {
+		// 已存在，删除刚下载的文件
+		os.Remove(result.FilePath)
+		zap.L().Debug("表情包已存在，跳过保存", zap.String("hash", result.FileHash))
+		return
+	}
+
+	zap.L().Info("自动保存表情包", zap.Uint("id", sticker.ID), zap.String("desc", description))
 }
