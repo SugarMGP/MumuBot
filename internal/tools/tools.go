@@ -14,8 +14,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// SpeakCallback 发言回调函数类型
-type SpeakCallback func(groupID int64, content string, replyTo int64)
+// SpeakCallback 发言回调函数类型，返回消息ID
+type SpeakCallback func(groupID int64, content string, replyTo int64) int64
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
@@ -422,11 +422,9 @@ type SpeakInput struct {
 
 // SpeakOutput 发言的输出
 type SpeakOutput struct {
-	Success     bool   `json:"success"`
-	ShouldSpeak bool   `json:"should_speak"`
-	Content     string `json:"content"`
-	ReplyTo     int64  `json:"reply_to,omitempty"`
-	Message     string `json:"message,omitempty"`
+	Success   bool   `json:"success"`
+	MessageID int64  `json:"message_id,omitempty"` // 发送成功后的消息ID
+	Message   string `json:"message,omitempty"`
 }
 
 // speakFunc 发言的实际实现 - 会通过回调实际发送消息
@@ -435,19 +433,18 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 		return &SpeakOutput{Success: false, Message: "说话内容不能为空"}, nil
 	}
 
+	var msgID int64
 	// 获取工具上下文
 	tc := GetToolContext(ctx)
 	if tc != nil && tc.SpeakCallback != nil {
-		// 通过回调发送消息
-		tc.SpeakCallback(tc.GroupID, input.Content, input.ReplyTo)
+		// 通过回调发送消息，获取返回的消息ID
+		msgID = tc.SpeakCallback(tc.GroupID, input.Content, input.ReplyTo)
 	}
 
 	output := &SpeakOutput{
-		Success:     true,
-		ShouldSpeak: true,
-		Content:     input.Content,
-		ReplyTo:     input.ReplyTo,
-		Message:     "已发言",
+		Success:   true,
+		MessageID: msgID,
+		Message:   fmt.Sprintf("发言成功，消息ID: %d", msgID),
 	}
 	LogToolCall("speak", input, output, nil)
 	return output, nil
@@ -479,17 +476,15 @@ type StayQuietInput struct {
 
 // StayQuietOutput 保持沉默的输出
 type StayQuietOutput struct {
-	Success     bool   `json:"success"`
-	ShouldSpeak bool   `json:"should_speak"`
-	Reason      string `json:"reason,omitempty"`
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
 }
 
 // stayQuietFunc 保持沉默的实际实现
 func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput, error) {
 	output := &StayQuietOutput{
-		Success:     true,
-		ShouldSpeak: false,
-		Reason:      input.Reason,
+		Success: true,
+		Message: "保持沉默",
 	}
 	LogToolCall("stayQuiet", input, output, nil)
 
@@ -506,7 +501,7 @@ func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput
 func NewStayQuietTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"stayQuiet",
-		`选择不说话，继续观察。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时使用。
+		`选择不说话，保持沉默。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时使用。
 
 【重要】使用规则：
 - stayQuiet 应该在你决定不发言时**最后调用**

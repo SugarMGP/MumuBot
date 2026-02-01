@@ -390,8 +390,8 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		GroupID:   groupID,
 		MemoryMgr: a.memory,
 		Bot:       a.bot,
-		SpeakCallback: func(gid int64, content string, replyTo int64) {
-			a.doSpeak(gid, content, replyTo)
+		SpeakCallback: func(gid int64, content string, replyTo int64) int64 {
+			return a.doSpeak(gid, content, replyTo)
 		},
 		StopThinking: cancelThinking, // 传递取消函数
 	})
@@ -605,8 +605,8 @@ func (a *Agent) getMemberInfo(groupID int64) string {
 	return strings.Join(parts, ", ")
 }
 
-// doSpeak 执行发言
-func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) {
+// doSpeak 执行发言，返回消息ID
+func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) int64 {
 	// 模拟打字延迟
 	if a.cfg.Chat.TypingSimulation {
 		typingSpeed := a.cfg.Chat.TypingSpeed
@@ -633,7 +633,7 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) {
 
 	if err != nil {
 		zap.L().Error("发言失败", zap.Int64("group_id", groupID), zap.Error(err))
-		return
+		return 0
 	}
 
 	a.recordSpeak(groupID)
@@ -649,4 +649,5 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) {
 	}
 	a.onMessage(msg)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
+	return msgID
 }
