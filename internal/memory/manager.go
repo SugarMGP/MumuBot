@@ -166,7 +166,21 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 		Order("importance DESC, updated_at DESC").
 		Limit(limit).
 		Find(&memories).Error
-	return memories, err
+	if err != nil {
+		return memories, err
+	}
+
+	if len(memories) > 0 {
+		memoryIDs := make([]uint, 0, len(memories))
+		for _, mem := range memories {
+			memoryIDs = append(memoryIDs, mem.ID)
+		}
+		_ = m.db.Model(&Memory{}).Where("id IN ?", memoryIDs).Updates(map[string]any{
+			"access_count": gorm.Expr("access_count + 1"),
+		}).Error
+	}
+
+	return memories, nil
 }
 
 // milvusVectorSearch 使用 Milvus 进行向量搜索
