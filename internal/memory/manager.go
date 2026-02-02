@@ -21,10 +21,11 @@ type EmbeddingProvider interface {
 
 // Manager 记忆系统管理器
 type Manager struct {
-	db        *gorm.DB
-	cfg       *config.Config
-	embedding EmbeddingProvider
-	milvus    *vector.MilvusClient // Milvus 向量存储
+	db          *gorm.DB
+	cfg         *config.Config
+	embedding   EmbeddingProvider
+	milvus      *vector.MilvusClient // Milvus 向量存储
+	cleanupStop chan struct{}
 }
 
 // NewManager 创建记忆管理器
@@ -86,11 +87,15 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 	}
 
 	m := &Manager{
-		db:        db,
-		cfg:       cfg,
-		embedding: embedding,
-		milvus:    milvusClient,
+		db:          db,
+		cfg:         cfg,
+		embedding:   embedding,
+		milvus:      milvusClient,
+		cleanupStop: make(chan struct{}),
 	}
+
+	// 启动消息日志清理任务
+	m.startMessageLogCleanup()
 
 	return m, nil
 }
@@ -195,6 +200,84 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 	}
 
 	return memories, nil
+}
+
+// startMessageLogCleanup 启动消息日志清理定时任务
+func (m *Manager) startMessageLogCleanup() {
+	if m == nil || m.cfg == nil {
+		return
+	}
+
+	cleanupCfg := m.cfg.Memory.MessageLogCleanup
+	enabled := true
+	if cleanupCfg.Enabled != nil {
+		enabled = *cleanupCfg.Enabled
+	}
+	if !enabled {
+		return
+	}
+
+	intervalHours := cleanupCfg.IntervalHours
+	if intervalHours <= 0 {
+		intervalHours = 6
+	}
+	keepLatest := cleanupCfg.KeepLatest
+	if keepLatest <= 0 {
+		keepLatest = 500
+	}
+
+	// 启动后立即清理一次
+	go m.cleanupMessageLogs(keepLatest)
+
+	ticker := time.NewTicker(time.Duration(intervalHours) * time.Hour)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				m.cleanupMessageLogs(keepLatest)
+			case <-m.cleanupStop:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+// cleanupMessageLogs 清理消息日志，仅保留每个群最新的 keepLatest 条
+func (m *Manager) cleanupMessageLogs(keepLatest int) {
+	if keepLatest <= 0 {
+		return
+	}
+
+	var groupIDs []int64
+	if err := m.db.Model(&MessageLog{}).Distinct("group_id").Pluck("group_id", &groupIDs).Error; err != nil {
+		zap.L().Warn("清理消息日志失败：获取群列表失败", zap.Error(err))
+		return
+	}
+
+	for _, groupID := range groupIDs {
+		var keepIDs []uint
+		if err := m.db.Model(&MessageLog{}).
+			Where("group_id = ?", groupID).
+			Order("created_at DESC").
+			Limit(keepLatest).
+			Pluck("id", &keepIDs).Error; err != nil {
+			zap.L().Warn("清理消息日志失败：获取保留ID失败", zap.Int64("group_id", groupID), zap.Error(err))
+			continue
+		}
+		if len(keepIDs) == 0 {
+			continue
+		}
+
+		result := m.db.Where("group_id = ? AND id NOT IN ?", groupID, keepIDs).Delete(&MessageLog{})
+		if result.Error != nil {
+			zap.L().Warn("清理消息日志失败：删除旧记录失败", zap.Int64("group_id", groupID), zap.Error(result.Error))
+			continue
+		}
+		if result.RowsAffected > 0 {
+			zap.L().Info("消息日志已清理", zap.Int64("group_id", groupID), zap.Int("deleted", int(result.RowsAffected)))
+		}
+	}
 }
 
 // milvusVectorSearch 使用 Milvus 进行向量搜索
@@ -468,6 +551,11 @@ func (m *Manager) GetMessageLogByID(messageID string) (*MessageLog, error) {
 
 // Close 关闭连接
 func (m *Manager) Close() error {
+	// 停止清理任务
+	if m.cleanupStop != nil {
+		close(m.cleanupStop)
+		m.cleanupStop = nil
+	}
 	// 关闭 Milvus 连接
 	if m.milvus != nil {
 		_ = m.milvus.Close()

@@ -116,6 +116,12 @@ memory:
     similarity_threshold: 0.7
     importance_threshold: 0.5  # 记忆重要性阈值（低于此值不存入长期记忆）
 
+  # 消息日志清理
+  message_log_cleanup:
+    enabled: true           # 是否启用自动清理
+    interval_hours: 6       # 清理间隔（小时）
+    keep_latest: 500       # 每个群保留最新N条消息
+
 # 表情包收藏配置
 sticker:
   auto_save: true             # 是否自动保存收到的表情包

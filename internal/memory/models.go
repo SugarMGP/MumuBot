@@ -2,8 +2,6 @@ package memory
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 // MemoryType 记忆类型
@@ -17,10 +15,9 @@ const (
 
 // Memory 长期记忆
 type Memory struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	Type        MemoryType `gorm:"type:varchar(50);index" json:"type"`
 	GroupID     int64      `gorm:"index" json:"group_id"`
@@ -34,10 +31,9 @@ func (Memory) TableName() string { return "memories" }
 
 // MemberProfile 成员画像
 type MemberProfile struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	GroupID     int64     `gorm:"uniqueIndex:idx_group_user" json:"group_id"`
 	UserID      int64     `gorm:"uniqueIndex:idx_group_user" json:"user_id"`
@@ -55,10 +51,9 @@ func (MemberProfile) TableName() string { return "member_profiles" }
 
 // Expression 学习到的表达方式（参考 MaiBot Expression）
 type Expression struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	GroupID   int64  `gorm:"index" json:"group_id"`
 	Situation string `gorm:"type:varchar(200)" json:"situation"` // 使用场景
@@ -72,10 +67,9 @@ func (Expression) TableName() string { return "expressions" }
 
 // Jargon 黑话/术语
 type Jargon struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	GroupID  int64  `gorm:"index" json:"group_id"`
 	Content  string `gorm:"type:varchar(100);index" json:"content"`
@@ -105,10 +99,9 @@ func (MessageLog) TableName() string { return "message_logs" }
 
 // Sticker 收集的表情包
 type Sticker struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	FileName    string `gorm:"type:varchar(100)" json:"file_name"`            // 本地文件名（uuid.ext）
 	OriginalURL string `gorm:"type:varchar(500)" json:"original_url"`         // 原始URL

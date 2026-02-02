@@ -108,9 +108,17 @@ type VisionLLMConfig struct {
 
 // MemoryConfig 记忆系统配置
 type MemoryConfig struct {
-	MySQL    MySQLConfig    `yaml:"mysql"`
-	Milvus   MilvusConfig   `yaml:"milvus"`
-	LongTerm LongTermConfig `yaml:"long_term"`
+	MySQL             MySQLConfig             `yaml:"mysql"`
+	Milvus            MilvusConfig            `yaml:"milvus"`
+	LongTerm          LongTermConfig          `yaml:"long_term"`
+	MessageLogCleanup MessageLogCleanupConfig `yaml:"message_log_cleanup"`
+}
+
+// MessageLogCleanupConfig 消息日志清理配置
+type MessageLogCleanupConfig struct {
+	Enabled       *bool `yaml:"enabled"`        // 是否启用，默认 true
+	IntervalHours int   `yaml:"interval_hours"` // 清理间隔（小时），默认 6
+	KeepLatest    int   `yaml:"keep_latest"`    // 每个群保留最新N条
 }
 
 // MySQLConfig MySQL 数据库配置
