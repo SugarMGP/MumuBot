@@ -3,11 +3,11 @@ package mcp
 import (
 	"amu-bot/internal/tools"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
 
+	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -62,7 +62,7 @@ func (m *MCPManager) LoadFromConfig(configPath string) error {
 	}
 
 	var cfg MCPConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := sonic.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("解析MCP配置文件失败: %w", err)
 	}
 

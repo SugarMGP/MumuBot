@@ -10,7 +10,6 @@ import (
 	"amu-bot/internal/tools"
 	"amu-bot/internal/utils"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -19,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
@@ -200,8 +200,8 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	// 序列化合并转发内容
 	forwardsJSON := ""
 	if len(msg.Forwards) > 0 {
-		if b, err := json.Marshal(msg.Forwards); err == nil {
-			forwardsJSON = string(b)
+		if b, err := sonic.MarshalString(msg.Forwards); err == nil {
+			forwardsJSON = b
 		}
 	}
 

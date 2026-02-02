@@ -3,7 +3,6 @@ package onebot
 import (
 	"amu-bot/internal/config"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
@@ -255,7 +255,7 @@ func (c *Client) receiveLoop() {
 // handleMessage 处理收到的消息
 func (c *Client) handleMessage(data []byte) {
 	var event map[string]interface{}
-	if err := json.Unmarshal(data, &event); err != nil {
+	if err := sonic.Unmarshal(data, &event); err != nil {
 		zap.L().Error("解析消息失败", zap.Error(err))
 		return
 	}
@@ -726,8 +726,8 @@ func (c *Client) GetGroupInfo(groupID int64, noCache bool) (*GroupInfo, error) {
 	if count, ok := parseInt(data["member_count"]); ok {
 		info.MemberCount = count
 	}
-	if max, ok := parseInt(data["max_member_count"]); ok {
-		info.MaxMemberCount = max
+	if m, ok := parseInt(data["max_member_count"]); ok {
+		info.MaxMemberCount = m
 	}
 	return info, nil
 }
@@ -882,7 +882,7 @@ func (c *Client) callAPI(ctx context.Context, action string, params map[string]i
 		"params": params,
 		"echo":   echo,
 	}
-	data, err := json.Marshal(req)
+	data, err := sonic.Marshal(req)
 	if err != nil {
 		c.connMu.Unlock()
 		return nil, err
@@ -954,7 +954,7 @@ func (c *Client) Close() error {
 // parseCardMessage 解析JSON卡片消息
 func parseCardMessage(jsonStr string) *CardMessage {
 	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+	if err := sonic.UnmarshalString(jsonStr, &data); err != nil {
 		return nil
 	}
 

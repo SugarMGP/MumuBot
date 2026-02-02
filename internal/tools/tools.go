@@ -5,12 +5,12 @@ import (
 	"amu-bot/internal/memory"
 	"amu-bot/internal/onebot"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"go.uber.org/zap"
@@ -50,12 +50,12 @@ func GetToolContext(ctx context.Context) *ToolContext {
 func LogToolCall(toolName string, input interface{}, output interface{}, err error) {
 	cfg := config.Get()
 	if cfg != nil && cfg.Debug.ShowToolCalls {
-		inputJSON, _ := json.Marshal(input)
-		outputJSON, _ := json.Marshal(output)
+		inputJSON, _ := sonic.MarshalString(input)
+		outputJSON, _ := sonic.MarshalString(output)
 		if err != nil {
-			zap.L().Debug("工具调用", zap.String("tool", toolName), zap.String("input", string(inputJSON)), zap.String("output", string(outputJSON)), zap.Error(err))
+			zap.L().Debug("工具调用", zap.String("tool", toolName), zap.String("input", inputJSON), zap.String("output", outputJSON), zap.Error(err))
 		} else {
-			zap.L().Debug("工具调用", zap.String("tool", toolName), zap.String("input", string(inputJSON)), zap.String("output", string(outputJSON)))
+			zap.L().Debug("工具调用", zap.String("tool", toolName), zap.String("input", inputJSON), zap.String("output", outputJSON))
 		}
 	}
 }
@@ -277,6 +277,30 @@ func NewSaveJargonTool() (tool.InvokableTool, error) {
 
 // ==================== 更新成员画像工具 ====================
 
+// mergeAndDeduplicateStrings 合并两个字符串切片并去重
+func mergeAndDeduplicateStrings(existing []string, newItems []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+
+	// 先添加已有的
+	for _, item := range existing {
+		if item != "" && !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	// 再添加新的
+	for _, item := range newItems {
+		if item != "" && !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	return result
+}
+
 // UpdateMemberProfileInput 更新成员画像的输入参数
 type UpdateMemberProfileInput struct {
 	// UserID 群友的QQ号
@@ -322,12 +346,30 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 		profile.SpeakStyle = input.SpeakStyle
 	}
 	if len(input.Interests) > 0 {
-		b, _ := json.Marshal(input.Interests)
-		profile.Interests = string(b)
+		// 解析已有的兴趣爱好
+		var existingInterests []string
+		if profile.Interests != "" {
+			if err := sonic.UnmarshalString(profile.Interests, &existingInterests); err != nil {
+				existingInterests = []string{}
+			}
+		}
+		// 合并并去重
+		mergedInterests := mergeAndDeduplicateStrings(existingInterests, input.Interests)
+		b, _ := sonic.MarshalString(mergedInterests)
+		profile.Interests = b
 	}
 	if len(input.CommonWords) > 0 {
-		b, _ := json.Marshal(input.CommonWords)
-		profile.CommonWords = string(b)
+		// 解析已有的常用词汇
+		var existingCommonWords []string
+		if profile.CommonWords != "" {
+			if err := sonic.UnmarshalString(profile.CommonWords, &existingCommonWords); err != nil {
+				existingCommonWords = []string{}
+			}
+		}
+		// 合并并去重
+		mergedCommonWords := mergeAndDeduplicateStrings(existingCommonWords, input.CommonWords)
+		b, _ := sonic.MarshalString(mergedCommonWords)
+		profile.CommonWords = b
 	}
 	if input.Intimacy != nil {
 		// 限制亲密度在 0-1 范围内
@@ -404,12 +446,12 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 
 	var interests, commonWords []string
 	if profile.Interests != "" {
-		if err := json.Unmarshal([]byte(profile.Interests), &interests); err != nil {
+		if err := sonic.UnmarshalString(profile.Interests, &interests); err != nil {
 			zap.L().Warn("反序列化 interests 失败", zap.Error(err))
 		}
 	}
 	if profile.CommonWords != "" {
-		if err := json.Unmarshal([]byte(profile.CommonWords), &commonWords); err != nil {
+		if err := sonic.UnmarshalString(profile.CommonWords, &commonWords); err != nil {
 			zap.L().Warn("反序列化 commonWords 失败", zap.Error(err))
 		}
 	}
@@ -1610,7 +1652,7 @@ func getForwardMessageDetailFunc(ctx context.Context, input *GetForwardMessageDe
 	}
 
 	var forwards []onebot.ForwardMessage
-	if err := json.Unmarshal([]byte(log.Forwards), &forwards); err != nil {
+	if err := sonic.UnmarshalString(log.Forwards, &forwards); err != nil {
 		return &GetForwardMessageDetailOutput{Success: false, Message: "解析合并转发内容失败"}, nil
 	}
 
