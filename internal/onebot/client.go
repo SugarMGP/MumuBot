@@ -78,7 +78,6 @@ type GroupMessage struct {
 	Card        string      `json:"card"`              // 群名片
 	Role        string      `json:"role"`              // 角色: owner/admin/member
 	Content     string      `json:"content"`           // 纯文本内容
-	RawMessage  string      `json:"raw_message"`       // 原始消息（CQ码格式）
 	MentionAmu  bool        `json:"mention_amu"`       // 是否@机器人
 	MentionAll  bool        `json:"mention_all"`       // 是否@全体成员
 	Time        time.Time   `json:"time"`              // 消息时间
@@ -273,8 +272,8 @@ func (c *Client) handleAPIResponse(event map[string]interface{}, echo string) {
 		if status, ok := event["status"].(string); ok {
 			resp.Status = status
 		}
-		if retCode, ok := event["retcode"].(float64); ok {
-			resp.RetCode = int(retCode)
+		if retCode, ok := event["retcode"].(int); ok {
+			resp.RetCode = retCode
 		}
 		// Data 可能是 map 或 array
 		resp.Data = event["data"]
@@ -292,8 +291,8 @@ func (c *Client) handleMetaEvent(event map[string]interface{}) {
 	if metaType == "lifecycle" {
 		subType, _ := event["sub_type"].(string)
 		if subType == "connect" {
-			if selfID, ok := event["self_id"].(float64); ok {
-				c.selfID = int64(selfID)
+			if selfID, ok := event["self_id"].(int64); ok {
+				c.selfID = selfID
 				zap.L().Info("Bot已上线", zap.Int64("qq", c.selfID))
 			}
 		}
@@ -336,29 +335,31 @@ func (c *Client) handleRequestEvent(event map[string]interface{}) {
 
 // parseGroupMessage 解析群消息
 func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
-	msg := &GroupMessage{}
+	msg := &GroupMessage{
+		MessageType: "group",
+	}
 
 	// 消息时间
-	if t, ok := event["time"].(float64); ok {
-		msg.Time = time.Unix(int64(t), 0)
+	if t, ok := event["time"].(int64); ok {
+		msg.Time = time.Unix(t, 0)
 	} else {
 		msg.Time = time.Now()
 	}
 
 	// 消息ID
-	if msgID, ok := event["message_id"].(float64); ok {
-		msg.MessageID = int64(msgID)
+	if msgID, ok := event["message_id"].(int64); ok {
+		msg.MessageID = msgID
 	}
 
 	// 群ID
-	if groupID, ok := event["group_id"].(float64); ok {
-		msg.GroupID = int64(groupID)
+	if groupID, ok := event["group_id"].(int64); ok {
+		msg.GroupID = groupID
 	}
 
 	// 发送者信息
 	if sender, ok := event["sender"].(map[string]interface{}); ok {
-		if userID, ok := sender["user_id"].(float64); ok {
-			msg.UserID = int64(userID)
+		if userID, ok := sender["user_id"].(int64); ok {
+			msg.UserID = userID
 		}
 		if nickname, ok := sender["nickname"].(string); ok {
 			msg.Nickname = nickname
@@ -369,11 +370,6 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 		if role, ok := sender["role"].(string); ok {
 			msg.Role = role
 		}
-	}
-
-	// 原始消息
-	if rawMsg, ok := event["raw_message"].(string); ok {
-		msg.RawMessage = rawMsg
 	}
 
 	// 解析消息段，提取各类信息
@@ -431,8 +427,8 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			if summary, ok := data["summary"].(string); ok {
 				img.Summary = summary
 			}
-			if subType, ok := data["sub_type"].(float64); ok {
-				img.SubType = int(subType)
+			if subType, ok := data["sub_type"].(int); ok {
+				img.SubType = subType
 			}
 			if img.URL != "" || img.File != "" {
 				msg.Images = append(msg.Images, img)
@@ -443,8 +439,6 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			// ID
 			if id, ok := data["id"].(string); ok {
 				face.ID, _ = strconv.Atoi(id)
-			} else if id, ok := data["id"].(float64); ok {
-				face.ID = int(id)
 			}
 			// 表情名称（NapCat 扩展字段）
 			if name, ok := data["name"].(string); ok && name != "" {
@@ -463,16 +457,16 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 				} else if qqID, err := strconv.ParseInt(qq, 10, 64); err == nil {
 					msg.AtList = append(msg.AtList, qqID)
 				}
-			} else if qq, ok := data["qq"].(float64); ok {
-				msg.AtList = append(msg.AtList, int64(qq))
+			} else if qq, ok := data["qq"].(int64); ok {
+				msg.AtList = append(msg.AtList, qq)
 			}
 
 		case "reply":
 			var replyMsgID int64
 			if id, ok := data["id"].(string); ok {
 				replyMsgID, _ = strconv.ParseInt(id, 10, 64)
-			} else if id, ok := data["id"].(float64); ok {
-				replyMsgID = int64(id)
+			} else if id, ok := data["id"].(int64); ok {
+				replyMsgID = id
 			}
 			if replyMsgID > 0 {
 				msg.Reply = &ReplyInfo{MessageID: replyMsgID}
@@ -482,8 +476,8 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 						msg.Reply.Content = rawMsg
 					}
 					if sender, ok := replyData["sender"].(map[string]interface{}); ok {
-						if uid, ok := sender["user_id"].(float64); ok {
-							msg.Reply.SenderID = int64(uid)
+						if uid, ok := sender["user_id"].(int64); ok {
+							msg.Reply.SenderID = uid
 						}
 						if nick, ok := sender["nickname"].(string); ok {
 							msg.Reply.Nickname = nick
@@ -559,8 +553,8 @@ func (c *Client) SendGroupMessage(groupID int64, content string) (int64, error) 
 		return 0, err
 	}
 	if data := resp.DataMap(); data != nil {
-		if msgID, ok := data["message_id"].(float64); ok {
-			return int64(msgID), nil
+		if msgID, ok := data["message_id"].(int64); ok {
+			return msgID, nil
 		}
 	}
 	return 0, nil
@@ -589,8 +583,8 @@ func (c *Client) SendGroupMessageReply(groupID int64, content string, replyTo in
 		return 0, err
 	}
 	if data := resp.DataMap(); data != nil {
-		if msgID, ok := data["message_id"].(float64); ok {
-			return int64(msgID), nil
+		if msgID, ok := data["message_id"].(int64); ok {
+			return msgID, nil
 		}
 	}
 	return 0, nil
@@ -606,8 +600,8 @@ func (c *Client) SendPrivateMessage(userID int64, content string) (int64, error)
 		return 0, err
 	}
 	if data := resp.DataMap(); data != nil {
-		if msgID, ok := data["message_id"].(float64); ok {
-			return int64(msgID), nil
+		if msgID, ok := data["message_id"].(int64); ok {
+			return msgID, nil
 		}
 	}
 	return 0, nil
@@ -643,8 +637,8 @@ func (c *Client) GetLoginInfo() (*LoginInfo, error) {
 		return nil, fmt.Errorf("无效的响应数据")
 	}
 	info := &LoginInfo{}
-	if userID, ok := data["user_id"].(float64); ok {
-		info.UserID = int64(userID)
+	if userID, ok := data["user_id"].(int64); ok {
+		info.UserID = userID
 	}
 	if nickname, ok := data["nickname"].(string); ok {
 		info.Nickname = nickname
@@ -666,17 +660,17 @@ func (c *Client) GetGroupInfo(groupID int64, noCache bool) (*GroupInfo, error) {
 		return nil, fmt.Errorf("无效的响应数据")
 	}
 	info := &GroupInfo{}
-	if gid, ok := data["group_id"].(float64); ok {
-		info.GroupID = int64(gid)
+	if gid, ok := data["group_id"].(int64); ok {
+		info.GroupID = gid
 	}
 	if name, ok := data["group_name"].(string); ok {
 		info.GroupName = name
 	}
-	if count, ok := data["member_count"].(float64); ok {
-		info.MemberCount = int(count)
+	if count, ok := data["member_count"].(int); ok {
+		info.MemberCount = count
 	}
-	if max, ok := data["max_member_count"].(float64); ok {
-		info.MaxMemberCount = int(max)
+	if max, ok := data["max_member_count"].(int); ok {
+		info.MaxMemberCount = max
 	}
 	return info, nil
 }
@@ -696,11 +690,11 @@ func (c *Client) GetGroupMemberInfo(groupID, userID int64, noCache bool) (*Group
 		return nil, fmt.Errorf("无效的响应数据")
 	}
 	info := &GroupMemberInfo{}
-	if gid, ok := data["group_id"].(float64); ok {
-		info.GroupID = int64(gid)
+	if gid, ok := data["group_id"].(int64); ok {
+		info.GroupID = gid
 	}
-	if uid, ok := data["user_id"].(float64); ok {
-		info.UserID = int64(uid)
+	if uid, ok := data["user_id"].(int64); ok {
+		info.UserID = uid
 	}
 	if nickname, ok := data["nickname"].(string); ok {
 		info.Nickname = nickname
@@ -711,11 +705,11 @@ func (c *Client) GetGroupMemberInfo(groupID, userID int64, noCache bool) (*Group
 	if role, ok := data["role"].(string); ok {
 		info.Role = role
 	}
-	if joinTime, ok := data["join_time"].(float64); ok {
-		info.JoinTime = int64(joinTime)
+	if joinTime, ok := data["join_time"].(int64); ok {
+		info.JoinTime = joinTime
 	}
-	if lastSentTime, ok := data["last_sent_time"].(float64); ok {
-		info.LastSentTime = int64(lastSentTime)
+	if lastSentTime, ok := data["last_sent_time"].(int64); ok {
+		info.LastSentTime = lastSentTime
 	}
 	if level, ok := data["level"].(string); ok {
 		info.Level = level
@@ -749,11 +743,11 @@ func (c *Client) GetGroupMemberList(groupID int64, noCache bool) ([]*GroupMember
 			continue
 		}
 		info := &GroupMemberInfo{}
-		if gid, ok := data["group_id"].(float64); ok {
-			info.GroupID = int64(gid)
+		if gid, ok := data["group_id"].(int64); ok {
+			info.GroupID = gid
 		}
-		if uid, ok := data["user_id"].(float64); ok {
-			info.UserID = int64(uid)
+		if uid, ok := data["user_id"].(int64); ok {
+			info.UserID = uid
 		}
 		if nickname, ok := data["nickname"].(string); ok {
 			info.Nickname = nickname
@@ -764,11 +758,11 @@ func (c *Client) GetGroupMemberList(groupID int64, noCache bool) ([]*GroupMember
 		if role, ok := data["role"].(string); ok {
 			info.Role = role
 		}
-		if joinTime, ok := data["join_time"].(float64); ok {
-			info.JoinTime = int64(joinTime)
+		if joinTime, ok := data["join_time"].(int64); ok {
+			info.JoinTime = joinTime
 		}
-		if lastSentTime, ok := data["last_sent_time"].(float64); ok {
-			info.LastSentTime = int64(lastSentTime)
+		if lastSentTime, ok := data["last_sent_time"].(int64); ok {
+			info.LastSentTime = lastSentTime
 		}
 		if level, ok := data["level"].(string); ok {
 			info.Level = level
@@ -992,11 +986,11 @@ func (c *Client) GetGroupNotice(groupID int64) ([]GroupNotice, error) {
 		if noticeID, ok := data["notice_id"].(string); ok {
 			notice.NoticeID = noticeID
 		}
-		if senderID, ok := data["sender_id"].(float64); ok {
-			notice.SenderID = int64(senderID)
+		if senderID, ok := data["sender_id"].(int64); ok {
+			notice.SenderID = senderID
 		}
-		if publishTime, ok := data["publish_time"].(float64); ok {
-			notice.PublishTime = int64(publishTime)
+		if publishTime, ok := data["publish_time"].(int64); ok {
+			notice.PublishTime = publishTime
 		}
 		if msg, ok := data["message"].(map[string]interface{}); ok {
 			if text, ok := msg["text"].(string); ok {
@@ -1029,23 +1023,23 @@ func (c *Client) GetEssenceMessages(groupID int64) ([]EssenceMessage, error) {
 			continue
 		}
 		msg := EssenceMessage{}
-		if msgID, ok := data["message_id"].(float64); ok {
-			msg.MessageID = int64(msgID)
+		if msgID, ok := data["message_id"].(int64); ok {
+			msg.MessageID = msgID
 		}
-		if senderID, ok := data["sender_id"].(float64); ok {
-			msg.SenderID = int64(senderID)
+		if senderID, ok := data["sender_id"].(int64); ok {
+			msg.SenderID = senderID
 		}
 		if senderNick, ok := data["sender_nick"].(string); ok {
 			msg.SenderNick = senderNick
 		}
-		if operatorID, ok := data["operator_id"].(float64); ok {
-			msg.OperatorID = int64(operatorID)
+		if operatorID, ok := data["operator_id"].(int64); ok {
+			msg.OperatorID = operatorID
 		}
 		if operatorNick, ok := data["operator_nick"].(string); ok {
 			msg.OperatorNick = operatorNick
 		}
-		if operatorTime, ok := data["operator_time"].(float64); ok {
-			msg.OperatorTime = int64(operatorTime)
+		if operatorTime, ok := data["operator_time"].(int64); ok {
+			msg.OperatorTime = operatorTime
 		}
 		// 解析消息内容
 		if content, ok := data["content"].([]interface{}); ok {
@@ -1143,8 +1137,8 @@ func (c *Client) SendImageMessage(groupID int64, filePath string, isSticker bool
 		return 0, err
 	}
 	if data := resp.DataMap(); data != nil {
-		if msgID, ok := data["message_id"].(float64); ok {
-			return int64(msgID), nil
+		if msgID, ok := data["message_id"].(int64); ok {
+			return msgID, nil
 		}
 	}
 	return 0, nil

@@ -707,7 +707,6 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) int64 {
 		UserID:      a.bot.GetSelfID(),
 		Nickname:    a.persona.GetName(),
 		Content:     content,
-		RawMessage:  content,
 		Time:        time.Now(),
 		MessageType: "group",
 	}

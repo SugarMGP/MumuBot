@@ -289,6 +289,8 @@ type UpdateMemberProfileInput struct {
 	Interests []string `json:"interests,omitempty" jsonschema:"description=兴趣爱好列表"`
 	// CommonWords 常用词汇或口头禅
 	CommonWords []string `json:"common_words,omitempty" jsonschema:"description=常用词汇或口头禅"`
+	// Intimacy 亲密度 0-1，根据互动情况调整：陌生人0.1-0.3，普通群友0.3-0.5，熟悉的朋友0.5-0.7，好朋友0.7-0.9，至交0.9-1.0
+	Intimacy *float64 `json:"intimacy,omitempty" jsonschema:"description=亲密度0-1，根据与对方的互动频率、聊天深度、情感连接来评估。陌生人0.1-0.3，普通群友0.3-0.5，熟悉朋友0.5-0.7，好朋友0.7-0.9，至交0.9-1.0"`
 }
 
 // UpdateMemberProfileOutput 更新成员画像的输出
@@ -327,6 +329,16 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 		b, _ := json.Marshal(input.CommonWords)
 		profile.CommonWords = string(b)
 	}
+	if input.Intimacy != nil {
+		// 限制亲密度在 0-1 范围内
+		intimacy := *input.Intimacy
+		if intimacy < 0 {
+			intimacy = 0
+		} else if intimacy > 1 {
+			intimacy = 1
+		}
+		profile.Intimacy = intimacy
+	}
 
 	if err := tc.MemoryMgr.UpdateMemberProfile(profile); err != nil {
 		output := &UpdateMemberProfileOutput{Success: false, Message: err.Error()}
@@ -343,7 +355,7 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 func NewUpdateMemberProfileTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"updateMemberProfile",
-		"全量更新你对某个群友的了解。当你发现群友的新特点、说话风格、兴趣爱好时使用。",
+		"更新你对某个群友的了解。当你发现群友的新特点、说话风格、兴趣爱好时使用。也可以根据互动情况调整亲密度（intimacy）。",
 		updateMemberProfileFunc,
 	)
 }
@@ -529,9 +541,6 @@ func NewStayQuietTool() (tool.InvokableTool, error) {
 
 // ==================== 获取当前时间工具 ====================
 
-// GetCurrentTimeInput 获取当前时间的输入参数（无参数）
-type GetCurrentTimeInput struct{}
-
 // GetCurrentTimeOutput 获取当前时间的输出
 type GetCurrentTimeOutput struct {
 	Time      string `json:"time"`
@@ -542,7 +551,7 @@ type GetCurrentTimeOutput struct {
 }
 
 // getCurrentTimeFunc 获取当前时间的实际实现
-func getCurrentTimeFunc(ctx context.Context, input *GetCurrentTimeInput) (*GetCurrentTimeOutput, error) {
+func getCurrentTimeFunc(_ context.Context, _ *struct{}) (*GetCurrentTimeOutput, error) {
 	now := time.Now()
 	hour := now.Hour()
 
@@ -563,13 +572,13 @@ func getCurrentTimeFunc(ctx context.Context, input *GetCurrentTimeInput) (*GetCu
 	}
 
 	output := &GetCurrentTimeOutput{
-		Time:      now.Format("2006-01-02 15:04:05"),
+		Time:      now.Format(time.DateTime),
 		Weekday:   now.Weekday().String(),
 		Period:    period,
 		IsLate:    hour >= 23 || hour < 6,
 		IsWeekend: now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
 	}
-	LogToolCall("getCurrentTime", input, output, nil)
+	LogToolCall("getCurrentTime", nil, output, nil)
 	return output, nil
 }
 
