@@ -146,6 +146,8 @@ type QueryMemoryInput struct {
 	Query string `json:"query" jsonschema:"description=搜索关键词或描述"`
 	// Type 限定记忆类型（可选）
 	Type string `json:"type,omitempty" jsonschema:"enum=group_fact,enum=self_experience,enum=conversation,description=限定记忆类型"`
+	// Global 是否全局搜索（跨所有群）
+	Global bool `json:"global,omitempty" jsonschema:"description=是否跨群搜索。设为true时搜索所有群的记忆；设为false时只搜索当前群的记忆"`
 }
 
 // QueryMemoryOutput 查询记忆的输出
@@ -167,7 +169,13 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 		return &QueryMemoryOutput{Success: false, Message: "查询内容不能为空"}, nil
 	}
 
-	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, tc.GroupID, memory.MemoryType(input.Type), 10)
+	// 根据 Global 开关决定是否限制群ID
+	groupID := tc.GroupID
+	if input.Global {
+		groupID = 0 // 0 表示搜索所有群
+	}
+
+	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, groupID, memory.MemoryType(input.Type), 10)
 	if err != nil {
 		output := &QueryMemoryOutput{Success: false, Message: err.Error()}
 		LogToolCall("queryMemory", input, output, err)
@@ -197,7 +205,12 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 func NewQueryMemoryTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"queryMemory",
-		"搜索你的记忆，找到相关的信息。可以查询关于某个话题、某个人、或者某次经历的记忆。",
+		`搜索你的记忆，找到相关的信息。可以查询关于某个话题、某个人、或者某次经历的记忆。
+
+【global 参数使用指南】
+- global=false（默认）：只搜索当前群的记忆，适合查找群内事件、群规等
+- global=true：搜索所有群的记忆，适合查找自身经历、通用信息等
+`,
 		queryMemoryFunc,
 	)
 }
@@ -330,7 +343,7 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 func NewUpdateMemberProfileTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"updateMemberProfile",
-		"更新你对某个群友的了解。当你发现群友的新特点、说话风格、兴趣爱好时使用。",
+		"全量更新你对某个群友的了解。当你发现群友的新特点、说话风格、兴趣爱好时使用。",
 		updateMemberProfileFunc,
 	)
 }

@@ -158,7 +158,10 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 
 	// 回退到关键词搜索
 	var memories []Memory
-	q := m.db.Where("group_id = ?", groupID)
+	q := m.db.Model(&Memory{})
+	if groupID != 0 {
+		q = q.Where("group_id = ?", groupID)
+	}
 	if memType != "" {
 		q = q.Where("type = ?", memType)
 	}

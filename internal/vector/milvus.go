@@ -187,15 +187,27 @@ func (c *MilvusClient) Search(ctx context.Context, embedding []float64, groupID 
 	}
 
 	// 构建过滤条件
-	filter := fmt.Sprintf("group_id == %d", groupID)
+	var filterParts []string
+	if groupID != 0 {
+		filterParts = append(filterParts, fmt.Sprintf("group_id == %d", groupID))
+	}
 	if memType != "" {
-		filter += fmt.Sprintf(" && mem_type == \"%s\"", memType)
+		filterParts = append(filterParts, fmt.Sprintf("mem_type == \"%s\"", memType))
+	}
+	filter := ""
+	if len(filterParts) > 0 {
+		filter = filterParts[0]
+		for i := 1; i < len(filterParts); i++ {
+			filter += " && " + filterParts[i]
+		}
 	}
 
 	// 搜索
 	searchOption := milvusclient.NewSearchOption(c.collectionName, topK, []entity.Vector{entity.FloatVector(emb32)}).
-		WithFilter(filter).
 		WithOutputFields("memory_id")
+	if filter != "" {
+		searchOption = searchOption.WithFilter(filter)
+	}
 
 	results, err := c.client.Search(ctx, searchOption)
 	if err != nil {

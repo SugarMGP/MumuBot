@@ -120,7 +120,7 @@ memory:
 sticker:
   auto_save: true             # 是否自动保存收到的表情包
   storage_path: "./stickers"  # 表情包本地存储路径
-  max_size_mb: 2             # 单个表情包最大大小（MB）
+  max_size_mb: 1             # 单个表情包最大大小（MB）
 
 # HTTP服务配置（用于健康检查等）
 server:
