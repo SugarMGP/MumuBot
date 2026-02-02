@@ -1,10 +1,10 @@
 package server
 
 import (
-	"amu-bot/internal/config"
-	"amu-bot/internal/memory"
 	"context"
 	"fmt"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,7 +39,7 @@ func (s *Server) Start() {
 	// 健康检查
 	r.GET("/health", s.healthCheck)
 
-	// API路由
+	// API 路由
 	api := r.Group("/api")
 	{
 		// 记忆相关
@@ -67,9 +67,9 @@ func (s *Server) Start() {
 		Handler: r,
 	}
 
-	zap.L().Info("HTTP服务启动", zap.String("addr", addr))
+	zap.L().Info("HTTP 服务启动", zap.String("addr", addr))
 	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		zap.L().Error("HTTP服务异常", zap.Error(err))
+		zap.L().Error("HTTP 服务异常", zap.Error(err))
 	}
 }
 
@@ -128,7 +128,7 @@ func (s *Server) listMemories(c *gin.Context) {
 func (s *Server) getMemory(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
 		return
 	}
 
@@ -145,7 +145,7 @@ func (s *Server) getMemory(c *gin.Context) {
 func (s *Server) deleteMemory(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 ID"})
 		return
 	}
 
@@ -180,7 +180,7 @@ func (s *Server) listMembers(c *gin.Context) {
 func (s *Server) getMember(c *gin.Context) {
 	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 ID"})
 		return
 	}
 

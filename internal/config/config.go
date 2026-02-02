@@ -83,14 +83,14 @@ type TimeRuleConfig struct {
 	TalkValue float64 `yaml:"talk_value"` // 该时段的发言频率
 }
 
-// LLMConfig LLM配置（统一使用 OpenAI 兼容格式）
+// LLMConfig LLM 配置
 type LLMConfig struct {
 	APIKey  string `yaml:"api_key"`
 	BaseURL string `yaml:"base_url"`
 	Model   string `yaml:"model"`
 }
 
-// EmbeddingConfig Embedding模型配置
+// EmbeddingConfig Embedding 模型配置
 type EmbeddingConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	APIKey  string `yaml:"api_key"`
@@ -118,7 +118,7 @@ type MemoryConfig struct {
 type MessageLogCleanupConfig struct {
 	Enabled       *bool `yaml:"enabled"`        // 是否启用，默认 true
 	IntervalHours int   `yaml:"interval_hours"` // 清理间隔（小时），默认 6
-	KeepLatest    int   `yaml:"keep_latest"`    // 每个群保留最新N条
+	KeepLatest    int   `yaml:"keep_latest"`    // 每个群保留最新消息数
 }
 
 // MySQLConfig MySQL 数据库配置
@@ -186,25 +186,25 @@ func Load(path string) (*Config, error) {
 		}
 
 		// 从环境变量覆盖敏感配置
-		if apiKey := os.Getenv("AMU_LLM_API_KEY"); apiKey != "" {
+		if apiKey := os.Getenv("MUMU_LLM_API_KEY"); apiKey != "" {
 			cfg.LLM.APIKey = apiKey
 		}
 		// Embedding API Key：优先使用专用环境变量，否则使用 LLM 的
-		if apiKey := os.Getenv("AMU_EMBEDDING_API_KEY"); apiKey != "" {
+		if apiKey := os.Getenv("MUMU_EMBEDDING_API_KEY"); apiKey != "" {
 			cfg.Embedding.APIKey = apiKey
 		} else if cfg.Embedding.APIKey == "" && cfg.LLM.APIKey != "" {
 			cfg.Embedding.APIKey = cfg.LLM.APIKey
 		}
-		if apiKey := os.Getenv("AMU_VISION_API_KEY"); apiKey != "" {
+		if apiKey := os.Getenv("MUMU_VISION_API_KEY"); apiKey != "" {
 			cfg.VisionLLM.APIKey = apiKey
 		} else if cfg.Embedding.APIKey == "" && cfg.LLM.APIKey != "" {
 			cfg.VisionLLM.APIKey = cfg.LLM.APIKey
 		}
-		if token := os.Getenv("AMU_ONEBOT_TOKEN"); token != "" {
+		if token := os.Getenv("MUMU_ONEBOT_TOKEN"); token != "" {
 			cfg.OneBot.AccessToken = token
 		}
 		// MySQL 密码
-		if password := os.Getenv("AMU_MYSQL_PASSWORD"); password != "" {
+		if password := os.Getenv("MUMU_MYSQL_PASSWORD"); password != "" {
 			cfg.Memory.MySQL.Password = password
 		}
 	})

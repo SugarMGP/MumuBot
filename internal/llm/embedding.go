@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"amu-bot/internal/config"
-	"amu-bot/internal/memory"
 	"context"
 	"fmt"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
 
 	"github.com/cloudwego/eino-ext/components/embedding/openai"
 )
@@ -15,7 +15,7 @@ type EmbeddingClient struct {
 	client *openai.Embedder
 }
 
-// NewEmbeddingClient 创建Embedding客户端
+// NewEmbeddingClient 创建 Embedding 客户端
 func NewEmbeddingClient(cfg *config.Config) (*EmbeddingClient, error) {
 	// 检查是否启用
 	if !cfg.Embedding.Enabled {
@@ -30,7 +30,7 @@ func NewEmbeddingClient(cfg *config.Config) (*EmbeddingClient, error) {
 		Model:   cfg.Embedding.Model,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("创建Embedder失败: %w", err)
+		return nil, fmt.Errorf("创建 Embedder 失败: %w", err)
 	}
 
 	return &EmbeddingClient{
@@ -47,16 +47,9 @@ func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float64, er
 	}
 
 	if len(vectors) == 0 || len(vectors[0]) == 0 {
-		return nil, fmt.Errorf("embedding结果为空")
+		return nil, fmt.Errorf("embedding 结果为空")
 	}
-
-	// 转换为float64
-	result := make([]float64, len(vectors[0]))
-	for i, v := range vectors[0] {
-		result[i] = float64(v)
-	}
-
-	return result, nil
+	return vectors[0], nil
 }
 
 // 确保实现了接口

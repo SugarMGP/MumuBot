@@ -1,18 +1,18 @@
 package agent
 
 import (
-	"amu-bot/internal/config"
-	"amu-bot/internal/llm"
-	"amu-bot/internal/mcp"
-	"amu-bot/internal/memory"
-	"amu-bot/internal/onebot"
-	"amu-bot/internal/persona"
-	"amu-bot/internal/tools"
-	"amu-bot/internal/utils"
 	"context"
 	"errors"
 	"fmt"
 	"math/rand"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/llm"
+	"mumu-bot/internal/mcp"
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/persona"
+	"mumu-bot/internal/tools"
+	"mumu-bot/internal/utils"
 	"os"
 	"strings"
 	"sync"
@@ -27,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Agent 阿沐Agent（基于 eino ReAct）
+// Agent 沐沐智能体
 type Agent struct {
 	cfg     *config.Config
 	persona *persona.Persona
@@ -37,7 +37,7 @@ type Agent struct {
 	bot     *onebot.Client
 	react   *react.Agent
 	tools   []tool.BaseTool
-	mcpMgr  *mcp.MCPManager // MCP管理器
+	mcpMgr  *mcp.Manager // MCP 管理器
 
 	// 消息缓冲（使用 ring buffer 避免扩容缩容开销）
 	buffers   map[int64]*utils.RingBuffer[*onebot.GroupMessage]
@@ -82,7 +82,7 @@ func New(
 	// 初始化 MCP 管理器
 	a.mcpMgr = mcp.NewMCPManager()
 	if err := a.mcpMgr.LoadFromConfig("config/mcp.json"); err != nil {
-		zap.L().Warn("加载MCP配置失败", zap.Error(err))
+		zap.L().Warn("加载 MCP 配置失败", zap.Error(err))
 	}
 
 	if err := a.initTools(); err != nil {
@@ -143,7 +143,7 @@ func (a *Agent) initTools() error {
 	mcpTools := a.mcpMgr.GetTools()
 	if len(mcpTools) > 0 {
 		a.tools = append(a.tools, mcpTools...)
-		zap.L().Info("已加载MCP工具", zap.Int("count", len(mcpTools)))
+		zap.L().Info("已加载 MCP 工具", zap.Int("count", len(mcpTools)))
 	}
 
 	return nil
@@ -171,7 +171,7 @@ func (a *Agent) Start() {
 	a.bot.OnMessage(a.onMessage)
 	a.wg.Add(1)
 	go a.thinkLoop()
-	zap.L().Info("Agent已启动")
+	zap.L().Info("Agent 已启动")
 }
 
 // Stop 停止
@@ -182,7 +182,7 @@ func (a *Agent) Stop() {
 	if a.mcpMgr != nil {
 		a.mcpMgr.Close()
 	}
-	zap.L().Info("Agent已停止")
+	zap.L().Info("Agent 已停止")
 }
 
 func (a *Agent) onMessage(msg *onebot.GroupMessage) {
@@ -193,7 +193,7 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	// 自身发送的消息也进入缓冲区和记录，但不触发思考
 	isSelf := msg.UserID == a.bot.GetSelfID()
 
-	// 检测是否通过名字或别名提及了阿沐
+	// 检测是否通过名字或别名提及了沐沐
 	mentionByName := a.persona.IsMentioned(msg.Content)
 	isMention := msg.MentionAmu || mentionByName
 
@@ -740,7 +740,6 @@ func (a *Agent) autoSaveSticker(url string, description string) {
 	// 保存到数据库
 	sticker := &memory.Sticker{
 		FileName:    result.FileName,
-		OriginalURL: url,
 		FileHash:    result.FileHash,
 		Description: description,
 	}

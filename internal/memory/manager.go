@@ -1,11 +1,11 @@
 package memory
 
 import (
-	"amu-bot/internal/config"
-	"amu-bot/internal/vector"
 	"context"
 	"errors"
 	"fmt"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/vector"
 	"strings"
 	"time"
 
@@ -39,7 +39,7 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 		mysqlCfg.Port = 3306
 	}
 	if mysqlCfg.DBName == "" {
-		mysqlCfg.DBName = "amu_bot"
+		mysqlCfg.DBName = "mumu_bot"
 	}
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
@@ -80,9 +80,9 @@ func NewManager(cfg *config.Config, embedding EmbeddingProvider) (*Manager, erro
 		milvusClient, err = vector.NewMilvusClient(milvusCfg)
 		if err != nil {
 			// Milvus 连接失败不影响整体运行，但向量检索功能将不可用
-			zap.L().Warn("Milvus连接失败，向量检索功能将不可用", zap.Error(err))
+			zap.L().Warn("Milvus 连接失败，向量检索功能将不可用", zap.Error(err))
 		} else {
-			zap.L().Info("Milvus向量存储已连接")
+			zap.L().Info("Milvus 向量存储已连接")
 		}
 	}
 
@@ -144,7 +144,7 @@ func (m *Manager) SaveMemory(ctx context.Context, mem *Memory) error {
 	if m.milvus != nil && len(embedding) > 0 {
 		if _, err := m.milvus.Insert(ctx, mem.ID, mem.GroupID, string(mem.Type), embedding); err != nil {
 			// 向量插入失败只记录日志，不影响主流程
-			zap.L().Warn("Milvus插入向量失败", zap.Error(err))
+			zap.L().Warn("Milvus 插入向量失败", zap.Error(err))
 		}
 	}
 
@@ -282,10 +282,6 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 
 // milvusVectorSearch 使用 Milvus 进行向量搜索
 func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, groupID int64, memType MemoryType, limit int) ([]Memory, error) {
-	if m.milvus == nil {
-		return nil, errors.New("Milvus 未初始化")
-	}
-
 	// 在 Milvus 中搜索
 	results, err := m.milvus.Search(ctx, queryEmb, groupID, string(memType), limit, m.cfg.Memory.LongTerm.SimilarityThreshold)
 	if err != nil {

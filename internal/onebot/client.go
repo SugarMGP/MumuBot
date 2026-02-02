@@ -1,9 +1,9 @@
 package onebot
 
 import (
-	"amu-bot/internal/config"
 	"context"
 	"fmt"
+	"mumu-bot/internal/config"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,7 +114,7 @@ type FaceInfo struct {
 type ReplyInfo struct {
 	MessageID int64  `json:"message_id"`
 	Content   string `json:"content,omitempty"`   // 被回复消息内容
-	SenderID  int64  `json:"sender_id,omitempty"` // 被回复消息发送者ID
+	SenderID  int64  `json:"sender_id,omitempty"` // 被回复消息发送者 ID
 	Nickname  string `json:"nickname,omitempty"`  // 被回复消息发送者昵称
 }
 
@@ -228,7 +228,7 @@ func (c *Client) Connect() error {
 	// 启动消息接收循环
 	go c.receiveLoop()
 
-	zap.L().Info("已连接到OneBot", zap.String("url", c.cfg.OneBot.WsURL))
+	zap.L().Info("已连接到 OneBot", zap.String("url", c.cfg.OneBot.WsURL))
 	return nil
 }
 
@@ -309,7 +309,7 @@ func (c *Client) handleMetaEvent(event map[string]interface{}) {
 		if subType == "connect" {
 			if selfID, ok := parseInt64(event["self_id"]); ok {
 				c.selfID = selfID
-				zap.L().Info("Bot已上线", zap.Int64("qq", c.selfID))
+				zap.L().Info("Bot 已上线", zap.Int64("qq", c.selfID))
 			}
 		}
 	}
@@ -362,7 +362,7 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 		msg.Time = time.Now()
 	}
 
-	// 消息ID
+	// 消息 ID
 	if msgID, ok := parseInt64(event["message_id"]); ok {
 		msg.MessageID = msgID
 		if err := c.MarkMsgAsRead(msgID); err != nil {
@@ -537,7 +537,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 				textParts = append(textParts, "[文件]")
 			}
 
-		case "json": // JSON卡片消息
+		case "json": // JSON 卡片消息
 			if jsonStr, ok := data["data"].(string); ok {
 				card := parseCardMessage(jsonStr)
 				if card != nil {
@@ -874,7 +874,7 @@ func (c *Client) callAPI(ctx context.Context, action string, params map[string]i
 	c.connMu.Lock()
 	if c.conn == nil {
 		c.connMu.Unlock()
-		return nil, fmt.Errorf("未连接到OneBot服务")
+		return nil, fmt.Errorf("未连接到 OneBot 服务")
 	}
 
 	req := map[string]interface{}{

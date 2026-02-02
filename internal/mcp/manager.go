@@ -1,9 +1,9 @@
 package mcp
 
 import (
-	"amu-bot/internal/tools"
 	"context"
 	"fmt"
+	"mumu-bot/internal/tools"
 	"os"
 	"sync"
 
@@ -16,81 +16,81 @@ import (
 	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
 )
 
-// MCPServerConfig MCP服务器配置
-type MCPServerConfig struct {
+// ServerConfig MCP 服务器配置
+type ServerConfig struct {
 	Name          string            `json:"name"`
 	Enabled       bool              `json:"enabled"`
 	Type          string            `json:"type"`           // sse 或 stdio
-	URL           string            `json:"url"`            // SSE服务器URL
-	Command       string            `json:"command"`        // stdio命令
-	Args          []string          `json:"args"`           // stdio参数
-	Env           []string          `json:"env"`            // stdio环境变量
+	URL           string            `json:"url"`            // SSE 服务器 URL
+	Command       string            `json:"command"`        // stdio 命令
+	Args          []string          `json:"args"`           // stdio 参数
+	Env           []string          `json:"env"`            // stdio 环境变量
 	ToolNameList  []string          `json:"tool_name_list"` // 可选，指定要加载的工具名称列表
-	CustomHeaders map[string]string `json:"custom_headers"` // 可选，自定义HTTP头
+	CustomHeaders map[string]string `json:"custom_headers"` // 可选，自定义 HTTP 头
 }
 
-// MCPConfig MCP配置文件结构
-type MCPConfig struct {
-	Servers []MCPServerConfig `json:"servers"`
+// Config MCP 配置文件结构
+type Config struct {
+	Servers []ServerConfig `json:"servers"`
 }
 
-// MCPManager MCP客户端管理器
-type MCPManager struct {
+// Manager MCP 客户端管理器
+type Manager struct {
 	clients []*client.Client
 	tools   []tool.BaseTool
 	mu      sync.Mutex
 }
 
-// NewMCPManager 创建MCP管理器
-func NewMCPManager() *MCPManager {
-	return &MCPManager{
+// NewMCPManager 创建 MCP 管理器
+func NewMCPManager() *Manager {
+	return &Manager{
 		clients: make([]*client.Client, 0),
 		tools:   make([]tool.BaseTool, 0),
 	}
 }
 
-// LoadFromConfig 从配置文件加载MCP服务器
-func (m *MCPManager) LoadFromConfig(configPath string) error {
+// LoadFromConfig 从配置文件加载 MCP 服务器
+func (m *Manager) LoadFromConfig(configPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			zap.L().Debug("MCP配置文件不存在，跳过加载", zap.String("path", configPath))
+			zap.L().Debug("MCP 配置文件不存在，跳过加载", zap.String("path", configPath))
 			return nil
 		}
-		return fmt.Errorf("读取MCP配置文件失败: %w", err)
+		return fmt.Errorf("读取 MCP 配置文件失败: %w", err)
 	}
 
-	var cfg MCPConfig
+	var cfg Config
 	if err := sonic.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("解析MCP配置文件失败: %w", err)
+		return fmt.Errorf("解析 MCP 配置文件失败: %w", err)
 	}
 
 	ctx := context.Background()
 
 	for _, serverCfg := range cfg.Servers {
 		if !serverCfg.Enabled {
-			zap.L().Debug("MCP服务器已禁用，跳过", zap.String("name", serverCfg.Name))
+			zap.L().Debug("MCP 服务器已禁用，跳过", zap.String("name", serverCfg.Name))
 			continue
 		}
 
 		if err := m.connectServer(ctx, &serverCfg); err != nil {
-			zap.L().Warn("连接MCP服务器失败",
+			zap.L().Warn("连接 MCP 服务器失败",
 				zap.String("name", serverCfg.Name),
 				zap.Error(err))
 			continue
 		}
 
-		zap.L().Info("已连接MCP服务器", zap.String("name", serverCfg.Name))
+		zap.L().Info("已连接 MCP 服务器", zap.String("name", serverCfg.Name))
 	}
 
 	return nil
 }
 
-// connectServer 连接单个MCP服务器
-func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) error {
+// connectServer 连接单个 MCP 服务器
+func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 	var cli *client.Client
 	var err error
 
@@ -98,33 +98,33 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 	case "sse":
 		cli, err = client.NewSSEMCPClient(cfg.URL)
 		if err != nil {
-			return fmt.Errorf("创建SSE客户端失败: %w", err)
+			return fmt.Errorf("创建 SSE 客户端失败: %w", err)
 		}
 	case "stdio":
 		cli, err = client.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 		if err != nil {
-			return fmt.Errorf("创建Stdio客户端失败: %w", err)
+			return fmt.Errorf("创建 Stdio 客户端失败: %w", err)
 		}
 	default:
-		return fmt.Errorf("不支持的MCP服务器类型: %s", cfg.Type)
+		return fmt.Errorf("不支持的 MCP 服务器类型: %s", cfg.Type)
 	}
 
 	// 启动客户端
 	if err := cli.Start(ctx); err != nil {
-		return fmt.Errorf("启动MCP客户端失败: %w", err)
+		return fmt.Errorf("启动 MCP 客户端失败: %w", err)
 	}
 
 	// 初始化连接
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "amu-bot",
+		Name:    "mumu-bot",
 		Version: "2.0.0",
 	}
 
 	if _, err := cli.Initialize(ctx, initRequest); err != nil {
 		_ = cli.Close()
-		return fmt.Errorf("初始化MCP连接失败: %w", err)
+		return fmt.Errorf("初始化 MCP 连接失败: %w", err)
 	}
 
 	// 获取工具 - 使用 MCPClient 接口
@@ -137,7 +137,7 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 	baseTools, err := mcptool.GetTools(ctx, mcpToolCfg)
 	if err != nil {
 		_ = cli.Close()
-		return fmt.Errorf("获取MCP工具失败: %w", err)
+		return fmt.Errorf("获取 MCP 工具失败: %w", err)
 	}
 
 	// 包装工具以添加调用日志
@@ -152,7 +152,7 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 	m.clients = append(m.clients, cli)
 	m.tools = append(m.tools, wrappedTools...)
 
-	zap.L().Info("已加载MCP工具",
+	zap.L().Info("已加载 MCP 工具",
 		zap.String("server", cfg.Name),
 		zap.Int("tool_count", len(baseTools)))
 
@@ -160,20 +160,20 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 }
 
 // GetTools 获取所有MCP工具
-func (m *MCPManager) GetTools() []tool.BaseTool {
+func (m *Manager) GetTools() []tool.BaseTool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.tools
 }
 
 // Close 关闭所有MCP连接
-func (m *MCPManager) Close() {
+func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, cli := range m.clients {
 		if err := cli.Close(); err != nil {
-			zap.L().Warn("关闭MCP客户端失败", zap.Error(err))
+			zap.L().Warn("关闭 MCP 客户端失败", zap.Error(err))
 		}
 	}
 

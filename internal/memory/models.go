@@ -104,9 +104,8 @@ type Sticker struct {
 	UpdatedAt time.Time `json:"updated_at"`
 
 	FileName    string `gorm:"type:varchar(100)" json:"file_name"`            // 本地文件名（uuid.ext）
-	OriginalURL string `gorm:"type:varchar(500)" json:"original_url"`         // 原始URL
-	FileHash    string `gorm:"type:varchar(64);uniqueIndex" json:"file_hash"` // 文件MD5哈希（用于去重）
-	Description string `gorm:"type:text" json:"description"`                  // Vision模型生成的描述
+	FileHash    string `gorm:"type:varchar(64);uniqueIndex" json:"file_hash"` // 文件 MD5 哈希（用于去重）
+	Description string `gorm:"type:text" json:"description"`                  // Vision 模型生成的描述
 	UseCount    int    `gorm:"default:0" json:"use_count"`                    // 使用次数
 }
 

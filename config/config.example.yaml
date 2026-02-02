@@ -1,16 +1,15 @@
-# 阿沐 - 赛博QQ群友配置文件
+# MumuBot 配置文件
 
 # 基础配置
 app:
   debug: true
   log_level: "debug"  # debug, info, warn, error
 
-# 阿沐人格配置
+# 人格配置
 persona:
   name: "沐沐大魔王"
   alias_names:        # 别名列表，这些都可以触发@检测
     - "mumu"
-    - "阿沐"
     - "牢沐"
     - "沐沐"
   # 兴趣话题（更容易触发发言）
@@ -38,9 +37,9 @@ persona:
     少用反问句，除非真的是在质疑某人的观点
     表达方式果断，不模棱两可
   # 详细人格描述（可选，用于更丰富的人设）
-  personality: "是一个大二在读女大学生，现在正在上网和群友聊天。有时犀利，有时比较温柔"
+  personality: "是一个大二在读女大学生，现在正在上网和群友聊天。有时犀利，有时比较温柔，有时比较可爱"
 
-# OneBot配置（NapCat）
+# OneBot 配置
 onebot:
   ws_url: "ws://127.0.0.1:3001"
   access_token: ""
@@ -52,42 +51,42 @@ groups:
     enabled: true
     extra_prompt: ""        # 群专属额外提示词（可选）
 
-# Agent决策配置
+# Agent 决策配置
 agent:
   observe_window: 30        # 观察窗口时间（秒）
-  think_interval: 3        # 决策间隔（秒）
+  think_interval: 3         # 决策间隔（秒）
   message_buffer_size: 15   # 消息缓冲区大小
   speak_cooldown: 0         # 发言冷却时间（秒）
-  max_step: 7              # ReAct 最大步数
+  max_step: 7               # ReAct 最大步数
 
 # 聊天行为配置
 chat:
   talk_frequency: 0.8       # 聊天频率，0-1，越大越活跃
   typing_simulation: true   # 是否模拟打字延迟
-  typing_speed: 6          # 每秒打字速度（字符）
+  typing_speed: 6           # 每秒打字速度（字符）
   enable_time_rules: false  # 是否启用时段规则
   time_rules:               # 时段发言频率规则
     - time_range: "03:00-10:00"
       group_id: 0           # 0表示全局
       talk_value: 0.2       # 夜间降低发言频率
 
-# LLM配置（统一使用 OpenAI 兼容格式）
+# LLM配置（使用 OpenAI 兼容格式）
 llm:
-  api_key: ""        # 留空则使用 AMU_LLM_API_KEY 环境变量
+  api_key: ""        # 留空则使用 MUMU_LLM_API_KEY 环境变量
   base_url: ""
   model: ""
 
 # Embedding模型配置（用于记忆检索）
 embedding:
   enabled: true
-  api_key: ""        # 留空则使用 AMU_EMBEDDING_API_KEY 或 AMU_LLM_API_KEY 环境变量
+  api_key: ""        # 留空则使用 MUMU_EMBEDDING_API_KEY 或 MUMU_LLM_API_KEY 环境变量
   base_url: ""
   model: ""
 
 # 多模态视觉模型配置（用于理解图片和表情包）
 vision_llm:
   enabled: true     # 是否启用图片理解
-  api_key: ""        # 留空则使用 AMU_VISION_API_KEY 环境变量 或 AMU_LLM_API_KEY 环境变量
+  api_key: ""        # 留空则使用 MUMU_VISION_API_KEY 环境变量 或 MUMU_LLM_API_KEY 环境变量
   base_url: ""
   model: ""    # 支持视觉的模型
 
@@ -98,15 +97,15 @@ memory:
     host: "127.0.0.1"
     port: 3306
     user: "root"
-    password: ""            # 留空则使用 AMU_MYSQL_PASSWORD 环境变量
-    db_name: "amu_bot"
+    password: ""            # 留空则使用 MUMU_MYSQL_PASSWORD 环境变量
+    db_name: "mumu_bot"
 
   # Milvus 向量数据库配置
   milvus:
     enabled: true           # 是否启用 Milvus 向量存储
     address: "localhost:19530"
     db_name: "default"
-    collection_name: "amu_memories"
+    collection_name: "mumu_memories"
     vector_dim: 1024        # embedding 维度
     metric_type: "COSINE"   # 相似度度量类型: IP, L2, COSINE
 

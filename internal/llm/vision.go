@@ -1,9 +1,9 @@
 package llm
 
 import (
-	"amu-bot/internal/config"
 	"context"
 	"fmt"
+	"mumu-bot/internal/config"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -29,7 +29,7 @@ func NewVisionClient(cfg *config.VisionLLMConfig) (*VisionClient, error) {
 		Model:   cfg.Model,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("创建VisionModel失败: %w", err)
+		return nil, fmt.Errorf("创建 VisionModel 失败: %w", err)
 	}
 
 	return &VisionClient{
@@ -44,7 +44,7 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 		return "[图片]", nil
 	}
 
-	// 构建多模态消息（使用新 API）
+	// 构建多模态消息
 	msg := &schema.Message{
 		Role: schema.User,
 		UserInputMultiContent: []schema.MessageInputPart{

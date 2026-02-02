@@ -1,11 +1,11 @@
 package tools
 
 import (
-	"amu-bot/internal/config"
-	"amu-bot/internal/memory"
-	"amu-bot/internal/onebot"
 	"context"
 	"fmt"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/onebot"
 	"os"
 	"path/filepath"
 	"time"
@@ -331,7 +331,7 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 	}
 
 	if input.UserID == 0 {
-		return &UpdateMemberProfileOutput{Success: false, Message: "用户ID不能为空"}, nil
+		return &UpdateMemberProfileOutput{Success: false, Message: "用户 ID 不能为空"}, nil
 	}
 
 	profile, err := tc.MemoryMgr.GetOrCreateMemberProfile(tc.GroupID, input.UserID, input.Nickname)
@@ -431,7 +431,7 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 	}
 
 	if input.UserID == 0 {
-		return &GetMemberInfoOutput{Success: false, Message: "用户ID不能为空"}, nil
+		return &GetMemberInfoOutput{Success: false, Message: "用户 ID 不能为空"}, nil
 	}
 
 	profile, err := tc.MemoryMgr.GetMemberProfile(tc.GroupID, input.UserID)
@@ -492,7 +492,7 @@ type SpeakInput struct {
 // SpeakOutput 发言的输出
 type SpeakOutput struct {
 	Success   bool   `json:"success"`
-	MessageID int64  `json:"message_id,omitempty"` // 发送成功后的消息ID
+	MessageID int64  `json:"message_id,omitempty"` // 发送成功后的消息 ID
 	Message   string `json:"message,omitempty"`
 }
 
@@ -657,7 +657,7 @@ func getGroupInfoFunc(ctx context.Context, input *GetGroupInfoInput) (*GetGroupI
 		return output, nil
 	}
 	if tc.Bot == nil {
-		output := &GetGroupInfoOutput{Success: false, Message: "Bot未连接"}
+		output := &GetGroupInfoOutput{Success: false, Message: "Bot 未连接"}
 		LogToolCall("getGroupInfo", input, output, nil)
 		return output, nil
 	}
@@ -717,10 +717,10 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 		return &GetGroupMemberDetailOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &GetGroupMemberDetailOutput{Success: false, Message: "Bot未连接"}, nil
+		return &GetGroupMemberDetailOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 	if input.UserID == 0 {
-		return &GetGroupMemberDetailOutput{Success: false, Message: "用户ID不能为空"}, nil
+		return &GetGroupMemberDetailOutput{Success: false, Message: "用户 ID 不能为空"}, nil
 	}
 
 	info, err := tc.Bot.GetGroupMemberInfo(tc.GroupID, input.UserID, false)
@@ -780,10 +780,10 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 		return &PokeOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &PokeOutput{Success: false, Message: "Bot未连接"}, nil
+		return &PokeOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 	if input.UserID == 0 {
-		return &PokeOutput{Success: false, Message: "用户ID不能为空"}, nil
+		return &PokeOutput{Success: false, Message: "用户 ID 不能为空"}, nil
 	}
 
 	if err := tc.Bot.GroupPoke(tc.GroupID, input.UserID); err != nil {
@@ -829,13 +829,13 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 		return &ReactToMessageOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &ReactToMessageOutput{Success: false, Message: "Bot未连接"}, nil
+		return &ReactToMessageOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 	if input.MessageID == 0 {
-		return &ReactToMessageOutput{Success: false, Message: "消息ID不能为空"}, nil
+		return &ReactToMessageOutput{Success: false, Message: "消息 ID 不能为空"}, nil
 	}
 	if input.EmojiID == 0 {
-		return &ReactToMessageOutput{Success: false, Message: "表情ID不能为空"}, nil
+		return &ReactToMessageOutput{Success: false, Message: "表情 ID 不能为空"}, nil
 	}
 
 	if err := tc.Bot.SetMsgEmojiLike(input.MessageID, input.EmojiID); err != nil {
@@ -881,10 +881,10 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return &RecallMessageOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &RecallMessageOutput{Success: false, Message: "Bot未连接"}, nil
+		return &RecallMessageOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 	if input.MessageID == 0 {
-		return &RecallMessageOutput{Success: false, Message: "消息ID不能为空"}, nil
+		return &RecallMessageOutput{Success: false, Message: "消息 ID 不能为空"}, nil
 	}
 
 	if err := tc.Bot.DeleteMsg(input.MessageID); err != nil {
@@ -1034,9 +1034,9 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 		limit = 40
 	}
 
-	msgs := tc.MemoryMgr.GetRecentMessages(tc.GroupID, limit, input.Offset)
-	results := make([]map[string]interface{}, 0, len(msgs))
-	for _, m := range msgs {
+	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, limit, input.Offset)
+	results := make([]map[string]interface{}, 0, len(messages))
+	for _, m := range messages {
 		results = append(results, map[string]interface{}{
 			"user_id":    m.UserID,
 			"nickname":   m.Nickname,
@@ -1141,7 +1141,7 @@ func reviewExpressionFunc(ctx context.Context, input *ReviewExpressionInput) (*R
 	}
 
 	if input.ID == 0 {
-		return &ReviewExpressionOutput{Success: false, Message: "表达方式ID不能为空"}, nil
+		return &ReviewExpressionOutput{Success: false, Message: "表达方式 ID 不能为空"}, nil
 	}
 
 	err := tc.MemoryMgr.ReviewExpression(input.ID, input.Approve)
@@ -1247,7 +1247,7 @@ func reviewJargonFunc(ctx context.Context, input *ReviewJargonInput) (*ReviewJar
 	}
 
 	if input.ID == 0 {
-		return &ReviewJargonOutput{Success: false, Message: "黑话ID不能为空"}, nil
+		return &ReviewJargonOutput{Success: false, Message: "黑话 ID 不能为空"}, nil
 	}
 
 	err := tc.MemoryMgr.ReviewJargon(input.ID, input.Approve)
@@ -1357,10 +1357,10 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 		return &SendStickerOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &SendStickerOutput{Success: false, Message: "Bot未连接"}, nil
+		return &SendStickerOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 	if input.StickerID == 0 {
-		return &SendStickerOutput{Success: false, Message: "表情包ID不能为空"}, nil
+		return &SendStickerOutput{Success: false, Message: "表情包 ID 不能为空"}, nil
 	}
 
 	// 获取表情包信息
@@ -1444,7 +1444,7 @@ func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*Get
 		return &GetGroupNoticesOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &GetGroupNoticesOutput{Success: false, Message: "Bot未连接"}, nil
+		return &GetGroupNoticesOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 
 	notices, err := tc.Bot.GetGroupNotice(tc.GroupID)
@@ -1511,7 +1511,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 		return &GetEssenceMessagesOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &GetEssenceMessagesOutput{Success: false, Message: "Bot未连接"}, nil
+		return &GetEssenceMessagesOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 
 	messages, err := tc.Bot.GetEssenceMessages(tc.GroupID)
@@ -1576,10 +1576,10 @@ func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInpu
 		return &GetMessageReactionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
 	}
 	if tc.Bot == nil {
-		return &GetMessageReactionsOutput{Success: false, Message: "Bot未连接"}, nil
+		return &GetMessageReactionsOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
 	if input.MessageID == 0 {
-		return &GetMessageReactionsOutput{Success: false, Message: "消息ID不能为空"}, nil
+		return &GetMessageReactionsOutput{Success: false, Message: "消息 ID 不能为空"}, nil
 	}
 
 	reactions, err := tc.Bot.GetMessageReactions(input.MessageID)

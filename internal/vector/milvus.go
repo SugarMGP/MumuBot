@@ -44,7 +44,7 @@ func NewMilvusClient(cfg *MilvusConfig) (*MilvusClient, error) {
 		cfg.DBName = "default"
 	}
 	if cfg.CollectionName == "" {
-		cfg.CollectionName = "amu_memories"
+		cfg.CollectionName = "mumu_memories"
 	}
 	if cfg.VectorDim == 0 {
 		cfg.VectorDim = 1536
@@ -72,7 +72,7 @@ func NewMilvusClient(cfg *MilvusConfig) (*MilvusClient, error) {
 
 	// 初始化集合
 	if err := mc.initCollection(ctx); err != nil {
-		cli.Close(ctx)
+		_ = cli.Close(ctx)
 		return nil, err
 	}
 

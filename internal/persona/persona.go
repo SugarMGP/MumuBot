@@ -1,8 +1,8 @@
 package persona
 
 import (
-	"amu-bot/internal/config"
 	"fmt"
+	"mumu-bot/internal/config"
 	"strings"
 	"time"
 
@@ -16,10 +16,10 @@ type PromptContext struct {
 	Expressions string // 学习到的表达习惯
 	Jargons     string // 黑话解释
 	TimeContext string // 时间上下文
-	AccountID   int64  // 沐沐的账号ID
+	AccountID   int64  // 沐沐的账号 ID
 }
 
-// Persona 阿沐的人格定义
+// Persona 人格定义
 type Persona struct {
 	cfg *config.PersonaConfig
 }

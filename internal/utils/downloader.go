@@ -32,7 +32,7 @@ func DownloadImage(url string, storageDir string, maxSizeMB int) (*DownloadResul
 		return nil, fmt.Errorf("创建存储目录失败: %w", err)
 	}
 
-	// 创建HTTP客户端
+	// 创建 HTTP 客户端
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
@@ -73,8 +73,8 @@ func DownloadImage(url string, storageDir string, maxSizeMB int) (*DownloadResul
 	}
 	tmpPath := tmpFile.Name()
 	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpPath) // 清理临时文件
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath) // 清理临时文件
 	}()
 
 	// 同时计算MD5和写入文件
@@ -98,7 +98,7 @@ func DownloadImage(url string, storageDir string, maxSizeMB int) (*DownloadResul
 	}
 
 	// 关闭临时文件
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	// 计算MD5哈希
 	fileHash := hex.EncodeToString(hash.Sum(nil))
@@ -174,20 +174,4 @@ func copyFile(src, dst string) error {
 
 	_, err = io.Copy(destFile, sourceFile)
 	return err
-}
-
-// CalculateFileHash 计算文件的MD5哈希
-func CalculateFileHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := md5.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
