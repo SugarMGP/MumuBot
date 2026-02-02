@@ -547,7 +547,13 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 
 		// 处理表情
 		for _, face := range m.Faces {
-			content += " " + llm.DescribeFace(face.ID, face.Name)
+			if face.Name != "" {
+				content += " " + fmt.Sprintf("[表情:%s]", face.Name)
+			} else if face.ID > 0 {
+				content += " " + fmt.Sprintf("[表情:%d]", face.ID)
+			} else {
+				content += " [表情]"
+			}
 		}
 
 		// 处理图片（调用 Vision 模型识别）

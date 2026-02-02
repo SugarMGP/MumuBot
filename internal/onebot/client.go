@@ -349,6 +349,9 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 	// 消息ID
 	if msgID, ok := event["message_id"].(int64); ok {
 		msg.MessageID = msgID
+		if err := c.MarkMsgAsRead(msgID); err != nil {
+			zap.L().Error("标记消息已读失败", zap.Error(err))
+		}
 	}
 
 	// 群ID

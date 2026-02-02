@@ -121,7 +121,7 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 	}
 
 	if _, err := cli.Initialize(ctx, initRequest); err != nil {
-		cli.Close()
+		_ = cli.Close()
 		return fmt.Errorf("初始化MCP连接失败: %w", err)
 	}
 
@@ -130,15 +130,15 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 		Cli: cli,
 	}
 
-	tools, err := mcptool.GetTools(ctx, mcpToolCfg)
+	baseTools, err := mcptool.GetTools(ctx, mcpToolCfg)
 	if err != nil {
-		cli.Close()
+		_ = cli.Close()
 		return fmt.Errorf("获取MCP工具失败: %w", err)
 	}
 
 	// 包装工具以添加调用日志
-	wrappedTools := make([]tool.BaseTool, 0, len(tools))
-	for _, t := range tools {
+	wrappedTools := make([]tool.BaseTool, 0, len(baseTools))
+	for _, t := range baseTools {
 		wrappedTools = append(wrappedTools, &loggingToolWrapper{
 			BaseTool:   t,
 			serverName: cfg.Name,
@@ -150,7 +150,7 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 
 	zap.L().Info("已加载MCP工具",
 		zap.String("server", cfg.Name),
-		zap.Int("tool_count", len(tools)))
+		zap.Int("tool_count", len(baseTools)))
 
 	return nil
 }

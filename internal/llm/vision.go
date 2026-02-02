@@ -4,9 +4,7 @@ import (
 	"amu-bot/internal/config"
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/schema"
@@ -14,9 +12,8 @@ import (
 
 // VisionClient 多模态视觉模型客户端
 type VisionClient struct {
-	cfg        *config.VisionLLMConfig
-	model      *openai.ChatModel
-	httpClient *http.Client
+	cfg   *config.VisionLLMConfig
+	model *openai.ChatModel
 }
 
 // NewVisionClient 创建视觉模型客户端
@@ -38,9 +35,6 @@ func NewVisionClient(cfg *config.VisionLLMConfig) (*VisionClient, error) {
 	return &VisionClient{
 		cfg:   cfg,
 		model: model,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
 	}, nil
 }
 
@@ -80,16 +74,4 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 		return "[图片]", nil
 	}
 	return fmt.Sprintf("[图片:%s]", desc), nil
-}
-
-// DescribeFace 描述QQ表情
-// 优先使用名称，如果没有则显示ID
-func DescribeFace(id int, name string) string {
-	if name != "" {
-		return fmt.Sprintf("[表情:%s]", name)
-	}
-	if id > 0 {
-		return fmt.Sprintf("[表情:%d]", id)
-	}
-	return "[表情]"
 }

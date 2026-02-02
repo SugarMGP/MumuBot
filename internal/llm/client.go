@@ -24,6 +24,11 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		BaseURL: cfg.LLM.BaseURL,
 		APIKey:  cfg.LLM.APIKey,
 		Model:   cfg.LLM.Model,
+		ExtraFields: map[string]any{
+			"thinking": map[string]any{
+				"type": "disabled",
+			},
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建ChatModel失败: %w", err)
