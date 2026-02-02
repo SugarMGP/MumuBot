@@ -21,14 +21,10 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	// 使用 Eino 的 OpenAI 兼容客户端
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		BaseURL: cfg.LLM.BaseURL,
-		APIKey:  cfg.LLM.APIKey,
-		Model:   cfg.LLM.Model,
-		ExtraFields: map[string]any{
-			"thinking": map[string]any{
-				"type": "disabled",
-			},
-		},
+		BaseURL:     cfg.LLM.BaseURL,
+		APIKey:      cfg.LLM.APIKey,
+		Model:       cfg.LLM.Model,
+		ExtraFields: cfg.LLM.ExtraFields,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建 ChatModel 失败: %w", err)

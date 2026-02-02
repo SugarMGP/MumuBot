@@ -180,16 +180,15 @@ type GroupInfo struct {
 
 // GroupMemberInfo 群成员信息
 type GroupMemberInfo struct {
-	GroupID         int64  `json:"group_id"`
-	UserID          int64  `json:"user_id"`
-	Nickname        string `json:"nickname"`
-	Card            string `json:"card"`
-	Role            string `json:"role"` // owner/admin/member
-	JoinTime        int64  `json:"join_time"`
-	LastSentTime    int64  `json:"last_sent_time"`
-	Level           string `json:"level"`
-	Title           string `json:"title"` // 专属头衔
-	TitleExpireTime int64  `json:"title_expire_time"`
+	GroupID      int64  `json:"group_id"`
+	UserID       int64  `json:"user_id"`
+	Nickname     string `json:"nickname"`
+	Card         string `json:"card"`
+	Role         string `json:"role"` // owner/admin/member
+	JoinTime     int64  `json:"join_time"`
+	LastSentTime int64  `json:"last_sent_time"`
+	Level        string `json:"level"`
+	Title        string `json:"title"` // 专属头衔
 }
 
 // LoginInfo 登录信息
@@ -574,36 +573,42 @@ func (c *Client) OnMessage(handler func(*GroupMessage)) {
 }
 
 // SendGroupMessage 发送群消息
-func (c *Client) SendGroupMessage(groupID int64, content string) (int64, error) {
-	resp, err := c.callAPI(context.Background(), "send_group_msg", map[string]interface{}{
-		"group_id": groupID,
-		"message":  content,
-	})
-	if err != nil {
-		return 0, err
-	}
-	if data := resp.DataMap(); data != nil {
-		if msgID, ok := parseInt64(data["message_id"]); ok {
-			return msgID, nil
-		}
-	}
-	return 0, nil
-}
-
-// SendGroupMessageReply 发送群消息（回复）
-func (c *Client) SendGroupMessageReply(groupID int64, content string, replyTo int64) (int64, error) {
+func (c *Client) SendGroupMessage(groupID int64, content string, replyTo int64, mentions []int64) (int64, error) {
 	// 使用消息段数组格式，更符合 OneBot 11 标准
 	var message []map[string]interface{}
+
+	// reply 消息段
 	if replyTo > 0 {
 		message = append(message, map[string]interface{}{
 			"type": "reply",
-			"data": map[string]interface{}{"id": strconv.FormatInt(replyTo, 10)},
+			"data": map[string]interface{}{
+				"id": strconv.FormatInt(replyTo, 10),
+			},
 		})
 	}
-	message = append(message, map[string]interface{}{
-		"type": "text",
-		"data": map[string]interface{}{"text": content},
-	})
+
+	// @ 消息段
+	for _, uid := range mentions {
+		if uid <= 0 {
+			continue
+		}
+		message = append(message, map[string]interface{}{
+			"type": "at",
+			"data": map[string]interface{}{
+				"qq": strconv.FormatInt(uid, 10),
+			},
+		})
+	}
+
+	// 文本消息段
+	if content != "" {
+		message = append(message, map[string]interface{}{
+			"type": "text",
+			"data": map[string]interface{}{
+				"text": content,
+			},
+		})
+	}
 
 	resp, err := c.callAPI(context.Background(), "send_group_msg", map[string]interface{}{
 		"group_id": groupID,

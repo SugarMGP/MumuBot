@@ -85,9 +85,10 @@ type TimeRuleConfig struct {
 
 // LLMConfig LLM 配置
 type LLMConfig struct {
-	APIKey  string `yaml:"api_key"`
-	BaseURL string `yaml:"base_url"`
-	Model   string `yaml:"model"`
+	APIKey      string                 `yaml:"api_key"`
+	BaseURL     string                 `yaml:"base_url"`
+	Model       string                 `yaml:"model"`
+	ExtraFields map[string]interface{} `yaml:"extra_fields"` // 额外参数
 }
 
 // EmbeddingConfig Embedding 模型配置

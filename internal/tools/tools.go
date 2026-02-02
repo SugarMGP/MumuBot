@@ -13,11 +13,14 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
+
+	mutils "mumu-bot/internal/utils"
+
 	"go.uber.org/zap"
 )
 
 // SpeakCallback 发言回调函数类型，返回消息ID
-type SpeakCallback func(groupID int64, content string, replyTo int64) int64
+type SpeakCallback func(groupID int64, content string, replyTo int64, mentions []int64) int64
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
@@ -145,9 +148,11 @@ type QueryMemoryInput struct {
 	// Query 搜索关键词或描述
 	Query string `json:"query" jsonschema:"description=搜索关键词或描述"`
 	// Type 限定记忆类型（可选）
-	Type string `json:"type,omitempty" jsonschema:"enum=group_fact,enum=self_experience,enum=conversation,description=限定记忆类型"`
-	// Global 是否全局搜索（跨所有群）
-	Global bool `json:"global,omitempty" jsonschema:"description=是否跨群搜索。设为true时搜索所有群的记忆；设为false时只搜索当前群的记忆"`
+	Type string `json:"type,omitempty" jsonschema:"enum=group_fact,enum=self_experience,enum=conversation,description=限定记忆类型（空字符串时不筛选）"`
+	// Scoped 是否只搜索当前聊天群的记忆
+	Scoped bool `json:"scoped,omitempty" jsonschema:"description=是否只搜索当前聊天群的记忆，默认false"`
+	// Limit 返回结果数量限制，默认10，最大50
+	Limit int `json:"limit,omitempty" jsonschema:"description=返回结果数量限制，默认10，最大50"`
 }
 
 // QueryMemoryOutput 查询记忆的输出
@@ -169,13 +174,21 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 		return &QueryMemoryOutput{Success: false, Message: "查询内容不能为空"}, nil
 	}
 
-	// 根据 Global 开关决定是否限制群ID
-	groupID := tc.GroupID
-	if input.Global {
-		groupID = 0 // 0 表示搜索所有群
+	// 根据开关决定是否限制群 ID
+	groupID := int64(0)
+	if input.Scoped {
+		groupID = tc.GroupID
 	}
 
-	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, groupID, memory.MemoryType(input.Type), 10)
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, groupID, memory.MemoryType(input.Type), limit)
 	if err != nil {
 		output := &QueryMemoryOutput{Success: false, Message: err.Error()}
 		LogToolCall("queryMemory", input, output, err)
@@ -207,9 +220,9 @@ func NewQueryMemoryTool() (tool.InvokableTool, error) {
 		"queryMemory",
 		`搜索你的记忆，找到相关的信息。可以查询关于某个话题、某个人、或者某次经历的记忆。
 
-【global 参数使用指南】
-- global=false（默认）：只搜索当前群的记忆，适合查找群内事件、群规等
-- global=true：搜索所有群的记忆，适合查找自身经历、通用信息等
+【scoped 参数使用指南】
+- scoped=false（默认）：搜索所有群的记忆，适合查找自身经历、过往事件等
+- scoped=true：只搜索当前群的记忆，适合查找当前群内事件、群规等
 `,
 		queryMemoryFunc,
 	)
@@ -487,6 +500,8 @@ type SpeakInput struct {
 	Content string `json:"content" jsonschema:"description=你想说的话，不要用markdown，说话要口语化"`
 	// ReplyTo 要回复的消息ID（可选）
 	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的消息ID"`
+	// Mentions 要@的用户QQ号列表（可选）
+	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
 }
 
 // SpeakOutput 发言的输出
@@ -507,7 +522,7 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc != nil && tc.SpeakCallback != nil {
 		// 通过回调发送消息，获取返回的消息ID
-		msgID = tc.SpeakCallback(tc.GroupID, input.Content, input.ReplyTo)
+		msgID = tc.SpeakCallback(tc.GroupID, input.Content, input.ReplyTo, input.Mentions)
 	}
 
 	output := &SpeakOutput{
@@ -531,7 +546,8 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 - 不要用分号、句号或换行符连接多个独立的句子
 - 正确示例：先调用speak("你好")，再调用speak("今天天气真好")
 - 错误示例：speak("你好。今天天气真好") 或 speak("你好\n今天天气真好")
-- 回复功能不要滥用，只有在明确需要回复某条消息时才使用 reply_to 参数，不要回复自己说的话`,
+- 在明确需要回复某条消息时使用 reply_to 参数，但是不要回复自己说的话
+- 如果想@某个群友，请使用 mentions 参数（可以同时@多个人），不要在内容里直接写 @XXX`,
 		speakFunc,
 	)
 }
@@ -699,15 +715,16 @@ type GetGroupMemberDetailInput struct {
 
 // GetGroupMemberDetailOutput 获取群成员详情的输出
 type GetGroupMemberDetailOutput struct {
-	Success      bool   `json:"success"`
-	Message      string `json:"message,omitempty"`
-	UserID       int64  `json:"user_id,omitempty"`
-	Nickname     string `json:"nickname,omitempty"`
-	Card         string `json:"card,omitempty"`           // 群名片
-	Role         string `json:"role,omitempty"`           // owner/admin/member
-	Title        string `json:"title,omitempty"`          // 专属头衔
-	JoinTime     string `json:"join_time,omitempty"`      // 入群时间
-	LastSentTime string `json:"last_sent_time,omitempty"` // 最后发言时间
+	Success       bool   `json:"success"`
+	Message       string `json:"message,omitempty"`
+	UserID        int64  `json:"user_id,omitempty"`
+	Nickname      string `json:"nickname,omitempty"`
+	GroupNickname string `json:"group_nickname,omitempty"` // 群昵称
+	Role          string `json:"role,omitempty"`           // owner/admin/member
+	Title         string `json:"title,omitempty"`          // 专属头衔
+	Level         string `json:"level,omitempty"`          // 群等级
+	JoinTime      string `json:"join_time,omitempty"`      // 入群时间
+	LastSentTime  string `json:"last_sent_time,omitempty"` // 最后发言时间
 }
 
 // getGroupMemberDetailFunc 获取群成员详情的实际实现
@@ -731,12 +748,13 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 	}
 
 	output := &GetGroupMemberDetailOutput{
-		Success:  true,
-		UserID:   info.UserID,
-		Nickname: info.Nickname,
-		Card:     info.Card,
-		Role:     info.Role,
-		Title:    info.Title,
+		Success:       true,
+		UserID:        info.UserID,
+		Nickname:      info.Nickname,
+		GroupNickname: info.Card,
+		Role:          info.Role,
+		Title:         info.Title,
+		Level:         info.Level,
 	}
 
 	if info.JoinTime > 0 {
@@ -754,7 +772,7 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 func NewGetGroupMemberDetailTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"getGroupMemberDetail",
-		"获取某个群成员的详细信息，包括群名片、角色（群主/管理员/普通成员）、入群时间、最后发言时间等。",
+		"获取某个群成员的详细信息，包括群昵称、角色（owner/admin/member）、头衔、等级、入群时间、最后发言时间等。",
 		getGroupMemberDetailFunc,
 	)
 }
@@ -1670,5 +1688,80 @@ func NewGetForwardMessageDetailTool() (tool.InvokableTool, error) {
 		"getForwardMessageDetail",
 		"查看合并转发消息的具体内容。当你看到消息中包含[合并转发]字样时，可以使用此工具查看其中的详细对话。",
 		getForwardMessageDetailFunc,
+	)
+}
+
+// ==================== 情绪更新工具 ====================
+
+// UpdateMoodInput 更新情绪的输入参数
+type UpdateMoodInput struct {
+	// ValenceDelta 心情变化量，正数变好，负数变差
+	ValenceDelta float64 `json:"valence_delta" jsonschema:"description=心情变化量：正数心情变好，负数心情变差。范围-0.5~0.5"`
+	// EnergyDelta 精力变化量，正数更活跃，负数更疲惫
+	EnergyDelta float64 `json:"energy_delta" jsonschema:"description=精力变化量：正数更有活力，负数更疲惫。范围-0.3~0.3"`
+	// SociabilityDelta 社交意愿变化量，正数更想聊，负数更想安静
+	SociabilityDelta float64 `json:"sociability_delta" jsonschema:"description=社交意愿变化量：正数更想聊天，负数更想安静。范围-0.3~0.3"`
+	// Reason 情绪变化的原因（可选）
+	Reason string `json:"reason,omitempty" jsonschema:"description=情绪变化的原因（给自己看的笔记，可选）"`
+}
+
+// UpdateMoodOutput 更新情绪的输出
+type UpdateMoodOutput struct {
+	Success     bool    `json:"success"`
+	Message     string  `json:"message,omitempty"`
+	Valence     float64 `json:"valence"`     // 更新后的心情值
+	Energy      float64 `json:"energy"`      // 更新后的精力值
+	Sociability float64 `json:"sociability"` // 更新后的社交意愿值
+}
+
+// updateMoodFunc 更新情绪的实际实现
+func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (*UpdateMoodOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return &UpdateMoodOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+	if tc.MemoryMgr == nil {
+		return &UpdateMoodOutput{Success: false, Message: "记忆管理器未初始化"}, nil
+	}
+
+	// 限制单次变化量，防止极端变化
+	valenceDelta := mutils.ClampFloat64(input.ValenceDelta, -0.5, 0.5)
+	energyDelta := mutils.ClampFloat64(input.EnergyDelta, -0.3, 0.3)
+	sociabilityDelta := mutils.ClampFloat64(input.SociabilityDelta, -0.3, 0.3)
+
+	mood, err := tc.MemoryMgr.UpdateMoodState(valenceDelta, energyDelta, sociabilityDelta, input.Reason)
+	if err != nil {
+		output := &UpdateMoodOutput{Success: false, Message: "更新情绪失败: " + err.Error()}
+		LogToolCall("updateMood", input, output, err)
+		return output, nil
+	}
+
+	output := &UpdateMoodOutput{
+		Success:     true,
+		Message:     "情绪已更新",
+		Valence:     mood.Valence,
+		Energy:      mood.Energy,
+		Sociability: mood.Sociability,
+	}
+	LogToolCall("updateMood", input, output, nil)
+	return output, nil
+}
+
+// NewUpdateMoodTool 创建更新情绪工具
+func NewUpdateMoodTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"updateMood",
+		`调整你的情绪状态。情绪会自然衰减回归平静，但你可以根据对话内容主动调整。
+
+【三个维度】
+- valence（心情）：-1差 ~ 1好。影响语气冷热、是否阴阳怪气
+- energy（精力）：0疲惫 ~ 1活跃。影响话多话少、句子长短
+- sociability（社交意愿）：0想静静 ~ 1想聊天。影响回复意愿、是否敷衍
+
+【使用建议】
+- 不需要每次都调整，只有明确感受到情绪变化时才调用
+- 变化量建议小幅度（±0.1~0.2），除非发生重大事件
+- 例如：被夸了 → valence +0.2；聊太久了 → energy -0.1；话题无聊 → sociability -0.15`,
+		updateMoodFunc,
 	)
 }

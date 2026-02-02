@@ -129,6 +129,8 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetForwardMessageDetailTool() },
+		// 情绪系统
+		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
 	}
 
 	for _, build := range toolBuilders {
@@ -392,6 +394,8 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		return
 	}
 	a.processing[groupID] = true
+	lastProcessedTime := a.lastProcessedTime[groupID]
+	a.lastProcessedTime[groupID] = time.Now()
 	a.processingMu.Unlock()
 
 	defer func() {
@@ -408,17 +412,11 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		GroupID:   groupID,
 		MemoryMgr: a.memory,
 		Bot:       a.bot,
-		SpeakCallback: func(gid int64, content string, replyTo int64) int64 {
-			return a.doSpeak(gid, content, replyTo)
+		SpeakCallback: func(gid int64, content string, replyTo int64, mentions []int64) int64 {
+			return a.doSpeak(gid, content, replyTo, mentions)
 		},
 		StopThinking: cancelThinking, // 传递取消函数
 	})
-
-	// 获取上次处理时间（用于判断哪些是新消息）
-	a.processingMu.Lock()
-	lastProcessedTime := a.lastProcessedTime[groupID]
-	a.lastProcessedTime[groupID] = time.Now()
-	a.processingMu.Unlock()
 
 	// 构建对话上下文
 	chatContext := a.buildChatContext(groupID, lastProcessedTime)
@@ -502,11 +500,11 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 		if m.Reply != nil {
 			if m.Reply.Content != "" {
 				// 截断过长的内容
-				replyContent := m.Reply.Content
-				if len(replyContent) > 50 {
-					replyContent = replyContent[:50] + "..."
+				replyContent := []rune(m.Reply.Content)
+				if len(replyContent) > 100 {
+					replyContent = replyContent[:100]
 				}
-				replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", m.Reply.MessageID, m.Reply.Nickname, replyContent)
+				replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", m.Reply.MessageID, m.Reply.Nickname, string(replyContent))
 			} else {
 				replyInfo = fmt.Sprintf(" [回复 #%d]", m.Reply.MessageID)
 			}
@@ -634,6 +632,15 @@ func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatConte
 		}
 	}
 
+	// 获取当前情绪状态
+	if mood, err := a.memory.GetMoodState(); err == nil {
+		pc.MoodState = &persona.MoodInfo{
+			Valence:     mood.Valence,
+			Energy:      mood.Energy,
+			Sociability: mood.Sociability,
+		}
+	}
+
 	return pc
 }
 
@@ -653,17 +660,22 @@ func (a *Agent) getMemberInfo(groupID int64) string {
 
 	var parts []string
 	parts = append(parts, fmt.Sprintf("昵称: %s", profile.Nickname))
+	parts = append(parts, fmt.Sprintf("活跃度（0-1）: %f", profile.Activity))
+	parts = append(parts, fmt.Sprintf("你与他的亲密度（0-1）: %f", profile.Intimacy))
 	if profile.SpeakStyle != "" {
 		parts = append(parts, fmt.Sprintf("说话风格: %s", profile.SpeakStyle))
 	}
 	if profile.Interests != "" {
 		parts = append(parts, fmt.Sprintf("兴趣: %s", profile.Interests))
 	}
+	if !profile.LastSpeak.IsZero() {
+		parts = append(parts, fmt.Sprintf("上次发言时间: %s", profile.LastSpeak.Format(time.DateTime)))
+	}
 	return strings.Join(parts, ", ")
 }
 
 // doSpeak 执行发言，返回消息ID
-func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) int64 {
+func (a *Agent) doSpeak(groupID int64, content string, replyTo int64, mentions []int64) int64 {
 	// 模拟打字延迟
 	if a.cfg.Chat.TypingSimulation {
 		typingSpeed := a.cfg.Chat.TypingSpeed
@@ -680,14 +692,7 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) int64 {
 		time.Sleep(delay)
 	}
 
-	var err error
-	var msgID int64
-	if replyTo > 0 {
-		msgID, err = a.bot.SendGroupMessageReply(groupID, content, replyTo)
-	} else {
-		msgID, err = a.bot.SendGroupMessage(groupID, content)
-	}
-
+	msgID, err := a.bot.SendGroupMessage(groupID, content, replyTo, mentions)
 	if err != nil {
 		zap.L().Error("发言失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return 0

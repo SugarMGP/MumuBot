@@ -47,7 +47,7 @@ func NewMilvusClient(cfg *MilvusConfig) (*MilvusClient, error) {
 		cfg.CollectionName = "mumu_memories"
 	}
 	if cfg.VectorDim == 0 {
-		cfg.VectorDim = 1536
+		cfg.VectorDim = 1024
 	}
 	if cfg.MetricType == "" {
 		cfg.MetricType = "COSINE"
@@ -91,7 +91,7 @@ func (c *MilvusClient) initCollection(ctx context.Context) error {
 		// 创建集合
 		schema := entity.NewSchema().
 			WithName(c.collectionName).
-			WithDescription("Amu bot memory vectors").
+			WithDescription("Mumu bot memory vectors").
 			WithField(entity.NewField().
 				WithName("id").
 				WithDataType(entity.FieldTypeInt64).

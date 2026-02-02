@@ -25,9 +25,10 @@ func NewEmbeddingClient(cfg *config.Config) (*EmbeddingClient, error) {
 	ctx := context.Background()
 
 	embedder, err := openai.NewEmbedder(ctx, &openai.EmbeddingConfig{
-		BaseURL: cfg.Embedding.BaseURL,
-		APIKey:  cfg.Embedding.APIKey,
-		Model:   cfg.Embedding.Model,
+		BaseURL:    cfg.Embedding.BaseURL,
+		APIKey:     cfg.Embedding.APIKey,
+		Model:      cfg.Embedding.Model,
+		Dimensions: &cfg.Memory.Milvus.VectorDim,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建 Embedder 失败: %w", err)
