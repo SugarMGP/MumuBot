@@ -4,7 +4,11 @@
             "name": "example-mcp-server-sse",
             "enabled": false,
             "type": "sse",
-            "url": "http://localhost:3333/sse"
+            "url": "http://localhost:3333/sse",
+            "tool_name_list": [],
+            "custom_headers": {
+                "Authorization": "Bearer YOUR_TOKEN_HERE"
+            }
         },
         {
             "name": "example-mcp-server-stdio",

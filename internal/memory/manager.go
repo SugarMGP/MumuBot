@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -165,7 +166,17 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 	if memType != "" {
 		q = q.Where("type = ?", memType)
 	}
-	err := q.Where("content LIKE ?", "%"+query+"%").
+	keywords := strings.Fields(query)
+	if len(keywords) == 0 {
+		return memories, nil
+	}
+	likeConditions := make([]string, 0, len(keywords))
+	args := make([]interface{}, 0, len(keywords))
+	for _, kw := range keywords {
+		likeConditions = append(likeConditions, "content LIKE ?")
+		args = append(args, "%"+kw+"%")
+	}
+	err := q.Where(strings.Join(likeConditions, " OR "), args...).
 		Order("importance DESC, updated_at DESC").
 		Limit(limit).
 		Find(&memories).Error
@@ -507,7 +518,14 @@ func (m *Manager) SearchStickers(keyword string, limit int) ([]Sticker, error) {
 	var stickers []Sticker
 	q := m.db.Model(&Sticker{})
 	if keyword != "" {
-		q = q.Where("description LIKE ?", "%"+keyword+"%")
+		keywords := strings.Fields(keyword)
+		likeConditions := make([]string, 0, len(keywords))
+		args := make([]interface{}, 0, len(keywords))
+		for _, kw := range keywords {
+			likeConditions = append(likeConditions, "description LIKE ?")
+			args = append(args, "%"+kw+"%")
+		}
+		q = q.Where(strings.Join(likeConditions, " OR "), args...)
 	}
 	err := q.Order("use_count DESC, updated_at DESC").Limit(limit).Find(&stickers).Error
 	return stickers, err

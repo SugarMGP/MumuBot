@@ -722,7 +722,7 @@ func (a *Agent) autoSaveSticker(url string, description string) {
 	}
 	maxSizeMB := cfg.Sticker.MaxSizeMB
 	if maxSizeMB <= 0 {
-		maxSizeMB = 1
+		maxSizeMB = 2
 	}
 
 	// 下载图片

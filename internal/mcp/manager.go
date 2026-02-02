@@ -18,13 +18,15 @@ import (
 
 // MCPServerConfig MCP服务器配置
 type MCPServerConfig struct {
-	Name    string   `json:"name"`
-	Enabled bool     `json:"enabled"`
-	Type    string   `json:"type"`    // sse 或 stdio
-	URL     string   `json:"url"`     // SSE服务器URL
-	Command string   `json:"command"` // stdio命令
-	Args    []string `json:"args"`    // stdio参数
-	Env     []string `json:"env"`     // stdio环境变量
+	Name          string            `json:"name"`
+	Enabled       bool              `json:"enabled"`
+	Type          string            `json:"type"`           // sse 或 stdio
+	URL           string            `json:"url"`            // SSE服务器URL
+	Command       string            `json:"command"`        // stdio命令
+	Args          []string          `json:"args"`           // stdio参数
+	Env           []string          `json:"env"`            // stdio环境变量
+	ToolNameList  []string          `json:"tool_name_list"` // 可选，指定要加载的工具名称列表
+	CustomHeaders map[string]string `json:"custom_headers"` // 可选，自定义HTTP头
 }
 
 // MCPConfig MCP配置文件结构
@@ -127,7 +129,9 @@ func (m *MCPManager) connectServer(ctx context.Context, cfg *MCPServerConfig) er
 
 	// 获取工具 - 使用 MCPClient 接口
 	mcpToolCfg := &mcptool.Config{
-		Cli: cli,
+		Cli:           cli,
+		ToolNameList:  cfg.ToolNameList,
+		CustomHeaders: cfg.CustomHeaders,
 	}
 
 	baseTools, err := mcptool.GetTools(ctx, mcpToolCfg)
