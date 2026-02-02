@@ -476,7 +476,8 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 - 如果你想说多句话，请多次调用speak
 - 不要用分号、句号或换行符连接多个独立的句子
 - 正确示例：先调用speak("你好")，再调用speak("今天天气真好")
-- 错误示例：speak("你好。今天天气真好") 或 speak("你好\n今天天气真好")`,
+- 错误示例：speak("你好。今天天气真好") 或 speak("你好\n今天天气真好")
+- 回复功能不要滥用，只有在明确需要回复某条消息时才使用 reply_to 参数，不要回复自己说的话`,
 		speakFunc,
 	)
 }

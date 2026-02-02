@@ -11,6 +11,7 @@ import (
 	"amu-bot/internal/utils"
 	fileutils "amu-bot/internal/utils"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -196,12 +197,12 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	isMention := msg.MentionAmu || mentionByName
 
 	a.addBuffer(msg)
-	a.memory.AddMessage(memory.MessageLog{
+	_ = a.memory.AddMessage(memory.MessageLog{
 		MessageID:  fmt.Sprintf("%d", msg.MessageID),
 		GroupID:    msg.GroupID,
 		UserID:     msg.UserID,
 		Nickname:   msg.Nickname,
-		Content:    msg.Content,
+		Content:    a.buildContentWithAt(msg),
 		MsgType:    msg.MessageType,
 		MentionAmu: isMention,
 		CreatedAt:  msg.Time,
@@ -217,6 +218,31 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if isMention {
 		go a.think(msg.GroupID, true)
 	}
+}
+
+// buildContentWithAt 构建包含 @ 信息的消息内容（用于存储到 MessageLog）
+func (a *Agent) buildContentWithAt(msg *onebot.GroupMessage) string {
+	var atParts []string
+
+	// @全体成员
+	if msg.MentionAll {
+		atParts = append(atParts, "@全体成员")
+	}
+
+	// @其他用户
+	for _, uid := range msg.AtList {
+		if uid != a.bot.GetSelfID() {
+			atParts = append(atParts, fmt.Sprintf("@%d", uid))
+		} else {
+			atParts = append(atParts, "@"+a.persona.GetName())
+		}
+	}
+
+	if len(atParts) == 0 {
+		return msg.Content
+	}
+
+	return strings.Join(atParts, " ") + " " + msg.Content
 }
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
@@ -291,7 +317,7 @@ func (a *Agent) thinkCycle() {
 		a.processingMu.RLock()
 		lastTime := a.lastProcessedTime[gc.GroupID]
 		a.processingMu.RUnlock()
-		if !lastMsg.Time.After(lastTime) {
+		if !lastTime.IsZero() && lastMsg.Time.Before(lastTime) {
 			continue
 		}
 
@@ -404,9 +430,10 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	})
 
 	// 获取上次处理时间（用于判断哪些是新消息）
-	a.processingMu.RLock()
+	a.processingMu.Lock()
 	lastProcessedTime := a.lastProcessedTime[groupID]
-	a.processingMu.RUnlock()
+	a.lastProcessedTime[groupID] = time.Now()
+	a.processingMu.Unlock()
 
 	// 构建对话上下文
 	chatContext := a.buildChatContext(groupID, lastProcessedTime)
@@ -437,16 +464,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	}
 
 	if isMention {
-		thinkPrompt += "\n\n注意：有人@你了，可能在找你说话，你可以看情况回复。"
-	}
-
-	// 记录当前缓冲区中的最后一条消息时间，作为新的“已读”位置
-	bufMsgs := a.getBuffer(groupID)
-	if len(bufMsgs) > 0 {
-		lastMsg := bufMsgs[len(bufMsgs)-1]
-		a.processingMu.Lock()
-		a.lastProcessedTime[groupID] = lastMsg.Time
-		a.processingMu.Unlock()
+		thinkPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
 	}
 
 	// 调试：显示系统提示词
@@ -469,9 +487,9 @@ func (a *Agent) think(groupID int64, isMention bool) {
 
 	if _, err := a.react.Generate(ctxWithTimeout, msgs); err != nil {
 		// 区分是超时还是主动取消（stayQuiet）
-		if ctxWithTimeout.Err() == context.DeadlineExceeded {
+		if errors.Is(ctxWithTimeout.Err(), context.DeadlineExceeded) {
 			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Duration("timeout", timeout))
-		} else if ctxWithCancel.Err() == context.Canceled {
+		} else if errors.Is(ctxWithCancel.Err(), context.Canceled) {
 			// stayQuiet 触发的主动停止，这是正常行为，不记录错误
 			zap.L().Debug("思考结束（stayQuiet）", zap.Int64("group_id", groupID))
 		} else {
@@ -657,7 +675,7 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64) int64 {
 	if a.cfg.Chat.TypingSimulation {
 		typingSpeed := a.cfg.Chat.TypingSpeed
 		if typingSpeed <= 0 {
-			typingSpeed = 10 // 默认每秒10字符
+			typingSpeed = 6
 		}
 		delay := time.Duration(float64(len([]rune(content)))/float64(typingSpeed)*1000) * time.Millisecond
 		if delay > 5*time.Second {
@@ -738,14 +756,14 @@ func (a *Agent) autoSaveSticker(url string, description string) {
 	isDuplicate, err := a.memory.SaveSticker(sticker)
 	if err != nil {
 		// 保存失败，删除已下载的文件
-		os.Remove(result.FilePath)
+		_ = os.Remove(result.FilePath)
 		zap.L().Warn("保存表情包失败", zap.Error(err))
 		return
 	}
 
 	if isDuplicate {
 		// 已存在，删除刚下载的文件
-		os.Remove(result.FilePath)
+		_ = os.Remove(result.FilePath)
 		zap.L().Debug("表情包已存在，跳过保存", zap.String("hash", result.FileHash))
 		return
 	}
