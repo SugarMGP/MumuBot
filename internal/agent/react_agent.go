@@ -9,8 +9,8 @@ import (
 	"amu-bot/internal/persona"
 	"amu-bot/internal/tools"
 	"amu-bot/internal/utils"
-	fileutils "amu-bot/internal/utils"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -128,6 +128,7 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewGetGroupNoticesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetForwardMessageDetailTool() },
 	}
 
 	for _, build := range toolBuilders {
@@ -196,16 +197,25 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	mentionByName := a.persona.IsMentioned(msg.Content)
 	isMention := msg.MentionAmu || mentionByName
 
+	// 序列化合并转发内容
+	forwardsJSON := ""
+	if len(msg.Forwards) > 0 {
+		if b, err := json.Marshal(msg.Forwards); err == nil {
+			forwardsJSON = string(b)
+		}
+	}
+
 	a.addBuffer(msg)
 	_ = a.memory.AddMessage(memory.MessageLog{
 		MessageID:  fmt.Sprintf("%d", msg.MessageID),
 		GroupID:    msg.GroupID,
 		UserID:     msg.UserID,
 		Nickname:   msg.Nickname,
-		Content:    a.buildContentWithAt(msg),
+		Content:    msg.Content,
 		MsgType:    msg.MessageType,
 		MentionAmu: isMention,
 		CreatedAt:  msg.Time,
+		Forwards:   forwardsJSON,
 	})
 
 	if isSelf {
@@ -218,31 +228,6 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if isMention {
 		go a.think(msg.GroupID, true)
 	}
-}
-
-// buildContentWithAt 构建包含 @ 信息的消息内容（用于存储到 MessageLog）
-func (a *Agent) buildContentWithAt(msg *onebot.GroupMessage) string {
-	var atParts []string
-
-	// @全体成员
-	if msg.MentionAll {
-		atParts = append(atParts, "@全体成员")
-	}
-
-	// @其他用户
-	for _, uid := range msg.AtList {
-		if uid != a.bot.GetSelfID() {
-			atParts = append(atParts, fmt.Sprintf("@%d", uid))
-		} else {
-			atParts = append(atParts, "@"+a.persona.GetName())
-		}
-	}
-
-	if len(atParts) == 0 {
-		return msg.Content
-	}
-
-	return strings.Join(atParts, " ") + " " + msg.Content
 }
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
@@ -480,8 +465,8 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		schema.UserMessage(thinkPrompt),
 	}
 
-	// 设置超时时间（默认60秒），防止LLM请求无限阻塞
-	timeout := 60 * time.Second
+	// 设置超时时间（默认90秒），防止LLM请求无限阻塞
+	timeout := 90 * time.Second
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, timeout)
 	defer cancelTimeout()
 
@@ -511,21 +496,6 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 	for _, m := range msgs {
 		// 判断是否是新消息（用于决定是否自动保存表情包）
 		isNewMessage := lastProcessedTime.IsZero() || m.Time.After(lastProcessedTime)
-		// 构建@信息
-		var mentionParts []string
-		if m.MentionAmu {
-			mentionParts = append(mentionParts, "@你")
-		}
-		// 显示@的其他用户
-		for _, atUserID := range m.AtList {
-			if atUserID != a.bot.GetSelfID() {
-				mentionParts = append(mentionParts, fmt.Sprintf("@%d", atUserID))
-			}
-		}
-		mention := ""
-		if len(mentionParts) > 0 {
-			mention = " [" + strings.Join(mentionParts, ",") + "]"
-		}
 
 		// 构建回复信息
 		replyInfo := ""
@@ -594,16 +564,33 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 			}
 		}
 
+		// 处理视频（调用 Vision 模型识别）
+		for _, vid := range m.Videos {
+			if a.vision != nil && vid.URL != "" {
+				desc, err := a.vision.DescribeVideo(ctx, vid.URL)
+				if err == nil {
+					content += " " + desc
+				} else {
+					content += " [视频]"
+				}
+			} else {
+				content += " [视频]"
+			}
+		}
+
 		// 在消息开头添加消息ID，方便模型引用
-		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d):%s%s %s\n",
-			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, replyInfo, mention, content))
+		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
+			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, replyInfo, content))
 	}
 	return b.String()
 }
 
 // buildPromptContext 构建动态 prompt 上下文
 func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatContext string) *persona.PromptContext {
-	pc := &persona.PromptContext{GroupID: groupID}
+	pc := &persona.PromptContext{
+		GroupID:   groupID,
+		AccountID: a.bot.GetSelfID(),
+	}
 
 	// 获取表达习惯
 	if exps, err := a.memory.GetExpressions(groupID, 5); err == nil && len(exps) > 0 {
@@ -739,7 +726,7 @@ func (a *Agent) autoSaveSticker(url string, description string) {
 	}
 
 	// 下载图片
-	result, err := fileutils.DownloadImage(url, storagePath, maxSizeMB)
+	result, err := utils.DownloadImage(url, storagePath, maxSizeMB)
 	if err != nil {
 		zap.L().Debug("下载表情包失败", zap.String("url", url), zap.Error(err))
 		return

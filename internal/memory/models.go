@@ -98,6 +98,7 @@ type MessageLog struct {
 	Content    string `gorm:"type:text" json:"content"`
 	MsgType    string `gorm:"type:varchar(50)" json:"msg_type"`
 	MentionAmu bool   `gorm:"default:false" json:"mention_amu"`
+	Forwards   string `gorm:"type:text" json:"forwards,omitempty"` // 合并转发内容的 JSON
 }
 
 func (MessageLog) TableName() string { return "message_logs" }

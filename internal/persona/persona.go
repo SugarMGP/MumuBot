@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // PromptContext 动态 prompt 上下文
@@ -14,6 +16,7 @@ type PromptContext struct {
 	Expressions string // 学习到的表达习惯
 	Jargons     string // 黑话解释
 	TimeContext string // 时间上下文
+	AccountID   int64  // 沐沐的账号ID
 }
 
 // Persona 阿沐的人格定义
@@ -27,11 +30,16 @@ func NewPersona(cfg *config.PersonaConfig) *Persona {
 
 // GetSystemPrompt 获取系统提示词（支持动态上下文）
 func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
+	if ctx == nil {
+		zap.L().Warn("GetSystemPrompt: 提供的PromptContext为nil")
+		return ""
+	}
+
 	var b strings.Builder
 	interests := strings.Join(p.cfg.Interests, "、")
 
 	// 基础身份
-	b.WriteString(fmt.Sprintf(`你是%s，QQ群里的一个普通群友。
+	b.WriteString(fmt.Sprintf(`你是%s，QQ群里的一个普通群友。你的QQ号是%d。
 
 ## 关于你
 - 名字：%s（群友都这么叫你）
@@ -40,7 +48,7 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 
 ## 说话风格
 %s
-`, p.cfg.Name, p.cfg.Name, interests, p.cfg.SpeakingStyle))
+`, p.cfg.Name, ctx.AccountID, p.cfg.Name, interests, p.cfg.SpeakingStyle))
 
 	// 详细人格描述（如果配置了）
 	if p.cfg.Personality != "" {
@@ -51,7 +59,7 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 	}
 
 	// 动态部分：表达习惯
-	if ctx != nil && ctx.Expressions != "" {
+	if ctx.Expressions != "" {
 		b.WriteString(fmt.Sprintf(`
 ## 你学到的表达方式（模仿群友）
 %s
@@ -59,7 +67,7 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 	}
 
 	// 动态部分：黑话解释
-	if ctx != nil && ctx.Jargons != "" {
+	if ctx.Jargons != "" {
 		b.WriteString(fmt.Sprintf(`
 ## 群内黑话/术语
 %s
@@ -67,7 +75,7 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 	}
 
 	// 动态部分：相关记忆
-	if ctx != nil && ctx.Memories != "" {
+	if ctx.Memories != "" {
 		b.WriteString(fmt.Sprintf(`
 ## 你记得的相关事情
 %s

@@ -445,6 +445,17 @@ func (m *Manager) ListMessageLogs(groupID int64, page, pageSize int) ([]MessageL
 	return items, total, err
 }
 
+// GetMessageLogByID 根据消息ID获取消息日志
+func (m *Manager) GetMessageLogByID(messageID string) (*MessageLog, error) {
+	var log MessageLog
+	err := m.db.Where("message_id = ?", messageID).First(&log).Error
+	if err != nil {
+		return nil, err
+	}
+	return &log, nil
+}
+
+// Close 关闭连接
 func (m *Manager) Close() error {
 	// 关闭 Milvus 连接
 	if m.milvus != nil {

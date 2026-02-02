@@ -59,7 +59,7 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 			},
 			{
 				Type: schema.ChatMessagePartTypeText,
-				Text: "请用简短的中文描述这张图片的内容，不超过50字。如果是表情包请描述表情、情绪和文字。若画面中有明确角色（例如卡通/动漫/游戏/电影人物），请补充说明角色类型或出处（若能判断）、当前情绪状态、整体风格或用途（如吐槽、害怕、搞笑）",
+				Text: "请用中文描述这张图片的内容，不超过50字。如果是表情包请描述表情、情绪和文字。若画面中有明确角色（例如卡通/动漫/游戏/电影人物），请补充说明角色类型或出处（若能判断）、当前情绪状态、整体风格或用途（如吐槽、害怕、搞笑）",
 			},
 		},
 	}
@@ -74,4 +74,40 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 		return "[图片]", nil
 	}
 	return fmt.Sprintf("[图片:%s]", desc), nil
+}
+
+// DescribeVideo 描述视频内容
+func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (string, error) {
+	if v == nil || v.model == nil {
+		return "[视频]", nil
+	}
+
+	msg := &schema.Message{
+		Role: schema.User,
+		UserInputMultiContent: []schema.MessageInputPart{
+			{
+				Type: schema.ChatMessagePartTypeVideoURL,
+				Video: &schema.MessageInputVideo{
+					MessagePartCommon: schema.MessagePartCommon{
+						URL: &videoURL,
+					},
+				},
+			},
+			{
+				Type: schema.ChatMessagePartTypeText,
+				Text: "请用中文描述这个视频的内容，不超过80字。若能判断角色、情绪或关键事件、物体，请一并说明。",
+			},
+		},
+	}
+
+	resp, err := v.model.Generate(ctx, []*schema.Message{msg})
+	if err != nil {
+		return "[视频:识别失败]", nil
+	}
+
+	desc := strings.TrimSpace(resp.Content)
+	if desc == "" {
+		return "[视频]", nil
+	}
+	return fmt.Sprintf("[视频:%s]", desc), nil
 }
