@@ -639,9 +639,9 @@ func (m *Manager) GetStickerByHash(hash string) (*Sticker, error) {
 
 // ==================== 情绪状态管理 ====================
 
-// startMoodDecay 启动情绪衰减定时任务（每五分钟执行一次）
+// startMoodDecay 启动情绪衰减定时任务（每分钟执行一次）
 func (m *Manager) startMoodDecay() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(1 * time.Minute)
 	go func() {
 		for {
 			select {
