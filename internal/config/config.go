@@ -88,6 +88,8 @@ type LLMConfig struct {
 	APIKey      string                 `yaml:"api_key"`
 	BaseURL     string                 `yaml:"base_url"`
 	Model       string                 `yaml:"model"`
+	Temperature float32                `yaml:"temperature"`
+	TopP        float32                `yaml:"top_p"`
 	ExtraFields map[string]interface{} `yaml:"extra_fields"` // 额外参数
 }
 

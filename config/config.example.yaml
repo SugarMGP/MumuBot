@@ -75,6 +75,8 @@ llm:
   api_key: ""        # 留空则使用 MUMU_LLM_API_KEY 环境变量
   base_url: ""
   model: ""
+  temperature: 0.8
+  top_p: 0.95
   extra_fields: {    # 额外参数
     "thinking": {
       "type": "disabled"
