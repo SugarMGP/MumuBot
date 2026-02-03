@@ -597,6 +597,11 @@ func (c *Client) SendGroupMessage(groupID int64, content string, replyTo int64, 
 			"data": map[string]interface{}{
 				"qq": strconv.FormatInt(uid, 10),
 			},
+		}, map[string]interface{}{
+			"type": "text",
+			"data": map[string]interface{}{
+				"text": " ",
+			},
 		})
 	}
 
