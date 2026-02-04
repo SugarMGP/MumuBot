@@ -38,6 +38,7 @@ type AppConfig struct {
 // PersonaConfig 人格配置
 type PersonaConfig struct {
 	Name          string   `yaml:"name"`
+	QQ            string   `yaml:"qq"`          // 沐沐的QQ号
 	AliasNames    []string `yaml:"alias_names"` // 别名，都可以触发@检测
 	Interests     []string `yaml:"interests"`
 	SpeakingStyle string   `yaml:"speaking_style"`

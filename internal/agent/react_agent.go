@@ -491,7 +491,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	})
 
 	// 构建对话上下文
-	chatContext := a.buildChatContext(groupID, lastProcessedTime)
+	chatContext := a.buildChatContext(groupID)
 	if chatContext == "" {
 		return
 	}
@@ -503,14 +503,15 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	memberInfo := a.getMemberInfo(groupID)
 
 	// 构建消息
-	systemPrompt := a.persona.GetSystemPrompt(promptCtx)
+	systemPrompt := a.persona.GetSystemPrompt()
 
 	// 添加群专属额外提示词
+	groupExtra := ""
 	if gc := a.cfg.GetGroupConfig(groupID); gc != nil && gc.ExtraPrompt != "" {
-		systemPrompt += "\n\n## 群特殊说明\n" + gc.ExtraPrompt
+		groupExtra = gc.ExtraPrompt
 	}
 
-	thinkPrompt := a.persona.GetThinkPrompt(chatContext, memberInfo)
+	thinkPrompt := a.persona.GetThinkPrompt(promptCtx, chatContext, groupExtra, memberInfo)
 
 	// 注入上次处理时间到提示词
 	if !lastProcessedTime.IsZero() {
@@ -525,8 +526,6 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	// 调试：显示系统提示词
 	if a.cfg.Debug.ShowPrompt {
 		zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
-	}
-	if a.cfg.Debug.ShowThinking {
 		zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
 	}
 
@@ -535,12 +534,13 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		schema.UserMessage(thinkPrompt),
 	}
 
-	// 设置超时时间（默认90秒），防止LLM请求无限阻塞
-	timeout := 90 * time.Second
+	// 设置超时时间（默认60秒），防止LLM请求无限阻塞
+	timeout := 60 * time.Second
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, timeout)
 	defer cancelTimeout()
 
-	if _, err := a.react.Generate(ctxWithTimeout, msgs); err != nil {
+	result, err := a.react.Generate(ctxWithTimeout, msgs)
+	if err != nil {
 		// 区分是超时还是主动取消（stayQuiet）
 		if errors.Is(ctxWithTimeout.Err(), context.DeadlineExceeded) {
 			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Duration("timeout", timeout))
@@ -551,10 +551,15 @@ func (a *Agent) think(groupID int64, isMention bool) {
 			zap.L().Error("思考失败", zap.Int64("group_id", groupID), zap.Error(err))
 		}
 	}
+
+	// 记录 Agent 输出
+	if a.cfg.Debug.ShowThinking && result != nil && result.Content != "" {
+		zap.L().Debug("Agent 输出", zap.Int64("group_id", groupID), zap.String("content", result.Content))
+	}
 }
 
 // buildChatContext 构建聊天上下文
-func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) string {
+func (a *Agent) buildChatContext(groupID int64) string {
 	msgs := a.getBuffer(groupID)
 	if len(msgs) == 0 {
 		return ""
@@ -570,8 +575,7 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 // buildPromptContext 构建动态 prompt 上下文
 func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatContext string) *persona.PromptContext {
 	pc := &persona.PromptContext{
-		GroupID:   groupID,
-		AccountID: a.bot.GetSelfID(),
+		GroupID: groupID,
 	}
 
 	// 获取表达习惯

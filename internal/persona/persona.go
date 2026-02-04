@@ -5,8 +5,6 @@ import (
 	"mumu-bot/internal/config"
 	"strings"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 // MoodInfo 情绪信息
@@ -21,8 +19,6 @@ type PromptContext struct {
 	GroupID     int64
 	Memories    string    // 相关记忆
 	Expressions string    // 学习到的表达习惯
-	TimeContext string    // 时间上下文
-	AccountID   int64     // 沐沐的账号 ID
 	MoodState   *MoodInfo // 当前情绪状态
 }
 
@@ -35,18 +31,13 @@ func NewPersona(cfg *config.PersonaConfig) *Persona {
 	return &Persona{cfg: cfg}
 }
 
-// GetSystemPrompt 获取系统提示词（支持动态上下文）
-func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
-	if ctx == nil {
-		zap.L().Warn("GetSystemPrompt: 提供的PromptContext为nil")
-		return ""
-	}
-
+// GetSystemPrompt 获取系统提示词（纯静态）
+func (p *Persona) GetSystemPrompt() string {
 	var b strings.Builder
 	interests := strings.Join(p.cfg.Interests, "、")
 
 	// 基础身份
-	b.WriteString(fmt.Sprintf(`你是%s，QQ群里的一个普通群友。你的QQ号是%d。
+	b.WriteString(fmt.Sprintf(`你是%s，QQ群里的一个普通群友，你的QQ号是%s。
 
 ## 关于你
 - 名字：%s（群友都这么叫你）
@@ -55,7 +46,7 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 
 ## 说话风格
 %s
-`, p.cfg.Name, ctx.AccountID, p.cfg.Name, interests, p.cfg.SpeakingStyle))
+`, p.cfg.Name, p.cfg.QQ, p.cfg.Name, interests, p.cfg.SpeakingStyle))
 
 	// 详细人格描述（如果配置了）
 	if p.cfg.Personality != "" {
@@ -63,32 +54,6 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 ## 更多关于你
 %s
 `, p.cfg.Personality))
-	}
-
-	// 动态部分：表达习惯
-	if ctx.Expressions != "" {
-		b.WriteString(fmt.Sprintf(`
-## 你学到的表达方式（模仿群友）
-%s
-`, ctx.Expressions))
-	}
-
-	// 动态部分：相关记忆
-	if ctx.Memories != "" {
-		b.WriteString(fmt.Sprintf(`
-## 你记得的相关事情
-%s
-`, ctx.Memories))
-	}
-
-	b.WriteString(fmt.Sprintf(`
-## 当前时间
-%s
-`, p.getTimeContext()))
-
-	// 动态部分：情绪状态
-	if ctx.MoodState != nil {
-		b.WriteString(p.getMoodPrompt(ctx.MoodState))
 	}
 
 	// 行为准则
@@ -105,7 +70,8 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 9. 对群友的行为、观点、事件可主动评价、吐槽、调侃或反驳
 10. 在感兴趣或有情绪时，可主动发起话题、带节奏、引导讨论
 11. 可灵活使用各种交互方式（发言、戳一戳、表情、表情包等）
-12. 与不同群友亲疏有别：熟的人更活跃，可主动戳一戳；不熟的人更冷淡
+12. 与不同群友亲疏有别：熟的人更活跃，不熟的人更冷淡
+13. 对于熟人，可以主动戳一戳他，即便你没什么想说的
 
 ## 表情包使用准则
 - 你有一个自己的表情包收藏（来自群友）
@@ -115,28 +81,12 @@ func (p *Persona) GetSystemPrompt(ctx *PromptContext) string {
 - 使用方式要自然，像真实群友
 
 ## 输出约束（非常重要！！！）
-
 - 你拥有完整的思考与判断能力，但这些思考只能在内部完成
 - 尽可能减少输出任何思考过程、分析、判断理由
 - 严禁输出解释性、描述性、总结性自然语言
 - 严禁复述群聊内容、背景或你的结论
-`)
 
-	return b.String()
-}
-
-// GetThinkPrompt 获取思考提示词
-func (p *Persona) GetThinkPrompt(chatContext string, memberInfo string) string {
-	var b strings.Builder
-
-	b.WriteString(fmt.Sprintf("现在群里的对话（包含你自己说过的话，#后面的数字是消息ID）：\n\n%s\n", chatContext))
-
-	if memberInfo != "" {
-		b.WriteString(fmt.Sprintf("\n你了解的说话者信息：\n%s\n", memberInfo))
-	}
-
-	b.WriteString(fmt.Sprintf(`
-作为%s，请你：
+## 行动指引
 1. 看看群里在聊什么
 2. 调用合适的工具来获取你需要的信息
 3. 判断是否有值得记住的信息（群友特点、黑话、重要事件、表达方式等）
@@ -149,11 +99,55 @@ func (p *Persona) GetThinkPrompt(chatContext string, memberInfo string) string {
 - 只记录**新的**信息，已经在已有记忆中出现的内容不要重复存储
 - 如果信息与已有记忆高度相似（换了个说法但意思相同），也不要存储
 - 存储前先回顾上面提供的记忆/黑话/表达方式，确认是否真的是新内容
-- **每个工具只需要执行一次，不要重复执行相同的内容！！！**
+- 每个工具只需要执行一次，不要重复执行相同的内容
+`)
 
-如果你已经有明确结论，请直接调用对应工具来行动。如果你觉得没有必要继续，请直接结束推理。
-`, p.cfg.Name))
+	return b.String()
+}
 
+// GetThinkPrompt 获取思考提示词（包含动态上下文）
+func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupExtra string, memberInfo string) string {
+	var b strings.Builder
+
+	// 当前时间
+	b.WriteString(fmt.Sprintf("## 当前时间\n%s\n", p.getTimeContext()))
+
+	// 动态部分：情绪状态
+	if ctx != nil && ctx.MoodState != nil {
+		b.WriteString(p.getMoodPrompt(ctx.MoodState))
+	}
+
+	// 动态部分：表达习惯
+	if ctx != nil && ctx.Expressions != "" {
+		b.WriteString(fmt.Sprintf(`
+## 你学到的表达方式（模仿群友）
+%s
+`, ctx.Expressions))
+	}
+
+	// 动态部分：相关记忆
+	if ctx != nil && ctx.Memories != "" {
+		b.WriteString(fmt.Sprintf(`
+## 你记得的相关事情
+%s
+`, ctx.Memories))
+	}
+
+	// 群特殊说明
+	if groupExtra != "" {
+		b.WriteString(fmt.Sprintf("\n## 群特殊说明\n%s\n", groupExtra))
+	}
+
+	// 对话上下文
+	b.WriteString(fmt.Sprintf("\n## 群里的对话\n（包含你自己说过的话，#后面的数字是消息ID）\n%s\n", chatContext))
+
+	// 说话者信息
+	if memberInfo != "" {
+		b.WriteString(fmt.Sprintf("\n## 你了解的说话者信息\n%s\n", memberInfo))
+	}
+
+	// 行动指引
+	b.WriteString("\n如果你已经有明确结论，请直接调用对应工具来行动。如果你觉得没有必要继续，请直接结束推理。\n")
 	return b.String()
 }
 

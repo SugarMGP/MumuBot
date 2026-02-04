@@ -8,6 +8,7 @@ app:
 # 人格配置
 persona:
   name: "沐沐大魔王"
+  qq: "123456789"
   alias_names:        # 别名列表，这些都可以触发@检测
     - "mumu"
     - "牢沐"
