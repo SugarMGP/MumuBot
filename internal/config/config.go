@@ -63,7 +63,6 @@ type AgentConfig struct {
 	ObserveWindow     int `yaml:"observe_window"`      // 观察窗口时间（秒）
 	ThinkInterval     int `yaml:"think_interval"`      // 决策间隔（秒）
 	MessageBufferSize int `yaml:"message_buffer_size"` // 消息缓冲区大小
-	SpeakCooldown     int `yaml:"speak_cooldown"`      // 发言冷却时间（秒）
 	MaxStep           int `yaml:"max_step"`            // ReAct 最大步数
 }
 

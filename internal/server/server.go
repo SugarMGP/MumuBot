@@ -237,7 +237,6 @@ func (s *Server) getStatus(c *gin.Context) {
 		"stats":   stats,
 		"config": gin.H{
 			"think_interval": s.cfg.Agent.ThinkInterval,
-			"speak_cooldown": s.cfg.Agent.SpeakCooldown,
 			"observe_window": s.cfg.Agent.ObserveWindow,
 			"llm_model":      s.cfg.LLM.Model,
 		},

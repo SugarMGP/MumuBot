@@ -52,7 +52,6 @@ agent:
   observe_window: 30        # 观察窗口时间（秒）
   think_interval: 5         # 决策间隔（秒）
   message_buffer_size: 15   # 消息缓冲区大小
-  speak_cooldown: 0         # 发言冷却时间（秒）
   max_step: 12               # ReAct 最大步数
 
 # 聊天行为配置

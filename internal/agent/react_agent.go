@@ -43,10 +43,6 @@ type Agent struct {
 	buffers   map[int64]*utils.RingBuffer[*onebot.GroupMessage]
 	buffersMu sync.RWMutex // 保护 map 本身的并发访问
 
-	// 发言冷却
-	lastSpeak   map[int64]time.Time
-	lastSpeakMu sync.RWMutex
-
 	// 正在处理中的群组（防止重复思考）和最后处理时间
 	processing        map[int64]bool
 	lastProcessedTime map[int64]time.Time
@@ -73,7 +69,6 @@ func New(
 		vision:            vision,
 		bot:               bot,
 		buffers:           make(map[int64]*utils.RingBuffer[*onebot.GroupMessage]),
-		lastSpeak:         make(map[int64]time.Time),
 		processing:        make(map[int64]bool),
 		lastProcessedTime: make(map[int64]time.Time),
 		stopCh:            make(chan struct{}),
@@ -413,7 +408,7 @@ func (a *Agent) thinkCycle() {
 		}
 		// 获取当前的发言概率（考虑时段规则）
 		speakProb := a.getSpeakProbability(gc.GroupID)
-		if !a.canSpeak(gc.GroupID) || rand.Float64() > speakProb {
+		if rand.Float64() > speakProb {
 			continue
 		}
 		a.think(gc.GroupID, false)
@@ -460,19 +455,6 @@ func (a *Agent) getSpeakProbability(groupID int64) float64 {
 	}
 
 	return baseProb
-}
-
-func (a *Agent) canSpeak(groupID int64) bool {
-	a.lastSpeakMu.RLock()
-	t, ok := a.lastSpeak[groupID]
-	a.lastSpeakMu.RUnlock()
-	return !ok || time.Since(t) >= time.Duration(a.cfg.Agent.SpeakCooldown)*time.Second
-}
-
-func (a *Agent) recordSpeak(groupID int64) {
-	a.lastSpeakMu.Lock()
-	a.lastSpeak[groupID] = time.Now()
-	a.lastSpeakMu.Unlock()
 }
 
 // think 进行思考和决策
@@ -689,7 +671,6 @@ func (a *Agent) doSpeak(groupID int64, content string, replyTo int64, mentions [
 		return 0
 	}
 
-	a.recordSpeak(groupID)
 	msg := &onebot.GroupMessage{
 		MessageID:   msgID,
 		GroupID:     groupID,
