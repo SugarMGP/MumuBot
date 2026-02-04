@@ -85,14 +85,14 @@ type MessageLog struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 
-	MessageID  string `gorm:"type:varchar(100);uniqueIndex" json:"message_id"`
-	GroupID    int64  `gorm:"index" json:"group_id"`
-	UserID     int64  `gorm:"index" json:"user_id"`
-	Nickname   string `gorm:"type:varchar(100)" json:"nickname"`
-	Content    string `gorm:"type:text" json:"content"`
-	MsgType    string `gorm:"type:varchar(50)" json:"msg_type"`
-	MentionAmu bool   `gorm:"default:false" json:"mention_amu"`
-	Forwards   string `gorm:"type:text" json:"forwards,omitempty"` // 合并转发内容的 JSON
+	MessageID   string `gorm:"type:varchar(100);uniqueIndex" json:"message_id"`
+	GroupID     int64  `gorm:"index" json:"group_id"`
+	UserID      int64  `gorm:"index" json:"user_id"`
+	Nickname    string `gorm:"type:varchar(100)" json:"nickname"`
+	Content     string `gorm:"type:text" json:"content"`
+	MsgType     string `gorm:"type:varchar(50)" json:"msg_type"`
+	IsMentioned bool   `gorm:"default:false" json:"is_mentioned"`
+	Forwards    string `gorm:"type:text" json:"forwards,omitempty"` // 合并转发内容的 JSON
 }
 
 func (MessageLog) TableName() string { return "message_logs" }

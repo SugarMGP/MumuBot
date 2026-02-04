@@ -331,14 +331,6 @@ func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, gr
 	return sortedMemories, nil
 }
 
-// GetMemoriesByType 按类型获取记忆
-func (m *Manager) GetMemoriesByType(groupID int64, memType MemoryType, limit int) ([]Memory, error) {
-	var memories []Memory
-	err := m.db.Where("group_id = ? AND type = ?", groupID, memType).
-		Order("importance DESC, updated_at DESC").Limit(limit).Find(&memories).Error
-	return memories, err
-}
-
 // ==================== 表达学习 ====================
 
 // GetExpressions 获取表达方式（已验证的优先）
@@ -377,11 +369,28 @@ func (m *Manager) GetUncheckedExpressions(groupID int64, limit int) ([]Expressio
 
 // ==================== 黑话管理 ====================
 
-// GetJargons 获取黑话列表（优先返回已验证的）
-func (m *Manager) GetJargons(groupID int64, limit int) ([]Jargon, error) {
+// SearchJargons 搜索黑话（通过关键词匹配，本群优先）
+func (m *Manager) SearchJargons(groupID int64, keyword string, limit int) ([]Jargon, error) {
 	var jargons []Jargon
-	err := m.db.Where("group_id = ?", groupID).
-		Order("verified DESC").Limit(limit).Find(&jargons).Error
+	q := m.db.Model(&Jargon{})
+
+	// 使用 strings.Fields 切割关键词，挨个模糊匹配
+	if keyword != "" {
+		keywords := strings.Fields(keyword)
+		if len(keywords) > 0 {
+			likeConditions := make([]string, 0, len(keywords))
+			args := make([]interface{}, 0, len(keywords))
+			for _, kw := range keywords {
+				likeConditions = append(likeConditions, "content LIKE ?")
+				args = append(args, "%"+kw+"%")
+			}
+			q = q.Where(strings.Join(likeConditions, " OR "), args...)
+		}
+	}
+
+	// 本群优先排序：本群的排在前面，然后按 verified 降序
+	err := q.Order(fmt.Sprintf("CASE WHEN group_id = %d THEN 0 ELSE 1 END, verified DESC", groupID)).
+		Limit(limit).Find(&jargons).Error
 	return jargons, err
 }
 

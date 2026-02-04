@@ -24,8 +24,6 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		BaseURL:     cfg.LLM.BaseURL,
 		APIKey:      cfg.LLM.APIKey,
 		Model:       cfg.LLM.Model,
-		Temperature: &cfg.LLM.Temperature,
-		TopP:        &cfg.LLM.TopP,
 		ExtraFields: cfg.LLM.ExtraFields,
 	})
 	if err != nil {

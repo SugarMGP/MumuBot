@@ -100,6 +100,7 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewQueryMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveJargonTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchJargonTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateMemberProfileTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMemberInfoTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
@@ -154,7 +155,7 @@ func (a *Agent) initTools() error {
 func (a *Agent) initReact() error {
 	maxStep := a.cfg.Agent.MaxStep
 	if maxStep <= 0 {
-		maxStep = 5 // 默认最大步数
+		maxStep = 12 // 默认最大步数
 	}
 	agent, err := react.NewAgent(context.Background(), &react.AgentConfig{
 		ToolCallingModel: a.model,
@@ -196,8 +197,7 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	isSelf := msg.UserID == a.bot.GetSelfID()
 
 	// 检测是否通过名字或别名提及了沐沐
-	mentionByName := a.persona.IsMentioned(msg.Content)
-	isMention := msg.MentionAmu || mentionByName
+	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content)
 
 	// 序列化合并转发内容
 	forwardsJSON := ""
@@ -207,17 +207,21 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		}
 	}
 
+	// 解析消息内容（图片、视频、表情、回复等）
+	parsedContent := a.parseMessageContent(msg)
+	msg.FinalContent = parsedContent
+
 	a.addBuffer(msg)
 	_ = a.memory.AddMessage(memory.MessageLog{
-		MessageID:  fmt.Sprintf("%d", msg.MessageID),
-		GroupID:    msg.GroupID,
-		UserID:     msg.UserID,
-		Nickname:   msg.Nickname,
-		Content:    msg.Content,
-		MsgType:    msg.MessageType,
-		MentionAmu: isMention,
-		CreatedAt:  msg.Time,
-		Forwards:   forwardsJSON,
+		MessageID:   fmt.Sprintf("%d", msg.MessageID),
+		GroupID:     msg.GroupID,
+		UserID:      msg.UserID,
+		Nickname:    msg.Nickname,
+		Content:     parsedContent, // 使用解析后的内容
+		MsgType:     msg.MessageType,
+		IsMentioned: isMentioned,
+		CreatedAt:   msg.Time,
+		Forwards:    forwardsJSON,
 	})
 
 	if isSelf {
@@ -227,9 +231,95 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	go a.updateMember(msg)
 
 	// 如果被 @ 了，立即触发一次思考（跳过等待）
-	if isMention {
+	if isMentioned {
 		go a.think(msg.GroupID, true)
 	}
+}
+
+// parseMessageContent 解析消息内容（图片、视频、表情、回复等）
+func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
+	ctx := context.Background()
+
+	// 构建回复信息
+	replyInfo := ""
+	if msg.Reply != nil {
+		if msg.Reply.Content != "" {
+			replyContent := []rune(msg.Reply.Content)
+			if len(replyContent) > 50 {
+				replyContent = replyContent[:50]
+			}
+			replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", msg.Reply.MessageID, msg.Reply.Nickname, string(replyContent))
+		} else {
+			replyInfo = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
+		}
+	}
+
+	// 构建消息内容（包含图片和表情描述）
+	content := msg.Content
+
+	// 处理表情
+	for _, face := range msg.Faces {
+		if face.Name != "" {
+			content += fmt.Sprintf(" [表情:%s]", face.Name)
+		} else if face.ID > 0 {
+			content += fmt.Sprintf(" [表情:%d]", face.ID)
+		} else {
+			content += " [表情]"
+		}
+	}
+
+	// 处理图片（调用 Vision 模型识别）
+	for _, img := range msg.Images {
+		if img.SubType == 1 {
+			// 表情包类型
+			var desc string
+			if a.vision != nil && img.URL != "" {
+				if d, err := a.vision.DescribeImage(ctx, img.URL); err == nil {
+					desc = d
+				}
+			}
+			if desc == "" && img.Summary != "" {
+				desc = img.Summary
+			}
+			// 自动保存表情包
+			if img.URL != "" && a.cfg.Sticker.AutoSave {
+				go a.autoSaveSticker(img.URL, desc)
+			}
+			if desc != "" {
+				content += fmt.Sprintf(" [表情包 描述:%s]", desc)
+			} else {
+				content += " [表情包]"
+			}
+		} else {
+			// 普通图片
+			if a.vision != nil && img.URL != "" {
+				if desc, err := a.vision.DescribeImage(ctx, img.URL); err == nil {
+					content += " " + desc
+				} else {
+					content += " [图片]"
+				}
+			} else {
+				content += " [图片]"
+			}
+		}
+	}
+
+	// 处理视频（调用 Vision 模型识别）
+	for _, vid := range msg.Videos {
+		if a.vision != nil && vid.URL != "" {
+			if desc, err := a.vision.DescribeVideo(ctx, vid.URL); err == nil {
+				content += " " + desc
+			} else {
+				content += " [视频]"
+			}
+		} else {
+			content += " [视频]"
+		}
+	}
+
+	// 构建完整消息行
+	return fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
+		msg.Time.Format("15:04:05"), msg.MessageID, msg.Nickname, msg.UserID, replyInfo, content)
 }
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
@@ -239,7 +329,7 @@ func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 		// 确保缓冲区大小有效
 		bufSize := a.cfg.Agent.MessageBufferSize
 		if bufSize <= 0 {
-			bufSize = 50 // 默认缓冲区大小
+			bufSize = 15 // 默认缓冲区大小
 		}
 		buf = utils.NewRingBuffer[*onebot.GroupMessage](bufSize)
 		a.buffers[msg.GroupID] = buf
@@ -314,7 +404,7 @@ func (a *Agent) thinkCycle() {
 		}
 
 		// 如果最后一条消息是 @提及，已经在 onMessage 中触发了即时思考，这里跳过
-		if a.persona.IsMentioned(lastMsg.Content) || lastMsg.MentionAmu {
+		if a.persona.IsMentioned(lastMsg.Content) || lastMsg.IsMentioned {
 			continue
 		}
 
@@ -488,97 +578,9 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 		return ""
 	}
 
-	ctx := context.Background()
 	var b strings.Builder
-
 	for _, m := range msgs {
-		// 判断是否是新消息（用于决定是否自动保存表情包）
-		isNewMessage := lastProcessedTime.IsZero() || m.Time.After(lastProcessedTime)
-
-		// 构建回复信息
-		replyInfo := ""
-		if m.Reply != nil {
-			if m.Reply.Content != "" {
-				// 截断过长的内容
-				replyContent := []rune(m.Reply.Content)
-				if len(replyContent) > 100 {
-					replyContent = replyContent[:100]
-				}
-				replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", m.Reply.MessageID, m.Reply.Nickname, string(replyContent))
-			} else {
-				replyInfo = fmt.Sprintf(" [回复 #%d]", m.Reply.MessageID)
-			}
-		}
-
-		// 构建消息内容（包含图片和表情描述）
-		content := m.Content
-
-		// 处理表情
-		for _, face := range m.Faces {
-			if face.Name != "" {
-				content += " " + fmt.Sprintf("[表情:%s]", face.Name)
-			} else if face.ID > 0 {
-				content += " " + fmt.Sprintf("[表情:%d]", face.ID)
-			} else {
-				content += " [表情]"
-			}
-		}
-
-		// 处理图片（调用 Vision 模型识别）
-		for _, img := range m.Images {
-			if img.SubType == 1 {
-				// 表情包类型 - 自动保存
-				var desc string
-				if a.vision != nil && img.URL != "" {
-					if d, err := a.vision.DescribeImage(ctx, img.URL); err == nil {
-						desc = d
-					}
-				}
-				if desc == "" && img.Summary != "" {
-					desc = img.Summary
-				}
-				// 自动保存表情包（仅对新消息且开启了自动保存）
-				if img.URL != "" && a.cfg.Sticker.AutoSave && isNewMessage {
-					go a.autoSaveSticker(img.URL, desc)
-				}
-				// 展示给 Agent
-				if desc != "" {
-					content += fmt.Sprintf(" [表情包 描述:%s]", desc)
-				} else {
-					content += " [表情包]"
-				}
-			} else {
-				// 普通图片
-				if a.vision != nil && img.URL != "" {
-					desc, err := a.vision.DescribeImage(ctx, img.URL)
-					if err == nil {
-						content += " " + desc
-					} else {
-						content += " [图片]"
-					}
-				} else {
-					content += " [图片]"
-				}
-			}
-		}
-
-		// 处理视频（调用 Vision 模型识别）
-		for _, vid := range m.Videos {
-			if a.vision != nil && vid.URL != "" {
-				desc, err := a.vision.DescribeVideo(ctx, vid.URL)
-				if err == nil {
-					content += " " + desc
-				} else {
-					content += " [视频]"
-				}
-			} else {
-				content += " [视频]"
-			}
-		}
-
-		// 在消息开头添加消息ID，方便模型引用
-		b.WriteString(fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
-			m.Time.Format("15:04:05"), m.MessageID, m.Nickname, m.UserID, replyInfo, content))
+		b.WriteString(m.FinalContent)
 	}
 	return b.String()
 }
@@ -597,17 +599,6 @@ func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatConte
 			lines = append(lines, fmt.Sprintf("- %s时: %s", e.Situation, e.Style))
 		}
 		pc.Expressions = strings.Join(lines, "\n")
-	}
-
-	// 获取黑话
-	if jargons, err := a.memory.GetJargons(groupID, 10); err == nil && len(jargons) > 0 {
-		var lines []string
-		for _, j := range jargons {
-			if j.Meaning != "" {
-				lines = append(lines, fmt.Sprintf("- %s: %s", j.Content, j.Meaning))
-			}
-		}
-		pc.Jargons = strings.Join(lines, "\n")
 	}
 
 	// 获取相关记忆（使用 TopK 配置）
@@ -660,8 +651,8 @@ func (a *Agent) getMemberInfo(groupID int64) string {
 
 	var parts []string
 	parts = append(parts, fmt.Sprintf("昵称: %s", profile.Nickname))
-	parts = append(parts, fmt.Sprintf("活跃度（0-1）: %f", profile.Activity))
-	parts = append(parts, fmt.Sprintf("你与他的亲密度（0-1）: %f", profile.Intimacy))
+	parts = append(parts, fmt.Sprintf("活跃度（0-1）: %.2f", profile.Activity))
+	parts = append(parts, fmt.Sprintf("你与他的亲密度（0-1）: %.2f", profile.Intimacy))
 	if profile.SpeakStyle != "" {
 		parts = append(parts, fmt.Sprintf("说话风格: %s", profile.SpeakStyle))
 	}

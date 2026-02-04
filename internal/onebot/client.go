@@ -71,23 +71,21 @@ func (r *APIResponse) DataList() []interface{} {
 
 // GroupMessage 群消息
 type GroupMessage struct {
-	MessageID   int64            `json:"message_id"`
-	GroupID     int64            `json:"group_id"`
-	UserID      int64            `json:"user_id"`
-	Nickname    string           `json:"nickname"`
-	Card        string           `json:"card"`               // 群名片
-	Role        string           `json:"role"`               // 角色: owner/admin/member
-	Content     string           `json:"content"`            // 纯文本内容
-	MentionAmu  bool             `json:"mention_amu"`        // 是否@机器人
-	MentionAll  bool             `json:"mention_all"`        // 是否@全体成员
-	Time        time.Time        `json:"time"`               // 消息时间
-	MessageType string           `json:"message_type"`       // 消息类型
-	Images      []ImageInfo      `json:"images,omitempty"`   // 图片列表
-	Videos      []VideoInfo      `json:"videos,omitempty"`   // 视频列表
-	Faces       []FaceInfo       `json:"faces,omitempty"`    // 表情列表
-	AtList      []int64          `json:"at_list,omitempty"`  // @的用户列表
-	Reply       *ReplyInfo       `json:"reply,omitempty"`    // 回复信息
-	Forwards    []ForwardMessage `json:"forwards,omitempty"` // 合并转发内容
+	MessageID    int64            `json:"message_id"`
+	GroupID      int64            `json:"group_id"`
+	UserID       int64            `json:"user_id"`
+	Nickname     string           `json:"nickname"`
+	Content      string           `json:"content"`                 // 纯文本内容
+	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
+	Time         time.Time        `json:"time"`                    // 消息时间
+	MessageType  string           `json:"message_type"`            // 消息类型
+	Images       []ImageInfo      `json:"images,omitempty"`        // 图片列表
+	Videos       []VideoInfo      `json:"videos,omitempty"`        // 视频列表
+	Faces        []FaceInfo       `json:"faces,omitempty"`         // 表情列表
+	AtList       []int64          `json:"at_list,omitempty"`       // @的用户列表
+	Reply        *ReplyInfo       `json:"reply,omitempty"`         // 回复信息
+	Forwards     []ForwardMessage `json:"forwards,omitempty"`      // 合并转发内容
+	FinalContent string           `json:"final_content,omitempty"` // 处理后的最终内容
 }
 
 // ImageInfo 图片信息
@@ -382,12 +380,6 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 		if nickname, ok := sender["nickname"].(string); ok {
 			msg.Nickname = nickname
 		}
-		if card, ok := sender["card"].(string); ok {
-			msg.Card = card
-		}
-		if role, ok := sender["role"].(string); ok {
-			msg.Role = role
-		}
 	}
 
 	// 解析消息段，提取各类信息
@@ -396,7 +388,7 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 	// 检查是否@机器人
 	for _, atID := range msg.AtList {
 		if atID == c.selfID {
-			msg.MentionAmu = true
+			msg.IsMentioned = true
 			break
 		}
 	}
@@ -471,7 +463,6 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 		case "at":
 			if qq, ok := data["qq"].(string); ok {
 				if qq == "all" {
-					msg.MentionAll = true
 					textParts = append(textParts, "@全体成员")
 				} else if qqID, err := strconv.ParseInt(qq, 10, 64); err == nil {
 					msg.AtList = append(msg.AtList, qqID)
@@ -636,33 +627,6 @@ func (c *Client) SendPrivateMessage(userID int64, content string) (int64, error)
 		"user_id": userID,
 		"message": content,
 	})
-	if err != nil {
-		return 0, err
-	}
-	if data := resp.DataMap(); data != nil {
-		if msgID, ok := parseInt64(data["message_id"]); ok {
-			return msgID, nil
-		}
-	}
-	return 0, nil
-}
-
-// SendMsg 发送消息 (通用接口)
-func (c *Client) SendMsg(messageType string, groupID, userID int64, message interface{}) (int64, error) {
-	params := map[string]interface{}{
-		"message": message,
-	}
-	if messageType != "" {
-		params["message_type"] = messageType
-	}
-	if groupID > 0 {
-		params["group_id"] = groupID
-	}
-	if userID > 0 {
-		params["user_id"] = userID
-	}
-
-	resp, err := c.callAPI(context.Background(), "send_msg", params)
 	if err != nil {
 		return 0, err
 	}
