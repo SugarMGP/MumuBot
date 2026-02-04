@@ -127,6 +127,8 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewGetForwardMessageDetailTool() },
 		// 情绪系统
 		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
+		// HTTP GET
+		func() (tool.BaseTool, error) { return tools.NewHttpRequestTool() },
 	}
 
 	for _, build := range toolBuilders {

@@ -62,7 +62,7 @@ func saveJargonFunc(ctx context.Context, input *SaveJargonInput) (*SaveJargonOut
 func NewSaveJargonTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"saveJargon",
-		`保存群里的黑话、术语或梗。当你发现群友使用了你不懂的词汇，并且从上下文理解了它的含义时，可以保存下来。`,
+		`保存群里的黑话、术语或梗。当群友使用了你不懂的词汇，并且你从上下文理解了它的含义时，可以保存下来。`,
 		saveJargonFunc,
 	)
 }

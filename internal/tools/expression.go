@@ -73,7 +73,7 @@ func NewGetUncheckedExpressionsTool() (tool.InvokableTool, error) {
 
 type ReviewExpressionInput struct {
 	ID      uint `json:"id" jsonschema:"description=表达方式ID"`
-	Approve bool `json:"approve" jsonschema:"description=是否通过审核，true=通过，false=拒绝"`
+	Approve bool `json:"approve" jsonschema:"description=是否通过审核"`
 }
 
 type ReviewExpressionOutput struct {

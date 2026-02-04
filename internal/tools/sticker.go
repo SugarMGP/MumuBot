@@ -70,7 +70,7 @@ func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*Searc
 func NewSearchStickersTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"searchStickers",
-		"搜索已保存的表情包。可以通过关键词搜索，如情绪（开心、无语）、内容（猫、狗）等。",
+		"通过关键词搜索已保存的表情包，关键词用空格隔开。",
 		searchStickersFunc,
 	)
 }
@@ -150,7 +150,7 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 func NewSendStickerTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"sendSticker",
-		"发送一个已保存的表情包。先用searchStickers搜索找到合适的表情包，再用这个工具发送。",
+		"发送一个已保存的表情包。先用searchStickers搜索表情包，再用该工具发送。",
 		sendStickerFunc,
 	)
 }

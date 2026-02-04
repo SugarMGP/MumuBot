@@ -159,6 +159,7 @@ require (
 	github.com/bytedance/sonic v1.15.0
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260129100151-33cdd47ff03a
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.8
+	github.com/cloudwego/eino-ext/components/tool/httprequest v0.0.0-20260204064123-1f91f547c77e
 	github.com/cloudwego/eino-ext/components/tool/mcp v0.0.8
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.43.2

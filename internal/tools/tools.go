@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	getreq "github.com/cloudwego/eino-ext/components/tool/httprequest/get"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
@@ -234,7 +235,7 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 func NewGetGroupMemberDetailTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"getGroupMemberDetail",
-		"获取某个群成员的详细信息，包括群昵称、角色（owner/admin/member）、头衔、等级、入群时间、最后发言时间等。",
+		"获取某个群成员的详细信息，包括群昵称、角色、头衔、等级、入群时间、最后发言时间等。",
 		getGroupMemberDetailFunc,
 	)
 }
@@ -420,7 +421,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"getEssenceMessages",
-		"获取当前群的精华消息列表。精华消息是被管理员设为精华的重要或有趣的消息。",
+		"获取当前群的精华消息。精华消息是被管理员设为精华的重要或有趣的消息。",
 		getEssenceMessagesFunc,
 	)
 }
@@ -543,4 +544,36 @@ func NewGetForwardMessageDetailTool() (tool.InvokableTool, error) {
 		"查看合并转发消息的具体内容。当你看到消息中包含[合并转发]字样时，使用此工具查看其中的详细对话。",
 		getForwardMessageDetailFunc,
 	)
+}
+
+// ==================== 网页浏览工具 ====================
+
+// httpRequestToolWrapper 包装 HTTP 请求工具以添加日志记录
+type httpRequestToolWrapper struct {
+	tool.InvokableTool
+}
+
+func (w *httpRequestToolWrapper) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	output, err := w.InvokableTool.InvokableRun(ctx, argumentsInJSON, opts...)
+	// 截断输出以避免日志过长
+	logOutput := output
+	if len(logOutput) > 300 {
+		logOutput = logOutput[:300] + "...(truncated)"
+	}
+	LogToolCall("request_get", argumentsInJSON, logOutput, err)
+	return output, err
+}
+
+func NewHttpRequestTool() (tool.BaseTool, error) {
+	baseTool, err := getreq.NewTool(context.Background(), &getreq.Config{
+		ToolName: "request_get",
+		ToolDesc: "获取网页内容。当你需要查看某个网页的具体内容时使用，输入应为完整的URL（例如https://www.baidu.com）。",
+		Headers: map[string]string{
+			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0",
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &httpRequestToolWrapper{InvokableTool: baseTool}, nil
 }
