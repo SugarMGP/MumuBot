@@ -431,9 +431,9 @@ func (m *Manager) GetUnverifiedJargons(groupID int64, limit int) ([]Jargon, erro
 // ==================== 成员画像 ====================
 
 // GetMemberProfile 获取成员画像
-func (m *Manager) GetMemberProfile(groupID, userID int64) (*MemberProfile, error) {
+func (m *Manager) GetMemberProfile(userID int64) (*MemberProfile, error) {
 	var profile MemberProfile
-	err := m.db.Where("group_id = ? AND user_id = ?", groupID, userID).First(&profile).Error
+	err := m.db.Where("user_id = ?", userID).First(&profile).Error
 	if err != nil {
 		return nil, err
 	}
@@ -441,13 +441,12 @@ func (m *Manager) GetMemberProfile(groupID, userID int64) (*MemberProfile, error
 }
 
 // GetOrCreateMemberProfile 获取或创建成员画像
-func (m *Manager) GetOrCreateMemberProfile(groupID, userID int64, nickname string) (*MemberProfile, error) {
+func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string) (*MemberProfile, error) {
 	var profile MemberProfile
-	err := m.db.Where("group_id = ? AND user_id = ?", groupID, userID).First(&profile).Error
+	err := m.db.Where("user_id = ?", userID).First(&profile).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		profile = MemberProfile{
-			GroupID:   groupID,
 			UserID:    userID,
 			Nickname:  nickname,
 			Activity:  0.5, // 初始活跃度

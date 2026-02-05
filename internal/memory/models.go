@@ -35,8 +35,7 @@ type MemberProfile struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	GroupID     int64     `gorm:"uniqueIndex:idx_group_user" json:"group_id"`
-	UserID      int64     `gorm:"uniqueIndex:idx_group_user" json:"user_id"`
+	UserID      int64     `gorm:"uniqueIndex::idx_user" json:"user_id"`
 	Nickname    string    `gorm:"type:varchar(100)" json:"nickname"`
 	SpeakStyle  string    `gorm:"type:text" json:"speak_style"`
 	Interests   string    `gorm:"type:text" json:"interests"`

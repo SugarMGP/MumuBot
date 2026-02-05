@@ -348,7 +348,7 @@ func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
 }
 
 func (a *Agent) updateMember(msg *onebot.GroupMessage) {
-	p, err := a.memory.GetOrCreateMemberProfile(msg.GroupID, msg.UserID, msg.Nickname)
+	p, err := a.memory.GetOrCreateMemberProfile(msg.UserID, msg.Nickname)
 	if err != nil {
 		zap.L().Warn("获取成员画像失败", zap.Error(err))
 		return
@@ -632,7 +632,7 @@ func (a *Agent) getMemberInfo(groupID int64) string {
 
 	// 获取最后一个说话者的信息
 	lastMsg := msgs[len(msgs)-1]
-	profile, err := a.memory.GetMemberProfile(groupID, lastMsg.UserID)
+	profile, err := a.memory.GetMemberProfile(lastMsg.UserID)
 	if err != nil {
 		return ""
 	}

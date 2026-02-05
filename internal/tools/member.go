@@ -39,16 +39,14 @@ func mergeAndDeduplicateStrings(existing []string, newItems []string) []string {
 type UpdateMemberProfileInput struct {
 	// UserID 群友的QQ号
 	UserID int64 `json:"user_id" jsonschema:"description=群友的QQ号"`
-	// Nickname 群友的昵称
-	Nickname string `json:"nickname,omitempty" jsonschema:"description=群友的昵称"`
 	// SpeakStyle 说话风格描述
 	SpeakStyle string `json:"speak_style,omitempty" jsonschema:"description=说话风格描述"`
 	// Interests 兴趣爱好列表
-	Interests []string `json:"interests,omitempty" jsonschema:"description=兴趣爱好列表"`
+	Interests []string `json:"interests,omitempty" jsonschema:"description=兴趣爱好列表（只传入新增的项）"`
 	// CommonWords 常用词汇或口头禅
-	CommonWords []string `json:"common_words,omitempty" jsonschema:"description=常用词汇或口头禅"`
-	// Intimacy 亲密度 0-1，根据互动情况调整：陌生人0.1-0.3，普通群友0.3-0.5，熟悉的朋友0.5-0.7，好朋友0.7-0.9，至交0.9-1.0
-	Intimacy *float64 `json:"intimacy,omitempty" jsonschema:"description=亲密度0-1，根据与对方的互动频率、聊天深度、情感连接来评估。陌生人0.1-0.3，普通群友0.3-0.5，熟悉朋友0.5-0.7，好朋友0.7-0.9，至交0.9-1.0"`
+	CommonWords []string `json:"common_words,omitempty" jsonschema:"description=常用词汇或口头禅（只传入新增的项）"`
+	// Intimacy 亲密度 0-1，根据互动情况调整
+	Intimacy *float64 `json:"intimacy,omitempty" jsonschema:"description=亲密度0-1，根据与对方的互动频率、聊天深度、情感连接来评估。"`
 }
 
 // UpdateMemberProfileOutput 更新成员画像的输出
@@ -68,14 +66,11 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 		return &UpdateMemberProfileOutput{Success: false, Message: "用户 ID 不能为空"}, nil
 	}
 
-	profile, err := tc.MemoryMgr.GetOrCreateMemberProfile(tc.GroupID, input.UserID, input.Nickname)
+	profile, err := tc.MemoryMgr.GetMemberProfile(input.UserID)
 	if err != nil {
 		return &UpdateMemberProfileOutput{Success: false, Message: err.Error()}, nil
 	}
 
-	if input.Nickname != "" {
-		profile.Nickname = input.Nickname
-	}
 	if input.SpeakStyle != "" {
 		profile.SpeakStyle = input.SpeakStyle
 	}
@@ -168,7 +163,7 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 		return &GetMemberInfoOutput{Success: false, Message: "用户 ID 不能为空"}, nil
 	}
 
-	profile, err := tc.MemoryMgr.GetMemberProfile(tc.GroupID, input.UserID)
+	profile, err := tc.MemoryMgr.GetMemberProfile(input.UserID)
 	if err != nil {
 		output := &GetMemberInfoOutput{
 			Success: false,
