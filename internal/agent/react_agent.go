@@ -461,6 +461,9 @@ func (a *Agent) getSpeakProbability(groupID int64) float64 {
 
 // think 进行思考和决策
 func (a *Agent) think(groupID int64, isMention bool) {
+	if a.bot.IsSelfMuted(groupID) {
+		return
+	}
 	// 并发锁：确保同一时间一个群只有一个思考进程
 	a.processingMu.Lock()
 	if a.processing[groupID] {

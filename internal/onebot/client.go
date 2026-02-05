@@ -23,6 +23,9 @@ type Client struct {
 	handlers map[string][]EventHandler
 	selfID   int64
 
+	mutedMu    sync.RWMutex
+	mutedUntil map[int64]time.Time
+
 	// 消息回调
 	onMessage func(*GroupMessage)
 
@@ -198,9 +201,10 @@ type LoginInfo struct {
 // NewClient 创建OneBot客户端
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		cfg:      cfg,
-		handlers: make(map[string][]EventHandler),
-		stopCh:   make(chan struct{}),
+		cfg:        cfg,
+		handlers:   make(map[string][]EventHandler),
+		stopCh:     make(chan struct{}),
+		mutedUntil: make(map[int64]time.Time),
 	}
 }
 
@@ -338,6 +342,68 @@ func (c *Client) handleNoticeEvent(event map[string]interface{}) {
 	noticeType, _ := event["notice_type"].(string)
 	subType, _ := event["sub_type"].(string)
 	zap.L().Debug("收到通知", zap.String("type", noticeType), zap.String("sub_type", subType))
+
+	if noticeType == "group_ban" {
+		c.handleGroupBanNotice(event, subType)
+	}
+}
+
+func (c *Client) handleGroupBanNotice(event map[string]interface{}, subType string) {
+	groupID, ok := parseInt64(event["group_id"])
+	if !ok || groupID == 0 {
+		return
+	}
+
+	userID, ok := parseInt64(event["user_id"])
+	if !ok || userID != c.selfID {
+		return
+	}
+
+	if subType == "lift_ban" {
+		c.clearSelfMuted(groupID)
+		return
+	}
+
+	if subType != "ban" {
+		return
+	}
+
+	if durationSec, ok := parseInt64(event["duration"]); ok && durationSec > 0 {
+		c.setSelfMutedUntil(groupID, time.Now().Add(time.Duration(durationSec)*time.Second))
+		return
+	}
+
+	// 如果没有时长或为 0，视为未禁言
+	c.clearSelfMuted(groupID)
+}
+
+func (c *Client) setSelfMutedUntil(groupID int64, until time.Time) {
+	c.mutedMu.Lock()
+	c.mutedUntil[groupID] = until
+	c.mutedMu.Unlock()
+}
+
+func (c *Client) clearSelfMuted(groupID int64) {
+	c.mutedMu.Lock()
+	delete(c.mutedUntil, groupID)
+	c.mutedMu.Unlock()
+}
+
+// IsSelfMuted 判断当前群内机器人是否处于禁言状态
+func (c *Client) IsSelfMuted(groupID int64) bool {
+	c.mutedMu.RLock()
+	until, ok := c.mutedUntil[groupID]
+	c.mutedMu.RUnlock()
+	if !ok || until.IsZero() {
+		return false
+	}
+
+	if time.Now().After(until) {
+		c.clearSelfMuted(groupID)
+		return false
+	}
+
+	return true
 }
 
 // handleRequestEvent 处理请求事件（加群/加好友请求）
