@@ -51,13 +51,13 @@ groups:
 # Agent 决策配置
 agent:
   observe_window: 30        # 观察窗口时间（秒）
-  think_interval: 5         # 决策间隔（秒）
+  think_interval: 15         # 决策间隔（秒）
   message_buffer_size: 15   # 消息缓冲区大小
   max_step: 12               # ReAct 最大步数
 
 # 聊天行为配置
 chat:
-  talk_frequency: 0.8       # 聊天频率，0-1，越大越活跃
+  talk_frequency: 0.7       # 聊天频率，0-1，越大越活跃
   typing_simulation: true   # 是否模拟打字延迟
   typing_speed: 6           # 每秒打字速度（字符）
   enable_time_rules: false  # 是否启用时段规则

@@ -190,9 +190,6 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		return
 	}
 
-	// 自身发送的消息也进入缓冲区和记录，但不触发思考
-	isSelf := msg.UserID == a.bot.GetSelfID()
-
 	// 检测是否通过名字或别名提及了沐沐
 	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content)
 
@@ -208,6 +205,12 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	parsedContent := a.parseMessageContent(msg)
 	msg.FinalContent = parsedContent
 
+	// 防止注入工具名字
+	for _, t := range a.tools {
+		info, _ := t.Info(context.Background())
+		parsedContent = strings.ReplaceAll(parsedContent, info.Name, "")
+	}
+
 	a.addBuffer(msg)
 	_ = a.memory.AddMessage(memory.MessageLog{
 		MessageID:   fmt.Sprintf("%d", msg.MessageID),
@@ -221,7 +224,7 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		Forwards:    forwardsJSON,
 	})
 
-	if isSelf {
+	if msg.UserID == a.bot.GetSelfID() {
 		return
 	}
 
