@@ -99,7 +99,7 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewUpdateMemberProfileTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMemberInfoTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetExpressionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchExpressionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveExpressionTool() },
 		// 审核工具
 		func() (tool.BaseTool, error) { return tools.NewGetUncheckedExpressionsTool() },
@@ -581,15 +581,6 @@ func (a *Agent) buildChatContext(groupID int64) string {
 func (a *Agent) buildPromptContext(ctx context.Context, groupID int64, chatContext string) *persona.PromptContext {
 	pc := &persona.PromptContext{
 		GroupID: groupID,
-	}
-
-	// 获取表达习惯
-	if exps, err := a.memory.GetExpressions(groupID, 5); err == nil && len(exps) > 0 {
-		var lines []string
-		for _, e := range exps {
-			lines = append(lines, fmt.Sprintf("- %s时: %s", e.Situation, e.Style))
-		}
-		pc.Expressions = strings.Join(lines, "\n")
 	}
 
 	// 获取相关记忆（使用 TopK 配置）

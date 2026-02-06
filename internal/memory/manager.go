@@ -333,17 +333,59 @@ func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, gr
 
 // ==================== 表达学习 ====================
 
-// GetExpressions 获取表达方式（已验证的优先）
-func (m *Manager) GetExpressions(groupID int64, limit int) ([]Expression, error) {
-	var expressions []Expression
-	err := m.db.Where("group_id = ? AND rejected = ?", groupID, false).
-		Order("checked DESC, updated_at DESC").Limit(limit).Find(&expressions).Error
-	return expressions, err
+// SaveExpression 保存表达方式
+func (m *Manager) SaveExpression(exp *Expression) (bool, error) {
+	if exp == nil {
+		return false, nil
+	}
+
+	if exp.GroupID != 0 && exp.Situation != "" && exp.Style != "" {
+		var existing Expression
+		err := m.db.Where("group_id = ? AND situation = ? AND style = ?", exp.GroupID, exp.Situation, exp.Style).
+			First(&existing).Error
+		if err == nil {
+			if existing.Examples == "" && exp.Examples != "" {
+				if err := m.db.Model(&existing).Updates(map[string]any{
+					"examples": exp.Examples,
+				}).Error; err != nil {
+					return false, err
+				}
+				return true, nil
+			}
+			return false, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, err
+		}
+	}
+
+	if err := m.db.Create(exp).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-// SaveExpression 保存表达方式
-func (m *Manager) SaveExpression(exp *Expression) error {
-	return m.db.Save(exp).Error
+// SearchExpressions 搜索表达方式（关键词匹配）
+func (m *Manager) SearchExpressions(groupID int64, keyword string, limit int) ([]Expression, error) {
+	var expressions []Expression
+	q := m.db.Model(&Expression{}).
+		Where("group_id = ? AND rejected = ?", groupID, false)
+
+	if keyword != "" {
+		keywords := strings.Fields(keyword)
+		if len(keywords) > 0 {
+			likeConditions := make([]string, 0, len(keywords))
+			args := make([]interface{}, 0, len(keywords))
+			for _, kw := range keywords {
+				likeConditions = append(likeConditions, "situation LIKE ? OR style LIKE ? OR examples LIKE ?")
+				args = append(args, "%"+kw+"%", "%"+kw+"%", "%"+kw+"%")
+			}
+			q = q.Where(strings.Join(likeConditions, " OR "), args...)
+		}
+	}
+
+	err := q.Order("checked DESC, updated_at DESC").Limit(limit).Find(&expressions).Error
+	return expressions, err
 }
 
 // ReviewExpression 审核表达方式

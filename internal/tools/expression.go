@@ -2,8 +2,8 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"mumu-bot/internal/memory"
+	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -148,13 +148,18 @@ func saveExpressionFunc(ctx context.Context, input *SaveExpressionInput) (*SaveE
 		Examples:  input.Example,
 	}
 
-	if err := tc.MemoryMgr.SaveExpression(exp); err != nil {
+	saved, err := tc.MemoryMgr.SaveExpression(exp)
+	if err != nil {
 		output := &SaveExpressionOutput{Success: false, Message: err.Error()}
 		LogToolCall("saveExpression", input, output, err)
 		return output, nil
 	}
 
-	output := &SaveExpressionOutput{Success: true, Message: "已记住这种表达方式"}
+	msg := "已记住这种表达方式"
+	if !saved {
+		msg = "已存在该表达方式，无需重复保存"
+	}
+	output := &SaveExpressionOutput{Success: true, Message: msg}
 	LogToolCall("saveExpression", input, output, nil)
 	return output, nil
 }
@@ -162,58 +167,71 @@ func saveExpressionFunc(ctx context.Context, input *SaveExpressionInput) (*SaveE
 func NewSaveExpressionTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"saveExpression",
-		"保存你学到的群友表达方式或口头禅。当你发现群友在特定场景下有独特的说话习惯时，可以记录下来以便模仿。",
+		"保存你学到的群友表达方式或口头禅。当你发现群友在特定场景下有独特的说话习惯时，可以记录下来以便模仿。不要记录自己的表达方式！",
 		saveExpressionFunc,
 	)
 }
 
-// ==================== 获取表达方式工具 ====================
+// ==================== 搜索表达方式工具 ====================
 
-type GetExpressionsInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
+type SearchExpressionsInput struct {
+	Keyword string `json:"keyword" jsonschema:"description=搜索关键词，可以是多个词用空格分隔"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"description=返回数量，默认10"`
 }
 
-type GetExpressionsOutput struct {
-	Success     bool     `json:"success"`
-	Expressions []string `json:"expressions,omitempty"`
-	Message     string   `json:"message,omitempty"`
+type SearchExpressionsOutput struct {
+	Success     bool             `json:"success"`
+	Count       int              `json:"count"`
+	Expressions []map[string]any `json:"expressions,omitempty"`
+	Message     string           `json:"message,omitempty"`
 }
 
-func getExpressionsFunc(ctx context.Context, input *GetExpressionsInput) (*GetExpressionsOutput, error) {
+func searchExpressionsFunc(ctx context.Context, input *SearchExpressionsInput) (*SearchExpressionsOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &GetExpressionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return &SearchExpressionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	}
+
+	if strings.TrimSpace(input.Keyword) == "" {
+		return &SearchExpressionsOutput{Success: false, Message: "搜索关键词不能为空"}, nil
 	}
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = 5
+		limit = 10
 	}
 
-	exps, err := tc.MemoryMgr.GetExpressions(tc.GroupID, limit)
+	exps, err := tc.MemoryMgr.SearchExpressions(tc.GroupID, input.Keyword, limit)
 	if err != nil {
-		output := &GetExpressionsOutput{Success: false, Message: err.Error()}
-		LogToolCall("getExpressions", input, output, err)
+		output := &SearchExpressionsOutput{Success: false, Message: err.Error()}
+		LogToolCall("searchExpressions", input, output, err)
 		return output, nil
 	}
 
-	results := make([]string, 0, len(exps))
-	for _, e := range exps {
-		results = append(results, fmt.Sprintf("[%s]: %s (示例: %s)", e.Situation, e.Style, e.Examples))
+	results := make([]map[string]any, 0, len(exps))
+	for _, j := range exps {
+		results = append(results, map[string]any{
+			"id":      j.ID,
+			"content": j.Situation,
+			"meaning": j.Style,
+			"context": j.Examples,
+			"checked": j.Checked,
+		})
 	}
 
-	output := &GetExpressionsOutput{
+	output := &SearchExpressionsOutput{
 		Success:     true,
+		Count:       len(exps),
 		Expressions: results,
 	}
-	LogToolCall("getExpressions", input, output, nil)
+	LogToolCall("searchExpressions", input, output, nil)
 	return output, nil
 }
 
-func NewGetExpressionsTool() (tool.InvokableTool, error) {
+func NewSearchExpressionsTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
-		"getExpressions",
-		"查看你学到的群友表达方式和口头禅。在你想模仿群友说话或者不知道该怎么表达时使用。",
-		getExpressionsFunc,
+		"searchExpressions",
+		"搜索你从群友学到的表达方式和口头禅。",
+		searchExpressionsFunc,
 	)
 }

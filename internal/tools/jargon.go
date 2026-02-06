@@ -79,10 +79,10 @@ type SearchJargonInput struct {
 
 // SearchJargonOutput 搜索黑话的输出
 type SearchJargonOutput struct {
-	Success bool                     `json:"success"`
-	Count   int                      `json:"count"`
-	Jargons []map[string]interface{} `json:"jargons,omitempty"`
-	Message string                   `json:"message,omitempty"`
+	Success bool             `json:"success"`
+	Count   int              `json:"count"`
+	Jargons []map[string]any `json:"jargons,omitempty"`
+	Message string           `json:"message,omitempty"`
 }
 
 // searchJargonFunc 搜索黑话的实际实现
@@ -108,9 +108,9 @@ func searchJargonFunc(ctx context.Context, input *SearchJargonInput) (*SearchJar
 		return output, nil
 	}
 
-	results := make([]map[string]interface{}, 0, len(jargons))
+	results := make([]map[string]any, 0, len(jargons))
 	for _, j := range jargons {
-		results = append(results, map[string]interface{}{
+		results = append(results, map[string]any{
 			"id":       j.ID,
 			"content":  j.Content,
 			"meaning":  j.Meaning,
@@ -201,7 +201,7 @@ func NewGetUnverifiedJargonsTool() (tool.InvokableTool, error) {
 
 type ReviewJargonInput struct {
 	ID      uint `json:"id" jsonschema:"description=黑话ID"`
-	Approve bool `json:"approve" jsonschema:"description=是否通过审核，true=通过，false=拒绝"`
+	Approve bool `json:"approve" jsonschema:"description=是否通过审核"`
 }
 
 type ReviewJargonOutput struct {
