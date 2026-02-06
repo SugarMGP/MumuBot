@@ -8,6 +8,12 @@
 
 ---
 
+> [!WARNING]
+> - 项目处于活跃开发阶段，配置和接口可能随时变化
+> - QQ 机器人存在封号风控风险，请谨慎使用
+> - AI 模型运行会消耗 Token，请注意用量
+> - 项目部分模块完成度较低（如表达学习系统、监控服务等），不保证功能完全可用
+
 ## ✨ 特性
 
 - 🧠 **ReAct 智能体** — 通过观察-思考-行动循环自主决策是否发言
@@ -93,13 +99,6 @@ go build -o mumu-bot .
 <a href="https://github.com/your-username/MumuBot/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=SugarMGP/MumuBot" />
 </a>
-
-## 📌 注意事项
-
-> [!WARNING]
-> - 项目处于活跃开发阶段，配置和接口可能随时变化
-> - QQ 机器人存在封号风控风险，请谨慎使用
-> - AI 模型运行会消耗 Token，请注意用量
 
 ## ❤️ 致谢
 
