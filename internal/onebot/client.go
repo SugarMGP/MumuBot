@@ -608,7 +608,29 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 		case "forward": // 合并转发
 			if forwardID, ok := parseInt64(data["id"]); ok && forwardID != 0 {
 				if nodes, err := c.GetForwardMsg(forwardID); err == nil && len(nodes) > 0 {
+					// 仅显示前四条，每条限制20个rune
+					limit := 4
+					if len(nodes) < limit {
+						limit = len(nodes)
+					}
+					var parts []string
+					for i := 0; i < limit; i++ {
+						node := nodes[i]
+						content := "[消息]"
+						if node.Content != "" {
+							runes := []rune(node.Content)
+							if len(runes) > 20 {
+								content = string(runes[:20]) + "..."
+							} else {
+								content = node.Content
+							}
+						}
+						parts = append(parts, fmt.Sprintf("%s(%d):%s", node.Nickname, node.UserID, content))
+					}
 					msg.Forwards = nodes
+					summary := fmt.Sprintf("[合并转发，共%d条，预览：%s] ", len(nodes), strings.Join(parts, " / "))
+					textParts = append(textParts, summary)
+					continue
 				}
 			}
 			textParts = append(textParts, "[合并转发]")
