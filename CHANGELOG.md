@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-04-29
+
 ### 变更
 
 - **成员画像现已记录群名片与学习别称**：成员画像会为每位群友沉淀按群区分的历史群名片，以及从学习链路提炼出的稳定别称；后台成员页也新增了对应展示与搜索，便于核对“这个人平时都被怎么叫”。
@@ -80,7 +82,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/SugarMGP/MumuBot/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/SugarMGP/MumuBot/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/SugarMGP/MumuBot/compare/v1.2.4...v1.3.0
 [1.2.4]: https://github.com/SugarMGP/MumuBot/releases/tag/v1.2.4
