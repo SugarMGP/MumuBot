@@ -546,8 +546,8 @@ func (s *AdminService) ListMemberProfiles(filter MemberFilter) (Page[memory.Memb
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		pattern := "%" + keyword + "%"
 		q = q.Where(
-			"nickname LIKE ? OR speak_style LIKE ? OR interests LIKE ? OR common_words LIKE ? OR CAST(user_id AS CHAR) LIKE ?",
-			pattern, pattern, pattern, pattern, pattern,
+			"nickname LIKE ? OR name_records LIKE ? OR speak_style LIKE ? OR interests LIKE ? OR common_words LIKE ? OR CAST(user_id AS CHAR) LIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern,
 		)
 	}
 

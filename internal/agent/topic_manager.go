@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/onebot"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
-
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/memory"
-	"mumu-bot/internal/onebot"
 
 	"github.com/cloudwego/eino/components/model"
 	agentreact "github.com/cloudwego/eino/flow/agent/react"
@@ -47,8 +46,10 @@ type topicMemoryStore interface {
 	ApplyTopicAssignmentBatch(ctx context.Context, input memory.TopicAssignmentBatchInput) (memory.TopicAssignmentBatchResult, error)
 }
 
-type topicSummaryFunc func(ctx context.Context, oldSummary memory.TopicSummaryV1, newMessages []memory.MessageLog) (memory.TopicSummaryV1, error)
-type topicAssignFunc func(ctx context.Context, groupID int64, messages []topicAssignJob, candidates []topicAssignmentCandidate) ([]topicAssignmentDecision, error)
+type (
+	topicSummaryFunc func(ctx context.Context, oldSummary memory.TopicSummaryV1, newMessages []memory.MessageLog) (memory.TopicSummaryV1, error)
+	topicAssignFunc  func(ctx context.Context, groupID int64, messages []topicAssignJob, candidates []topicAssignmentCandidate) ([]topicAssignmentDecision, error)
+)
 
 type topicRuntimeState struct {
 	thread       memory.TopicThread
@@ -505,13 +506,7 @@ func (tm *TopicManager) assignmentItemsFromDecisions(batch []topicAssignJob, dec
 		}
 		switch item.Action {
 		case memory.TopicAssignmentActionReuse:
-			if candidateIDs[item.TopicID] != memory.TopicThreadStatusActive {
-				item.Action = memory.TopicAssignmentActionNoTopic
-				item.TopicID = 0
-				item.MatchReason = string(memory.TopicAssignmentActionNoTopic)
-			}
-		case memory.TopicAssignmentActionReopen:
-			if candidateIDs[item.TopicID] != memory.TopicThreadStatusArchived {
+			if status := candidateIDs[item.TopicID]; status != memory.TopicThreadStatusActive && status != memory.TopicThreadStatusArchived {
 				item.Action = memory.TopicAssignmentActionNoTopic
 				item.TopicID = 0
 				item.MatchReason = string(memory.TopicAssignmentActionNoTopic)
@@ -1410,8 +1405,6 @@ func normalizeAssignmentAction(action string) memory.TopicAssignmentAction {
 		return memory.TopicAssignmentActionReuse
 	case string(memory.TopicAssignmentActionNew):
 		return memory.TopicAssignmentActionNew
-	case string(memory.TopicAssignmentActionReopen):
-		return memory.TopicAssignmentActionReopen
 	default:
 		return memory.TopicAssignmentActionNoTopic
 	}

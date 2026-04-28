@@ -250,9 +250,9 @@ templ MemberListPage(data MemberListPageData, currentPath string) {
 
 templ MemberListBody(data MemberListPageData) {
 	<div class="space-y-6">
-		@PageHeader("成员画像", "查看昵称、兴趣、常用词和活跃信息。", "成员画像")
+		@PageHeader("成员画像", "查看昵称、群名片、别称、兴趣、常用词和活跃信息。", "成员画像")
 		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("member-filters", "筛选条件", "按昵称、QQ、兴趣或常用词查找成员画像。", EmptyComponent(), false, MemberFilterForm(data))
+			@FilterPanel("member-filters", "筛选条件", "按昵称、群名片、别称、QQ、兴趣或常用词查找成员画像。", EmptyComponent(), false, MemberFilterForm(data))
 			@SortToolbar(data.Sort)
 			<div class="space-y-4">
 				if len(data.Items) == 0 {
@@ -262,11 +262,40 @@ templ MemberListBody(data MemberListPageData) {
 					<article class="grid gap-4 rounded-[1.45rem] border border-slate-200/70 bg-white/76 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)] motion-safe:animate-[admin-fade-up_220ms_ease-out] xl:grid-cols-[13rem_minmax(0,1fr)_10rem] xl:items-start">
 						<section class="min-w-0 space-y-4">
 							<div class="flex items-center gap-4">
-								<div class="flex size-12 shrink-0 items-center justify-center rounded-[1.15rem] bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] text-lg font-extrabold text-white shadow-[0_16px_32px_rgba(15,23,42,0.16)]">{ avatarText(item.Nickname) }</div>
+								<div class="flex size-12 shrink-0 items-center justify-center rounded-[1.15rem] bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] text-lg font-extrabold text-white shadow-[0_16px_32px_rgba(15,23,42,0.16)]">{ avatarText(memberPrimaryName(item)) }</div>
 								<div class="min-w-0">
 									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">成员</div>
-									<div class="mt-1 text-lg font-extrabold tracking-[-0.04em] text-slate-950">{ memberDisplayName(item.Nickname) }</div>
+									<div class="mt-1 text-lg font-extrabold tracking-[-0.04em] text-slate-950">{ memberDisplayName(memberPrimaryName(item)) }</div>
 									<div class="mt-1 text-sm text-slate-500">QQ { fmt.Sprintf("%d", item.UserID) }</div>
+								</div>
+							</div>
+							<div class="rounded-[1.15rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
+								<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">群名片 / 别称</div>
+								<div class="mt-3 space-y-3">
+									<div>
+										<div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">群名片</div>
+										if len(memberGroupCards(item, 6)) > 0 {
+											<div class="mt-2 flex flex-wrap gap-2">
+												for _, tag := range memberGroupCards(item, 6) {
+													<span class="inline-flex max-w-full items-center rounded-full bg-cyan-50 px-3 py-1 text-[11px] font-semibold text-cyan-700 ring-1 ring-cyan-200/80">{ tag }</span>
+												}
+											</div>
+										} else {
+											<div class="mt-2 text-sm text-slate-500">暂无记录过的群名片</div>
+										}
+									</div>
+									<div>
+										<div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">学习别称</div>
+										if len(memberLearnedAliases(item, 6)) > 0 {
+											<div class="mt-2 flex flex-wrap gap-2">
+												for _, tag := range memberLearnedAliases(item, 6) {
+													<span class="inline-flex max-w-full items-center rounded-full bg-amber-50 px-3 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200/80">{ tag }</span>
+												}
+											</div>
+										} else {
+											<div class="mt-2 text-sm text-slate-500">暂无学习到的别称</div>
+										}
+									</div>
 								</div>
 							</div>
 							<div class="rounded-[1.15rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
@@ -339,7 +368,7 @@ templ MemberFilterForm(data MemberListPageData) {
 	<form class="grid gap-2.5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" method="get" action="/admin/members" hx-get="/admin/members" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="昵称、QQ、兴趣、常用词"/>
+		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="昵称、群名片、别称、QQ、兴趣、常用词"/>
 		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 xl:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }

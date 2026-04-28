@@ -69,6 +69,7 @@ jobs:
       run: |
         mkdir -p dist/config
         cp config/config.example.yaml dist/config/config.yaml
+        cp config/persona.prompt dist/config/persona.prompt
         cp config/mcp.example.json dist/config/mcp.json
         cp README.md dist/
         cp LICENSE dist/

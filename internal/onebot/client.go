@@ -13,6 +13,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/gorilla/websocket"
+	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 )
 
@@ -28,6 +29,8 @@ type Client struct {
 
 	mutedMu    sync.RWMutex
 	mutedUntil map[int64]time.Time
+
+	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
 
 	// 消息回调
 	onMessage func(*GroupMessage)
@@ -79,7 +82,9 @@ type GroupMessage struct {
 	MessageID    int64            `json:"message_id"`
 	GroupID      int64            `json:"group_id"`
 	UserID       int64            `json:"user_id"`
-	Nickname     string           `json:"nickname"`
+	Nickname     string           `json:"nickname"`                // QQ 原始昵称
+	GroupCard    string           `json:"group_card,omitempty"`    // 当前群名片
+	DisplayName  string           `json:"display_name,omitempty"`  // 当前渲染显示名
 	Content      string           `json:"content"`                 // 纯文本内容
 	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
 	Time         time.Time        `json:"time"`                    // 消息时间
@@ -97,8 +102,7 @@ type GroupMessage struct {
 type ImageInfo struct {
 	URL     string `json:"url"`
 	File    string `json:"file"`
-	Summary string `json:"summary,omitempty"` // 图片摘要/描述
-	SubType int    `json:"sub_type"`          // 0普通图片 1表情包
+	SubType int    `json:"sub_type"` // 0普通图片 1表情包
 }
 
 // VideoInfo 视频信息
@@ -118,7 +122,9 @@ type ReplyInfo struct {
 	MessageID int64  `json:"message_id"`
 	Content   string `json:"content,omitempty"`   // 被回复消息内容
 	SenderID  int64  `json:"sender_id,omitempty"` // 被回复消息发送者 ID
-	Nickname  string `json:"nickname,omitempty"`  // 被回复消息发送者昵称
+	Nickname  string `json:"nickname,omitempty"`  // 被回复消息发送者原始昵称
+	GroupCard string `json:"group_card,omitempty"`
+	Display   string `json:"display,omitempty"`
 }
 
 // ForwardMessage 合并转发中的单条消息
@@ -203,12 +209,16 @@ type LoginInfo struct {
 // NewClient 创建OneBot客户端
 func NewClient() *Client {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{
-		handlers:   make(map[string][]EventHandler),
-		ctx:        ctx,
-		cancel:     cancel,
-		mutedUntil: make(map[int64]time.Time),
+	memberInfoCache := newGroupMemberInfoCache()
+	client := &Client{
+		handlers:        make(map[string][]EventHandler),
+		ctx:             ctx,
+		cancel:          cancel,
+		mutedUntil:      make(map[int64]time.Time),
+		memberInfoCache: memberInfoCache,
 	}
+	go memberInfoCache.Start()
+	return client
 }
 
 // Connect 连接到OneBot服务
@@ -452,6 +462,18 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 		if nickname, ok := sender["nickname"].(string); ok {
 			msg.Nickname = nickname
 		}
+		if card, ok := sender["card"].(string); ok {
+			msg.GroupCard = card
+		}
+	}
+	msg.DisplayName = displayNameFromNames(msg.GroupCard, msg.Nickname)
+	if msg.GroupID > 0 && msg.UserID > 0 && (strings.TrimSpace(msg.GroupCard) != "" || strings.TrimSpace(msg.Nickname) != "") {
+		c.cacheGroupMemberInfo(&GroupMemberInfo{
+			GroupID:  msg.GroupID,
+			UserID:   msg.UserID,
+			Nickname: msg.Nickname,
+			Card:     msg.GroupCard,
+		})
 	}
 
 	// 解析消息段，提取各类信息
@@ -506,9 +528,6 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			if file, ok := data["file"].(string); ok {
 				img.File = file
 			}
-			if summary, ok := data["summary"].(string); ok {
-				img.Summary = summary
-			}
 			if subType, ok := parseInt(data["sub_type"]); ok {
 				img.SubType = subType
 			}
@@ -533,7 +552,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			msg.Faces = append(msg.Faces, face)
 
 		case "at":
-			text, qqID, ok := parseAtSegment(data)
+			text, qqID, ok := c.parseAtSegmentForGroup(msg, data)
 			if ok {
 				msg.AtList = append(msg.AtList, qqID)
 			}
@@ -550,9 +569,6 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			img := ImageInfo{}
 			if url, ok := data["url"].(string); ok {
 				img.URL = url
-			}
-			if summary, ok := data["summary"].(string); ok {
-				img.Summary = summary
 			}
 			img.SubType = 1 // 标记为表情包类型
 			if img.URL != "" {
@@ -1012,6 +1028,9 @@ func (c *Client) Close() error {
 		if c.cancel != nil {
 			c.cancel()
 		}
+		if c.memberInfoCache != nil {
+			c.memberInfoCache.Stop()
+		}
 
 		c.connMu.Lock()
 		defer c.connMu.Unlock()
@@ -1267,6 +1286,113 @@ func extractTextFromSegments(segments []interface{}) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+func newGroupMemberInfoCache() *ttlcache.Cache[string, *GroupMemberInfo] {
+	return ttlcache.New(
+		ttlcache.WithTTL[string, *GroupMemberInfo](10*time.Minute),
+		ttlcache.WithCapacity[string, *GroupMemberInfo](2048),
+		ttlcache.WithDisableTouchOnHit[string, *GroupMemberInfo](),
+	)
+}
+
+func groupMemberCacheKey(groupID, userID int64) string {
+	return fmt.Sprintf("%d:%d", groupID, userID)
+}
+
+func (c *Client) getCachedGroupMemberInfo(groupID, userID int64) *GroupMemberInfo {
+	if c == nil || c.memberInfoCache == nil || groupID <= 0 || userID <= 0 {
+		return nil
+	}
+	item := c.memberInfoCache.Get(groupMemberCacheKey(groupID, userID))
+	if item == nil {
+		return nil
+	}
+	return item.Value()
+}
+
+func (c *Client) cacheGroupMemberInfo(info *GroupMemberInfo) {
+	if c == nil || c.memberInfoCache == nil || info == nil || info.GroupID <= 0 || info.UserID <= 0 {
+		return
+	}
+	c.memberInfoCache.Set(groupMemberCacheKey(info.GroupID, info.UserID), info, ttlcache.DefaultTTL)
+}
+
+func preferredGroupMemberDisplayName(info *GroupMemberInfo) string {
+	if info == nil {
+		return ""
+	}
+	if card := strings.TrimSpace(info.Card); card != "" {
+		return card
+	}
+	if nickname := strings.TrimSpace(info.Nickname); nickname != "" {
+		return nickname
+	}
+	return ""
+}
+
+func displayNameFromNames(groupCard, nickname string) string {
+	if card := strings.TrimSpace(groupCard); card != "" {
+		return card
+	}
+	if nick := strings.TrimSpace(nickname); nick != "" {
+		return nick
+	}
+	return ""
+}
+
+func (c *Client) resolveMentionDisplayName(ctx context.Context, groupID, userID int64) string {
+	if displayName := preferredGroupMemberDisplayName(c.getCachedGroupMemberInfo(groupID, userID)); displayName != "" {
+		return displayName
+	}
+
+	if c == nil || groupID <= 0 || userID <= 0 {
+		return ""
+	}
+
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	info, err := c.GetGroupMemberInfo(lookupCtx, groupID, userID, false)
+	if err != nil {
+		zap.L().Debug("获取群成员信息失败，mention 回退为 QQ 号",
+			zap.Int64("group_id", groupID),
+			zap.Int64("user_id", userID),
+			zap.Error(err),
+		)
+		return ""
+	}
+
+	c.cacheGroupMemberInfo(info)
+	return preferredGroupMemberDisplayName(info)
+}
+
+func (c *Client) parseAtSegmentForGroup(msg *GroupMessage, data map[string]interface{}) (string, int64, bool) {
+	if qq, ok := data["qq"].(string); ok {
+		if qq == "all" {
+			return "@全体成员", 0, false
+		}
+		qqID, err := strconv.ParseInt(qq, 10, 64)
+		if err != nil {
+			return "", 0, false
+		}
+		if displayName := c.resolveMentionDisplayName(c.ctx, msg.GroupID, qqID); displayName != "" {
+			return "@" + displayName, qqID, true
+		}
+		return "@" + qq, qqID, true
+	}
+
+	qqID, ok := utils.ParseInt64Value(data["qq"])
+	if !ok {
+		return "", 0, false
+	}
+	if displayName := c.resolveMentionDisplayName(c.ctx, msg.GroupID, qqID); displayName != "" {
+		return "@" + displayName, qqID, true
+	}
+	return fmt.Sprintf("@%d", qqID), qqID, true
 }
 
 func atDisplayName(data map[string]interface{}) string {

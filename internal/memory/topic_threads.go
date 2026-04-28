@@ -26,7 +26,6 @@ const (
 	TopicAssignmentActionNoTopic TopicAssignmentAction = "no_topic"
 	TopicAssignmentActionReuse   TopicAssignmentAction = "reuse"
 	TopicAssignmentActionNew     TopicAssignmentAction = "new"
-	TopicAssignmentActionReopen  TopicAssignmentAction = "reopen"
 )
 
 type TopicAssignmentBatchItem struct {
@@ -733,10 +732,26 @@ func applyTopicAssignmentItemTx(tx *gorm.DB, groupID int64, item TopicAssignment
 		if item.TopicID == 0 {
 			return 0, 0, false, nil
 		}
-		if _, ok := activeByID[item.TopicID]; !ok {
-			return 0, 0, false, nil
+		if topic, ok := activeByID[item.TopicID]; ok {
+			return topic.ID, 0, true, nil
 		}
-		return item.TopicID, 0, true, nil
+		archivedTopicID, ok, err := archiveVictimForAssignmentTx(tx, groupID, activeByID, protectedTopics)
+		if err != nil || !ok {
+			return 0, 0, false, err
+		}
+		if err := reopenTopicThreadTx(tx, groupID, item.TopicID); err != nil {
+			if errors.Is(err, ErrTopicStateChanged) {
+				return 0, 0, false, nil
+			}
+			return 0, 0, false, err
+		}
+		var reopened TopicThread
+		if err := tx.First(&reopened, item.TopicID).Error; err != nil {
+			return 0, 0, false, err
+		}
+		activeByID[reopened.ID] = reopened
+		protectedTopics[reopened.ID] = struct{}{}
+		return reopened.ID, archivedTopicID, true, nil
 	case TopicAssignmentActionNew:
 		key := item.NewTopicKey
 		if key == "" {
@@ -760,30 +775,6 @@ func applyTopicAssignmentItemTx(tx *gorm.DB, groupID int64, item TopicAssignment
 		newTopicByKey[key] = topic.ID
 		protectedTopics[topic.ID] = struct{}{}
 		return topic.ID, archivedTopicID, true, nil
-	case TopicAssignmentActionReopen:
-		if item.TopicID == 0 {
-			return 0, 0, false, nil
-		}
-		if _, ok := activeByID[item.TopicID]; ok {
-			return item.TopicID, 0, true, nil
-		}
-		archivedTopicID, ok, err := archiveVictimForAssignmentTx(tx, groupID, activeByID, protectedTopics)
-		if err != nil || !ok {
-			return 0, 0, false, err
-		}
-		if err := reopenTopicThreadTx(tx, groupID, item.TopicID); err != nil {
-			if errors.Is(err, ErrTopicStateChanged) {
-				return 0, 0, false, nil
-			}
-			return 0, 0, false, err
-		}
-		var reopened TopicThread
-		if err := tx.First(&reopened, item.TopicID).Error; err != nil {
-			return 0, 0, false, err
-		}
-		activeByID[reopened.ID] = reopened
-		protectedTopics[reopened.ID] = struct{}{}
-		return reopened.ID, archivedTopicID, true, nil
 	default:
 		return 0, 0, false, nil
 	}

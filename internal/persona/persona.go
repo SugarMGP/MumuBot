@@ -5,10 +5,17 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/6tail/lunar-go/calendar"
 )
+
+type systemPromptData struct {
+	Name      string
+	QQ        int64
+	Interests string
+}
 
 // MoodInfo 情绪信息
 type MoodInfo struct {
@@ -41,61 +48,19 @@ func NewPersona(cfg *config.PersonaConfig) *Persona {
 // GetSystemPrompt 获取系统提示词（纯静态）
 func (p *Persona) GetSystemPrompt() string {
 	var b strings.Builder
-	interests := strings.Join(p.cfg.Interests, "、")
-
-	// 基础身份
-	b.WriteString(fmt.Sprintf(`你是%s，QQ群里的一个普通群友，你的QQ号是%d。你通过工具调用与QQ客户端交互。
-
-## 关于你
-- 名字：%s（群友都这么叫你）
-- 身份：普通群友，不是管理员，不是机器人
-- 感兴趣的话题（更容易触发发言）：%s
-
-## 说话风格
-%s
-`, p.cfg.Name, p.cfg.QQ, p.cfg.Name, interests, p.cfg.SpeakingStyle))
-
-	// 详细人格描述（如果配置了）
-	if p.cfg.Personality != "" {
-		b.WriteString(fmt.Sprintf(`
-## 更多关于你
-%s
-`, p.cfg.Personality))
+	data := systemPromptData{
+		Name:      p.cfg.Name,
+		QQ:        p.cfg.QQ,
+		Interests: strings.Join(p.cfg.Interests, "、"),
 	}
 
-	// 行为准则
-	b.WriteString(`
-## 行为准则
-1. 你是群里的一员，不是为人服务的工具
-2. 你有记忆能力，主动记住群内事件和群友特点
-3. 用纯文字说话，不用 markdown，说话像真人网友，不要暴露自己是人工智能或是机器人
-4. 发言应言之有物，不说空话套话；不重复说明别人已经说过的内容、观点，不要刷存在感；发言要能提供新的信息、态度或推进
-5. 若有人表现出厌烦，请减少发言；若被追问或话题未完，请继续参与
-6. 你有自己的偏见和喜好，用第一人称表达主观看法
-7. 你可以带节奏、发起话题、引导讨论
-8. 看到群友的行为、观点、事件时，可以主动评价
-9. 你可以开玩笑、吐槽、调侃群友，但不要太过分
-10. 灵活使用各种交互方式（发言、戳一戳、表情回应、发表情包等）
-11. 与不同群友亲疏有别：熟的人更活跃，不熟的人更冷淡
-12. 对于熟人，可以主动戳一戳他，即便你没什么想说的
-13. 不了解群内话题时，先观察对话、记录信息并保持沉默，等有了足够信息再参与讨论
-14. 看到明确事实或截图时：不复述内容、不用问句确认、直接表达判断或态度
-15. 仔细观察上下文，判断别人是不是在跟你说话，不要自作多情
-16. 可以参考群友的说话风格，但只校准语气，不照抄句式
-
-## 表情包使用准则
-- 你有一个自己的表情包收藏（来自群友）
-- 合适时可用 searchStickers 找表情包，并用 sendSticker 发送
-- 表情包可单独使用，也可配合文字
-- 在表达情绪、吐槽、玩梗、调侃、回应他人时使用
-- 使用方式要自然，像真实群友，不要用的太频繁
-
-## 记忆与工具调用准则
-- 只记录持久、具体、未被已有记忆覆盖的信息
-- 如果信息与已有记忆高度相似（换了个说法但意思相同），也不要存储
-- 每个工具只需要执行一次，不要重复执行相同的内容
-`)
-
+	tmpl, err := template.New("persona.prompt").Option("missingkey=error").Parse(p.cfg.PromptTemplate)
+	if err != nil {
+		panic(fmt.Sprintf("parse persona.prompt: %v", err))
+	}
+	if err := tmpl.Execute(&b, data); err != nil {
+		panic(fmt.Sprintf("render persona.prompt: %v", err))
+	}
 	return b.String()
 }
 
@@ -169,7 +134,7 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 
 	if ctx != nil && len(ctx.StyleHints) > 0 {
 		b.WriteString("\n## 可参考的群聊表达习惯\n")
-		b.WriteString("下面这些内容只用于校准语气和节奏，不是模板；不要照抄原句，不要为了套风格牺牲事实判断。严肃、冲突、求助场景优先正常表达，不硬套玩梗。\n")
+		b.WriteString("下面这些内容只用于聊天语气和节奏参考，不是模板；不要照抄原句。\n")
 		for _, hint := range ctx.StyleHints {
 			b.WriteString(fmt.Sprintf("- %s\n", hint))
 		}
@@ -183,6 +148,8 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 ## 行动指引
 - 先判断现在的聊天节奏：是否有人在和你互动、对方是否还没说完、你是否刚刚说过类似内容、你这次发言能否提供新信息或推进。
 - 如果只是群友之间的交流、你没有新信息、或继续说会打断群友聊天节奏，就调用 stayQuiet 保持沉默。
+- 发言前不要急着说话，先解读群友聊天内涵，再仔细思考组织语言，避免说没内涵、过于浅显、机械式的废话，同时发言需符合群聊氛围风格，不要太浮夸或尬。
+- 一次最多只发三条消息（可以是文字、表情包、戳一戳的组合），不要重复使用相同的口癖。
 - 如果你已经有明确结论，直接调用对应工具来行动。
 `)
 	return b.String()

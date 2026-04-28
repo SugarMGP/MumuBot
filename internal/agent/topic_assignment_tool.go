@@ -25,9 +25,9 @@ type topicAssignmentSubmission struct {
 
 type topicAssignmentDecision struct {
 	MessageKey  string  `json:"message_key" jsonschema:"description=输入消息的编号，例如 m123"`
-	Action      string  `json:"action" jsonschema:"enum=no_topic,enum=new,enum=reuse,enum=reopen,description=分配动作"`
-	TopicID     uint    `json:"topic_id,omitempty" jsonschema:"description=reuse 或 reopen 时填写已有话题 ID"`
-	NewTopicKey string  `json:"new_topic_key,omitempty" jsonschema:"description=new 时填写批内新话题临时编号"`
+	Action      string  `json:"action" jsonschema:"enum=no_topic,enum=new,enum=reuse,description=分配动作"`
+	TopicID     uint    `json:"topic_id,omitempty" jsonschema:"description=reuse 时填写已有话题 ID"`
+	NewTopicKey string  `json:"new_topic_key,omitempty" jsonschema:"description=创建新话题时填写批内新话题临时编号"`
 	Reason      string  `json:"reason,omitempty" jsonschema:"description=简短判断理由"`
 	Confidence  float64 `json:"confidence,omitempty" jsonschema:"description=0 到 1 的置信度"`
 }
@@ -122,9 +122,8 @@ func buildTopicAssignmentPrompt(groupID int64, messages []topicAssignJob, candid
 	var b strings.Builder
 	fmt.Fprintf(&b, "群 %d 有一批新消息需要分配话题。请按时间顺序判断每条消息：\n", groupID)
 	b.WriteString("- no_topic: 灌水、纯表情、单字附和、无可持续上下文的消息。\n")
-	b.WriteString("- reuse: 归入当前 active 话题，topic_id 必须来自候选。\n")
-	b.WriteString("- reopen: 归入 archived 话题，topic_id 必须来自候选。\n")
-	b.WriteString("- new: 新话题，使用 new_topic_key；同一新话题多条消息复用同一个 key。\n")
+	b.WriteString("- reuse: 归入已有候选话题，topic_id 必须来自候选；候选可能是 active，也可能是 archived。\n")
+	b.WriteString("- new: 新话题，使用 new_topic_key；同一新话题多条消息必须复用同一个 key。\n")
 	b.WriteString("\n候选话题：\n")
 	if len(candidates) == 0 {
 		b.WriteString("无\n")

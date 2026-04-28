@@ -144,7 +144,7 @@ func systemFieldValueClass(field SystemField) string {
 
 func systemFieldNeedsWide(field SystemField) bool {
 	switch strings.TrimSpace(field.Label) {
-	case "说话风格", "人格简介", "已启用群聊", "自动学习", "审核节奏":
+	case "已启用群聊", "自动学习", "审核节奏":
 		return true
 	}
 	return len([]rune(strings.TrimSpace(field.Value))) > 32
@@ -471,6 +471,46 @@ func avatarText(value string) string {
 
 func memberDisplayName(value string) string {
 	return displayText(value, "未填写昵称")
+}
+
+func memberPrimaryName(profile memory.MemberProfile) string {
+	return profile.Nickname
+}
+
+func memberGroupCards(profile memory.MemberProfile, limit int) []string {
+	records := profile.MemberNameRecords()
+	if len(records) == 0 {
+		return nil
+	}
+	items := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.Source == memory.MemberNameSourceGroupCard {
+			items = append(items, memberGroupCardLabel(record))
+		}
+	}
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+func memberGroupCardLabel(record memory.MemberNameRecord) string {
+	name := strings.TrimSpace(record.Content)
+	if name == "" {
+		return ""
+	}
+	if record.GroupID > 0 {
+		return fmt.Sprintf("%s · 群 %d", name, record.GroupID)
+	}
+	return name
+}
+
+func memberLearnedAliases(profile memory.MemberProfile, limit int) []string {
+	items := memory.MemberLearnedAliases(profile.MemberNameRecords())
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
+	}
+	return items
 }
 
 func memberTags(raw string, limit int) []string {

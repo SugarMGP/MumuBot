@@ -19,33 +19,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type runtimeSource struct {
-	cfg       *config.Config
-	memMgr    *memory.Manager
-	mumuAgent *agent.Agent
-}
-
-func (s runtimeSource) Snapshot() webapp.RuntimeSnapshot {
-	snapshot := webapp.RuntimeSnapshot{
-		LearningOn:    s.cfg.Learning.Enabled,
-		EnabledGroups: enabledGroups(s.cfg.Groups),
-	}
-
-	if s.mumuAgent != nil {
-		snapshot.Connected = s.mumuAgent.OneBotConnected()
-		snapshot.SelfID = s.mumuAgent.BotSelfID()
-		snapshot.MCPToolCount = s.mumuAgent.MCPToolCount()
-	}
-
-	if s.memMgr != nil {
-		if mood, err := s.memMgr.GetMoodState(); err == nil {
-			snapshot.CurrentMood = mood
-		}
-	}
-
-	return snapshot
-}
-
 func main() {
 	configPath := "config/config.yaml"
 	cfg, err := config.Load(configPath)
@@ -88,11 +61,7 @@ func main() {
 	adminService := services.NewAdminService(memoryMgr.GetDB(), stickerDir).
 		WithMemoryDeleter(memoryMgr).
 		WithJargonReloader(mumuAgent)
-	app := webapp.New(cfg, adminService, runtimeSource{
-		cfg:       cfg,
-		memMgr:    memoryMgr,
-		mumuAgent: mumuAgent,
-	})
+	app := webapp.New(cfg, adminService, webapp.NewRuntimeSource(cfg, memoryMgr, mumuAgent))
 	httpServer := app.Server()
 
 	go func() {
@@ -118,14 +87,4 @@ func main() {
 	}
 
 	zap.L().Info("再见！")
-}
-
-func enabledGroups(groups []config.GroupConfig) int {
-	count := 0
-	for _, group := range groups {
-		if group.Enabled {
-			count++
-		}
-	}
-	return count
 }

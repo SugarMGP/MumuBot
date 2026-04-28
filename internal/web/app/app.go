@@ -5,6 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mumu-bot/internal/agent"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/llm"
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/web/assets"
+	"mumu-bot/internal/web/auth"
+	"mumu-bot/internal/web/services"
+	"mumu-bot/internal/web/views"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -14,14 +22,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
-
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
-	"mumu-bot/internal/memory"
-	"mumu-bot/internal/web/assets"
-	"mumu-bot/internal/web/auth"
-	"mumu-bot/internal/web/services"
-	"mumu-bot/internal/web/views"
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
@@ -43,6 +43,42 @@ func (r RuntimeSnapshot) Snapshot() RuntimeSnapshot {
 
 type RuntimeSource interface {
 	Snapshot() RuntimeSnapshot
+}
+
+type runtimeSource struct {
+	cfg       *config.Config
+	memMgr    *memory.Manager
+	mumuAgent *agent.Agent
+}
+
+func (s runtimeSource) Snapshot() RuntimeSnapshot {
+	snapshot := RuntimeSnapshot{}
+	if s.cfg != nil {
+		snapshot.LearningOn = s.cfg.Learning.Enabled
+		snapshot.EnabledGroups = countEnabledGroups(s.cfg.Groups)
+	}
+
+	if s.mumuAgent != nil {
+		snapshot.Connected = s.mumuAgent.OneBotConnected()
+		snapshot.SelfID = s.mumuAgent.BotSelfID()
+		snapshot.MCPToolCount = s.mumuAgent.MCPToolCount()
+	}
+
+	if s.memMgr != nil {
+		if mood, err := s.memMgr.GetMoodState(); err == nil {
+			snapshot.CurrentMood = mood
+		}
+	}
+
+	return snapshot
+}
+
+func NewRuntimeSource(cfg *config.Config, memMgr *memory.Manager, mumuAgent *agent.Agent) RuntimeSource {
+	return runtimeSource{
+		cfg:       cfg,
+		memMgr:    memMgr,
+		mumuAgent: mumuAgent,
+	}
 }
 
 type App struct {
@@ -944,11 +980,9 @@ func (a *App) systemSections() []views.SystemSection {
 			groupIDs = append(groupIDs, fmt.Sprintf("%d", group.GroupID))
 		}
 	}
-	groupSummary := "无"
+	groupSummary := "暂未启用群聊"
 	if len(groupIDs) > 0 {
 		groupSummary = strings.Join(groupIDs, "、")
-	} else {
-		groupSummary = "暂未启用群聊"
 	}
 
 	appendField := func(fields []views.SystemField, label string, value string) []views.SystemField {
@@ -965,8 +999,6 @@ func (a *App) systemSections() []views.SystemSection {
 		personaFields = append(personaFields, views.SystemField{Label: "QQ", Value: fmt.Sprintf("%d", cfg.Persona.QQ)})
 	}
 	personaFields = appendField(personaFields, "别名", joinOrDash(cfg.Persona.AliasNames))
-	personaFields = appendField(personaFields, "人格简介", strings.TrimSpace(cfg.Persona.Personality))
-	personaFields = appendField(personaFields, "说话风格", formatSpeakingStyle(cfg.Persona.SpeakingStyle))
 
 	groupFields := []views.SystemField{
 		{Label: "启用群数", Value: fmt.Sprintf("%d / %d", countEnabledGroups(cfg.Groups), len(cfg.Groups))},
@@ -1245,35 +1277,6 @@ func deleteActionErrorText(err error) string {
 		return "这条记录不存在或已经被删除。"
 	}
 	return "删除失败，请稍后再试。"
-}
-
-func formatSpeakingStyle(value string) string {
-	text := strings.TrimSpace(value)
-	if text == "" {
-		return "-"
-	}
-
-	parts := strings.FieldsFunc(text, func(r rune) bool {
-		switch r {
-		case '\n', '\r', '，', '；', '。', ';':
-			return true
-		default:
-			return false
-		}
-	})
-
-	lines := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		lines = append(lines, part)
-	}
-	if len(lines) == 0 {
-		return "-"
-	}
-	return strings.Join(lines, "\n")
 }
 
 func buildSortToolbar(current *neturl.URL, currentSort string, currentOrder string, options []sortOption) views.SortToolbarData {

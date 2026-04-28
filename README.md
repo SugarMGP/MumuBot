@@ -36,7 +36,7 @@
 
 | 依赖 | 说明 |
 |------|------|
-| Go 1.25+ | 编译运行 |
+| Go 1.26 | 编译运行 |
 | Node.js 22+ | 构建前端资源 |
 | MySQL | 存储记忆、消息日志、群友画像 |
 | Milvus | 向量数据库，用于长期记忆、风格卡片和归档话题检索 |
@@ -49,10 +49,11 @@ GitHub Release 提供 Linux、Windows、macOS 的打包产物。归档内包含�
 
 - 可执行文件
 - `config/config.yaml` 示例配置
+- `config/persona.prompt` 人格提示词模板
 - `config/mcp.json` 示例配置
 - `README.md` 和 `LICENSE`
 
-运行发布包时不需要额外部署前端静态文件，管理后台所需资源已经内嵌进二进制。
+运行发布包时不需要额外部署前端静态文件，管理后台所需资源已经内嵌进二进制；如果要调整静态人格提示词，可直接编辑归档里的 `config/persona.prompt`。
 
 ### 从源码构建
 
@@ -74,7 +75,7 @@ go build -o mumu-bot .
 
 ### 配置与启动
 
-如果你使用的是 GitHub Release 里的打包归档，可直接编辑归档自带的 `config/config.yaml` 和 `config/mcp.json`，不用再执行下面的复制命令。
+如果你使用的是 GitHub Release 里的打包归档，可直接编辑归档自带的 `config/config.yaml`、`config/persona.prompt` 和 `config/mcp.json`，不用再执行下面的复制命令。
 
 ```bash
 # 1. 复制配置文件并按需修改
@@ -91,6 +92,9 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_ONEBOT_TOKEN                   - OneBot 访问令牌
 #   MUMU_MYSQL_PASSWORD                 - MySQL 密码
 
+# 静态人格提示词模板位于 config/persona.prompt
+# persona.name、persona.qq、persona.alias_names、persona.interests 仍在 config/config.yaml 中配置
+
 # 3. 启动
 ./mumu-bot
 ```
@@ -98,6 +102,12 @@ cp config/mcp.example.json config/mcp.json
 默认情况下服务监听 `8080` 端口，可在配置中修改。
 
 访问服务的 `/admin` 路径进入管理后台。未设置后台密钥时，后台会保持关闭状态。
+
+## 🧠 人格模板
+
+`config/persona.prompt` 是默认的人格提示词模板文件，用来约束沐沐的整体人设、说话节奏和回复风格。你可以按自己的群聊场景直接调整这份模板，再结合实际对话效果反复测试。
+
+如果你测出了更自然、更稳定、也更好用的 prompt，欢迎通过 Issue 分享使用场景和效果，或直接提交 Pull Request 一起完善这份模板。
 
 ## 🔧 MCP 工具扩展
 

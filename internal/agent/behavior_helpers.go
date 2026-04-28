@@ -55,6 +55,8 @@ func findReplyInfoInMessages(msgs []*onebot.GroupMessage, messageID int64) *oneb
 			Content:   content,
 			SenderID:  msg.UserID,
 			Nickname:  msg.Nickname,
+			GroupCard: msg.GroupCard,
+			Display:   msg.DisplayName,
 		}
 	}
 	return nil

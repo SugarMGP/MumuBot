@@ -223,6 +223,7 @@ type MemberProfile struct {
 
 	UserID      int64     `gorm:"uniqueIndex::idx_user" json:"user_id"`
 	Nickname    string    `gorm:"type:varchar(100)" json:"nickname"`
+	NameRecords string    `gorm:"type:text" json:"name_records,omitempty"`
 	SpeakStyle  string    `gorm:"type:text" json:"speak_style"`
 	Interests   string    `gorm:"type:text" json:"interests"`
 	CommonWords string    `gorm:"type:text" json:"common_words"`
@@ -233,6 +234,20 @@ type MemberProfile struct {
 }
 
 func (MemberProfile) TableName() string { return "member_profiles" }
+
+type MemberNameSource string
+
+const (
+	MemberNameSourceGroupCard    MemberNameSource = "group_card"
+	MemberNameSourceLearnedAlias MemberNameSource = "learned_alias"
+)
+
+type MemberNameRecord struct {
+	Content   string           `json:"content"`
+	Source    MemberNameSource `json:"source"`
+	GroupID   int64            `json:"group_id"`
+	UpdatedAt time.Time        `json:"updated_at"`
+}
 
 type StyleIntent string
 

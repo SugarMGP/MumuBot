@@ -1,7 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -39,12 +42,11 @@ type AppConfig struct {
 
 // PersonaConfig 人格配置
 type PersonaConfig struct {
-	Name          string   `yaml:"name"`
-	QQ            int64    `yaml:"qq"`          // 沐沐的QQ号
-	AliasNames    []string `yaml:"alias_names"` // 别名，都可以触发@检测
-	Interests     []string `yaml:"interests"`
-	SpeakingStyle string   `yaml:"speaking_style"`
-	Personality   string   `yaml:"personality"` // 人格描述
+	Name           string   `yaml:"name"`
+	QQ             int64    `yaml:"qq"`          // 沐沐的QQ号
+	AliasNames     []string `yaml:"alias_names"` // 别名，都可以触发@检测
+	Interests      []string `yaml:"interests"`
+	PromptTemplate string   `yaml:"-"`
 }
 
 // OneBotConfig OneBot协议配置
@@ -211,6 +213,12 @@ func Load(path string) (*Config, error) {
 			return
 		}
 
+		cfg.Persona.PromptTemplate, err = LoadPersonaPrompt(filepath.Join("config", "persona.prompt"))
+		if err != nil {
+			cfg = nil
+			return
+		}
+
 		// 从环境变量覆盖敏感配置
 		if apiKey := os.Getenv("MUMU_MODEL_HIGH_API_KEY"); apiKey != "" {
 			cfg.ModelTiers.High.APIKey = apiKey
@@ -236,6 +244,18 @@ func Load(path string) (*Config, error) {
 		}
 	})
 	return cfg, err
+}
+
+func LoadPersonaPrompt(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	prompt := strings.TrimSpace(strings.ReplaceAll(string(data), "\r\n", "\n"))
+	if prompt == "" {
+		return "", fmt.Errorf("persona prompt body is empty: %s", path)
+	}
+	return prompt, nil
 }
 
 // Get 获取全局配置

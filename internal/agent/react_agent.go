@@ -33,7 +33,7 @@ import (
 
 const (
 	agentThinkTimeout            = 60 * time.Second
-	contextClassificationTimeout = 20 * time.Second
+	contextClassificationTimeout = 30 * time.Second
 	replyCacheTTL                = 30 * time.Minute
 	replyCacheCapacity           = 1024
 	visionCacheTTL               = 6 * time.Hour
@@ -620,9 +620,62 @@ func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
 		if nick, ok := sender["nickname"].(string); ok {
 			reply.Nickname = nick
 		}
+		if card, ok := sender["card"].(string); ok {
+			reply.GroupCard = card
+		}
 	}
+	reply.Display = displayNameForRenderedText(reply.GroupCard, reply.Nickname, "")
 
 	return reply, nil
+}
+
+func displayNameForRenderedText(groupCard, fallbackName, qq string) string {
+	if card := strings.TrimSpace(groupCard); card != "" {
+		return card
+	}
+	if name := strings.TrimSpace(fallbackName); name != "" {
+		return name
+	}
+	return strings.TrimSpace(qq)
+}
+
+func memberProfileDisplayName(profile *memory.MemberProfile, groupID int64, fallbackName string, allowLearnedAlias bool) string {
+	if profile != nil {
+		if card := memory.LatestMemberGroupCard(profile.MemberNameRecords(), groupID); strings.TrimSpace(card) != "" {
+			return card
+		}
+		if allowLearnedAlias {
+			if aliases := memory.MemberLearnedAliases(profile.MemberNameRecords()); len(aliases) > 0 {
+				return aliases[0]
+			}
+		}
+		if name := strings.TrimSpace(profile.Nickname); name != "" {
+			return name
+		}
+	}
+	return strings.TrimSpace(fallbackName)
+}
+
+func (a *Agent) getMemberProfileForDisplay(userID int64) (*memory.MemberProfile, error) {
+	if userID <= 0 {
+		return nil, errors.New("invalid user id")
+	}
+	if a == nil || a.memory == nil {
+		return nil, errors.New("member profile lookup unavailable")
+	}
+	return a.memory.GetMemberProfile(userID)
+}
+
+func (a *Agent) resolveRenderedDisplayName(groupID, userID int64, groupCard, runtimeName, qq string) string {
+	if card := strings.TrimSpace(groupCard); card != "" {
+		return card
+	}
+	if profile, err := a.getMemberProfileForDisplay(userID); err == nil {
+		if name := memberProfileDisplayName(profile, groupID, runtimeName, false); strings.TrimSpace(name) != "" {
+			return name
+		}
+	}
+	return displayNameForRenderedText("", runtimeName, qq)
 }
 
 func visionCacheKey(kind string, remoteURL string, file string) string {
@@ -682,12 +735,13 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	// 构建回复信息
 	replyInfo := ""
 	if msg.Reply != nil {
+		replyDisplayName := a.resolveRenderedDisplayName(msg.GroupID, msg.Reply.SenderID, msg.Reply.GroupCard, msg.Reply.Display, msg.Reply.Nickname)
 		if msg.Reply.Content != "" {
 			replyContent := []rune(msg.Reply.Content)
 			if len(replyContent) > 50 {
 				replyContent = replyContent[:50]
 			}
-			replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", msg.Reply.MessageID, msg.Reply.Nickname, string(replyContent))
+			replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", msg.Reply.MessageID, replyDisplayName, string(replyContent))
 		} else {
 			replyInfo = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
 		}
@@ -717,18 +771,14 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 					visionDesc = d
 				}
 			}
-			saveDesc := strings.TrimSpace(visionDesc)
-			desc := saveDesc
-			if desc == "" {
-				desc = strings.TrimSpace(img.Summary)
-			}
+			desc := strings.TrimSpace(visionDesc)
 			// 自动保存表情包
-			if img.URL != "" && saveDesc != "" && config.Get().Sticker.AutoSave && a.ctx.Err() == nil {
+			if img.URL != "" && desc != "" && config.Get().Sticker.AutoSave && a.ctx.Err() == nil {
 				a.wg.Add(1)
 				go func(url string, stickerDesc string) {
 					defer a.wg.Done()
 					a.autoSaveSticker(a.ctx, url, stickerDesc)
-				}(img.URL, saveDesc)
+				}(img.URL, desc)
 			}
 			if desc != "" {
 				content += fmt.Sprintf(" [表情包:%s]", desc)
@@ -739,7 +789,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 			// 普通图片
 			if a.vision != nil {
 				if desc, err := a.describeImageCached(ctx, img); err == nil && desc != "" {
-					content += " " + desc
+					content += fmt.Sprintf(" [图片:%s]", desc)
 				} else {
 					content += " [图片]"
 				}
@@ -753,7 +803,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	for _, vid := range msg.Videos {
 		if a.vision != nil {
 			if desc, err := a.describeVideoCached(ctx, vid); err == nil && desc != "" {
-				content += " " + desc
+				content += fmt.Sprintf(" [视频:%s]", desc)
 			} else {
 				content += " [视频]"
 			}
@@ -763,15 +813,19 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	}
 
 	var qid string
-	if msg.UserID == config.Get().Persona.QQ {
+	if cfg := config.Get(); cfg != nil && msg.UserID == cfg.Persona.QQ {
 		qid = "你"
 	} else {
 		qid = fmt.Sprintf("%d", msg.UserID)
 	}
+	displayName := a.resolveRenderedDisplayName(msg.GroupID, msg.UserID, msg.GroupCard, msg.DisplayName, msg.Nickname)
+	if displayName == "" {
+		displayName = qid
+	}
 
 	// 构建完整消息行
 	return fmt.Sprintf("[%s] #%d %s(%s):%s %s\n",
-		msg.Time.Format("15:04:05"), msg.MessageID, msg.Nickname, qid, replyInfo, content)
+		msg.Time.Format("15:04:05"), msg.MessageID, displayName, qid, replyInfo, content)
 }
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
@@ -814,6 +868,7 @@ func (a *Agent) updateMember(msg *onebot.GroupMessage) {
 	p.MsgCount++
 	p.LastSpeak = msg.Time
 	p.Nickname = msg.Nickname
+	p.UpsertGroupCard(msg.GroupID, msg.GroupCard, msg.Time)
 	if err := a.memory.UpdateMemberProfile(p); err != nil {
 		zap.L().Error("更新成员画像失败", zap.Error(err))
 	}
@@ -1446,37 +1501,66 @@ func (a *Agent) buildRecentPeopleContext(groupID int64) string {
 		return ""
 	}
 
-	latestNicknames := make(map[int64]string, len(ids))
+	latestNames := make(map[int64]*onebot.GroupMessage, len(ids))
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if _, ok := latestNicknames[msgs[i].UserID]; ok {
+		if _, ok := latestNames[msgs[i].UserID]; ok {
 			continue
 		}
-		latestNicknames[msgs[i].UserID] = msgs[i].Nickname
+		latestNames[msgs[i].UserID] = msgs[i]
 	}
 
 	lines := make([]string, 0, len(ids))
 	for _, userID := range ids {
-		nickname := latestNicknames[userID]
+		latestMsg := latestNames[userID]
+		nickname := ""
+		groupCard := ""
+		displayName := ""
+		if latestMsg != nil {
+			nickname = latestMsg.Nickname
+			groupCard = latestMsg.GroupCard
+			displayName = latestMsg.DisplayName
+		}
 		profile, err := a.memory.GetMemberProfile(userID)
 		if err != nil {
-			if nickname == "" {
-				nickname = fmt.Sprintf("%d", userID)
+			name := displayNameForRenderedText(groupCard, displayName, nickname)
+			if name == "" {
+				name = strings.TrimSpace(nickname)
 			}
-			lines = append(lines, fmt.Sprintf("- %s：最近在场。", nickname))
+			if name == "" {
+				name = fmt.Sprintf("%d", userID)
+			}
+			lines = append(lines, fmt.Sprintf("- %s：最近在场。", name))
 			continue
 		}
 
-		displayName := profile.Nickname
+		currentGroupName := strings.TrimSpace(groupCard)
+		if currentGroupName == "" {
+			currentGroupName = memory.LatestMemberGroupCard(profile.MemberNameRecords(), groupID)
+		}
+		displayName = strings.TrimSpace(currentGroupName)
 		if displayName == "" {
-			displayName = nickname
+			aliases := memory.MemberLearnedAliases(profile.MemberNameRecords())
+			if len(aliases) > 0 {
+				displayName = aliases[0]
+			}
+		}
+		if displayName == "" {
+			displayName = strings.TrimSpace(nickname)
 		}
 		if displayName == "" {
 			displayName = fmt.Sprintf("%d", userID)
+		}
+		originalNickname := strings.TrimSpace(profile.Nickname)
+		if originalNickname == "" {
+			originalNickname = strings.TrimSpace(nickname)
 		}
 
 		details := []string{
 			fmt.Sprintf("亲密度 %.2f", profile.Intimacy),
 			fmt.Sprintf("活跃度 %.2f", profile.Activity),
+		}
+		if originalNickname != "" && originalNickname != displayName {
+			details = append(details, "原昵称: "+originalNickname)
 		}
 		if profile.SpeakStyle != "" {
 			details = append(details, "风格: "+profile.SpeakStyle)
@@ -1553,13 +1637,6 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath strin
 		return 0, err
 	}
 
-	var content string
-	if description != "" {
-		content = fmt.Sprintf("[表情包:%s]", description)
-	} else {
-		content = "[表情包]"
-	}
-
 	msg := &onebot.GroupMessage{
 		MessageID:   msgID,
 		GroupID:     groupID,
@@ -1569,7 +1646,7 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath strin
 		Time:        time.Now(),
 		MessageType: "group",
 		Images: []onebot.ImageInfo{
-			{Summary: content, SubType: 1},
+			{SubType: 1},
 		},
 	}
 	a.onMessage(msg)

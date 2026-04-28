@@ -386,7 +386,7 @@ func (l *Learner) processKnowledgeExtraction(groupID int64, msgs []memory.Messag
 }
 
 func (l *Learner) processMemberProfileExtraction(groupID int64, msgs []memory.MessageLog) error {
-	summaries := l.buildMemberProfileSummaries(msgs)
+	summaries := l.buildMemberProfileSummaries(groupID, msgs)
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -398,10 +398,11 @@ func (l *Learner) processMemberProfileExtraction(groupID int64, msgs []memory.Me
 1. 只处理发言证据明确、样本足够的群友；没有把握就跳过。
 2. speak_style 用一句中文概括该人的说话习惯。
 3. interests 和 common_words 都要尽量精炼，通常各给 0-5 项即可。
-4. interests 和 common_words 会整体覆盖旧列表，所以不要把不确定的项塞进去。
-5. 不要修改 intimacy_delta，保持默认值。
-6. 如果某个字段没有把握，就不要传该字段。
-7. 如果没有适合更新的人，直接回复“无新发现”。
+4. aliases 只记录稳定、反复出现、证据足够的别称，不要记录一次性的玩笑叫法。
+5. interests 和 common_words 会整体覆盖旧列表，所以不要把不确定的项塞进去。
+6. 不要修改 intimacy_delta，保持默认值。
+7. 如果某个字段没有把握，就不要传该字段。
+8. 如果没有适合更新的人，直接回复“无新发现”。
 
 候选成员：
 
@@ -424,7 +425,7 @@ func (l *Learner) processMemberProfileExtraction(groupID int64, msgs []memory.Me
 	return err
 }
 
-func (l *Learner) buildMemberProfileSummaries(msgs []memory.MessageLog) []string {
+func (l *Learner) buildMemberProfileSummaries(groupID int64, msgs []memory.MessageLog) []string {
 	const minEvidenceMessages = 3
 	const maxSamplesPerMember = 6
 
@@ -477,6 +478,12 @@ func (l *Learner) buildMemberProfileSummaries(msgs []memory.MessageLog) []string
 		fmt.Fprintf(summary, "用户 %d（%s）最近发言 %d 条。", evidence.userID, evidence.nickname, evidence.msgCount)
 		if profile, err := l.memMgr.GetMemberProfile(userID); err == nil {
 			var profileNotes []string
+			if card := memory.LatestMemberGroupCard(profile.MemberNameRecords(), groupID); strings.TrimSpace(card) != "" {
+				profileNotes = append(profileNotes, "当前群历史群名片："+card)
+			}
+			if aliases := memory.MemberLearnedAliases(profile.MemberNameRecords()); len(aliases) > 0 {
+				profileNotes = append(profileNotes, "已学别称："+strings.Join(aliases, "、"))
+			}
 			if strings.TrimSpace(profile.SpeakStyle) != "" {
 				profileNotes = append(profileNotes, "当前说话风格："+strings.TrimSpace(profile.SpeakStyle))
 			}

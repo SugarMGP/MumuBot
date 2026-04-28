@@ -7,15 +7,227 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/utils"
 	"mumu-bot/internal/vector"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/model"
 	agentreact "github.com/cloudwego/eino/flow/agent/react"
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
+
+func ParseMemberNameRecords(raw string) []MemberNameRecord {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var records []MemberNameRecord
+	if err := sonic.UnmarshalString(raw, &records); err != nil {
+		return nil
+	}
+	return normalizeMemberNameRecords(records)
+}
+
+func EncodeMemberNameRecords(records []MemberNameRecord) string {
+	normalized := normalizeMemberNameRecords(records)
+	if len(normalized) == 0 {
+		return ""
+	}
+	b, err := sonic.MarshalString(normalized)
+	if err != nil {
+		return ""
+	}
+	return b
+}
+
+func normalizeMemberNameRecords(records []MemberNameRecord) []MemberNameRecord {
+	if len(records) == 0 {
+		return nil
+	}
+
+	type dedupeKey struct {
+		content string
+		source  MemberNameSource
+		groupID int64
+	}
+
+	latestByKey := make(map[dedupeKey]MemberNameRecord, len(records))
+	for _, record := range records {
+		record.Content = strings.TrimSpace(record.Content)
+		record.Source = MemberNameSource(strings.TrimSpace(string(record.Source)))
+		if record.Content == "" {
+			continue
+		}
+		switch record.Source {
+		case MemberNameSourceGroupCard:
+			if record.GroupID <= 0 {
+				continue
+			}
+		case MemberNameSourceLearnedAlias:
+			record.GroupID = 0
+		default:
+			continue
+		}
+
+		key := dedupeKey{
+			content: strings.ToLower(record.Content),
+			source:  record.Source,
+			groupID: record.GroupID,
+		}
+		if existing, ok := latestByKey[key]; ok && existing.UpdatedAt.After(record.UpdatedAt) {
+			continue
+		}
+		latestByKey[key] = record
+	}
+
+	normalized := make([]MemberNameRecord, 0, len(latestByKey))
+	for _, record := range latestByKey {
+		normalized = append(normalized, record)
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].UpdatedAt.Equal(normalized[j].UpdatedAt) {
+			if normalized[i].Source != normalized[j].Source {
+				return normalized[i].Source < normalized[j].Source
+			}
+			if normalized[i].GroupID != normalized[j].GroupID {
+				return normalized[i].GroupID < normalized[j].GroupID
+			}
+			return normalized[i].Content < normalized[j].Content
+		}
+		return normalized[i].UpdatedAt.After(normalized[j].UpdatedAt)
+	})
+	return normalized
+}
+
+func UpsertMemberGroupCard(records []MemberNameRecord, groupID int64, card string, updatedAt time.Time) []MemberNameRecord {
+	card = strings.TrimSpace(card)
+	if groupID <= 0 || card == "" {
+		return normalizeMemberNameRecords(records)
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	records = append(records, MemberNameRecord{
+		Content:   card,
+		Source:    MemberNameSourceGroupCard,
+		GroupID:   groupID,
+		UpdatedAt: updatedAt,
+	})
+	return normalizeMemberNameRecords(records)
+}
+
+func UpsertMemberLearnedAliases(records []MemberNameRecord, aliases []string, updatedAt time.Time) []MemberNameRecord {
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" {
+			continue
+		}
+		records = append(records, MemberNameRecord{
+			Content:   alias,
+			Source:    MemberNameSourceLearnedAlias,
+			GroupID:   0,
+			UpdatedAt: updatedAt,
+		})
+	}
+	return normalizeMemberNameRecords(records)
+}
+
+func LatestMemberGroupCard(records []MemberNameRecord, groupID int64) string {
+	if groupID <= 0 {
+		return ""
+	}
+	for _, record := range normalizeMemberNameRecords(records) {
+		if record.Source == MemberNameSourceGroupCard && record.GroupID == groupID {
+			return record.Content
+		}
+	}
+	return ""
+}
+
+func MemberLearnedAliases(records []MemberNameRecord) []string {
+	normalized := normalizeMemberNameRecords(records)
+	if len(normalized) == 0 {
+		return nil
+	}
+	aliases := make([]string, 0, len(normalized))
+	for _, record := range normalized {
+		if record.Source == MemberNameSourceLearnedAlias {
+			aliases = append(aliases, record.Content)
+		}
+	}
+	return aliases
+}
+
+func MemberNamesForAdmin(records []MemberNameRecord, nickname string) []string {
+	normalized := normalizeMemberNameRecords(records)
+	if len(normalized) == 0 && strings.TrimSpace(nickname) == "" {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(normalized)+1)
+	names := make([]string, 0, len(normalized)+1)
+	push := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+
+	push(nickname)
+	for _, record := range normalized {
+		push(record.Content)
+	}
+	return names
+}
+
+func MemberNamesSearchText(records []MemberNameRecord, nickname string) string {
+	names := MemberNamesForAdmin(records, nickname)
+	if len(names) == 0 {
+		return ""
+	}
+	return strings.Join(names, " ")
+}
+
+func (p *MemberProfile) MemberNameRecords() []MemberNameRecord {
+	if p == nil {
+		return nil
+	}
+	return ParseMemberNameRecords(p.NameRecords)
+}
+
+func (p *MemberProfile) SetMemberNameRecords(records []MemberNameRecord) {
+	if p == nil {
+		return
+	}
+	p.NameRecords = EncodeMemberNameRecords(records)
+}
+
+func (p *MemberProfile) UpsertGroupCard(groupID int64, card string, updatedAt time.Time) {
+	if p == nil {
+		return
+	}
+	p.NameRecords = EncodeMemberNameRecords(UpsertMemberGroupCard(p.MemberNameRecords(), groupID, card, updatedAt))
+}
+
+func (p *MemberProfile) UpsertLearnedAliases(aliases []string, updatedAt time.Time) {
+	if p == nil {
+		return
+	}
+	p.NameRecords = EncodeMemberNameRecords(UpsertMemberLearnedAliases(p.MemberNameRecords(), aliases, updatedAt))
+}
 
 type MemoryIngestInput struct {
 	GroupID               int64
@@ -181,11 +393,6 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 
 // ==================== 短期记忆 ====================
 
-// AddMessage 添加消息到短期记忆
-func (m *Manager) AddMessage(msg MessageLog) error {
-	return m.db.Create(&msg).Error
-}
-
 // GetRecentMessages 获取最近的消息记录
 func (m *Manager) GetRecentMessages(groupID int64, limit, offset int) []MessageLog {
 	var dbMsgs []MessageLog
@@ -200,14 +407,6 @@ func (m *Manager) GetRecentMessages(groupID int64, limit, offset int) []MessageL
 		dbMsgs[i], dbMsgs[j] = dbMsgs[j], dbMsgs[i]
 	}
 	return dbMsgs
-}
-
-// GetMessagesAfterID 获取指定消息ID之后的消息
-func (m *Manager) GetMessagesAfterID(groupID int64, selfID int64, lastID uint, limit int) ([]MessageLog, error) {
-	var dbMsgs []MessageLog
-	err := m.db.Where("group_id = ? AND id > ? AND user_id != ?", groupID, lastID, selfID).
-		Order("id ASC").Limit(limit).Find(&dbMsgs).Error
-	return dbMsgs, err
 }
 
 func (m *Manager) GetProcessableLearningMessages(groupID int64, selfID int64, lastID uint, limit int) ([]MessageLog, error) {
@@ -440,7 +639,7 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 			}
 			return &existing, "deduplicated", nil
 		}
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, "", err
 		}
 		mem := &Memory{
@@ -1629,16 +1828,6 @@ func (m *Manager) UpdateStickerUsage(id uint) error {
 	return m.db.Model(&Sticker{}).Where("id = ?", id).Updates(map[string]any{
 		"use_count": gorm.Expr("use_count + 1"),
 	}).Error
-}
-
-// GetStickerByHash 通过哈希获取表情包
-func (m *Manager) GetStickerByHash(hash string) (*Sticker, error) {
-	var sticker Sticker
-	err := m.db.Where("file_hash = ?", hash).First(&sticker).Error
-	if err != nil {
-		return nil, err
-	}
-	return &sticker, nil
 }
 
 // ==================== 情绪状态管理 ====================

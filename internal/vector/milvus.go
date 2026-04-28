@@ -26,15 +26,6 @@ type MilvusClient struct {
 	collectionName string
 }
 
-// MemoryVector 记忆向量结构
-type MemoryVector struct {
-	ID        int64     `json:"id"`
-	MemoryID  uint      `json:"memory_id"`
-	GroupID   int64     `json:"group_id"`
-	MemType   string    `json:"mem_type"`
-	Embedding []float32 `json:"embedding"`
-}
-
 // NewMilvusClient 创建 Milvus 客户端
 func NewMilvusClient(cfg *MilvusConfig) (*MilvusClient, error) {
 	if cfg.Address == "" {

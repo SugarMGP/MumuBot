@@ -43,7 +43,7 @@ func NewVisionClient() (*VisionClient, error) {
 // DescribeImage 描述图片内容
 func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (string, error) {
 	if v == nil || v.model == nil {
-		return "[图片]", nil
+		return "", nil
 	}
 
 	// 构建多模态消息
@@ -68,20 +68,15 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 
 	resp, err := v.model.Generate(ctx, []*schema.Message{msg})
 	if err != nil {
-		return "[图片:识别失败]", nil
+		return "", nil
 	}
-
-	desc := strings.TrimSpace(resp.Content)
-	if desc == "" {
-		return "[图片]", nil
-	}
-	return fmt.Sprintf("[图片:%s]", desc), nil
+	return strings.TrimSpace(resp.Content), nil
 }
 
 // DescribeVideo 描述视频内容
 func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (string, error) {
 	if v == nil || v.model == nil {
-		return "[视频]", nil
+		return "", nil
 	}
 
 	msg := &schema.Message{
@@ -104,12 +99,7 @@ func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (stri
 
 	resp, err := v.model.Generate(ctx, []*schema.Message{msg})
 	if err != nil {
-		return "[视频:识别失败]", nil
+		return "", nil
 	}
-
-	desc := strings.TrimSpace(resp.Content)
-	if desc == "" {
-		return "[视频]", nil
-	}
-	return fmt.Sprintf("[视频:%s]", desc), nil
+	return strings.TrimSpace(resp.Content), nil
 }

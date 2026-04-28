@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"strings"
+	"time"
 
 	mutils "mumu-bot/internal/utils"
 
@@ -24,6 +25,8 @@ type UpdateMemberProfileInput struct {
 	Interests []string `json:"interests,omitempty" jsonschema:"description=兴趣爱好列表（传入后会覆盖旧列表）"`
 	// CommonWords 常用词汇或口头禅
 	CommonWords []string `json:"common_words,omitempty" jsonschema:"description=常用词汇或口头禅（传入后会覆盖旧列表）"`
+	// Aliases 学到的稳定别称
+	Aliases []string `json:"aliases,omitempty" jsonschema:"description=基于明确证据学到的稳定别称（只会追加为学习别称，不会覆盖群名片或原昵称）"`
 	// IntimacyDelta 亲密度变化值 -0.3 到 0.3
 	IntimacyDelta float64 `json:"intimacy_delta,omitempty" jsonschema:"minimum=-0.3,maximum=0.3,description=亲密度变化值(-0.3到0.3)，正数表示增加亲密度，负数表示降低亲密度"`
 }
@@ -63,6 +66,9 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 	if input.CommonWords != nil {
 		b, _ := sonic.MarshalString(input.CommonWords)
 		profile.CommonWords = b
+	}
+	if input.Aliases != nil {
+		profile.UpsertLearnedAliases(input.Aliases, time.Now())
 	}
 
 	delta := input.IntimacyDelta
@@ -122,6 +128,18 @@ func getMemberInfoFunc(ctx context.Context, input *GetMemberInfoInput) (*GetMemb
 			Success: false,
 			Message: "不太了解这个人",
 		}, nil
+	}
+
+	if tc.Bot != nil && tc.GroupID > 0 && tc.MemoryMgr != nil {
+		info, infoErr := tc.Bot.GetGroupMemberInfo(ctx, tc.GroupID, input.UserID, false)
+		if infoErr != nil {
+			zap.L().Debug("获取成员昵称用于回写失败", zap.Int64("group_id", tc.GroupID), zap.Int64("user_id", input.UserID), zap.Error(infoErr))
+		} else if latestNickname := strings.TrimSpace(info.Nickname); latestNickname != "" && latestNickname != strings.TrimSpace(profile.Nickname) {
+			profile.Nickname = latestNickname
+			if err := tc.MemoryMgr.UpdateMemberProfile(profile); err != nil {
+				zap.L().Warn("成员昵称回写失败", zap.Int64("group_id", tc.GroupID), zap.Int64("user_id", input.UserID), zap.Error(err))
+			}
+		}
 	}
 
 	var interests, commonWords []string
