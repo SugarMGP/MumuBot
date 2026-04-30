@@ -231,6 +231,45 @@ func formatTime(ts time.Time) string {
 	return ts.Format("2006-01-02 15:04")
 }
 
+func formatTimeAttr(ts time.Time) string {
+	if ts.IsZero() {
+		return ""
+	}
+	return ts.Format(time.RFC3339)
+}
+
+func formatRFC3339Time(raw string) string {
+	ts, ok := parseRFC3339Time(raw)
+	if !ok {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return "-"
+		}
+		return trimmed
+	}
+	return formatTime(ts)
+}
+
+func formatRFC3339TimeAttr(raw string) string {
+	ts, ok := parseRFC3339Time(raw)
+	if !ok {
+		return strings.TrimSpace(raw)
+	}
+	return formatTimeAttr(ts)
+}
+
+func parseRFC3339Time(raw string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	ts, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ts, true
+}
+
 func topicStatusText(status memory.TopicThreadStatus) string {
 	switch status {
 	case memory.TopicThreadStatusArchived:
@@ -255,6 +294,112 @@ func topicSummary(topic memory.TopicThread) memory.TopicSummaryV1 {
 
 func topicSummaryHistory(topic memory.TopicThread) []memory.TopicSummarySnapshot {
 	return memory.ParseTopicSummaryHistory(topic.SummaryHistoryJSON)
+}
+
+func topicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
+	history := topicSummaryHistory(topic)
+	if len(history) == 0 {
+		return nil
+	}
+
+	changes := make([]TopicSummaryChangeView, 0, len(history))
+	for idx, snapshot := range history {
+		var prev *memory.TopicSummarySnapshot
+		if idx > 0 {
+			prev = &history[idx-1]
+		}
+		changes = append(changes, buildTopicSummaryChangeView(prev, snapshot))
+	}
+	for left, right := 0, len(changes)-1; left < right; left, right = left+1, right-1 {
+		changes[left], changes[right] = changes[right], changes[left]
+	}
+	return changes
+}
+
+func TopicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
+	return topicSummaryChanges(topic)
+}
+
+func buildTopicSummaryChangeView(prev *memory.TopicSummarySnapshot, current memory.TopicSummarySnapshot) TopicSummaryChangeView {
+	currentTitle := strings.TrimSpace(current.Summary.Title)
+	currentGist := strings.TrimSpace(current.Summary.Gist)
+	view := TopicSummaryChangeView{
+		CapturedAtLabel: formatRFC3339Time(current.CapturedAt),
+		CapturedAtValue: formatRFC3339TimeAttr(current.CapturedAt),
+		CurrentTitle:    currentTitle,
+		CurrentGist:     currentGist,
+	}
+
+	if prev == nil {
+		view.TitleChanged = currentTitle != ""
+		view.GistChanged = currentGist != ""
+		view.AddedFacts = normalizedTopicSummaryItems(current.Summary.Facts)
+		view.AddedOpenLoops = normalizedTopicSummaryItems(current.Summary.OpenLoops)
+		view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedFacts) > 0 || len(view.AddedOpenLoops) > 0
+		return view
+	}
+
+	prevTitle := strings.TrimSpace(prev.Summary.Title)
+	prevGist := strings.TrimSpace(prev.Summary.Gist)
+	view.PreviousTitle = prevTitle
+	view.PreviousGist = prevGist
+	view.TitleChanged = prevTitle != currentTitle
+	view.GistChanged = prevGist != currentGist
+	view.AddedFacts, view.RemovedFacts = diffStringSet(prev.Summary.Facts, current.Summary.Facts)
+	view.AddedOpenLoops, view.RemovedOpenLoops = diffStringSet(prev.Summary.OpenLoops, current.Summary.OpenLoops)
+	view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedFacts) > 0 || len(view.RemovedFacts) > 0 || len(view.AddedOpenLoops) > 0 || len(view.RemovedOpenLoops) > 0
+	return view
+}
+
+func diffStringSet(before []string, after []string) ([]string, []string) {
+	beforeItems := normalizedTopicSummaryItems(before)
+	afterItems := normalizedTopicSummaryItems(after)
+	beforeSet := make(map[string]struct{}, len(beforeItems))
+	afterSet := make(map[string]struct{}, len(afterItems))
+
+	for _, item := range beforeItems {
+		beforeSet[item] = struct{}{}
+	}
+	for _, item := range afterItems {
+		afterSet[item] = struct{}{}
+	}
+
+	added := make([]string, 0)
+	removed := make([]string, 0)
+	for _, item := range afterItems {
+		if _, ok := beforeSet[item]; !ok {
+			added = append(added, item)
+		}
+	}
+	for _, item := range beforeItems {
+		if _, ok := afterSet[item]; !ok {
+			removed = append(removed, item)
+		}
+	}
+	return added, removed
+}
+
+func normalizedTopicSummaryItems(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		normalized = append(normalized, item)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func topicTitle(topic memory.TopicThread) string {
@@ -322,6 +467,13 @@ func formatOptionalTime(ts *time.Time) string {
 		return "-"
 	}
 	return ts.Format("2006-01-02 15:04")
+}
+
+func formatOptionalTimeAttr(ts *time.Time) string {
+	if ts == nil || ts.IsZero() {
+		return ""
+	}
+	return ts.Format(time.RFC3339)
 }
 
 func emptyDash(value string) string {
@@ -449,10 +601,8 @@ func memorySourceKindText(kind memory.MemorySourceKind) string {
 	switch kind {
 	case memory.MemorySourceKindTopic:
 		return "话题沉淀"
-	case memory.MemorySourceKindMigration:
-		return "旧版迁入"
 	case memory.MemorySourceKindMessage:
-		return "消息学习"
+		return "主动记住"
 	default:
 		return "未标注"
 	}

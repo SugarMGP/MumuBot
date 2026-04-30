@@ -15,7 +15,7 @@ templ StyleCardListBody(data StyleCardListPageData) {
 	<div class="space-y-6">
 		@PageHeader("风格卡片", "查看示例、场景和使用情况，处理不合适的风格卡片。", "风格审核")
 		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("style-card-filters", "筛选条件", "先按群号或关键词缩小范围，再处理需要调整的风格卡片。", EmptyComponent(), false, StyleCardFilterForm(data))
+			@FilterPanel("style-card-filters", "筛选条件", "先按群号或关键词缩小范围，再处理需要调整的风格卡片。", StyleCardFilterControls(data), true, StyleCardFilterForm(data))
 			@SortToolbar(data.Sort)
 			<div class="space-y-4">
 				if len(data.Items) == 0 {
@@ -26,7 +26,7 @@ templ StyleCardListBody(data StyleCardListPageData) {
 						<div class="space-y-3.5">
 							<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 								<div class="min-w-0">
-									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 最近更新 { formatTime(item.UpdatedAt) }</div>
+									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 最近更新 <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
 								</div>
 								<span class={ styleCardStatusClass(item.Status) }>{ styleCardStatusText(item.Status) }</span>
 							</div>
@@ -53,7 +53,7 @@ templ StyleCardListBody(data StyleCardListPageData) {
 								<span class="inline-flex items-center rounded-full bg-slate-950/5 px-3 py-1 text-[11px] font-semibold text-slate-700">证据 { fmt.Sprintf("%d", item.EvidenceCount) }</span>
 								<span class="inline-flex items-center rounded-full bg-slate-950/5 px-3 py-1 text-[11px] font-semibold text-slate-700">使用 { fmt.Sprintf("%d", item.UseCount) } 次</span>
 								if item.LastUsedAt != nil {
-									<span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-500">上次使用 { formatOptionalTime(item.LastUsedAt) }</span>
+									<span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-500">上次使用 <time datetime={ formatOptionalTimeAttr(item.LastUsedAt) }>{ formatOptionalTime(item.LastUsedAt) }</time></span>
 								}
 							</div>
 						</div>
@@ -79,21 +79,24 @@ templ StyleCardListBody(data StyleCardListPageData) {
 	</div>
 }
 
-templ StyleCardFilterForm(data StyleCardListPageData) {
-	<form id="style-card-filter-form" class="space-y-3" method="get" action="/admin/style-cards" hx-get="/admin/style-cards" hx-trigger="change from:input[type='radio'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		@ChoiceFilterGroup("status", data.Status, []FilterChoice{
+templ StyleCardFilterControls(data StyleCardListPageData) {
+	<div class="grid gap-2.5 lg:justify-items-end">
+		@ChoiceFilterGroupForForm("style-card-filter-form", "status", data.Status, []FilterChoice{
 			{Label: "全部状态", Value: ""},
 			{Label: "候选", Value: "candidate"},
 			{Label: "已启用", Value: "active"},
 			{Label: "已拒绝", Value: "rejected"},
 		})
-		<div class="grid gap-2.5 xl:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] xl:items-center">
+	</div>
+}
+
+templ StyleCardFilterForm(data StyleCardListPageData) {
+	<form id="style-card-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/style-cards" hx-get="/admin/style-cards" hx-trigger="change from:input[form='style-card-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
 		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="示例、场景、意图、语气"/>
-		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 xl:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
-		</div>
+		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
 
@@ -110,7 +113,7 @@ templ JargonListBody(data JargonListPageData) {
 	<div class="space-y-6">
 		@PageHeader("黑话", "筛选、查看并更新术语状态。", "黑话审核")
 		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("jargon-filters", "筛选条件", "先按群号或关键词缩小范围，再处理需要关注的术语。", EmptyComponent(), false, JargonFilterForm(data))
+			@FilterPanel("jargon-filters", "筛选条件", "先按群号或关键词缩小范围，再处理需要关注的术语。", JargonFilterControls(data), true, JargonFilterForm(data))
 			@SortToolbar(data.Sort)
 			<div class="space-y-4">
 				if len(data.Items) == 0 {
@@ -121,7 +124,7 @@ templ JargonListBody(data JargonListPageData) {
 						<div class="space-y-3.5">
 							<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 								<div class="min-w-0">
-									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 最近更新 { formatTime(item.UpdatedAt) }</div>
+									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 最近更新 <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
 									<h2 class="mt-2 text-[1.5rem] font-extrabold tracking-[-0.05em] text-slate-950 sm:text-[1.75rem]">{ item.Content }</h2>
 								</div>
 								<span class={ jargonStatusClass(item) }>{ jargonStatusText(item) }</span>
@@ -151,20 +154,23 @@ templ JargonListBody(data JargonListPageData) {
 	</div>
 }
 
-templ JargonFilterForm(data JargonListPageData) {
-	<form id="jargon-filter-form" class="space-y-3" method="get" action="/admin/jargons" hx-get="/admin/jargons" hx-trigger="change from:input[type='radio'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		@ChoiceFilterGroup("status", data.Status, []FilterChoice{
+templ JargonFilterControls(data JargonListPageData) {
+	<div class="grid gap-2.5 lg:justify-items-end">
+		@ChoiceFilterGroupForForm("jargon-filter-form", "status", data.Status, []FilterChoice{
 			{Label: "全部状态", Value: ""},
 			{Label: "待审核", Value: "pending"},
 			{Label: "已通过", Value: "approved"},
 			{Label: "已拒绝", Value: "rejected"},
 		})
-		<div class="grid gap-2.5 xl:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] xl:items-center">
+	</div>
+}
+
+templ JargonFilterForm(data JargonListPageData) {
+	<form id="jargon-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/jargons" hx-get="/admin/jargons" hx-trigger="change from:input[form='jargon-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
 		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="术语、释义、上下文"/>
-		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 xl:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
-		</div>
+		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }

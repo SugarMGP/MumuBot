@@ -54,7 +54,7 @@ templ StickerListBody(data StickerListPageData) {
 						<div class="mt-4 space-y-2 text-sm text-slate-600">
 							<div class="flex items-center justify-between gap-4"><span>使用次数</span><strong class="font-semibold text-slate-900">{ fmt.Sprintf("%d", item.UseCount) }</strong></div>
 							<div class="flex items-center justify-between gap-4"><span>哈希</span><code class="rounded-full bg-slate-950/5 px-2.5 py-1 text-xs">{ item.FileHash }</code></div>
-							<div class="flex items-center justify-between gap-4"><span>创建时间</span><span>{ formatTime(item.CreatedAt) }</span></div>
+							<div class="flex items-center justify-between gap-4"><span>创建时间</span><time datetime={ formatTimeAttr(item.CreatedAt) }>{ formatTime(item.CreatedAt) }</time></div>
 						</div>
 						<div class="mt-5 grid gap-3">
 							if stickerFileURL(item.FileName) != "" {
@@ -129,7 +129,7 @@ templ MemoryListBody(data MemoryListPageData) {
 	<div class="space-y-6">
 		@PageHeader("记忆", "按状态、归类、来源和关键词查看已经沉淀下来的长期记忆。", "记忆检索")
 		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("memory-filters", "筛选条件", "按群号、状态、归类或关键词收窄结果，快速看当前生效中的记忆。", EmptyComponent(), false, MemoryFilterForm(data))
+			@FilterPanel("memory-filters", "筛选条件", "按群号、状态、归类或关键词收窄结果，快速看当前生效中的记忆。", MemoryFilterControls(data), true, MemoryFilterForm(data))
 			@SortToolbar(data.Sort)
 			if len(data.Items) == 0 {
 				<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500">暂无记忆</div>
@@ -201,21 +201,21 @@ templ MemoryListBody(data MemoryListPageData) {
 	</div>
 }
 
-templ MemoryFilterForm(data MemoryListPageData) {
-	<form id="memory-filter-form" class="space-y-3" method="get" action="/admin/memories" hx-get="/admin/memories" hx-trigger="change from:input[type='radio'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		@ChoiceFilterGroup("type", data.Type, []FilterChoice{
+templ MemoryFilterControls(data MemoryListPageData) {
+	<div class="grid gap-2.5 lg:justify-items-end">
+		@ChoiceFilterGroupForForm("memory-filter-form", "type", data.Type, []FilterChoice{
 			{Label: "全部类型", Value: ""},
 			{Label: "群长期事实", Value: "group_fact"},
 			{Label: "自身经历", Value: "self_experience"},
 			{Label: "重要对话", Value: "conversation"},
 		})
-		@ChoiceFilterGroup("status", data.Status, []FilterChoice{
+		@ChoiceFilterGroupForForm("memory-filter-form", "status", data.Status, []FilterChoice{
 			{Label: "生效中", Value: "active"},
 			{Label: "待收敛", Value: "candidate"},
 			{Label: "已归档", Value: "archived"},
 			{Label: "旧版记录", Value: "legacy"},
 		})
-		@ChoiceFilterGroup("canonical_type", data.CanonicalType, []FilterChoice{
+		@ChoiceFilterGroupForForm("memory-filter-form", "canonical_type", data.CanonicalType, []FilterChoice{
 			{Label: "全部归类", Value: ""},
 			{Label: "事实", Value: "fact"},
 			{Label: "经历", Value: "episode"},
@@ -223,19 +223,17 @@ templ MemoryFilterForm(data MemoryListPageData) {
 			{Label: "约束", Value: "constraint"},
 			{Label: "目标", Value: "goal"},
 		})
-		@ChoiceFilterGroup("source_kind", data.SourceKind, []FilterChoice{
-			{Label: "全部来源", Value: ""},
-			{Label: "消息学习", Value: "message"},
-			{Label: "话题沉淀", Value: "topic"},
-			{Label: "旧版迁入", Value: "migration"},
-		})
-		<div class="grid gap-2.5 xl:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] xl:items-center">
+		@ChoiceFilterGroupForForm("memory-filter-form", "source_kind", data.SourceKind, data.SourceOptions)
+	</div>
+}
+
+templ MemoryFilterForm(data MemoryListPageData) {
+	<form id="memory-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/memories" hx-get="/admin/memories" hx-trigger="change from:input[form='memory-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
 		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="关键词"/>
-		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 xl:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
-		</div>
+		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
 
@@ -352,7 +350,7 @@ templ MemberListBody(data MemberListPageData) {
 								</div>
 								<div class="rounded-[1.05rem] bg-slate-50/90 p-3.5 ring-1 ring-slate-200/80">
 									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最后发言</div>
-									<div class="mt-2 text-sm font-semibold text-slate-900">{ formatTime(item.LastSpeak) }</div>
+									<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(item.LastSpeak) }>{ formatTime(item.LastSpeak) }</time></div>
 								</div>
 							</div>
 						</section>

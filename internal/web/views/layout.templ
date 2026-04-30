@@ -229,10 +229,22 @@ templ ListFooter(meta ListMeta) {
 }
 
 templ ChoiceFilterGroup(name string, current string, options []FilterChoice) {
-	<div data-admin-choice-group={ name } class="flex flex-wrap items-center gap-2 sm:justify-end">
+	@ChoiceFilterGroupForFormAligned("", name, current, options, "sm:justify-end")
+}
+
+templ ChoiceFilterGroupForForm(formID string, name string, current string, options []FilterChoice) {
+	@ChoiceFilterGroupForFormAligned(formID, name, current, options, "sm:justify-end")
+}
+
+templ ChoiceFilterGroupForFormAligned(formID string, name string, current string, options []FilterChoice, alignClass string) {
+	<div data-admin-choice-group={ name } class={ joinClasses("flex flex-wrap items-center gap-2", alignClass) }>
 		for _, option := range options {
 			<label class={ filterChoiceClass(equalTrimmed(option.Value, current)) }>
-				<input class="sr-only" type="radio" name={ name } value={ option.Value } checked?={ equalTrimmed(option.Value, current) }/>
+				if formID != "" {
+					<input class="sr-only" type="radio" name={ name } value={ option.Value } form={ formID } checked?={ equalTrimmed(option.Value, current) }/>
+				} else {
+					<input class="sr-only" type="radio" name={ name } value={ option.Value } checked?={ equalTrimmed(option.Value, current) }/>
+				}
 				<span>{ option.Label }</span>
 			</label>
 		}

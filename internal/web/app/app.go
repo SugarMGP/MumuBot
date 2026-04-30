@@ -630,6 +630,11 @@ func (a *App) memoryPageData(current *neturl.URL, flash *views.FlashMessage) (vi
 		Status:        filter.Status,
 		CanonicalType: filter.CanonicalType,
 		SourceKind:    filter.SourceKind,
+		SourceOptions: []views.FilterChoice{
+			{Label: "全部来源", Value: ""},
+			{Label: "主动记住", Value: "message"},
+			{Label: "话题沉淀", Value: "topic"},
+		},
 		Keyword:       filter.Keyword,
 		Sort:          buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}, {Key: "access", Label: "访问量"}, {Key: "importance", Label: "重要度"}, {Key: "evidence", Label: "证据数"}}),
 		Items:         result.Items,
@@ -679,9 +684,10 @@ func (a *App) topicDetailPageData(id uint, flash *views.FlashMessage) (views.Top
 	}
 
 	return views.TopicDetailPageData{
-		Thread:   thread,
-		Messages: messages,
-		Flash:    flash,
+		Thread:         thread,
+		SummaryChanges: views.TopicSummaryChanges(thread),
+		Messages:       messages,
+		Flash:          flash,
 	}, nil
 }
 

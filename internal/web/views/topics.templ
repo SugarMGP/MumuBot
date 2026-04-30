@@ -15,7 +15,7 @@ templ TopicListBody(data TopicListPageData) {
 	<div class="space-y-6">
 		@PageHeader("话题", "查看每个群里正在进行或已经归档的话题摘要，快速回看脉络和未完事项。", "话题工作记忆")
 		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("topic-filters", "筛选条件", "按群号、状态或关键词查找当前话题与归档话题。", EmptyComponent(), false, TopicFilterForm(data))
+			@FilterPanel("topic-filters", "筛选条件", "按群号、状态或关键词查找当前话题与归档话题。", TopicFilterControls(data), true, TopicFilterForm(data))
 			@SortToolbar(data.Sort)
 			<div class="grid gap-4 xl:grid-cols-2">
 				if len(data.Items) == 0 {
@@ -45,7 +45,7 @@ templ TopicListBody(data TopicListPageData) {
 							</div>
 							<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
 								<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最近更新</div>
-								<div class="mt-1 text-sm font-semibold text-slate-900">{ formatTime(item.UpdatedAt) }</div>
+								<div class="mt-1 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
 							</div>
 						</div>
 						if len(topicKeywords(item)) > 0 {
@@ -75,20 +75,23 @@ templ TopicListBody(data TopicListPageData) {
 	</div>
 }
 
-templ TopicFilterForm(data TopicListPageData) {
-	<form id="topic-filter-form" class="space-y-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="change from:input[type='radio'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		@ChoiceFilterGroup("status", data.Status, []FilterChoice{
+templ TopicFilterControls(data TopicListPageData) {
+	<div class="grid gap-2.5 lg:justify-items-end">
+		@ChoiceFilterGroupForForm("topic-filter-form", "status", data.Status, []FilterChoice{
 			{Label: "全部状态", Value: ""},
 			{Label: "进行中", Value: "active"},
 			{Label: "已归档", Value: "archived"},
 		})
-		<div class="grid gap-2.5 xl:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] xl:items-center">
+	</div>
+}
+
+templ TopicFilterForm(data TopicListPageData) {
+	<form id="topic-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="change from:input[form='topic-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 			<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 			<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 			<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
 			<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="关键词、标题或摘要"/>
-			<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 xl:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
-		</div>
+			<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
 
@@ -166,24 +169,79 @@ templ TopicDetailBody(data TopicDetailPageData) {
 					</div>
 					<div class="rounded-[1.15rem] bg-slate-50/90 px-4 py-4 ring-1 ring-slate-200/80">
 						<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">创建时间</div>
-						<div class="mt-2 text-sm font-semibold text-slate-900">{ formatTime(data.Thread.CreatedAt) }</div>
+						<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(data.Thread.CreatedAt) }>{ formatTime(data.Thread.CreatedAt) }</time></div>
 					</div>
 					<div class="rounded-[1.15rem] bg-slate-50/90 px-4 py-4 ring-1 ring-slate-200/80">
 						<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最近更新</div>
-						<div class="mt-2 text-sm font-semibold text-slate-900">{ formatTime(data.Thread.UpdatedAt) }</div>
+						<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(data.Thread.UpdatedAt) }>{ formatTime(data.Thread.UpdatedAt) }</time></div>
 					</div>
 				</div>
 				<div class="rounded-[1.3rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
 					<div class="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">最近摘要变化</div>
-					if len(topicSummaryHistory(data.Thread)) == 0 {
+					if len(data.SummaryChanges) == 0 {
 						<div class="mt-3 text-sm text-slate-500">还没有摘要快照。</div>
 					} else {
 						<div class="mt-3 space-y-3">
-							for _, snapshot := range topicSummaryHistory(data.Thread) {
+							for _, change := range data.SummaryChanges {
 								<div class="rounded-[1.1rem] bg-white/84 p-4 ring-1 ring-slate-200/80">
-									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{ snapshot.CapturedAt }</div>
-									<div class="mt-2 text-sm font-semibold text-slate-900">{ snapshot.Summary.Title }</div>
-									<div class="mt-1 text-sm leading-6 text-slate-600">{ snapshot.Summary.Gist }</div>
+									<time class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
+									if change.Changed {
+										if change.TitleChanged {
+											<div class="mt-3 text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">标题变化</div>
+											<div class="mt-1 text-sm leading-6 text-slate-700">{ displayText(change.PreviousTitle, "之前没有标题") } -> { displayText(change.CurrentTitle, "现在没有标题") }</div>
+										}
+										if change.GistChanged {
+											<div class="mt-3 text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">概括变化</div>
+											<div class="mt-1 text-sm leading-6 text-slate-700">{ displayText(change.PreviousGist, "之前没有概括") }</div>
+											<div class="mt-2 rounded-2xl bg-cyan-50/75 px-3 py-2 text-sm leading-6 text-cyan-900 ring-1 ring-cyan-200/80">{ displayText(change.CurrentGist, "现在没有概括") }</div>
+										}
+										if len(change.AddedFacts) > 0 {
+											<div class="mt-3 text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">新增已确认信息</div>
+											<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+												for _, item := range change.AddedFacts {
+													<li class="flex gap-2">
+														<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-emerald-500"></span>
+														<span>{ item }</span>
+													</li>
+												}
+											</ul>
+										}
+										if len(change.RemovedFacts) > 0 {
+											<div class="mt-3 text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">移除的已确认信息</div>
+											<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+												for _, item := range change.RemovedFacts {
+													<li class="flex gap-2">
+														<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-rose-500"></span>
+														<span>{ item }</span>
+													</li>
+												}
+											</ul>
+										}
+										if len(change.AddedOpenLoops) > 0 {
+											<div class="mt-3 text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">新增未完事项</div>
+											<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+												for _, item := range change.AddedOpenLoops {
+													<li class="flex gap-2">
+														<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-amber-500"></span>
+														<span>{ item }</span>
+													</li>
+												}
+											</ul>
+										}
+										if len(change.RemovedOpenLoops) > 0 {
+											<div class="mt-3 text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">已解决或移除的未完事项</div>
+											<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+												for _, item := range change.RemovedOpenLoops {
+													<li class="flex gap-2">
+														<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-slate-400"></span>
+														<span>{ item }</span>
+													</li>
+												}
+											</ul>
+										}
+									} else {
+										<div class="mt-3 text-sm leading-6 text-slate-600">本次仅刷新时间，摘要内容没有变化。</div>
+									}
 								</div>
 							}
 						</div>
@@ -206,7 +264,7 @@ templ TopicDetailBody(data TopicDetailPageData) {
 						<article class="rounded-[1.25rem] border border-slate-200/75 bg-white/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)]">
 							<div class="flex flex-wrap items-center justify-between gap-3">
 								<div class="text-sm font-semibold text-slate-900">{ item.Nickname }</div>
-								<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{ formatTime(item.CreatedAt) } · #{ fmt.Sprintf("%d", item.ID) }</div>
+								<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500"><time datetime={ formatTimeAttr(item.CreatedAt) }>{ formatTime(item.CreatedAt) }</time> · #{ fmt.Sprintf("%d", item.ID) }</div>
 							</div>
 							<div class="mt-3 text-sm leading-7 text-slate-700 whitespace-pre-wrap break-words">{ topicMessageText(item) }</div>
 						</article>

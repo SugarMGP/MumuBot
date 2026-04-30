@@ -146,6 +146,7 @@ type MemoryListPageData struct {
 	Status        string
 	CanonicalType string
 	SourceKind    string
+	SourceOptions []FilterChoice
 	Keyword       string
 	Sort          SortToolbarData
 	Items         []memory.Memory
@@ -164,9 +165,10 @@ type TopicListPageData struct {
 }
 
 type TopicDetailPageData struct {
-	Thread   memory.TopicThread
-	Messages []memory.MessageLog
-	Flash    *FlashMessage
+	Thread          memory.TopicThread
+	SummaryChanges  []TopicSummaryChangeView
+	Messages        []memory.MessageLog
+	Flash           *FlashMessage
 }
 
 type MemberListPageData struct {
@@ -190,4 +192,20 @@ type SystemSection struct {
 type SystemPageData struct {
 	Sections []SystemSection
 	Flash    *FlashMessage
+}
+
+type TopicSummaryChangeView struct {
+	CapturedAtLabel  string
+	CapturedAtValue  string
+	TitleChanged     bool
+	CurrentTitle     string
+	PreviousTitle    string
+	GistChanged      bool
+	CurrentGist      string
+	PreviousGist     string
+	AddedFacts       []string
+	RemovedFacts     []string
+	AddedOpenLoops   []string
+	RemovedOpenLoops []string
+	Changed          bool
 }
