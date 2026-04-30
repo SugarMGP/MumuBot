@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-05-01
+
 ### 变更
 
 - **后台筛选与摘要变化展示现已更直观**：记忆、话题、风格卡片和黑话页面的筛选项在桌面端会稳定显示在右上区域；话题详情里的“最近摘要变化”也改为只展示每次新增、移除或更新的部分，不再直接堆整段摘要快照。
@@ -91,7 +93,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/SugarMGP/MumuBot/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/SugarMGP/MumuBot/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/SugarMGP/MumuBot/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/SugarMGP/MumuBot/compare/v1.2.4...v1.3.0
