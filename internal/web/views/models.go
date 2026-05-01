@@ -197,15 +197,41 @@ type SystemPageData struct {
 type TopicSummaryChangeView struct {
 	CapturedAtLabel  string
 	CapturedAtValue  string
+	Headline         string
+	Badges           []TopicSummaryChangeBadgeView
+	InitiallyOpen    bool
+	InitialSnapshot  bool
 	TitleChanged     bool
 	CurrentTitle     string
 	PreviousTitle    string
+	TitleDiff        TopicTextDiffView
 	GistChanged      bool
 	CurrentGist      string
 	PreviousGist     string
+	GistDiff         TopicTextDiffView
 	AddedFacts       []string
 	RemovedFacts     []string
 	AddedOpenLoops   []string
 	RemovedOpenLoops []string
 	Changed          bool
+}
+
+type TopicSummaryChangeBadgeView struct {
+	Label string
+	Tone  string
+}
+
+type TopicTextDiffView struct {
+	PreviousSegments    []TopicTextDiffSegmentView
+	CurrentSegments     []TopicTextDiffSegmentView
+	InlineSegments      []TopicTextDiffSegmentView
+	PreviousPlaceholder string
+	CurrentPlaceholder  string
+	PreviousEmpty       bool
+	CurrentEmpty        bool
+}
+
+type TopicTextDiffSegmentView struct {
+	Text string
+	Kind string
 }

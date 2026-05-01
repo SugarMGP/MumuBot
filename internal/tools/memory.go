@@ -66,12 +66,9 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 		return &SaveMemoryOutput{Success: true, Message: "已补充到已有记忆"}, nil
 	case "reinforced":
 		return &SaveMemoryOutput{Success: true, Message: "已增强已有记忆"}, nil
-	case "conflict-candidate":
-		return &SaveMemoryOutput{Success: true, Message: "已记为候选，等待后续证据收敛"}, nil
+	case "merged":
+		return &SaveMemoryOutput{Success: true, Message: "已合并到已有记忆"}, nil
 	default:
-		if mem.Status == memory.MemoryStatusCandidate {
-			return &SaveMemoryOutput{Success: true, Message: "已暂存为候选记忆"}, nil
-		}
 		return &SaveMemoryOutput{Success: true, Message: "已记住"}, nil
 	}
 }
@@ -80,7 +77,7 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 func NewSaveMemoryTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"saveMemory",
-		`保存真正值得跨会话记住的信息。传入一条短摘要即可，系统会自动提取记忆类型、槽位和来源。
+		`保存值得记住的信息，传入一条纯文字摘要即可。
 适合保存的内容包括：稳定事实、长期偏好、群规边界、持续目标、值得追踪的经历。
 普通闲聊、短期待回复、临时口嗨不要保存。`,
 		saveMemoryFunc,

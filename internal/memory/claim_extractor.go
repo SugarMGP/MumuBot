@@ -21,19 +21,17 @@ type NormalizedClaim struct {
 	SubjectName   string
 	CanonicalType CanonicalMemoryType
 	SlotKind      string
-	SlotAnchor    string
 	ValueSummary  string
 	LongTerm      bool
 }
 
 type rawNormalizedClaim struct {
-	SubjectClass        string `json:"subject_class" jsonschema:"enum=group,enum=self,enum=member,enum=unknown,description=长期记忆主体类别"`
-	SubjectName         string `json:"subject_name,omitempty" jsonschema:"description=当主体是 member 且能定位到候选成员时，填写候选昵称"`
-	CanonicalType       string `json:"canonical_type" jsonschema:"enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal,enum=ignore,description=长期记忆类型"`
-	SlotKind            string `json:"slot_kind,omitempty" jsonschema:"description=keyed 类型必须填写闭集槽位类型"`
-	SlotAnchorCandidate string `json:"slot_anchor_candidate,omitempty" jsonschema:"description=keyed 类型必须填写稳定槽位锚点，不要写当前值"`
-	ValueSummary        string `json:"value_summary,omitempty" jsonschema:"description=一句短中文，概括当前值、规则或进展"`
-	LongTerm            bool   `json:"long_term" jsonschema:"description=只有适合跨会话召回时才为 true"`
+	SubjectClass  string `json:"subject_class" jsonschema:"enum=group,enum=self,enum=member,enum=unknown,description=长期记忆主体类别"`
+	SubjectName   string `json:"subject_name,omitempty" jsonschema:"description=当主体是 member 且能定位到候选成员时，填写候选昵称"`
+	CanonicalType string `json:"canonical_type" jsonschema:"enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal,enum=ignore,description=长期记忆类型"`
+	SlotKind      string `json:"slot_kind,omitempty" jsonschema:"description=keyed 类型建议填写闭集槽位类型，用于话题摘要沿用旧元数据，不参与记忆主表去重"`
+	ValueSummary  string `json:"value_summary,omitempty" jsonschema:"description=一句短中文，概括当前值、规则或进展"`
+	LongTerm      bool   `json:"long_term" jsonschema:"description=只有适合跨会话召回时才为 true"`
 }
 
 type memoryClaimToolOutput struct {
@@ -139,13 +137,12 @@ func newMemoryClaimTool() (tool.InvokableTool, error) {
 			}
 
 			*target = rawNormalizedClaim{
-				SubjectClass:        subjectClass,
-				SubjectName:         strings.TrimSpace(input.SubjectName),
-				CanonicalType:       canonicalType,
-				SlotKind:            strings.TrimSpace(strings.ToLower(input.SlotKind)),
-				SlotAnchorCandidate: strings.TrimSpace(input.SlotAnchorCandidate),
-				ValueSummary:        strings.TrimSpace(input.ValueSummary),
-				LongTerm:            input.LongTerm,
+				SubjectClass:  subjectClass,
+				SubjectName:   strings.TrimSpace(input.SubjectName),
+				CanonicalType: canonicalType,
+				SlotKind:      strings.TrimSpace(strings.ToLower(input.SlotKind)),
+				ValueSummary:  strings.TrimSpace(input.ValueSummary),
+				LongTerm:      input.LongTerm,
 			}
 			if err := agentreact.SetReturnDirectly(ctx); err != nil {
 				return nil, err
@@ -181,10 +178,6 @@ func newMemoryClaimExtractor(claimModel model.ToolCallingChatModel) (*agentreact
 }
 
 func (m *Manager) extractNormalizedClaim(ctx context.Context, input MemoryIngestInput, content string) NormalizedClaim {
-	return m.extractNormalizedClaimWithTool(ctx, input, content)
-}
-
-func (m *Manager) extractNormalizedClaimWithTool(ctx context.Context, input MemoryIngestInput, content string) NormalizedClaim {
 	if m.claimExtractor == nil {
 		return NormalizedClaim{}
 	}
@@ -220,13 +213,12 @@ func (m *Manager) extractNormalizedClaimWithTool(ctx context.Context, input Memo
 - 如果 related_user_id > 0 且不等于 self_id，它表示外部已经明确指定了某个 member 主体；这种情况下 subject_class 可以是 member，subject_name 允许留空
 - 如果 related_user_id > 0 且等于 self_id，它表示外部已经明确指定了 self 主体；这种情况下 subject_class 应该是 self
 - canonical_type 只能是 fact | episode | preference | constraint | goal | ignore
-- keyed 类型必须填写合法 slot_kind：
+- keyed 类型尽量填写合法 slot_kind；slot_kind 只帮助后续摘要沿用旧条目，不参与长期记忆去重：
   - fact: identity | relation | role | status | assignment | schedule | conclusion
   - preference: like | dislike | habit | style
   - constraint: rule | taboo | boundary | avoid
   - goal: project | task | deadline | milestone
-- keyed 类型必须填写 slot_anchor_candidate；它必须是稳定槽位名，不要写当前值，不要带主语和时间副词
-- episode 不需要 slot_kind 和 slot_anchor_candidate
+- episode 不需要 slot_kind
 - value_summary 用一句短中文概括当前值、规则或进展
 - 只有适合跨会话长期召回时才把 long_term 设为 true
 - 如果这条信息不适合长期记忆，canonical_type 设为 ignore
@@ -314,13 +306,6 @@ func buildNormalizedClaim(input MemoryIngestInput, raw rawNormalizedClaim) Norma
 
 	if IsKeyedCanonicalType(claim.CanonicalType) {
 		claim.SlotKind = normalizeSlotKind(claim.CanonicalType, raw.SlotKind)
-		if claim.SlotKind == "" {
-			return NormalizedClaim{}
-		}
-		claim.SlotAnchor = normalizeSlotAnchor(raw.SlotAnchorCandidate)
-		if claim.SlotAnchor == "" {
-			return NormalizedClaim{}
-		}
 	}
 
 	return claim

@@ -3,10 +3,9 @@ package memory
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"fmt"
-	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // MemoryType 记忆类型
@@ -56,11 +55,6 @@ const (
 
 const (
 	MemoryOpenLoopGraceWindow = 72 * time.Hour
-)
-
-var (
-	slotAnchorSanitizer = regexp.MustCompile(`[^\p{Han}a-z0-9_]+`)
-	slotAnchorSplitters = regexp.MustCompile(`[\s\-]+`)
 )
 
 // Memory 长期记忆
@@ -124,63 +118,28 @@ func oldMemoryTypeFromSubject(subjectClass MemorySubjectClass) MemoryType {
 	}
 }
 
-func scopeCodeFromMemoryType(kind MemoryType) string {
-	switch kind {
-	case MemoryTypeGroupFact:
-		return "gf"
-	case MemoryTypeSelfExperience:
-		return "se"
-	default:
-		return "cv"
-	}
-}
-
-func buildFactKey(kind MemoryType, subjectToken string, slotKind string, slotAnchor string) string {
-	subjectToken = strings.TrimSpace(subjectToken)
-	slotKind = strings.TrimSpace(slotKind)
-	slotAnchor = strings.TrimSpace(slotAnchor)
-	if subjectToken == "" || slotKind == "" || slotAnchor == "" {
+func buildFactKey(_ MemoryType, _ CanonicalMemoryType, content string) string {
+	normalized := normalizeMemoryContentForKey(content)
+	if normalized == "" {
 		return ""
 	}
-	hash := sha1.Sum([]byte(slotAnchor))
-	shortHash := hex.EncodeToString(hash[:])[:10]
-	return fmt.Sprintf("%s:%s:%s:%s", scopeCodeFromMemoryType(kind), subjectToken, slotKind, shortHash)
+	hash := sha1.Sum([]byte(normalized))
+	return hex.EncodeToString(hash[:])[:20]
 }
 
-func normalizeSlotAnchor(raw string) string {
+func normalizeMemoryContentForKey(raw string) string {
 	text := strings.TrimSpace(strings.ToLower(raw))
 	if text == "" {
 		return ""
 	}
-	text = slotAnchorSplitters.ReplaceAllString(text, "_")
-	text = slotAnchorSanitizer.ReplaceAllString(text, "_")
-	text = strings.Trim(text, "_")
-	if text == "" {
-		return ""
-	}
-	runes := []rune(text)
-	if len(runes) > 32 {
-		text = string(runes[:32])
-	}
-	return strings.Trim(text, "_")
-}
-
-func subjectToken(subjectClass MemorySubjectClass, groupID int64, userID int64, selfID int64) string {
-	switch subjectClass {
-	case MemorySubjectClassGroup:
-		if groupID > 0 {
-			return fmt.Sprintf("g:%d", groupID)
+	var builder strings.Builder
+	for _, r := range text {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			continue
 		}
-	case MemorySubjectClassSelf:
-		if selfID > 0 {
-			return fmt.Sprintf("self:%d", selfID)
-		}
-	case MemorySubjectClassMember:
-		if userID > 0 {
-			return fmt.Sprintf("u:%d", userID)
-		}
+		builder.WriteRune(r)
 	}
-	return ""
+	return builder.String()
 }
 
 func importanceForStatus(kind CanonicalMemoryType, status MemoryStatus, evidenceCount int) float64 {
@@ -396,6 +355,13 @@ type TopicSummaryParticipant struct {
 	Position string `json:"position"`
 }
 
+type TopicSummaryItemMeta struct {
+	Text      string `json:"text"`
+	Kind      string `json:"kind"`
+	SlotKind  string `json:"slot_kind,omitempty"`
+	Signature string `json:"signature,omitempty"`
+}
+
 type TopicParticipantRef struct {
 	UserID   int64  `json:"user_id"`
 	Nickname string `json:"nickname"`
@@ -410,6 +376,7 @@ type TopicSummaryV1 struct {
 	OpenLoops    []string                  `json:"open_loops"`
 	RecentTurns  []string                  `json:"recent_turns"`
 	Keywords     []string                  `json:"keywords"`
+	ItemMeta     []TopicSummaryItemMeta    `json:"item_meta,omitempty"`
 }
 
 type TopicSummarySnapshot struct {

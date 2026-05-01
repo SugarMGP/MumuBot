@@ -429,18 +429,11 @@ func (s *AdminService) ListMemories(filter MemoryFilter) (Page[memory.Memory], e
 	if strings.TrimSpace(filter.CanonicalType) != "" {
 		q = q.Where("canonical_type = ?", strings.TrimSpace(filter.CanonicalType))
 	}
-	switch strings.TrimSpace(filter.Status) {
-	case "active", "candidate", "archived", "legacy":
-		if filter.Status == "legacy" {
-			q = q.Where("(status = ? OR status = '')", memory.MemoryStatusLegacy)
-		} else {
-			q = q.Where("status = ?", strings.TrimSpace(filter.Status))
-		}
-	default:
-		q = q.Where("status = ?", memory.MemoryStatusActive)
+	if clause, args := memoryStatusFilterClause(filter.Status); clause != "" {
+		q = q.Where(clause, args...)
 	}
-	if strings.TrimSpace(filter.SourceKind) != "" {
-		q = q.Where("source_kind = ?", strings.TrimSpace(filter.SourceKind))
+	if clause, args := memorySourceFilterClause(filter.SourceKind); clause != "" {
+		q = q.Where(clause, args...)
 	}
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		pattern := "%" + keyword + "%"
@@ -455,6 +448,32 @@ func (s *AdminService) ListMemories(filter MemoryFilter) (Page[memory.Memory], e
 		return result, err
 	}
 	return result, nil
+}
+
+func memoryStatusFilterClause(raw string) (string, []any) {
+	switch strings.TrimSpace(raw) {
+	case "":
+		return "", nil
+	case string(memory.MemoryStatusLegacy):
+		return "(status = ? OR status = '' OR status IS NULL)", []any{memory.MemoryStatusLegacy}
+	case string(memory.MemoryStatusActive), string(memory.MemoryStatusCandidate), string(memory.MemoryStatusArchived):
+		return "status = ?", []any{strings.TrimSpace(raw)}
+	default:
+		return "", nil
+	}
+}
+
+func memorySourceFilterClause(raw string) (string, []any) {
+	switch strings.TrimSpace(raw) {
+	case "":
+		return "", nil
+	case string(memory.MemorySourceKindMessage):
+		return "(source_kind = ? OR ((source_kind = '' OR source_kind IS NULL) AND source_ref LIKE ?))", []any{memory.MemorySourceKindMessage, "message:%"}
+	case string(memory.MemorySourceKindTopic):
+		return "(source_kind = ? OR ((source_kind = '' OR source_kind IS NULL) AND source_ref LIKE ?))", []any{memory.MemorySourceKindTopic, "topic:%"}
+	default:
+		return "source_kind = ?", []any{strings.TrimSpace(raw)}
+	}
 }
 
 func (s *AdminService) ListTopicThreads(filter TopicFilter) (Page[memory.TopicThread], error) {

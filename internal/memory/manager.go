@@ -249,6 +249,18 @@ type TopicMemoryCandidateInput struct {
 	AllowedCanonicalTypes []CanonicalMemoryType
 }
 
+type memoryMergeInput struct {
+	Incoming   Memory
+	Candidates []Memory
+}
+
+type memoryMergeDecision struct {
+	ShouldMerge   bool
+	TargetID      uint
+	MergeIDs      []uint
+	MergedContent string
+}
+
 // EmbeddingProvider 向量嵌入接口
 type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
@@ -268,6 +280,7 @@ type Manager struct {
 	db              *gorm.DB
 	embedding       EmbeddingProvider
 	claimExtractor  *agentreact.Agent
+	mergeDecider    *agentreact.Agent
 	milvus          vectorStore // Memory 向量存储
 	styleCardMilvus vectorStore // StyleCard 向量存储
 	topicMilvus     vectorStore // Topic 摘要向量存储
@@ -380,13 +393,16 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 	} else {
 		m.claimExtractor = claimExtractor
 	}
-
+	if mergeDecider, err := newMemoryMergeDecider(claimModel); err != nil {
+		return nil, fmt.Errorf("初始化长期记忆合并判断器失败: %w", err)
+	} else {
+		m.mergeDecider = mergeDecider
+	}
 	// 启动消息日志清理任务
 	m.startMessageLogCleanup()
 
 	// 启动情绪衰减任务
 	m.startMoodDecay()
-	m.startMemoryConvergence()
 
 	return m, nil
 }
@@ -470,16 +486,26 @@ func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupI
 
 // UpdateMemoryContent 更新记忆内容（用于合并）
 func (m *Manager) UpdateMemoryContent(ctx context.Context, id uint, newContent string) error {
-	// 更新数据库
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	updates := map[string]any{
 		"content":    newContent,
 		"updated_at": time.Now(),
 	}
-	if err := m.db.Model(&Memory{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	if id != 0 {
+		var existing Memory
+		if err := m.db.WithContext(ctx).First(&existing, id).Error; err == nil {
+			if existing.CanonicalType == CanonicalMemoryTypeEpisode {
+				updates["fact_key"] = ""
+			} else {
+				updates["fact_key"] = buildFactKey(existing.Type, existing.CanonicalType, newContent)
+			}
+		}
+	}
+	if _, err := m.updateMemoryWithVector(ctx, id, updates); err != nil {
 		return err
 	}
-
-	m.syncMemoryVectorBestEffort(ctx, id)
 	return nil
 }
 
@@ -503,41 +529,40 @@ func (m *Manager) UpdateMemberProfileLearned(profile *MemberProfile) error {
 
 // DeleteMemory 删除记忆
 func (m *Manager) DeleteMemory(ctx context.Context, id uint) error {
-	if err := m.db.Delete(&Memory{}, id).Error; err != nil {
+	if id == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var old Memory
+	if err := m.db.WithContext(ctx).First(&old, id).Error; err != nil {
 		return err
 	}
-	if m.milvus != nil {
-		_ = m.milvus.Delete(ctx, []uint{id})
+	if err := m.db.WithContext(ctx).Delete(&Memory{}, id).Error; err != nil {
+		return err
+	}
+	if err := m.deleteMemoryVector(ctx, id); err != nil {
+		m.restoreDeletedMemoryRowsBestEffort(ctx, old)
+		return err
 	}
 	return nil
 }
 
 func (m *Manager) ArchiveMemory(ctx context.Context, id uint) error {
-	if err := m.db.WithContext(ctx).
-		Model(&Memory{}).
-		Where("id = ?", id).
-		Updates(map[string]any{
-			"status":     MemoryStatusArchived,
-			"updated_at": time.Now(),
-		}).Error; err != nil {
-		return err
-	}
-	m.syncMemoryVectorBestEffort(ctx, id)
-	return nil
+	_, err := m.updateMemoryWithVector(ctx, id, map[string]any{
+		"status":     MemoryStatusArchived,
+		"updated_at": time.Now(),
+	})
+	return err
 }
 
 func (m *Manager) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	if err := m.db.WithContext(ctx).
-		Model(&Memory{}).
-		Where("id = ?", id).
-		Updates(map[string]any{
-			"status":     MemoryStatusCandidate,
-			"updated_at": time.Now(),
-		}).Error; err != nil {
-		return err
-	}
-	m.syncMemoryVectorBestEffort(ctx, id)
-	return nil
+	_, err := m.updateMemoryWithVector(ctx, id, map[string]any{
+		"status":     MemoryStatusCandidate,
+		"updated_at": time.Now(),
+	})
+	return err
 }
 
 // SaveMemory 保存长期记忆
@@ -562,12 +587,37 @@ func (m *Manager) SaveMemory(ctx context.Context, mem *Memory) error {
 		mem.Importance = importanceForStatus(mem.CanonicalType, mem.Status, mem.EvidenceCount)
 	}
 
-	// 保存到 MySQL
-	if err := m.db.Save(mem).Error; err != nil {
+	if mem.ID == 0 {
+		created, err := m.createMemoryWithVector(ctx, mem)
+		if err != nil {
+			return err
+		}
+		if created != nil {
+			*mem = *created
+		}
+		return nil
+	}
+	updates := map[string]any{
+		"type":           mem.Type,
+		"group_id":       mem.GroupID,
+		"user_id":        mem.UserID,
+		"content":        mem.Content,
+		"importance":     mem.Importance,
+		"access_count":   mem.AccessCount,
+		"canonical_type": mem.CanonicalType,
+		"status":         mem.Status,
+		"evidence_count": mem.EvidenceCount,
+		"source_kind":    mem.SourceKind,
+		"source_ref":     mem.SourceRef,
+		"fact_key":       mem.FactKey,
+	}
+	updated, err := m.updateMemoryWithVector(ctx, mem.ID, updates)
+	if err != nil {
 		return err
 	}
-
-	m.syncMemoryVectorBestEffort(ctx, mem.ID)
+	if updated != nil {
+		*mem = *updated
+	}
 	return nil
 }
 
@@ -602,7 +652,6 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 		relatedUserID = resolveSubjectCandidateUserID(claim.SubjectName, input.SubjectCandidates)
 	}
 	subjectClass := claim.SubjectClass
-	subjectTokenValue := subjectToken(subjectClass, input.GroupID, relatedUserID, input.SelfID)
 
 	status := MemoryStatusCandidate
 	if input.SourceKind == MemorySourceKindMigration {
@@ -616,32 +665,15 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 	}
 
 	memType := oldMemoryTypeFromSubject(subjectClass)
+	if input.SourceKind != MemorySourceKindMigration {
+		status = MemoryStatusActive
+	}
 	factKey := ""
-	if IsKeyedCanonicalType(claim.CanonicalType) && subjectClass != MemorySubjectClassUnknown {
-		factKey = buildFactKey(memType, subjectTokenValue, claim.SlotKind, claim.SlotAnchor)
+	if claim.CanonicalType != CanonicalMemoryTypeEpisode {
+		factKey = buildFactKey(memType, claim.CanonicalType, content)
 	}
 
 	if claim.CanonicalType == CanonicalMemoryTypeEpisode {
-		var existing Memory
-		episodeQuery := m.db.WithContext(ctx).Where("group_id = ? AND source_ref = ? AND content = ?", input.GroupID, input.SourceRef, content)
-		err := episodeQuery.First(&existing).Error
-		if err == nil {
-			updates := map[string]any{
-				"updated_at":     time.Now(),
-				"evidence_count": gorm.Expr("GREATEST(evidence_count, ?)", 1),
-				"importance":     importanceForStatus(existing.CanonicalType, existing.EffectiveStatus(), existing.EvidenceCount),
-			}
-			if updateErr := m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", existing.ID).Updates(updates).Error; updateErr != nil {
-				return nil, "", updateErr
-			}
-			if fetchErr := m.db.WithContext(ctx).First(&existing, existing.ID).Error; fetchErr == nil {
-				return &existing, "deduplicated", nil
-			}
-			return &existing, "deduplicated", nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, "", err
-		}
 		mem := &Memory{
 			Type:          memType,
 			GroupID:       input.GroupID,
@@ -654,68 +686,7 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 			SourceRef:     input.SourceRef,
 			Importance:    importanceForStatus(claim.CanonicalType, status, 1),
 		}
-		if err := m.SaveMemory(ctx, mem); err != nil {
-			return nil, "", err
-		}
-		return mem, "created", nil
-	}
-
-	if factKey != "" {
-		var existing Memory
-		err := m.db.WithContext(ctx).
-			Where("group_id = ? AND canonical_type = ? AND fact_key = ? AND status <> ?", input.GroupID, claim.CanonicalType, factKey, MemoryStatusArchived).
-			Order("id DESC").
-			First(&existing).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, "", err
-		}
-		if err == nil {
-			if m.sameClaimValue(ctx, existing, input, claim, content) {
-				updates := map[string]any{
-					"updated_at":  time.Now(),
-					"source_kind": input.SourceKind,
-					"source_ref":  input.SourceRef,
-				}
-				action := "deduplicated"
-				nextEvidenceCount := existing.EvidenceCount
-				nextStatus := existing.EffectiveStatus()
-				if existing.SourceRef != input.SourceRef {
-					updates["evidence_count"] = gorm.Expr("evidence_count + 1")
-					nextEvidenceCount++
-					action = "reinforced"
-				}
-				if existing.EffectiveStatus() == MemoryStatusCandidate && canPromoteCandidate(existing, input.SourceKind, nextEvidenceCount) {
-					nextStatus = MemoryStatusActive
-					updates["status"] = nextStatus
-				}
-				updates["importance"] = importanceForStatus(existing.CanonicalType, nextStatus, nextEvidenceCount)
-				if updateErr := m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", existing.ID).Updates(updates).Error; updateErr != nil {
-					return nil, "", updateErr
-				}
-				_ = m.db.WithContext(ctx).First(&existing, existing.ID).Error
-				if _, ok := updates["status"]; ok {
-					m.syncMemoryVectorBestEffort(ctx, existing.ID)
-				}
-				return &existing, action, nil
-			}
-			mem := &Memory{
-				Type:          memType,
-				GroupID:       input.GroupID,
-				UserID:        relatedUserID,
-				Content:       content,
-				CanonicalType: claim.CanonicalType,
-				Status:        MemoryStatusCandidate,
-				EvidenceCount: 1,
-				SourceKind:    input.SourceKind,
-				SourceRef:     input.SourceRef,
-				FactKey:       factKey,
-				Importance:    importanceForStatus(claim.CanonicalType, MemoryStatusCandidate, 1),
-			}
-			if err := m.SaveMemory(ctx, mem); err != nil {
-				return nil, "", err
-			}
-			return mem, "conflict-candidate", nil
-		}
+		return m.saveMemoryWithMerge(ctx, input, mem)
 	}
 
 	mem := &Memory{
@@ -731,10 +702,587 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 		FactKey:       factKey,
 		Importance:    importanceForStatus(claim.CanonicalType, status, 1),
 	}
-	if err := m.SaveMemory(ctx, mem); err != nil {
+	return m.saveMemoryWithMerge(ctx, input, mem)
+}
+
+func (m *Manager) saveMemoryWithMerge(ctx context.Context, input MemoryIngestInput, incoming *Memory) (*Memory, string, error) {
+	if incoming == nil {
+		return nil, "ignored", nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if exact, action, ok, err := m.findExactMemory(ctx, input, *incoming); err != nil || ok {
+		return exact, action, err
+	}
+
+	if shouldSemanticMerge(incoming.CanonicalType) {
+		candidates, err := m.findSemanticMergeCandidates(ctx, *incoming)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(candidates) > 0 {
+			decision, err := m.decideMemoryMerge(ctx, memoryMergeInput{
+				Incoming:   *incoming,
+				Candidates: candidates,
+			})
+			if err != nil {
+				return nil, "", err
+			}
+			if decision.ShouldMerge {
+				mem, err := m.applyMemoryMerge(ctx, input, *incoming, candidates, decision)
+				return mem, "merged", err
+			}
+		}
+	}
+
+	mem, err := m.createMemoryWithVector(ctx, incoming)
+	if err != nil {
 		return nil, "", err
 	}
 	return mem, "created", nil
+}
+
+func (m *Manager) findExactMemory(ctx context.Context, input MemoryIngestInput, incoming Memory) (*Memory, string, bool, error) {
+	var existing Memory
+	var ok bool
+	var err error
+	if incoming.CanonicalType == CanonicalMemoryTypeEpisode {
+		existing, ok, err = m.findFirstCompatibleMemory(ctx, incoming, m.db.WithContext(ctx).
+			Where("group_id = ? AND type = ? AND canonical_type = ? AND source_kind = ? AND source_ref = ? AND content = ? AND (status <> ? OR status = '' OR status IS NULL)",
+				incoming.GroupID, incoming.Type, incoming.CanonicalType, incoming.SourceKind, incoming.SourceRef, incoming.Content, MemoryStatusArchived))
+	} else if incoming.FactKey != "" {
+		existing, ok, err = m.findFirstCompatibleMemory(ctx, incoming, m.db.WithContext(ctx).
+			Where("group_id = ? AND type = ? AND canonical_type = ? AND fact_key = ? AND (status <> ? OR status = '' OR status IS NULL)",
+				incoming.GroupID, incoming.Type, incoming.CanonicalType, incoming.FactKey, MemoryStatusArchived))
+	} else {
+		existing, ok, err = m.findFirstCompatibleMemory(ctx, incoming, m.db.WithContext(ctx).
+			Where("group_id = ? AND type = ? AND canonical_type = ? AND content = ? AND (status <> ? OR status = '' OR status IS NULL)",
+				incoming.GroupID, incoming.Type, incoming.CanonicalType, incoming.Content, MemoryStatusArchived))
+	}
+	if err != nil {
+		return nil, "", false, err
+	}
+	if !ok {
+		if incoming.CanonicalType != CanonicalMemoryTypeEpisode {
+			if legacy, ok, legacyErr := m.findExactMemoryByContent(ctx, incoming); legacyErr != nil || ok {
+				if legacyErr != nil {
+					return nil, "", false, legacyErr
+				}
+				mem, action, reinforceErr := m.reinforceExistingMemory(ctx, legacy, input)
+				return mem, action, true, reinforceErr
+			}
+		}
+		return nil, "", false, nil
+	}
+	mem, action, err := m.reinforceExistingMemory(ctx, existing, input)
+	return mem, action, true, err
+}
+
+func (m *Manager) findFirstCompatibleMemory(ctx context.Context, incoming Memory, query *gorm.DB) (Memory, bool, error) {
+	var candidates []Memory
+	if err := query.Order("id DESC").Find(&candidates).Error; err != nil {
+		return Memory{}, false, err
+	}
+	for _, candidate := range candidates {
+		if memorySubjectCompatible(incoming, candidate) {
+			return candidate, true, nil
+		}
+	}
+	return Memory{}, false, nil
+}
+
+func (m *Manager) findExactMemoryByContent(ctx context.Context, incoming Memory) (Memory, bool, error) {
+	normalized := normalizeMemoryContentForKey(incoming.Content)
+	if normalized == "" {
+		return Memory{}, false, nil
+	}
+	var candidates []Memory
+	if err := m.db.WithContext(ctx).
+		Where("group_id = ? AND type = ? AND canonical_type = ? AND content = ? AND (status <> ? OR status = '' OR status IS NULL)",
+			incoming.GroupID, incoming.Type, incoming.CanonicalType, incoming.Content, MemoryStatusArchived).
+		Order("id DESC").
+		Find(&candidates).Error; err != nil {
+		return Memory{}, false, err
+	}
+	for _, candidate := range candidates {
+		if memorySubjectCompatible(incoming, candidate) {
+			return candidate, true, nil
+		}
+	}
+	var lastID uint
+	const batchSize = 100
+	for {
+		candidates = candidates[:0]
+		query := m.db.WithContext(ctx).
+			Where("group_id = ? AND type = ? AND canonical_type = ? AND (status <> ? OR status = '' OR status IS NULL)",
+				incoming.GroupID, incoming.Type, incoming.CanonicalType, MemoryStatusArchived).
+			Order("id DESC").
+			Limit(batchSize)
+		if lastID > 0 {
+			query = query.Where("id < ?", lastID)
+		}
+		if err := query.Find(&candidates).Error; err != nil {
+			return Memory{}, false, err
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			if !memorySubjectCompatible(incoming, candidate) {
+				continue
+			}
+			if normalizeMemoryContentForKey(candidate.Content) == normalized {
+				return candidate, true, nil
+			}
+		}
+		lastID = candidates[len(candidates)-1].ID
+	}
+	return Memory{}, false, nil
+}
+
+func (m *Manager) reinforceExistingMemory(ctx context.Context, existing Memory, input MemoryIngestInput) (*Memory, string, error) {
+	now := time.Now()
+	action := "deduplicated"
+	nextEvidenceCount := existing.EvidenceCount
+	if nextEvidenceCount <= 0 {
+		nextEvidenceCount = 1
+	}
+	if !sameEvidenceSource(existing.SourceKind, existing.SourceRef, input.SourceKind, input.SourceRef) {
+		action = "reinforced"
+		nextEvidenceCount++
+	}
+	nextStatus := existing.EffectiveStatus()
+	if input.SourceKind != MemorySourceKindMigration && nextStatus != MemoryStatusArchived {
+		nextStatus = MemoryStatusActive
+	}
+	if nextStatus == MemoryStatusLegacy {
+		nextStatus = MemoryStatusActive
+	}
+	updates := map[string]any{
+		"status":         nextStatus,
+		"evidence_count": nextEvidenceCount,
+		"importance":     importanceForStatus(existing.CanonicalType, nextStatus, nextEvidenceCount),
+		"updated_at":     now,
+	}
+	if existing.CanonicalType != CanonicalMemoryTypeEpisode {
+		updates["fact_key"] = buildFactKey(existing.Type, existing.CanonicalType, existing.Content)
+	}
+	if action == "reinforced" {
+		updates["source_kind"] = input.SourceKind
+		updates["source_ref"] = input.SourceRef
+	}
+	mem, err := m.updateMemoryWithVector(ctx, existing.ID, updates)
+	return mem, action, err
+}
+
+func (m *Manager) createMemoryWithVector(ctx context.Context, mem *Memory) (*Memory, error) {
+	if mem == nil {
+		return nil, nil
+	}
+	if mem.EvidenceCount <= 0 {
+		mem.EvidenceCount = 1
+	}
+	if mem.Status == "" {
+		mem.Status = MemoryStatusActive
+	}
+	if mem.Importance <= 0 {
+		mem.Importance = importanceForStatus(mem.CanonicalType, mem.Status, mem.EvidenceCount)
+	}
+	prepared, err := m.prepareMemoryVector(ctx, *mem)
+	if err != nil {
+		return nil, err
+	}
+	var created Memory
+	if err := m.db.WithContext(ctx).Create(mem).Error; err != nil {
+		return nil, err
+	}
+	created = *mem
+	if prepared != nil {
+		prepared.memory = created
+	}
+	if err := m.insertPreparedMemoryVector(ctx, prepared); err != nil {
+		if err := m.db.WithContext(ctx).Delete(&Memory{}, created.ID).Error; err != nil {
+			zap.L().Warn("补偿删除长期记忆行失败", zap.Uint("memory_id", created.ID), zap.Error(err))
+		}
+		if err := m.deleteMemoryVector(ctx, created.ID); err != nil {
+			zap.L().Warn("补偿删除长期记忆向量失败", zap.Uint("memory_id", created.ID), zap.Error(err))
+		}
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (m *Manager) updateMemoryWithVector(ctx context.Context, id uint, updates map[string]any) (*Memory, error) {
+	if id == 0 {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var old Memory
+	if err := m.db.WithContext(ctx).First(&old, id).Error; err != nil {
+		return nil, err
+	}
+	next := memoryWithUpdates(old, updates)
+	prepared, err := m.prepareMemoryVector(ctx, next)
+	if err != nil {
+		return nil, err
+	}
+	var updated Memory
+	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Memory{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&updated, id).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if prepared != nil {
+		prepared.memory = updated
+	}
+	if err := m.replacePreparedMemoryVector(ctx, updated.ID, prepared); err != nil {
+		m.restoreExistingMemoryRowBestEffort(ctx, old)
+		m.restoreMemoryVectorsBestEffort(ctx, old)
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (m *Manager) applyMemoryMerge(ctx context.Context, input MemoryIngestInput, incoming Memory, candidates []Memory, decision memoryMergeDecision) (*Memory, error) {
+	targetID := decision.TargetID
+	if targetID == 0 && len(candidates) > 0 {
+		targetID = candidates[0].ID
+	}
+	if targetID == 0 {
+		return nil, fmt.Errorf("语义合并缺少目标记忆")
+	}
+	candidateByID := make(map[uint]Memory, len(candidates))
+	for _, candidate := range candidates {
+		candidateByID[candidate.ID] = candidate
+	}
+	target, ok := candidateByID[targetID]
+	if !ok {
+		return nil, fmt.Errorf("语义合并目标不在候选列表中")
+	}
+
+	mergeIDs := uniqueMemoryIDs(append(decision.MergeIDs, targetID))
+	content := strings.TrimSpace(decision.MergedContent)
+	if content == "" {
+		content = incoming.Content
+	}
+	now := time.Now()
+	nextEvidenceCount := target.EvidenceCount
+	if nextEvidenceCount <= 0 {
+		nextEvidenceCount = 1
+	}
+	incomingAddsEvidence := !sameEvidenceSource(target.SourceKind, target.SourceRef, input.SourceKind, input.SourceRef)
+	if incomingAddsEvidence {
+		nextEvidenceCount++
+	}
+	deletedCandidates := make([]Memory, 0, len(mergeIDs))
+	for _, id := range mergeIDs {
+		if id == targetID {
+			continue
+		}
+		if candidate, ok := candidateByID[id]; ok {
+			nextEvidenceCount += max(candidate.EvidenceCount, 1)
+			deletedCandidates = append(deletedCandidates, candidate)
+		}
+	}
+	nextStatus := target.EffectiveStatus()
+	if nextStatus == MemoryStatusLegacy {
+		nextStatus = MemoryStatusActive
+	}
+	updates := map[string]any{
+		"content":        content,
+		"status":         nextStatus,
+		"fact_key":       buildFactKey(target.Type, target.CanonicalType, content),
+		"evidence_count": nextEvidenceCount,
+		"importance":     importanceForStatus(target.CanonicalType, nextStatus, nextEvidenceCount),
+		"updated_at":     now,
+	}
+	if incomingAddsEvidence {
+		updates["source_kind"] = input.SourceKind
+		updates["source_ref"] = input.SourceRef
+	}
+	nextTarget := memoryWithUpdates(target, updates)
+	prepared, err := m.prepareMemoryVector(ctx, nextTarget)
+	if err != nil {
+		return nil, err
+	}
+	var updated Memory
+	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Memory{}).Where("id = ?", targetID).Updates(updates).Error; err != nil {
+			return err
+		}
+		archiveIDs := make([]uint, 0, len(mergeIDs))
+		for _, id := range mergeIDs {
+			if id != targetID {
+				archiveIDs = append(archiveIDs, id)
+			}
+		}
+		if len(archiveIDs) > 0 {
+			if err := tx.Where("id IN ?", archiveIDs).Delete(&Memory{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.First(&updated, targetID).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if prepared != nil {
+		prepared.memory = updated
+	}
+	if err := m.replaceMergedMemoryVectors(ctx, prepared, mergeIDs); err != nil {
+		m.restoreExistingMemoryRowBestEffort(ctx, target)
+		m.restoreDeletedMemoryRowsBestEffort(ctx, deletedCandidates...)
+		oldVectors := make([]Memory, 0, 1+len(deletedCandidates))
+		oldVectors = append(oldVectors, target)
+		oldVectors = append(oldVectors, deletedCandidates...)
+		m.restoreMemoryVectorsBestEffort(ctx, oldVectors...)
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (m *Manager) findSemanticMergeCandidates(ctx context.Context, incoming Memory) ([]Memory, error) {
+	if !shouldSemanticMerge(incoming.CanonicalType) || m.embedding == nil || m.milvus == nil {
+		return nil, nil
+	}
+	embedding, err := m.embedding.Embed(ctx, incoming.Content)
+	if err != nil {
+		return nil, err
+	}
+	results, err := m.milvus.Search(ctx, embedding, incoming.GroupID, string(incoming.Type), 8, 0.9)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+	ids := make([]uint, 0, len(results))
+	for _, result := range results {
+		if result.MemoryID != 0 {
+			ids = append(ids, result.MemoryID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var memories []Memory
+	if err := m.db.WithContext(ctx).
+		Where("id IN ? AND group_id = ? AND type = ? AND canonical_type = ? AND (status = ? OR status = ? OR status = '')",
+			ids, incoming.GroupID, incoming.Type, incoming.CanonicalType, MemoryStatusActive, MemoryStatusLegacy).
+		Find(&memories).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[uint]Memory, len(memories))
+	for _, mem := range memories {
+		byID[mem.ID] = mem
+	}
+	ordered := make([]Memory, 0, len(memories))
+	for _, result := range results {
+		if mem, ok := byID[result.MemoryID]; ok {
+			if !memorySubjectCompatible(incoming, mem) {
+				continue
+			}
+			ordered = append(ordered, mem)
+		}
+	}
+	return ordered, nil
+}
+
+func memorySubjectCompatible(incoming Memory, candidate Memory) bool {
+	if incoming.Type != candidate.Type {
+		return false
+	}
+	switch incoming.Type {
+	case MemoryTypeConversation, MemoryTypeSelfExperience:
+		if incoming.UserID > 0 && candidate.UserID > 0 && incoming.UserID != candidate.UserID {
+			return false
+		}
+	}
+	return true
+}
+
+func shouldSemanticMerge(kind CanonicalMemoryType) bool {
+	switch kind {
+	case CanonicalMemoryTypeFact, CanonicalMemoryTypePreference, CanonicalMemoryTypeConstraint, CanonicalMemoryTypeGoal:
+		return true
+	default:
+		return false
+	}
+}
+
+func sameEvidenceSource(leftKind MemorySourceKind, leftRef string, rightKind MemorySourceKind, rightRef string) bool {
+	return leftKind == rightKind && strings.TrimSpace(leftRef) == strings.TrimSpace(rightRef)
+}
+
+func uniqueMemoryIDs(ids []uint) []uint {
+	seen := make(map[uint]struct{}, len(ids))
+	result := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func (m *Manager) deleteMemoryVector(ctx context.Context, id uint) error {
+	if id == 0 || m.milvus == nil {
+		return nil
+	}
+	return m.milvus.Delete(ctx, []uint{id})
+}
+
+type preparedMemoryVector struct {
+	memory    Memory
+	embedding []float64
+}
+
+func (m *Manager) prepareMemoryVector(ctx context.Context, mem Memory) (*preparedMemoryVector, error) {
+	if !memoryVectorEligible(mem) || m.embedding == nil || m.milvus == nil {
+		return nil, nil
+	}
+	embedding, err := m.embedding.Embed(ctx, mem.Content)
+	if err != nil {
+		return nil, err
+	}
+	return &preparedMemoryVector{memory: mem, embedding: embedding}, nil
+}
+
+func (m *Manager) insertPreparedMemoryVector(ctx context.Context, prepared *preparedMemoryVector) error {
+	if prepared == nil || m.milvus == nil {
+		return nil
+	}
+	_, err := m.milvus.Insert(ctx, prepared.memory.ID, prepared.memory.GroupID, string(prepared.memory.Type), prepared.embedding)
+	return err
+}
+
+func (m *Manager) replacePreparedMemoryVector(ctx context.Context, id uint, prepared *preparedMemoryVector) error {
+	if err := m.deleteMemoryVector(ctx, id); err != nil {
+		return err
+	}
+	return m.insertPreparedMemoryVector(ctx, prepared)
+}
+
+func (m *Manager) replaceMergedMemoryVectors(ctx context.Context, prepared *preparedMemoryVector, oldIDs []uint) error {
+	for _, id := range uniqueMemoryIDs(oldIDs) {
+		if err := m.deleteMemoryVector(ctx, id); err != nil {
+			return err
+		}
+	}
+	return m.insertPreparedMemoryVector(ctx, prepared)
+}
+
+func (m *Manager) restoreExistingMemoryRowBestEffort(ctx context.Context, mem Memory) {
+	if mem.ID == 0 {
+		return
+	}
+	if err := m.db.WithContext(ctx).Save(&mem).Error; err != nil {
+		zap.L().Warn("补偿恢复长期记忆行失败", zap.Uint("memory_id", mem.ID), zap.Error(err))
+	}
+}
+
+func (m *Manager) restoreDeletedMemoryRowsBestEffort(ctx context.Context, memories ...Memory) {
+	for _, mem := range memories {
+		if mem.ID == 0 {
+			continue
+		}
+		if err := m.db.WithContext(ctx).Create(&mem).Error; err != nil {
+			zap.L().Warn("补偿重建长期记忆行失败", zap.Uint("memory_id", mem.ID), zap.Error(err))
+		}
+	}
+}
+
+func (m *Manager) restoreMemoryVectorsBestEffort(ctx context.Context, memories ...Memory) {
+	for _, mem := range memories {
+		prepared, err := m.prepareMemoryVector(ctx, mem)
+		if err != nil {
+			zap.L().Warn("补偿准备长期记忆向量失败", zap.Uint("memory_id", mem.ID), zap.Error(err))
+			continue
+		}
+		if err := m.replacePreparedMemoryVector(ctx, mem.ID, prepared); err != nil {
+			zap.L().Warn("补偿恢复长期记忆向量失败", zap.Uint("memory_id", mem.ID), zap.Error(err))
+		}
+	}
+}
+
+func memoryWithUpdates(mem Memory, updates map[string]any) Memory {
+	next := mem
+	for key, value := range updates {
+		switch key {
+		case "type":
+			if v, ok := value.(MemoryType); ok {
+				next.Type = v
+			}
+		case "group_id":
+			if v, ok := value.(int64); ok {
+				next.GroupID = v
+			}
+		case "user_id":
+			if v, ok := value.(int64); ok {
+				next.UserID = v
+			}
+		case "content":
+			if v, ok := value.(string); ok {
+				next.Content = v
+			}
+		case "importance":
+			if v, ok := value.(float64); ok {
+				next.Importance = v
+			}
+		case "access_count":
+			if v, ok := value.(int); ok {
+				next.AccessCount = v
+			}
+		case "canonical_type":
+			if v, ok := value.(CanonicalMemoryType); ok {
+				next.CanonicalType = v
+			}
+		case "status":
+			if v, ok := value.(MemoryStatus); ok {
+				next.Status = v
+			}
+		case "evidence_count":
+			if v, ok := value.(int); ok {
+				next.EvidenceCount = v
+			}
+		case "source_kind":
+			if v, ok := value.(MemorySourceKind); ok {
+				next.SourceKind = v
+			}
+		case "source_ref":
+			if v, ok := value.(string); ok {
+				next.SourceRef = v
+			}
+		case "fact_key":
+			if v, ok := value.(string); ok {
+				next.FactKey = v
+			}
+		case "updated_at":
+			if v, ok := value.(time.Time); ok {
+				next.UpdatedAt = v
+			}
+		}
+	}
+	return next
 }
 
 func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error) {
@@ -769,42 +1317,6 @@ func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMem
 		if mem == nil {
 			continue
 		}
-		if mem.Status == MemoryStatusCandidate && canPromoteCandidate(*mem, MemorySourceKindTopic, mem.EvidenceCount) {
-			now := time.Now()
-			affectedIDs := []uint{mem.ID}
-			if err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				if err := tx.Model(&Memory{}).Where("id = ?", mem.ID).Updates(map[string]any{
-					"status":     MemoryStatusActive,
-					"importance": importanceForStatus(mem.CanonicalType, MemoryStatusActive, mem.EvidenceCount),
-					"updated_at": now,
-				}).Error; err != nil {
-					return err
-				}
-				if mem.FactKey == "" {
-					return nil
-				}
-				var archivedIDs []uint
-				if err := tx.Model(&Memory{}).
-					Where("id <> ? AND group_id = ? AND canonical_type = ? AND fact_key = ? AND status = ?", mem.ID, mem.GroupID, mem.CanonicalType, mem.FactKey, MemoryStatusActive).
-					Pluck("id", &archivedIDs).Error; err != nil {
-					return err
-				}
-				affectedIDs = append(affectedIDs, archivedIDs...)
-				if len(archivedIDs) == 0 {
-					return nil
-				}
-				return tx.Model(&Memory{}).
-					Where("id IN ?", archivedIDs).
-					Updates(map[string]any{
-						"status":     MemoryStatusArchived,
-						"updated_at": now,
-					}).Error
-			}); err == nil && m.db.WithContext(ctx).First(mem, mem.ID).Error == nil {
-				m.syncMemoryVectorsBestEffort(ctx, affectedIDs...)
-				created = append(created, *mem)
-				continue
-			}
-		}
 		if action != "ignored" {
 			created = append(created, *mem)
 		}
@@ -813,74 +1325,6 @@ func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMem
 		}
 	}
 	return created, nil
-}
-
-func (m *Manager) RunMemoryConvergence(ctx context.Context, now time.Time) error {
-	if now.IsZero() {
-		now = time.Now()
-	}
-	var affectedIDs []uint
-	if err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var stale []Memory
-		if err := tx.
-			Where("status = ? AND updated_at < ?", MemoryStatusCandidate, now.Add(-MemoryOpenLoopGraceWindow)).
-			Find(&stale).Error; err != nil {
-			return err
-		}
-		for _, item := range stale {
-			if item.FactKey == "" && item.CanonicalType != CanonicalMemoryTypeEpisode {
-				if err := tx.Model(&Memory{}).Where("id = ?", item.ID).Updates(map[string]any{
-					"status":     MemoryStatusArchived,
-					"updated_at": now,
-				}).Error; err != nil {
-					return err
-				}
-				affectedIDs = append(affectedIDs, item.ID)
-				continue
-			}
-			if canPromoteCandidate(item, item.SourceKind, item.EvidenceCount) {
-				if err := tx.Model(&Memory{}).Where("id = ?", item.ID).Updates(map[string]any{
-					"status":     MemoryStatusActive,
-					"updated_at": now,
-				}).Error; err != nil {
-					return err
-				}
-				affectedIDs = append(affectedIDs, item.ID)
-				if item.FactKey != "" {
-					var archivedIDs []uint
-					if err := tx.Model(&Memory{}).
-						Where("id <> ? AND group_id = ? AND canonical_type = ? AND fact_key = ? AND status = ?", item.ID, item.GroupID, item.CanonicalType, item.FactKey, MemoryStatusActive).
-						Pluck("id", &archivedIDs).Error; err != nil {
-						return err
-					}
-					affectedIDs = append(affectedIDs, archivedIDs...)
-					if len(archivedIDs) > 0 {
-						if err := tx.Model(&Memory{}).
-							Where("id IN ?", archivedIDs).
-							Updates(map[string]any{
-								"status":     MemoryStatusArchived,
-								"updated_at": now,
-							}).Error; err != nil {
-							return err
-						}
-					}
-				}
-				continue
-			}
-			if err := tx.Model(&Memory{}).Where("id = ?", item.ID).Updates(map[string]any{
-				"status":     MemoryStatusArchived,
-				"updated_at": now,
-			}).Error; err != nil {
-				return err
-			}
-			affectedIDs = append(affectedIDs, item.ID)
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	m.syncMemoryVectorsBestEffort(ctx, affectedIDs...)
-	return nil
 }
 
 // QueryMemory 查询相关记忆
@@ -989,27 +1433,6 @@ func (m *Manager) startMessageLogCleanup() {
 			select {
 			case <-ticker.C:
 				m.cleanupMessageLogs(keepLatest)
-			case <-m.cleanupStop:
-				ticker.Stop()
-				return
-			}
-		}
-	}()
-}
-
-func (m *Manager) startMemoryConvergence() {
-	ticker := time.NewTicker(15 * time.Minute)
-
-	go func() {
-		if err := m.RunMemoryConvergence(context.Background(), time.Now()); err != nil {
-			zap.L().Warn("启动时运行长期记忆收敛失败", zap.Error(err))
-		}
-		for {
-			select {
-			case <-ticker.C:
-				if err := m.RunMemoryConvergence(context.Background(), time.Now()); err != nil {
-					zap.L().Warn("长期记忆收敛失败", zap.Error(err))
-				}
 			case <-m.cleanupStop:
 				ticker.Stop()
 				return
@@ -1630,65 +2053,6 @@ func (m *Manager) Close() error {
 
 func (m *Manager) GetDB() *gorm.DB { return m.db }
 
-func canPromoteCandidate(mem Memory, sourceKind MemorySourceKind, evidenceCount int) bool {
-	if mem.CanonicalType == CanonicalMemoryTypeEpisode {
-		return sourceKind == MemorySourceKindTopic
-	}
-	if mem.FactKey == "" {
-		return false
-	}
-	if sourceKind == MemorySourceKindTopic {
-		return true
-	}
-	return evidenceCount >= 2
-}
-
-func (m *Manager) syncMemoryVectorBestEffort(ctx context.Context, id uint) {
-	if err := m.syncMemoryVector(ctx, id); err != nil {
-		zap.L().Warn("同步长期记忆向量失败", zap.Uint("memory_id", id), zap.Error(err))
-	}
-}
-
-func (m *Manager) syncMemoryVectorsBestEffort(ctx context.Context, ids ...uint) {
-	seen := make(map[uint]struct{}, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		m.syncMemoryVectorBestEffort(ctx, id)
-	}
-}
-
-func (m *Manager) syncMemoryVector(ctx context.Context, id uint) error {
-	if id == 0 || m.milvus == nil {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := m.milvus.Delete(ctx, []uint{id}); err != nil {
-		return err
-	}
-
-	var mem Memory
-	if err := m.db.WithContext(ctx).First(&mem, id).Error; err != nil {
-		return err
-	}
-	if !memoryVectorEligible(mem) || m.embedding == nil {
-		return nil
-	}
-	embedding, err := m.embedding.Embed(ctx, mem.Content)
-	if err != nil {
-		return err
-	}
-	_, err = m.milvus.Insert(ctx, mem.ID, mem.GroupID, string(mem.Type), embedding)
-	return err
-}
-
 func memoryVectorEligible(mem Memory) bool {
 	switch mem.EffectiveStatus() {
 	case MemoryStatusActive, MemoryStatusLegacy:
@@ -1713,30 +2077,6 @@ func containsCanonicalType(allowed []CanonicalMemoryType, kind CanonicalMemoryTy
 		if candidate == kind {
 			return true
 		}
-	}
-	return false
-}
-
-func normalizeComparableText(raw string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(strings.ToLower(raw))), "")
-}
-
-func (m *Manager) sameClaimValue(_ context.Context, existing Memory, _ MemoryIngestInput, incoming NormalizedClaim, content string) bool {
-	existingContent := normalizeComparableText(existing.Content)
-	incomingContent := normalizeComparableText(content)
-	if existingContent != "" && existingContent == incomingContent {
-		return true
-	}
-
-	incomingValue := normalizeComparableText(incoming.ValueSummary)
-	if incomingValue == "" {
-		incomingValue = incomingContent
-	}
-	if incomingValue == "" {
-		return false
-	}
-	if existingContent == incomingValue {
-		return true
 	}
 	return false
 }

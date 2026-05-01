@@ -88,6 +88,7 @@ func MarshalTopicSummary(summary TopicSummaryV1) (string, error) {
 	if summary.Keywords == nil {
 		summary.Keywords = []string{}
 	}
+	summary.ItemMeta = NormalizeTopicSummaryItemMeta(summary)
 
 	raw, err := json.Marshal(summary)
 	if err != nil {
@@ -130,7 +131,69 @@ func ParseTopicSummary(raw string) TopicSummaryV1 {
 	if summary.Keywords == nil {
 		summary.Keywords = []string{}
 	}
+	summary.ItemMeta = normalizeExistingTopicSummaryItemMeta(summary)
 	return summary
+}
+
+func normalizeExistingTopicSummaryItemMeta(summary TopicSummaryV1) []TopicSummaryItemMeta {
+	if len(summary.ItemMeta) == 0 {
+		return []TopicSummaryItemMeta{}
+	}
+	return NormalizeTopicSummaryItemMeta(summary)
+}
+
+func NormalizeTopicSummaryItemMeta(summary TopicSummaryV1) []TopicSummaryItemMeta {
+	result := make([]TopicSummaryItemMeta, 0, len(summary.Facts)+len(summary.OpenLoops))
+	oldByText := make(map[string]TopicSummaryItemMeta, len(summary.ItemMeta))
+	for _, meta := range summary.ItemMeta {
+		text := strings.TrimSpace(meta.Text)
+		if text == "" {
+			continue
+		}
+		meta.Text = text
+		meta.Kind = strings.TrimSpace(meta.Kind)
+		meta.SlotKind = strings.TrimSpace(meta.SlotKind)
+		meta.Signature = strings.TrimSpace(meta.Signature)
+		oldByText[normalizeMemoryContentForKey(text)] = meta
+	}
+	push := func(kind string, text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
+		}
+		key := normalizeMemoryContentForKey(text)
+		meta := oldByText[key]
+		meta.Text = text
+		meta.Kind = kind
+		if meta.Signature == "" {
+			meta.Signature = buildFactKey(MemoryTypeGroupFact, CanonicalMemoryTypeFact, text)
+		}
+		result = append(result, meta)
+	}
+	for _, fact := range summary.Facts {
+		push("fact", fact)
+	}
+	for _, loop := range summary.OpenLoops {
+		push("open_loop", loop)
+	}
+	return result
+}
+
+func TopicSummaryItemMetaForPrompt(summary TopicSummaryV1) []TopicSummaryItemMeta {
+	return NormalizeTopicSummaryItemMeta(summary)
+}
+
+func MergeTopicSummaryItemMeta(oldSummary TopicSummaryV1, nextSummary TopicSummaryV1) []TopicSummaryItemMeta {
+	nextSummary.ItemMeta = append([]TopicSummaryItemMeta(nil), oldSummary.ItemMeta...)
+	return NormalizeTopicSummaryItemMeta(nextSummary)
+}
+
+func MarshalTopicSummaryItemMetaForPrompt(summary TopicSummaryV1) (string, error) {
+	raw, err := json.Marshal(TopicSummaryItemMetaForPrompt(summary))
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func ParseTopicSummaryHistory(raw string) []TopicSummarySnapshot {

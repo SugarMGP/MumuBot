@@ -815,6 +815,7 @@ func (tm *TopicManager) ensureTopicSummaryFreshOnce(ctx context.Context, topicID
 		if err != nil {
 			return nil, err
 		}
+		summary.ItemMeta = memory.MergeTopicSummaryItemMeta(oldSummary, summary)
 		summaryUntil := pendingLogs[len(pendingLogs)-1].ID
 		if err := tm.store.UpdateTopicSummary(ctx, topicID, summary, summaryUntil, time.Now()); err != nil {
 			return nil, err
@@ -1223,11 +1224,15 @@ func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.T
 	if err != nil {
 		return memory.TopicSummaryV1{}, err
 	}
+	oldItemMetaJSON := "[]"
+	if rawMeta, err := memory.MarshalTopicSummaryItemMetaForPrompt(oldSummary); err == nil {
+		oldItemMetaJSON = rawMeta
+	}
 	target := &topicSummarySubmission{}
 	summaryCtx, cancel := context.WithTimeout(withTopicSummaryTarget(ctx, target), 30*time.Second)
 	defer cancel()
 
-	prompt := fmt.Sprintf("请根据旧摘要和新增消息，调用一次 %s 工具提交最新的话题摘要，不要输出普通文本。\n字段固定为 title,gist,facts,participants,open_loops,recent_turns,keywords。\nfacts 只写已经确认且对后续有用的稳定事实；open_loops 只写尚未解决、后续可能要接上的事项；recent_turns 保留近期推进，不复述全部聊天。\nparticipants 中每项包含 nickname 和 position。\n旧摘要：%s\n新增消息：\n%s", topicSummaryToolName, oldSummaryJSON, strings.Join(msgLines, "\n"))
+	prompt := fmt.Sprintf("请根据旧摘要和新增消息，调用一次 %s 工具提交最新的话题摘要，不要输出普通文本。\n字段固定为 title,gist,facts,participants,open_loops,recent_turns,keywords。\nfacts 只写已经确认且对后续有用的稳定事实；open_loops 只写尚未解决、后续可能要接上的事项；recent_turns 保留近期推进，不复述全部聊天。\nparticipants 中每项包含 nickname 和 position。\n旧摘要里的 item_meta 只供你理解旧条目身份：如果新消息没有实质改变同一条事实或事项，尽量沿用旧 facts/open_loops 的原句，不要把同一事实改写成并列新条目；如果需要更新同一条事实，替换旧条目，不要同时保留新旧两条。\n旧摘要：%s\n旧条目元数据：%s\n新增消息：\n%s", topicSummaryToolName, oldSummaryJSON, oldItemMetaJSON, strings.Join(msgLines, "\n"))
 	_, err = tm.summaryExtractor.Generate(summaryCtx, []*schema.Message{
 		schema.SystemMessage("你负责维护群聊当前话题的结构化摘要。你必须调用工具提交结果，不要输出普通文本。"),
 		schema.UserMessage(prompt),

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mumu-bot/internal/memory"
 	neturl "net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -308,10 +309,17 @@ func topicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
 		if idx > 0 {
 			prev = &history[idx-1]
 		}
-		changes = append(changes, buildTopicSummaryChangeView(prev, snapshot))
+		change := buildTopicSummaryChangeView(prev, snapshot)
+		if !change.Changed {
+			continue
+		}
+		changes = append(changes, change)
 	}
 	for left, right := 0, len(changes)-1; left < right; left, right = left+1, right-1 {
 		changes[left], changes[right] = changes[right], changes[left]
+	}
+	if len(changes) > 0 {
+		changes[0].InitiallyOpen = true
 	}
 	return changes
 }
@@ -331,11 +339,16 @@ func buildTopicSummaryChangeView(prev *memory.TopicSummarySnapshot, current memo
 	}
 
 	if prev == nil {
+		view.InitialSnapshot = true
 		view.TitleChanged = currentTitle != ""
 		view.GistChanged = currentGist != ""
 		view.AddedFacts = normalizedTopicSummaryItems(current.Summary.Facts)
 		view.AddedOpenLoops = normalizedTopicSummaryItems(current.Summary.OpenLoops)
 		view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedFacts) > 0 || len(view.AddedOpenLoops) > 0
+		view.TitleDiff = buildAddedTextDiffView(currentTitle, "之前没有标题", "现在没有标题")
+		view.GistDiff = buildAddedTextDiffView(currentGist, "之前没有概括", "现在没有概括")
+		view.Headline = topicSummaryChangeHeadline(view)
+		view.Badges = topicSummaryChangeBadges(view)
 		return view
 	}
 
@@ -345,10 +358,250 @@ func buildTopicSummaryChangeView(prev *memory.TopicSummarySnapshot, current memo
 	view.PreviousGist = prevGist
 	view.TitleChanged = prevTitle != currentTitle
 	view.GistChanged = prevGist != currentGist
+	view.TitleDiff = buildTopicTextDiffView(prevTitle, currentTitle, "之前没有标题", "现在没有标题")
+	view.GistDiff = buildTopicTextDiffView(prevGist, currentGist, "之前没有概括", "现在没有概括")
 	view.AddedFacts, view.RemovedFacts = diffStringSet(prev.Summary.Facts, current.Summary.Facts)
 	view.AddedOpenLoops, view.RemovedOpenLoops = diffStringSet(prev.Summary.OpenLoops, current.Summary.OpenLoops)
 	view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedFacts) > 0 || len(view.RemovedFacts) > 0 || len(view.AddedOpenLoops) > 0 || len(view.RemovedOpenLoops) > 0
+	view.Headline = topicSummaryChangeHeadline(view)
+	view.Badges = topicSummaryChangeBadges(view)
 	return view
+}
+
+func buildTopicTextDiffView(previous string, current string, previousPlaceholder string, currentPlaceholder string) TopicTextDiffView {
+	previous = strings.TrimSpace(previous)
+	current = strings.TrimSpace(current)
+	if previous == current {
+		segments := diffSegmentsForText(previous, "equal")
+		return TopicTextDiffView{
+			PreviousSegments:    diffSegmentsForText(previous, "equal"),
+			CurrentSegments:     diffSegmentsForText(current, "equal"),
+			InlineSegments:      append([]TopicTextDiffSegmentView(nil), segments...),
+			PreviousPlaceholder: previousPlaceholder,
+			CurrentPlaceholder:  currentPlaceholder,
+			PreviousEmpty:       previous == "",
+			CurrentEmpty:        current == "",
+		}
+	}
+
+	diffView := TopicTextDiffView{
+		PreviousPlaceholder: previousPlaceholder,
+		CurrentPlaceholder:  currentPlaceholder,
+		PreviousEmpty:       previous == "",
+		CurrentEmpty:        current == "",
+	}
+	if previous == "" {
+		diffView.CurrentSegments = diffSegmentsForText(current, "add")
+		diffView.InlineSegments = append(diffView.InlineSegments, TopicTextDiffSegmentView{Text: current, Kind: "add"})
+		return diffView
+	}
+	if current == "" {
+		diffView.PreviousSegments = diffSegmentsForText(previous, "remove")
+		diffView.InlineSegments = append(diffView.InlineSegments, TopicTextDiffSegmentView{Text: previous, Kind: "remove"})
+		return diffView
+	}
+
+	prevPrefix, prevMiddle, prevSuffix, currPrefix, currMiddle, currSuffix := topicCommonTextDiff(previous, current)
+	if prevPrefix != "" {
+		appendDiffSegment(&diffView.PreviousSegments, "equal", prevPrefix)
+		appendDiffSegment(&diffView.CurrentSegments, "equal", currPrefix)
+		appendDiffSegment(&diffView.InlineSegments, "equal", prevPrefix)
+	}
+	if prevMiddle != "" {
+		appendDiffSegment(&diffView.PreviousSegments, "remove", prevMiddle)
+		appendDiffSegment(&diffView.InlineSegments, "remove", prevMiddle)
+	}
+	if currMiddle != "" {
+		appendDiffSegment(&diffView.CurrentSegments, "add", currMiddle)
+		appendDiffSegment(&diffView.InlineSegments, "add", currMiddle)
+	}
+	if prevSuffix != "" {
+		appendDiffSegment(&diffView.PreviousSegments, "equal", prevSuffix)
+		appendDiffSegment(&diffView.CurrentSegments, "equal", currSuffix)
+		appendDiffSegment(&diffView.InlineSegments, "equal", prevSuffix)
+	}
+	return diffView
+}
+
+func buildAddedTextDiffView(current string, previousPlaceholder string, currentPlaceholder string) TopicTextDiffView {
+	current = strings.TrimSpace(current)
+	return TopicTextDiffView{
+		PreviousPlaceholder: previousPlaceholder,
+		CurrentPlaceholder:  currentPlaceholder,
+		PreviousEmpty:       true,
+		CurrentEmpty:        current == "",
+		CurrentSegments:     diffSegmentsForText(current, "add"),
+		InlineSegments:      diffSegmentsForText(current, "add"),
+	}
+}
+
+func diffSegmentsForText(text string, kind string) []TopicTextDiffSegmentView {
+	if text == "" {
+		return nil
+	}
+	return []TopicTextDiffSegmentView{{Text: text, Kind: kind}}
+}
+
+func appendDiffSegment(target *[]TopicTextDiffSegmentView, kind string, text string) {
+	if text == "" {
+		return
+	}
+	if len(*target) > 0 {
+		last := &(*target)[len(*target)-1]
+		if last.Kind == kind {
+			last.Text += text
+			return
+		}
+	}
+	*target = append(*target, TopicTextDiffSegmentView{Text: text, Kind: kind})
+}
+
+func topicCommonTextDiff(previous string, current string) (string, string, string, string, string, string) {
+	prevRunes := []rune(previous)
+	currRunes := []rune(current)
+
+	prefix := 0
+	for prefix < len(prevRunes) && prefix < len(currRunes) && prevRunes[prefix] == currRunes[prefix] {
+		prefix++
+	}
+
+	suffix := 0
+	for suffix < len(prevRunes)-prefix && suffix < len(currRunes)-prefix && prevRunes[len(prevRunes)-1-suffix] == currRunes[len(currRunes)-1-suffix] {
+		suffix++
+	}
+
+	return string(prevRunes[:prefix]), string(prevRunes[prefix : len(prevRunes)-suffix]), string(prevRunes[len(prevRunes)-suffix:]), string(currRunes[:prefix]), string(currRunes[prefix : len(currRunes)-suffix]), string(currRunes[len(currRunes)-suffix:])
+}
+
+func topicSummaryChangeHeadline(change TopicSummaryChangeView) string {
+	if change.InitialSnapshot {
+		return "首次生成摘要快照"
+	}
+	parts := make([]string, 0, 4)
+	if change.TitleChanged {
+		parts = append(parts, "标题改了")
+	}
+	if change.GistChanged {
+		parts = append(parts, "概括改了")
+	}
+	if count := len(change.AddedOpenLoops) + len(change.RemovedOpenLoops); count > 0 {
+		parts = append(parts, fmt.Sprintf("未完事项调整 %d 项", count))
+	}
+	if count := len(change.AddedFacts) + len(change.RemovedFacts); count > 0 {
+		parts = append(parts, fmt.Sprintf("已确认事项调整 %d 项", count))
+	}
+	if len(parts) == 0 {
+		return "摘要内容有更新"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func topicSummaryChangeBadges(change TopicSummaryChangeView) []TopicSummaryChangeBadgeView {
+	badges := make([]TopicSummaryChangeBadgeView, 0, 5)
+	if change.TitleChanged {
+		badges = append(badges, TopicSummaryChangeBadgeView{Label: "标题变化", Tone: "cyan"})
+	}
+	if change.GistChanged {
+		badges = append(badges, TopicSummaryChangeBadgeView{Label: "概括变化", Tone: "teal"})
+	}
+	if len(change.AddedOpenLoops) > 0 || len(change.RemovedOpenLoops) > 0 {
+		badges = append(badges, TopicSummaryChangeBadgeView{Label: "未完事项", Tone: "amber"})
+	}
+	if len(change.AddedFacts) > 0 || len(change.RemovedFacts) > 0 {
+		badges = append(badges, TopicSummaryChangeBadgeView{Label: "已确认事项", Tone: "emerald"})
+	}
+	return badges
+}
+
+func topicChangeBadgeClass(tone string) string {
+	base := "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1"
+	switch strings.TrimSpace(tone) {
+	case "cyan":
+		return joinClasses(base, "bg-cyan-50 text-cyan-700 ring-cyan-200/80")
+	case "teal":
+		return joinClasses(base, "bg-teal-50 text-teal-700 ring-teal-200/80")
+	case "amber":
+		return joinClasses(base, "bg-amber-50 text-amber-700 ring-amber-200/80")
+	case "emerald":
+		return joinClasses(base, "bg-emerald-50 text-emerald-700 ring-emerald-200/80")
+	default:
+		return joinClasses(base, "bg-slate-100 text-slate-600 ring-slate-200/80")
+	}
+}
+
+func topicDiffSegmentClass(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "add":
+		return "admin-topic-diff__segment admin-topic-diff__segment--add"
+	case "remove":
+		return "admin-topic-diff__segment admin-topic-diff__segment--remove"
+	default:
+		return "admin-topic-diff__segment admin-topic-diff__segment--equal"
+	}
+}
+
+func topicInlineDiffClass(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "add":
+		return "admin-topic-inline-diff__segment admin-topic-inline-diff__segment--add"
+	case "remove":
+		return "admin-topic-inline-diff__segment admin-topic-inline-diff__segment--remove"
+	default:
+		return "admin-topic-inline-diff__segment admin-topic-inline-diff__segment--equal"
+	}
+}
+
+func topicSummaryChangeCountLabel(topic memory.TopicThread, changes []TopicSummaryChangeView) string {
+	historyCount := len(topicSummaryHistory(topic))
+	if historyCount == 0 {
+		return "还没有摘要快照"
+	}
+	changed := 0
+	for _, change := range changes {
+		if change.Changed {
+			changed++
+		}
+	}
+	if changed == 0 {
+		return "有摘要快照，但还没有内容变化"
+	}
+	return fmt.Sprintf("共 %d 次内容变化", changed)
+}
+
+func topicSummaryTimelineClass(changes []TopicSummaryChangeView) string {
+	if len(changes) >= 5 {
+		return "admin-topic-summary-timeline admin-topic-summary-timeline--compact"
+	}
+	return "admin-topic-summary-timeline"
+}
+
+func topicSummaryColumnClass(changes []TopicSummaryChangeView) string {
+	_ = changes
+	return "space-y-4"
+}
+
+func topicSummaryShellClass(changes []TopicSummaryChangeView) string {
+	_ = changes
+	return "grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)] xl:items-start"
+}
+
+func topicChangeSectionSummary(change TopicSummaryChangeView) string {
+	delta := 0
+	delta += len(change.AddedFacts) + len(change.RemovedFacts)
+	delta += len(change.AddedOpenLoops) + len(change.RemovedOpenLoops)
+	if delta == 0 {
+		return "本次没有列表项增减"
+	}
+	return fmt.Sprintf("本次共有 %d 处列表项调整", delta)
+}
+
+func topicDiffList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := append([]string(nil), items...)
+	sort.Strings(cloned)
+	return cloned
 }
 
 func diffStringSet(before []string, after []string) ([]string, []string) {
@@ -597,7 +850,27 @@ func memoryStatusClass(status memory.MemoryStatus) string {
 	}
 }
 
-func memorySourceKindText(kind memory.MemorySourceKind) string {
+func memorySourceKindText(item memory.Memory) string {
+	switch kind := item.SourceKind; kind {
+	case memory.MemorySourceKindTopic:
+		return "话题沉淀"
+	case memory.MemorySourceKindMessage:
+		return "主动记住"
+	}
+	sourceRef := strings.TrimSpace(item.SourceRef)
+	switch {
+	case strings.HasPrefix(sourceRef, "topic:"):
+		return "话题沉淀"
+	case strings.HasPrefix(sourceRef, "message:"):
+		return "主动记住"
+	case item.EffectiveStatus() == memory.MemoryStatusLegacy:
+		return "旧版兼容"
+	default:
+		return "未标注"
+	}
+}
+
+func memorySourceKindTextFromKind(kind memory.MemorySourceKind) string {
 	switch kind {
 	case memory.MemorySourceKindTopic:
 		return "话题沉淀"

@@ -65,6 +65,7 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/meguminnnnnnnnn/go-openai v0.1.4 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.15 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.15 // indirect
@@ -145,6 +146,7 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
+	gorm.io/driver/sqlite v1.6.0 // indirect
 	k8s.io/apimachinery v0.36.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
