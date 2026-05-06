@@ -179,9 +179,9 @@
   }
 
   .admin-topic-summary-timeline--compact {
-    max-height: min(72vh, 58rem);
-    overflow-y: auto;
-    padding-right: 0.35rem;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .admin-topic-summary-timeline--compact::-webkit-scrollbar {
@@ -379,8 +379,9 @@
   .admin-topic-inline-diff {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.2rem 0.3rem;
+    justify-content: flex-start;
+    align-items: flex-start;
+    gap: 0.18rem 0.24rem;
     border-radius: 1.1rem;
     border: 1px solid rgb(226 232 240 / 0.9);
     background: rgb(255 255 255 / 0.92);
@@ -388,7 +389,9 @@
     font-size: 0.92rem;
     line-height: 1.8;
     color: rgb(51 65 85);
-    text-align: center;
+    text-align: left;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .admin-topic-inline-diff__placeholder {
@@ -397,12 +400,13 @@
   }
 
   .admin-topic-inline-diff__segment {
-    display: inline-block;
+    display: inline;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     word-break: break-word;
     border-radius: 0.55rem;
-    padding: 0 0.16rem;
-    flex: 0 0 auto;
+    padding: 0.02rem 0.18rem;
+    min-width: 0;
   }
 
   .admin-topic-inline-diff__segment--equal {
@@ -422,6 +426,10 @@
     text-decoration: line-through;
     text-decoration-thickness: 0.08em;
     text-decoration-color: rgb(248 113 113 / 0.78);
+  }
+
+  .admin-topic-inline-diff--flow {
+    align-content: flex-start;
   }
 }
 

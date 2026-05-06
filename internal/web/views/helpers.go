@@ -559,20 +559,18 @@ func topicSummaryChangeCountLabel(topic memory.TopicThread, changes []TopicSumma
 }
 
 func topicSummaryTimelineClass(changes []TopicSummaryChangeView) string {
-	if len(changes) >= 5 {
-		return "admin-topic-summary-timeline admin-topic-summary-timeline--compact"
-	}
+	_ = changes
 	return "admin-topic-summary-timeline"
 }
 
 func topicSummaryColumnClass(changes []TopicSummaryChangeView) string {
 	_ = changes
-	return "space-y-4"
+	return ""
 }
 
 func topicSummaryShellClass(changes []TopicSummaryChangeView) string {
 	_ = changes
-	return "grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)] xl:items-start"
+	return "grid gap-4 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-start"
 }
 
 func topicDiffList(items []string) []string {
