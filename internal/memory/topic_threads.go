@@ -2,18 +2,18 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/vector"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"mumu-bot/internal/vector"
 )
 
 const topicSummaryVectorType = "topic_summary"
@@ -90,11 +90,11 @@ func MarshalTopicSummary(summary TopicSummaryV1) (string, error) {
 	}
 	summary.ItemMeta = NormalizeTopicSummaryItemMeta(summary)
 
-	raw, err := json.Marshal(summary)
+	raw, err := sonic.MarshalString(summary)
 	if err != nil {
 		return "", err
 	}
-	return string(raw), nil
+	return raw, nil
 }
 
 func MustMarshalTopicSummary(summary TopicSummaryV1) string {
@@ -110,7 +110,7 @@ func ParseTopicSummary(raw string) TopicSummaryV1 {
 	if strings.TrimSpace(raw) == "" {
 		return summary
 	}
-	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+	if err := sonic.UnmarshalString(raw, &summary); err != nil {
 		return EmptyTopicSummary()
 	}
 	if summary.Version == 0 {
@@ -179,21 +179,17 @@ func NormalizeTopicSummaryItemMeta(summary TopicSummaryV1) []TopicSummaryItemMet
 	return result
 }
 
-func TopicSummaryItemMetaForPrompt(summary TopicSummaryV1) []TopicSummaryItemMeta {
-	return NormalizeTopicSummaryItemMeta(summary)
-}
-
 func MergeTopicSummaryItemMeta(oldSummary TopicSummaryV1, nextSummary TopicSummaryV1) []TopicSummaryItemMeta {
 	nextSummary.ItemMeta = append([]TopicSummaryItemMeta(nil), oldSummary.ItemMeta...)
 	return NormalizeTopicSummaryItemMeta(nextSummary)
 }
 
 func MarshalTopicSummaryItemMetaForPrompt(summary TopicSummaryV1) (string, error) {
-	raw, err := json.Marshal(TopicSummaryItemMetaForPrompt(summary))
+	raw, err := sonic.MarshalString(NormalizeTopicSummaryItemMeta(summary))
 	if err != nil {
 		return "", err
 	}
-	return string(raw), nil
+	return raw, nil
 }
 
 func ParseTopicSummaryHistory(raw string) []TopicSummarySnapshot {
@@ -201,7 +197,7 @@ func ParseTopicSummaryHistory(raw string) []TopicSummarySnapshot {
 		return []TopicSummarySnapshot{}
 	}
 	var snapshots []TopicSummarySnapshot
-	if err := json.Unmarshal([]byte(raw), &snapshots); err != nil {
+	if err := sonic.UnmarshalString(raw, &snapshots); err != nil {
 		return []TopicSummarySnapshot{}
 	}
 	return snapshots
@@ -224,11 +220,11 @@ func AppendTopicSummaryHistory(raw string, summary TopicSummaryV1, capturedAt ti
 	if len(history) > TopicSummaryHistoryLimit {
 		history = history[len(history)-TopicSummaryHistoryLimit:]
 	}
-	encoded, err := json.Marshal(history)
+	encoded, err := sonic.MarshalString(history)
 	if err != nil {
 		return "", err
 	}
-	return string(encoded), nil
+	return encoded, nil
 }
 
 func (m *Manager) ArchiveTopicThreadForRepair(ctx context.Context, groupID int64, topicID uint) error {

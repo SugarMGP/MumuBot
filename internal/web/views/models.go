@@ -165,10 +165,10 @@ type TopicListPageData struct {
 }
 
 type TopicDetailPageData struct {
-	Thread          memory.TopicThread
-	SummaryChanges  []TopicSummaryChangeView
-	Messages        []memory.MessageLog
-	Flash           *FlashMessage
+	Thread         memory.TopicThread
+	SummaryChanges []TopicSummaryChangeView
+	Messages       []memory.MessageLog
+	Flash          *FlashMessage
 }
 
 type MemberListPageData struct {

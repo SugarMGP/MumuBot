@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"mumu-bot/internal/agent"
@@ -24,6 +23,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/a-h/templ"
+	"github.com/bytedance/sonic"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 )
@@ -159,7 +159,7 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	_ = sonic.ConfigDefault.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"name":   "mumu-bot",
 		"time":   time.Now().Format(time.RFC3339),
@@ -635,11 +635,11 @@ func (a *App) memoryPageData(current *neturl.URL, flash *views.FlashMessage) (vi
 			{Label: "主动记住", Value: "message"},
 			{Label: "话题沉淀", Value: "topic"},
 		},
-		Keyword:       filter.Keyword,
-		Sort:          buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}, {Key: "access", Label: "访问量"}, {Key: "importance", Label: "重要度"}, {Key: "evidence", Label: "证据数"}}),
-		Items:         result.Items,
-		Meta:          a.listMeta(current, result.Page, result.PageSize, result.Total),
-		Flash:         flash,
+		Keyword: filter.Keyword,
+		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}, {Key: "access", Label: "访问量"}, {Key: "importance", Label: "重要度"}, {Key: "evidence", Label: "证据数"}}),
+		Items:   result.Items,
+		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
+		Flash:   flash,
 	}, nil
 }
 
@@ -1161,11 +1161,11 @@ func actionTriggerHeader(flash *views.FlashMessage, closeDialog bool) (string, e
 		payload["admin:action-dialog-close"] = true
 	}
 
-	encoded, err := json.Marshal(payload)
+	encoded, err := sonic.MarshalString(payload)
 	if err != nil {
 		return "", err
 	}
-	return asciiHeaderJSON(string(encoded)), nil
+	return asciiHeaderJSON(encoded), nil
 }
 
 func asciiHeaderJSON(raw string) string {

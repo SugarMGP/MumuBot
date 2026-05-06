@@ -1,7 +1,6 @@
 package views
 
 import (
-	"encoding/json"
 	"fmt"
 	"mumu-bot/internal/memory"
 	neturl "net/url"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/bytedance/sonic"
 )
 
 func NavItems() []NavItem {
@@ -76,11 +77,11 @@ func flashJSON(flash *FlashMessage) string {
 		return ""
 	}
 
-	data, err := json.Marshal(flash)
+	data, err := sonic.MarshalString(flash)
 	if err != nil {
 		return ""
 	}
-	return string(data)
+	return data
 }
 
 func navIconName(href string) string {
@@ -529,17 +530,6 @@ func topicChangeBadgeClass(tone string) string {
 	}
 }
 
-func topicDiffSegmentClass(kind string) string {
-	switch strings.TrimSpace(kind) {
-	case "add":
-		return "admin-topic-diff__segment admin-topic-diff__segment--add"
-	case "remove":
-		return "admin-topic-diff__segment admin-topic-diff__segment--remove"
-	default:
-		return "admin-topic-diff__segment admin-topic-diff__segment--equal"
-	}
-}
-
 func topicInlineDiffClass(kind string) string {
 	switch strings.TrimSpace(kind) {
 	case "add":
@@ -583,16 +573,6 @@ func topicSummaryColumnClass(changes []TopicSummaryChangeView) string {
 func topicSummaryShellClass(changes []TopicSummaryChangeView) string {
 	_ = changes
 	return "grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)] xl:items-start"
-}
-
-func topicChangeSectionSummary(change TopicSummaryChangeView) string {
-	delta := 0
-	delta += len(change.AddedFacts) + len(change.RemovedFacts)
-	delta += len(change.AddedOpenLoops) + len(change.RemovedOpenLoops)
-	if delta == 0 {
-		return "本次没有列表项增减"
-	}
-	return fmt.Sprintf("本次共有 %d 处列表项调整", delta)
 }
 
 func topicDiffList(items []string) []string {
@@ -865,17 +845,6 @@ func memorySourceKindText(item memory.Memory) string {
 		return "主动记住"
 	case item.EffectiveStatus() == memory.MemoryStatusLegacy:
 		return "旧版兼容"
-	default:
-		return "未标注"
-	}
-}
-
-func memorySourceKindTextFromKind(kind memory.MemorySourceKind) string {
-	switch kind {
-	case memory.MemorySourceKindTopic:
-		return "话题沉淀"
-	case memory.MemorySourceKindMessage:
-		return "主动记住"
 	default:
 		return "未标注"
 	}
@@ -1294,7 +1263,7 @@ func normalizedListItems(raw string) []string {
 	var items []string
 	if strings.HasPrefix(text, "[") {
 		var parsed []string
-		if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+		if err := sonic.UnmarshalString(text, &parsed); err == nil {
 			items = parsed
 		}
 	}
