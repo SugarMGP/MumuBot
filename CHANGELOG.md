@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-05-07
+
 ### 修复
 
 - **话题详情现已修正摘要变化与消息区的排版冲突**：摘要变化中的行内 diff 会在卡片内自然换行，不再冲出边框；未完事项与已确认事项也改为上下排布，长内容查看更顺手。
@@ -116,7 +118,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.4...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...HEAD
+[1.3.5]: https://github.com/SugarMGP/MumuBot/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/SugarMGP/MumuBot/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/SugarMGP/MumuBot/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/SugarMGP/MumuBot/compare/v1.3.1...v1.3.2
