@@ -35,7 +35,7 @@ type topicMemoryStore interface {
 	ListRecentTopicParticipants(ctx context.Context, topicID uint, limit int) ([]memory.TopicParticipantRef, error)
 	CountTopicMessagesAfterSummary(ctx context.Context, topicID uint) (int, error)
 	GetTopicMessagesAfterSummary(ctx context.Context, topicID uint, limit int) ([]memory.MessageLog, error)
-	UpdateTopicSummary(ctx context.Context, topicID uint, summary memory.TopicSummaryV1, summaryUntil uint, capturedAt time.Time) error
+	UpdateTopicSummary(ctx context.Context, topicID uint, summary memory.TopicSummary, summaryUntil uint, capturedAt time.Time) error
 	GetTopicThread(ctx context.Context, topicID uint) (*memory.TopicThread, error)
 	SearchArchivedTopicThreadHits(ctx context.Context, query string, groupID int64, topK int, threshold float64) ([]memory.TopicThreadSearchHit, error)
 	ArchiveTopicThreadForRepair(ctx context.Context, groupID int64, topicID uint) error
@@ -47,7 +47,7 @@ type topicMemoryStore interface {
 }
 
 type (
-	topicSummaryFunc func(ctx context.Context, oldSummary memory.TopicSummaryV1, newMessages []memory.MessageLog) (memory.TopicSummaryV1, error)
+	topicSummaryFunc func(ctx context.Context, oldSummary memory.TopicSummary, newMessages []memory.MessageLog) (memory.TopicSummary, error)
 	topicAssignFunc  func(ctx context.Context, groupID int64, messages []topicAssignJob, candidates []topicAssignmentCandidate) ([]topicAssignmentDecision, error)
 )
 
@@ -977,7 +977,7 @@ func (tm *TopicManager) hasPendingAssignmentInRangeLocked(groupID int64, afterID
 func (tm *TopicManager) collectCandidatesLocked(ctx context.Context, groupID int64, msg *onebot.GroupMessage, archivedHits []memory.TopicThreadSearchHit, topicQuery string) ([]topicCandidate, error) {
 	query := messageTopicText(msg)
 	archiveQuery := strings.TrimSpace(topicQuery)
-	replyTopicID := tm.resolveReplyTopicID(ctx, msg)
+	replyTopicID := tm.resolveReplyTopicID(msg)
 	candidates := make([]topicCandidate, 0)
 	seen := make(map[uint]struct{})
 
@@ -988,7 +988,7 @@ func (tm *TopicManager) collectCandidatesLocked(ctx context.Context, groupID int
 			Status:             topic.Status,
 			ReplyMatched:       replyTopicID != 0 && replyTopicID == topic.ID,
 			SemanticScore:      max(topicSemanticSimilarity(query, topic, state), 0.15),
-			ParticipantOverlap: topicParticipantOverlap(msg, topic, state),
+			ParticipantOverlap: topicParticipantOverlap(msg, state),
 			KeywordContinuity:  topicKeywordContinuity(query, topic),
 			LastMessageLogID:   topic.LastMessageLogID,
 		}
@@ -1010,7 +1010,7 @@ func (tm *TopicManager) collectCandidatesLocked(ctx context.Context, groupID int
 				Status:             hit.Topic.Status,
 				ReplyMatched:       replyTopicID != 0 && replyTopicID == hit.Topic.ID,
 				SemanticScore:      max(hit.Score, topicKeywordContinuity(archiveQuery, hit.Topic)),
-				ParticipantOverlap: topicParticipantOverlap(msg, hit.Topic, archivedState),
+				ParticipantOverlap: topicParticipantOverlap(msg, archivedState),
 				KeywordContinuity:  topicKeywordContinuity(archiveQuery, hit.Topic),
 				LastMessageLogID:   hit.Topic.LastMessageLogID,
 			})
@@ -1034,7 +1034,7 @@ func (tm *TopicManager) collectCandidatesLocked(ctx context.Context, groupID int
 					Status:             topic.Status,
 					ReplyMatched:       true,
 					SemanticScore:      1,
-					ParticipantOverlap: topicParticipantOverlap(msg, *topic, replyState),
+					ParticipantOverlap: topicParticipantOverlap(msg, replyState),
 					KeywordContinuity:  topicKeywordContinuity(query, *topic),
 					LastMessageLogID:   topic.LastMessageLogID,
 				})
@@ -1058,7 +1058,7 @@ func (tm *TopicManager) searchArchivedTopicHitsByText(ctx context.Context, group
 	return hits
 }
 
-func (tm *TopicManager) resolveReplyTopicID(ctx context.Context, msg *onebot.GroupMessage) uint {
+func (tm *TopicManager) resolveReplyTopicID(msg *onebot.GroupMessage) uint {
 	if msg == nil || msg.Reply == nil || msg.Reply.MessageID == 0 {
 		return 0
 	}
@@ -1206,14 +1206,14 @@ func (tm *TopicManager) getGroupLock(groupID int64) *sync.Mutex {
 	return lock
 }
 
-func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.TopicSummaryV1, newMessages []memory.MessageLog) (memory.TopicSummaryV1, error) {
+func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.TopicSummary, newMessages []memory.MessageLog) (memory.TopicSummary, error) {
 	if tm.summaryExtractor == nil {
-		return memory.TopicSummaryV1{}, fmt.Errorf("topic summary extractor not configured")
+		return memory.TopicSummary{}, fmt.Errorf("topic summary extractor not configured")
 	}
 
 	var msgLines []string
 	for _, log := range newMessages {
-		text := messageLogTopicText(log)
+		text := strings.TrimSpace(log.OriginalContent)
 		if text == "" {
 			continue
 		}
@@ -1222,7 +1222,7 @@ func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.T
 
 	oldSummaryJSON, err := memory.MarshalTopicSummary(oldSummary)
 	if err != nil {
-		return memory.TopicSummaryV1{}, err
+		return memory.TopicSummary{}, err
 	}
 	oldItemMetaJSON := "[]"
 	if rawMeta, err := memory.MarshalTopicSummaryItemMetaForPrompt(oldSummary); err == nil {
@@ -1238,7 +1238,7 @@ func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.T
 		schema.UserMessage(prompt),
 	}, buildTopicSummaryOptions()...)
 	if err != nil {
-		return memory.TopicSummaryV1{}, err
+		return memory.TopicSummary{}, err
 	}
 
 	return normalizeTopicSummarySubmission(target), nil
@@ -1246,7 +1246,7 @@ func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.T
 
 func messageLogToGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
 	msg := messageLogBaseGroupMessage(log)
-	msg.Content = messageLogTopicText(log)
+	msg.Content = strings.TrimSpace(log.OriginalContent)
 	msg.FinalContent = strings.TrimSpace(log.Content)
 	return msg
 }
@@ -1444,10 +1444,6 @@ func messageTopicText(msg *onebot.GroupMessage) string {
 	return strings.TrimSpace(msg.Content)
 }
 
-func messageLogTopicText(log memory.MessageLog) string {
-	return strings.TrimSpace(log.OriginalContent)
-}
-
 func topicSemanticSimilarity(query string, topic memory.TopicThread, state *topicRuntimeState) float64 {
 	summary := memory.ParseTopicSummary(topic.SummaryJSON)
 	summaryText := strings.TrimSpace(summary.Title + "\n" + summary.Gist + "\n" + strings.Join(summary.Facts, "\n"))
@@ -1458,7 +1454,7 @@ func topicSemanticSimilarity(query string, topic memory.TopicThread, state *topi
 	return max(textSimilarity(query, summaryText), textSimilarity(query, tailText))
 }
 
-func topicParticipantOverlap(msg *onebot.GroupMessage, topic memory.TopicThread, state *topicRuntimeState) float64 {
+func topicParticipantOverlap(msg *onebot.GroupMessage, state *topicRuntimeState) float64 {
 	if msg == nil {
 		return 0
 	}

@@ -367,7 +367,7 @@ type TopicParticipantRef struct {
 	Nickname string `json:"nickname"`
 }
 
-type TopicSummaryV1 struct {
+type TopicSummary struct {
 	Version      int                       `json:"version"`
 	Title        string                    `json:"title"`
 	Gist         string                    `json:"gist"`
@@ -380,8 +380,8 @@ type TopicSummaryV1 struct {
 }
 
 type TopicSummarySnapshot struct {
-	CapturedAt string         `json:"captured_at"`
-	Summary    TopicSummaryV1 `json:"summary"`
+	CapturedAt string       `json:"captured_at"`
+	Summary    TopicSummary `json:"summary"`
 }
 
 type TopicThread struct {

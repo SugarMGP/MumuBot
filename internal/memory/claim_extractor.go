@@ -23,6 +23,7 @@ type NormalizedClaim struct {
 	SlotKind      string
 	ValueSummary  string
 	LongTerm      bool
+	Ignored       bool
 }
 
 type rawNormalizedClaim struct {
@@ -205,7 +206,35 @@ func (m *Manager) extractNormalizedClaim(ctx context.Context, input MemoryIngest
 		}
 	}
 
-	prompt := fmt.Sprintf(`请把下面这句候选长期记忆提取成一个结构化 claim，并且必须调用一次 %s 工具，不要输出普通文本。
+	prompt := buildMemoryClaimPrompt(input, subjectCandidates, content)
+
+	options := []flowagent.AgentOption{
+		flowagent.WithComposeOptions(
+			compose.WithChatModelOption(model.WithToolChoice(schema.ToolChoiceForced, memoryClaimToolName)),
+		),
+	}
+
+	_, err := m.claimExtractor.Generate(extractCtx, []*schema.Message{
+		schema.SystemMessage("你负责把群聊长期记忆候选提取成结构化 claim。你必须调用工具提交结果，不要输出普通文本。"),
+		schema.UserMessage(prompt),
+	}, options...)
+	if err != nil {
+		zap.L().Warn("结构化提取长期记忆失败", zap.Error(err))
+		return NormalizedClaim{}
+	}
+	claim := buildNormalizedClaim(input, *target)
+	if claim.CanonicalType == "" && !claim.Ignored {
+		zap.L().Warn("结构化提取长期记忆返回无效 claim",
+			zap.String("subject_class", target.SubjectClass),
+			zap.String("subject_name", target.SubjectName),
+			zap.String("canonical_type", target.CanonicalType),
+			zap.String("slot_kind", target.SlotKind))
+	}
+	return claim
+}
+
+func buildMemoryClaimPrompt(input MemoryIngestInput, subjectCandidates string, content string) string {
+	return fmt.Sprintf(`请把下面这句候选长期记忆提取成一个结构化 claim，并且必须调用一次 %s 工具，不要输出普通文本。
 
 规则：
 - subject_class 只能是 group | self | member | unknown
@@ -213,6 +242,7 @@ func (m *Manager) extractNormalizedClaim(ctx context.Context, input MemoryIngest
 - 如果 related_user_id > 0 且不等于 self_id，它表示外部已经明确指定了某个 member 主体；这种情况下 subject_class 可以是 member，subject_name 允许留空
 - 如果 related_user_id > 0 且等于 self_id，它表示外部已经明确指定了 self 主体；这种情况下 subject_class 应该是 self
 - canonical_type 只能是 fact | episode | preference | constraint | goal | ignore
+- 当 allowed_canonical_types 非空时，canonical_type 只能从 allowed_canonical_types 中选择，不要输出其他类型
 - keyed 类型尽量填写合法 slot_kind；slot_kind 只帮助后续摘要沿用旧条目，不参与长期记忆去重：
   - fact: identity | relation | role | status | assignment | schedule | conclusion
   - preference: like | dislike | habit | style
@@ -238,33 +268,12 @@ func (m *Manager) extractNormalizedClaim(ctx context.Context, input MemoryIngest
 		allowedCanonicalTypesPrompt(input.AllowedCanonicalTypes),
 		content,
 	)
-
-	options := []flowagent.AgentOption{
-		flowagent.WithComposeOptions(
-			compose.WithChatModelOption(model.WithToolChoice(schema.ToolChoiceForced, memoryClaimToolName)),
-		),
-	}
-
-	_, err := m.claimExtractor.Generate(extractCtx, []*schema.Message{
-		schema.SystemMessage("你负责把群聊长期记忆候选提取成结构化 claim。你必须调用工具提交结果，不要输出普通文本。"),
-		schema.UserMessage(prompt),
-	}, options...)
-	if err != nil {
-		zap.L().Warn("结构化提取长期记忆失败", zap.Error(err))
-		return NormalizedClaim{}
-	}
-	claim := buildNormalizedClaim(input, *target)
-	if claim.CanonicalType == "" {
-		zap.L().Warn("结构化提取长期记忆返回无效 claim",
-			zap.String("subject_class", target.SubjectClass),
-			zap.String("subject_name", target.SubjectName),
-			zap.String("canonical_type", target.CanonicalType),
-			zap.String("slot_kind", target.SlotKind))
-	}
-	return claim
 }
 
 func buildNormalizedClaim(input MemoryIngestInput, raw rawNormalizedClaim) NormalizedClaim {
+	if strings.EqualFold(strings.TrimSpace(raw.CanonicalType), "ignore") {
+		return NormalizedClaim{Ignored: true}
+	}
 	claim := NormalizedClaim{
 		SubjectName:   strings.TrimSpace(raw.SubjectName),
 		CanonicalType: normalizeCanonicalType(raw.CanonicalType),

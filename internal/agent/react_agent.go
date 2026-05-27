@@ -441,7 +441,7 @@ func (a *Agent) BotSelfID() int64 {
 }
 
 func newAgentTTLCache[K comparable, V any](capacity int, ttl time.Duration) *ttlcache.Cache[K, V] {
-	return ttlcache.New[K, V](
+	return ttlcache.New(
 		ttlcache.WithTTL[K, V](ttl),
 		ttlcache.WithCapacity[K, V](uint64(capacity)),
 		ttlcache.WithDisableTouchOnHit[K, V](),
@@ -1465,8 +1465,9 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 	}
 
 	var b strings.Builder
+	selfID := a.bot.GetSelfID()
 	for _, m := range msgs {
-		if !lastProcessedTime.IsZero() && m.Time.Before(lastProcessedTime) {
+		if (!lastProcessedTime.IsZero() && m.Time.Before(lastProcessedTime)) || (selfID != 0 && m.UserID == selfID) {
 			b.WriteString("(OLD)")
 		}
 		b.WriteString(m.FinalContent)

@@ -290,7 +290,7 @@ func topicStatusClass(status memory.TopicThreadStatus) string {
 	}
 }
 
-func topicSummary(topic memory.TopicThread) memory.TopicSummaryV1 {
+func topicSummary(topic memory.TopicThread) memory.TopicSummary {
 	return memory.ParseTopicSummary(topic.SummaryJSON)
 }
 

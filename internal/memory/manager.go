@@ -635,9 +635,11 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 
 	claim := m.extractNormalizedClaim(ctx, input, content)
 	if claim.CanonicalType == "" {
-		zap.L().Warn("长期记忆候选被忽略：未提取到有效 claim",
-			zap.String("source_kind", string(input.SourceKind)),
-			zap.String("source_ref", input.SourceRef))
+		if !claim.Ignored {
+			zap.L().Warn("长期记忆候选被忽略：未提取到有效 claim",
+				zap.String("source_kind", string(input.SourceKind)),
+				zap.String("source_ref", input.SourceRef))
+		}
 		return nil, "ignored", nil
 	}
 	if len(input.AllowedCanonicalTypes) > 0 && !containsCanonicalType(input.AllowedCanonicalTypes, claim.CanonicalType) {
@@ -782,7 +784,7 @@ func (m *Manager) findExactMemory(ctx context.Context, input MemoryIngestInput, 
 
 func (m *Manager) findFirstCompatibleMemory(ctx context.Context, incoming Memory, query *gorm.DB) (Memory, bool, error) {
 	var candidates []Memory
-	if err := query.Order("id DESC").Find(&candidates).Error; err != nil {
+	if err := query.WithContext(ctx).Order("id DESC").Find(&candidates).Error; err != nil {
 		return Memory{}, false, err
 	}
 	for _, candidate := range candidates {
@@ -1383,7 +1385,7 @@ func (m *Manager) keywordSearchMemories(ctx context.Context, query string, group
 		likeConditions = append(likeConditions, "content LIKE ?")
 		args = append(args, "%"+kw+"%")
 	}
-	err := q.Where(strings.Join(likeConditions, " OR "), args...).
+	err := q.WithContext(ctx).Where(strings.Join(likeConditions, " OR "), args...).
 		Order("importance DESC, updated_at DESC").
 		Limit(limit).
 		Find(&memories).Error
@@ -1396,7 +1398,7 @@ func (m *Manager) keywordSearchMemories(ctx context.Context, query string, group
 		for _, mem := range memories {
 			memoryIDs = append(memoryIDs, mem.ID)
 		}
-		_ = m.db.Model(&Memory{}).Where("id IN ?", memoryIDs).Updates(map[string]any{
+		_ = m.db.WithContext(ctx).Model(&Memory{}).Where("id IN ?", memoryIDs).Updates(map[string]any{
 			"access_count": gorm.Expr("access_count + 1"),
 		}).Error
 	}
@@ -1509,7 +1511,7 @@ func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, gr
 	sortedMemories := make([]Memory, 0, len(results))
 	for _, r := range results {
 		if mem, ok := memoryMap[r.MemoryID]; ok {
-			m.db.Model(&mem).Updates(map[string]any{
+			m.db.WithContext(ctx).Model(&mem).Updates(map[string]any{
 				"access_count": gorm.Expr("access_count + 1"),
 			})
 			sortedMemories = append(sortedMemories, mem)
@@ -1592,10 +1594,10 @@ func (m *Manager) SaveStyleCardCandidate(ctx context.Context, card *StyleCard) (
 		if mergedExcerpt := mergeStyleCardSourceExcerpt(existing.SourceExcerpt, card.SourceExcerpt); mergedExcerpt != strings.TrimSpace(existing.SourceExcerpt) {
 			updates["source_excerpt"] = mergedExcerpt
 		}
-		if err := m.db.Model(&existing).Updates(updates).Error; err != nil {
+		if err := m.db.WithContext(ctx).Model(&existing).Updates(updates).Error; err != nil {
 			return false, err
 		}
-		if err := m.db.First(&existing, existing.ID).Error; err == nil {
+		if err := m.db.WithContext(ctx).First(&existing, existing.ID).Error; err == nil {
 			if err := m.refreshStyleCardVector(ctx, &existing); err != nil {
 				return false, err
 			}

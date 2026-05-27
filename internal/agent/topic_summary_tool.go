@@ -87,7 +87,7 @@ func newTopicSummaryExtractor(chatModel model.ToolCallingChatModel) (*agentreact
 	return agent, nil
 }
 
-func normalizeTopicSummarySubmission(raw *topicSummarySubmission) memory.TopicSummaryV1 {
+func normalizeTopicSummarySubmission(raw *topicSummarySubmission) memory.TopicSummary {
 	summary := memory.EmptyTopicSummary()
 	if raw == nil {
 		return summary

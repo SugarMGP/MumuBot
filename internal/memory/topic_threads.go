@@ -58,8 +58,8 @@ func IsTopicAssignmentProcessed(msg MessageLog) bool {
 	return msg.TopicThreadID != 0 || strings.TrimSpace(msg.TopicMatchReason) != ""
 }
 
-func EmptyTopicSummary() TopicSummaryV1 {
-	return TopicSummaryV1{
+func EmptyTopicSummary() TopicSummary {
+	return TopicSummary{
 		Version:      1,
 		Facts:        []string{},
 		Participants: []TopicSummaryParticipant{},
@@ -69,7 +69,7 @@ func EmptyTopicSummary() TopicSummaryV1 {
 	}
 }
 
-func MarshalTopicSummary(summary TopicSummaryV1) (string, error) {
+func MarshalTopicSummary(summary TopicSummary) (string, error) {
 	if summary.Version == 0 {
 		summary.Version = 1
 	}
@@ -97,7 +97,7 @@ func MarshalTopicSummary(summary TopicSummaryV1) (string, error) {
 	return raw, nil
 }
 
-func MustMarshalTopicSummary(summary TopicSummaryV1) string {
+func MustMarshalTopicSummary(summary TopicSummary) string {
 	raw, err := MarshalTopicSummary(summary)
 	if err != nil {
 		return `{"version":1,"title":"","gist":"","facts":[],"participants":[],"open_loops":[],"recent_turns":[],"keywords":[]}`
@@ -105,7 +105,7 @@ func MustMarshalTopicSummary(summary TopicSummaryV1) string {
 	return raw
 }
 
-func ParseTopicSummary(raw string) TopicSummaryV1 {
+func ParseTopicSummary(raw string) TopicSummary {
 	summary := EmptyTopicSummary()
 	if strings.TrimSpace(raw) == "" {
 		return summary
@@ -135,14 +135,14 @@ func ParseTopicSummary(raw string) TopicSummaryV1 {
 	return summary
 }
 
-func normalizeExistingTopicSummaryItemMeta(summary TopicSummaryV1) []TopicSummaryItemMeta {
+func normalizeExistingTopicSummaryItemMeta(summary TopicSummary) []TopicSummaryItemMeta {
 	if len(summary.ItemMeta) == 0 {
 		return []TopicSummaryItemMeta{}
 	}
 	return NormalizeTopicSummaryItemMeta(summary)
 }
 
-func NormalizeTopicSummaryItemMeta(summary TopicSummaryV1) []TopicSummaryItemMeta {
+func NormalizeTopicSummaryItemMeta(summary TopicSummary) []TopicSummaryItemMeta {
 	result := make([]TopicSummaryItemMeta, 0, len(summary.Facts)+len(summary.OpenLoops))
 	oldByText := make(map[string]TopicSummaryItemMeta, len(summary.ItemMeta))
 	for _, meta := range summary.ItemMeta {
@@ -179,12 +179,12 @@ func NormalizeTopicSummaryItemMeta(summary TopicSummaryV1) []TopicSummaryItemMet
 	return result
 }
 
-func MergeTopicSummaryItemMeta(oldSummary TopicSummaryV1, nextSummary TopicSummaryV1) []TopicSummaryItemMeta {
+func MergeTopicSummaryItemMeta(oldSummary TopicSummary, nextSummary TopicSummary) []TopicSummaryItemMeta {
 	nextSummary.ItemMeta = append([]TopicSummaryItemMeta(nil), oldSummary.ItemMeta...)
 	return NormalizeTopicSummaryItemMeta(nextSummary)
 }
 
-func MarshalTopicSummaryItemMetaForPrompt(summary TopicSummaryV1) (string, error) {
+func MarshalTopicSummaryItemMetaForPrompt(summary TopicSummary) (string, error) {
 	raw, err := sonic.MarshalString(NormalizeTopicSummaryItemMeta(summary))
 	if err != nil {
 		return "", err
@@ -211,7 +211,7 @@ func DefaultTopicSummaryHistoryJSON() string {
 	return "[]"
 }
 
-func AppendTopicSummaryHistory(raw string, summary TopicSummaryV1, capturedAt time.Time) (string, error) {
+func AppendTopicSummaryHistory(raw string, summary TopicSummary, capturedAt time.Time) (string, error) {
 	history := ParseTopicSummaryHistory(raw)
 	history = append(history, TopicSummarySnapshot{
 		CapturedAt: capturedAt.Format(time.RFC3339),
@@ -240,7 +240,7 @@ func (m *Manager) ArchiveTopicThreadForRepair(ctx context.Context, groupID int64
 		}).Error
 }
 
-func (m *Manager) UpdateTopicSummary(ctx context.Context, topicID uint, summary TopicSummaryV1, summaryUntil uint, capturedAt time.Time) error {
+func (m *Manager) UpdateTopicSummary(ctx context.Context, topicID uint, summary TopicSummary, summaryUntil uint, capturedAt time.Time) error {
 	if topicID == 0 {
 		return nil
 	}
@@ -736,7 +736,7 @@ func topicSummaryCollectionName(base string) string {
 	return base + "_topic_summaries"
 }
 
-func topicSummaryVectorText(summary TopicSummaryV1) string {
+func topicSummaryVectorText(summary TopicSummary) string {
 	parts := []string{
 		strings.TrimSpace(summary.Title),
 		strings.TrimSpace(summary.Gist),
