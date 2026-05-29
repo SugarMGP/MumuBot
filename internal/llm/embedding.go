@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"mumu-bot/internal/config"
-	"mumu-bot/internal/memory"
 
 	"github.com/cloudwego/eino-ext/components/embedding/openai"
 )
@@ -50,6 +49,3 @@ func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float64, er
 	}
 	return vectors[0], nil
 }
-
-// 确保实现了接口
-var _ memory.EmbeddingProvider = (*EmbeddingClient)(nil)

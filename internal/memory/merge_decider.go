@@ -3,22 +3,12 @@ package memory
 import (
 	"context"
 	"fmt"
+	"mumu-bot/internal/llm"
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/components/tool"
-	toolutils "github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/compose"
-	flowagent "github.com/cloudwego/eino/flow/agent"
-	agentreact "github.com/cloudwego/eino/flow/agent/react"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
-
-const memoryMergeToolName = "submitMemoryMergeDecision"
-
-type memoryMergeCaptureKey struct{}
 
 type rawMemoryMergeDecision struct {
 	ShouldMerge   bool   `json:"should_merge" jsonschema:"description=是否应把新记忆合并进已有记忆"`
@@ -27,72 +17,13 @@ type rawMemoryMergeDecision struct {
 	MergedContent string `json:"merged_content,omitempty" jsonschema:"description=合并后的完整新记忆内容；保留事实，不编造新增信息"`
 }
 
-type memoryMergeToolOutput struct {
-	Success bool `json:"success"`
-}
-
-func withMemoryMergeTarget(ctx context.Context, target *rawMemoryMergeDecision) context.Context {
-	return context.WithValue(ctx, memoryMergeCaptureKey{}, target)
-}
-
-func getMemoryMergeTarget(ctx context.Context) *rawMemoryMergeDecision {
-	target, _ := ctx.Value(memoryMergeCaptureKey{}).(*rawMemoryMergeDecision)
-	return target
-}
-
-func newMemoryMergeTool() (tool.InvokableTool, error) {
-	return toolutils.InferTool(
-		memoryMergeToolName,
-		"提交长期记忆语义合并判断。必须调用一次，不要输出普通文本。",
-		func(ctx context.Context, input *rawMemoryMergeDecision) (*memoryMergeToolOutput, error) {
-			target := getMemoryMergeTarget(ctx)
-			if target == nil {
-				return nil, fmt.Errorf("记忆合并接收器未初始化")
-			}
-			*target = rawMemoryMergeDecision{
-				ShouldMerge:   input.ShouldMerge,
-				TargetID:      input.TargetID,
-				MergeIDs:      append([]uint(nil), input.MergeIDs...),
-				MergedContent: strings.TrimSpace(input.MergedContent),
-			}
-			if err := agentreact.SetReturnDirectly(ctx); err != nil {
-				return nil, err
-			}
-			return &memoryMergeToolOutput{Success: true}, nil
-		},
-	)
-}
-
-func newMemoryMergeDecider(mergeModel model.ToolCallingChatModel) (*agentreact.Agent, error) {
-	if mergeModel == nil {
-		return nil, fmt.Errorf("mergeModel 不能为空")
-	}
-	mergeTool, err := newMemoryMergeTool()
-	if err != nil {
-		return nil, err
-	}
-	return agentreact.NewAgent(context.Background(), &agentreact.AgentConfig{
-		ToolCallingModel: mergeModel,
-		ToolsConfig: compose.ToolsNodeConfig{
-			Tools:               []tool.BaseTool{mergeTool},
-			ExecuteSequentially: true,
-		},
-		MaxStep:            4,
-		ToolReturnDirectly: map[string]struct{}{memoryMergeToolName: {}},
-	})
-}
-
 func (m *Manager) decideMemoryMerge(ctx context.Context, input memoryMergeInput) (memoryMergeDecision, error) {
-	if m.mergeDecider == nil || len(input.Candidates) == 0 {
+	if m.claimModel == nil || len(input.Candidates) == 0 {
 		return memoryMergeDecision{}, nil
 	}
-	mergeCtx, cancel := context.WithTimeout(withMemoryMergeTarget(ctx, &rawMemoryMergeDecision{}), 20*time.Second)
-	defer cancel()
 
-	target := getMemoryMergeTarget(mergeCtx)
-	if target == nil {
-		return memoryMergeDecision{}, nil
-	}
+	mergeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 
 	candidateLines := make([]string, 0, len(input.Candidates))
 	for _, candidate := range input.Candidates {
@@ -103,7 +34,7 @@ func (m *Manager) decideMemoryMerge(ctx context.Context, input memoryMergeInput)
 			strings.TrimSpace(candidate.Content),
 		))
 	}
-	prompt := fmt.Sprintf(`请判断新长期记忆是否与候选中的已有记忆语义重复，并且必须调用一次 %s 工具，不要输出普通文本。
+	prompt := fmt.Sprintf(`请判断新长期记忆是否与候选中的已有记忆语义重复。
 
 规则：
 - 只有确认表达同一件长期事实、偏好、约束或目标时才 should_merge=true。
@@ -118,22 +49,17 @@ func (m *Manager) decideMemoryMerge(ctx context.Context, input memoryMergeInput)
 
 候选记忆：
 %s`,
-		memoryMergeToolName,
 		input.Incoming.CanonicalType,
 		strings.TrimSpace(input.Incoming.Content),
 		strings.Join(candidateLines, "\n"),
 	)
-	_, err := m.mergeDecider.Generate(mergeCtx, []*schema.Message{
-		schema.SystemMessage("你负责判断长期记忆是否语义重复，并产出合并后的单条记忆。你必须调用工具提交结果，不要输出普通文本。"),
-		schema.UserMessage(prompt),
-	}, flowagent.WithComposeOptions(
-		compose.WithChatModelOption(model.WithToolChoice(schema.ToolChoiceForced, memoryMergeToolName)),
-	))
+
+	raw, err := llm.GenerateStructuredJSONObject[rawMemoryMergeDecision](mergeCtx, m.claimModel, prompt)
 	if err != nil {
 		zap.L().Warn("长期记忆语义合并判断失败", zap.Error(err))
 		return memoryMergeDecision{}, err
 	}
-	return normalizeMemoryMergeDecision(input.Candidates, *target), nil
+	return normalizeMemoryMergeDecision(input.Candidates, raw), nil
 }
 
 func normalizeMemoryMergeDecision(candidates []Memory, raw rawMemoryMergeDecision) memoryMergeDecision {

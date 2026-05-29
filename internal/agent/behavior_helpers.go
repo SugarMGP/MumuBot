@@ -1,42 +1,11 @@
 package agent
 
 import (
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"strconv"
 	"strings"
 )
-
-func contextClassificationMessageWindowSize(bufferSize int) int {
-	if bufferSize <= 0 {
-		cfg := config.Get()
-		if cfg != nil {
-			bufferSize = cfg.Agent.MessageBufferSize
-		}
-	}
-
-	window := bufferSize / 2
-	if window < 10 {
-		return 10
-	}
-	if window > 30 {
-		return 30
-	}
-	return window
-}
-
-func trimContextClassificationMessages(msgs []*onebot.GroupMessage, bufferSize int) []*onebot.GroupMessage {
-	window := contextClassificationMessageWindowSize(bufferSize)
-	if len(msgs) <= window {
-		return msgs
-	}
-	return msgs[len(msgs)-window:]
-}
-
-func replyTargetsSelf(reply *onebot.ReplyInfo, selfID int64) bool {
-	return reply != nil && reply.SenderID != 0 && selfID != 0 && reply.SenderID == selfID
-}
 
 func findReplyInfoInMessages(msgs []*onebot.GroupMessage, messageID int64) *onebot.ReplyInfo {
 	for i := len(msgs) - 1; i >= 0; i-- {

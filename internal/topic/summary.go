@@ -1,24 +1,10 @@
-package agent
+package topic
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	"mumu-bot/internal/memory"
-
-	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/components/tool"
-	toolutils "github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/compose"
-	flowagent "github.com/cloudwego/eino/flow/agent"
-	agentreact "github.com/cloudwego/eino/flow/agent/react"
-	"github.com/cloudwego/eino/schema"
 )
-
-const topicSummaryToolName = "submitTopicSummary"
-
-type topicSummaryCaptureKey struct{}
 
 type topicSummarySubmission struct {
 	Title        string                           `json:"title" jsonschema:"description=当前话题标题"`
@@ -28,63 +14,6 @@ type topicSummarySubmission struct {
 	OpenLoops    []string                         `json:"open_loops,omitempty" jsonschema:"description=当前话题里仍未闭合的事项"`
 	RecentTurns  []string                         `json:"recent_turns,omitempty" jsonschema:"description=最近几轮关键推进"`
 	Keywords     []string                         `json:"keywords,omitempty" jsonschema:"description=用于检索该话题的关键词"`
-}
-
-type topicSummaryToolOutput struct {
-	Success bool `json:"success"`
-}
-
-func withTopicSummaryTarget(ctx context.Context, target *topicSummarySubmission) context.Context {
-	return context.WithValue(ctx, topicSummaryCaptureKey{}, target)
-}
-
-func getTopicSummaryTarget(ctx context.Context) *topicSummarySubmission {
-	target, _ := ctx.Value(topicSummaryCaptureKey{}).(*topicSummarySubmission)
-	return target
-}
-
-func newTopicSummaryTool() (tool.InvokableTool, error) {
-	return toolutils.InferTool(
-		topicSummaryToolName,
-		"提交当前群聊话题的结构化摘要结果。必须调用一次，不要输出普通文本。",
-		func(ctx context.Context, input *topicSummarySubmission) (*topicSummaryToolOutput, error) {
-			target := getTopicSummaryTarget(ctx)
-			if target == nil {
-				return nil, fmt.Errorf("话题摘要接收器未初始化")
-			}
-
-			*target = *input
-			if err := agentreact.SetReturnDirectly(ctx); err != nil {
-				return nil, err
-			}
-			return &topicSummaryToolOutput{Success: true}, nil
-		},
-	)
-}
-
-func newTopicSummaryExtractor(chatModel model.ToolCallingChatModel) (*agentreact.Agent, error) {
-	if chatModel == nil {
-		return nil, nil
-	}
-
-	summaryTool, err := newTopicSummaryTool()
-	if err != nil {
-		return nil, err
-	}
-
-	agent, err := agentreact.NewAgent(context.Background(), &agentreact.AgentConfig{
-		ToolCallingModel: chatModel,
-		ToolsConfig: compose.ToolsNodeConfig{
-			Tools:               []tool.BaseTool{summaryTool},
-			ExecuteSequentially: true,
-		},
-		MaxStep:            4,
-		ToolReturnDirectly: map[string]struct{}{topicSummaryToolName: {}},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return agent, nil
 }
 
 func normalizeTopicSummarySubmission(raw *topicSummarySubmission) memory.TopicSummary {
@@ -144,12 +73,4 @@ func compactTopicStrings(items []string, limit int) []string {
 		}
 	}
 	return result
-}
-
-func buildTopicSummaryOptions() []flowagent.AgentOption {
-	return []flowagent.AgentOption{
-		flowagent.WithComposeOptions(
-			compose.WithChatModelOption(model.WithToolChoice(schema.ToolChoiceForced, topicSummaryToolName)),
-		),
-	}
 }

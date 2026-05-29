@@ -15,8 +15,6 @@ var (
 	highTierClientSlot = &tierClientSlot{}
 	midTierClientSlot  = &tierClientSlot{}
 	lowTierClientSlot  = &tierClientSlot{}
-
-	chatModelFactory = newOpenAIChatModel
 )
 
 type Tier string
@@ -31,15 +29,6 @@ type tierClientSlot struct {
 	client model.ToolCallingChatModel
 	err    error
 	once   sync.Once
-}
-
-func newOpenAIChatModel(baseURL string, apiKey string, modelName string, extraFields map[string]interface{}) (model.ToolCallingChatModel, error) {
-	return openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
-		Model:       modelName,
-		ExtraFields: extraFields,
-	})
 }
 
 func TierDisplayName(tier Tier) string {
@@ -61,25 +50,37 @@ func NewClientForTier(tier Tier) (model.ToolCallingChatModel, error) {
 		return nil, fmt.Errorf("配置未加载")
 	}
 
-	modelCfg, err := tierConfig(cfg, tier)
-	if err != nil {
-		return nil, err
+	var modelCfg config.ModelConfig
+	var slot *tierClientSlot
+	switch tier {
+	case TierHigh:
+		modelCfg = cfg.ModelTiers.High
+		slot = highTierClientSlot
+	case TierMid:
+		modelCfg = cfg.ModelTiers.Mid
+		slot = midTierClientSlot
+	case TierLow:
+		modelCfg = cfg.ModelTiers.Low
+		slot = lowTierClientSlot
+	default:
+		return nil, fmt.Errorf("未知模型档位: %s", tier)
 	}
-	return getTierClient(tier, modelCfg)
-}
 
-func getTierClient(tier Tier, cfg config.ModelConfig) (model.ToolCallingChatModel, error) {
-	slot := tierClientSlotFor(tier)
 	slot.once.Do(func() {
-		apiKey := strings.TrimSpace(cfg.APIKey)
-		baseURL := strings.TrimSpace(cfg.BaseURL)
-		modelName := strings.TrimSpace(cfg.Model)
+		apiKey := strings.TrimSpace(modelCfg.APIKey)
+		baseURL := strings.TrimSpace(modelCfg.BaseURL)
+		modelName := strings.TrimSpace(modelCfg.Model)
 		if apiKey == "" || baseURL == "" || modelName == "" {
 			slot.err = fmt.Errorf("%s配置不完整", TierDisplayName(tier))
 			return
 		}
 
-		chatModel, err := chatModelFactory(baseURL, apiKey, modelName, cfg.ExtraFields)
+		chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
+			BaseURL:     baseURL,
+			APIKey:      apiKey,
+			Model:       modelName,
+			ExtraFields: modelCfg.ExtraFields,
+		})
 		if err != nil {
 			slot.err = fmt.Errorf("创建%s失败: %w", TierDisplayName(tier), err)
 			return
@@ -88,30 +89,4 @@ func getTierClient(tier Tier, cfg config.ModelConfig) (model.ToolCallingChatMode
 	})
 
 	return slot.client, slot.err
-}
-
-func tierConfig(cfg *config.Config, tier Tier) (config.ModelConfig, error) {
-	switch tier {
-	case TierHigh:
-		return cfg.ModelTiers.High, nil
-	case TierMid:
-		return cfg.ModelTiers.Mid, nil
-	case TierLow:
-		return cfg.ModelTiers.Low, nil
-	default:
-		return config.ModelConfig{}, fmt.Errorf("未知模型档位: %s", tier)
-	}
-}
-
-func tierClientSlotFor(tier Tier) *tierClientSlot {
-	switch tier {
-	case TierHigh:
-		return highTierClientSlot
-	case TierMid:
-		return midTierClientSlot
-	case TierLow:
-		return lowTierClientSlot
-	default:
-		return &tierClientSlot{}
-	}
 }

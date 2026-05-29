@@ -74,10 +74,10 @@ learning:
   batch_size: 100               # 每次学习的消息数量限制
   min_msg_count: 5              # 触发学习的最少消息数量
 
-# 三档模型配置（需为 OpenAI 兼容 ChatModel，且都要支持工具调用）
-# 高档模型：用于沐沐实时思考与回复，推荐使用 GLM-4.7 或 Deepseek V3.2 等旗舰模型
-# 中档模型：用于话题摘要、后台学习、记忆合并，推荐使用 Qwen3.6-35B-A3B 等中端模型
-# 轻量模型：用于群风格判定，推荐使用 Qwen3.5-9B 等轻量模型
+# 三档模型配置（需为 OpenAI 兼容 ChatModel，并支持工具调用和结构化输出）
+# 高档模型：用于沐沐实时思考与回复，推荐使用 GLM-4.7、Mimo v2.5 Pro 等旗舰模型
+# 中档模型：用于话题摘要、话题归属与后台学习，推荐使用 Qwen3.6-35B-A3B、Deepseek V4 Flash 等中端模型
+# 轻量模型：用于上下文分类、长期记忆提取/合并和群风格判定，推荐使用 Qwen3.5-9B 等轻量模型
 model_tiers:
   high:
     api_key: ""        # 留空则使用 MUMU_MODEL_HIGH_API_KEY 环境变量
@@ -86,19 +86,18 @@ model_tiers:
     extra_fields: {    # 额外参数（可选）
       "enable_thinking": false,
       "temperature": 0.7,
-      "top_p": 0.85,
       "frequency_penalty": 0.15
     }
   mid:
     api_key: ""        # 留空则使用 MUMU_MODEL_MID_API_KEY 环境变量
     base_url: ""
     model: ""
-    extra_fields: {}   # 额外参数（可选）
+    extra_fields: {}
   low:
     api_key: ""        # 留空则使用 MUMU_MODEL_LOW_API_KEY 环境变量
     base_url: ""
-    model: ""
-    extra_fields: {}   # 额外参数（可选）
+    model: ""    
+    extra_fields: {}
 
 # Embedding模型配置（用于记忆检索，强制项）
 embedding:

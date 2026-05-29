@@ -13,7 +13,6 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/model"
-	agentreact "github.com/cloudwego/eino/flow/agent/react"
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -279,8 +278,7 @@ type vectorStore interface {
 type Manager struct {
 	db              *gorm.DB
 	embedding       EmbeddingProvider
-	claimExtractor  *agentreact.Agent
-	mergeDecider    *agentreact.Agent
+	claimModel      model.BaseChatModel
 	milvus          vectorStore // Memory 向量存储
 	styleCardMilvus vectorStore // StyleCard 向量存储
 	topicMilvus     vectorStore // Topic 摘要向量存储
@@ -383,20 +381,11 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 	m := &Manager{
 		db:              db,
 		embedding:       embedding,
+		claimModel:      claimModel,
 		milvus:          milvusClient,
 		styleCardMilvus: styleMilvusClient,
 		topicMilvus:     topicMilvusClient,
 		cleanupStop:     make(chan struct{}),
-	}
-	if claimExtractor, err := newMemoryClaimExtractor(claimModel); err != nil {
-		return nil, fmt.Errorf("初始化长期记忆提取器失败: %w", err)
-	} else {
-		m.claimExtractor = claimExtractor
-	}
-	if mergeDecider, err := newMemoryMergeDecider(claimModel); err != nil {
-		return nil, fmt.Errorf("初始化长期记忆合并判断器失败: %w", err)
-	} else {
-		m.mergeDecider = mergeDecider
 	}
 	// 启动消息日志清理任务
 	m.startMessageLogCleanup()

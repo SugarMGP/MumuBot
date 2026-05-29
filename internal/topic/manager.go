@@ -1,10 +1,11 @@
-package agent
+package topic
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"sort"
@@ -15,8 +16,6 @@ import (
 	"unicode"
 
 	"github.com/cloudwego/eino/components/model"
-	agentreact "github.com/cloudwego/eino/flow/agent/react"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +27,7 @@ const (
 	maxTopicAssignWorkers   = 2
 )
 
-type topicMemoryStore interface {
+type Store interface {
 	ListActiveTopicThreads(ctx context.Context, groupID int64) ([]memory.TopicThread, error)
 	ListArchivedTopicThreadsNeedingSummary(ctx context.Context, groupID int64) ([]memory.TopicThread, error)
 	ListRecentTopicMessages(ctx context.Context, topicID uint, limit int) ([]memory.MessageLog, error)
@@ -82,7 +81,7 @@ type topicAssignJob struct {
 	message      *onebot.GroupMessage
 }
 
-type TopicPromptContext struct {
+type PromptContext struct {
 	Prompt         string
 	RetrievalQuery string
 	TopicIDs       []uint
@@ -95,15 +94,15 @@ type PersistMessageInput struct {
 	ForwardsJSON string
 }
 
-type TopicManager struct {
-	ctx              context.Context
-	store            topicMemoryStore
-	assignExtractor  *agentreact.Agent
-	summaryExtractor *agentreact.Agent
-	summaryFn        topicSummaryFunc
-	assignFn         topicAssignFunc
-	groupStates      map[int64]*topicGroupState
-	groupLocks       map[int64]*sync.Mutex
+type Manager struct {
+	ctx          context.Context
+	store        Store
+	assignModel  model.BaseChatModel
+	summaryModel model.BaseChatModel
+	summaryFn    topicSummaryFunc
+	assignFn     topicAssignFunc
+	groupStates  map[int64]*topicGroupState
+	groupLocks   map[int64]*sync.Mutex
 
 	statesMu sync.RWMutex
 	locksMu  sync.Mutex
@@ -126,7 +125,7 @@ type TopicManager struct {
 	batchSize      int
 }
 
-func NewTopicManager(ctx context.Context, store topicMemoryStore, chatModel model.ToolCallingChatModel, bufferCapacity ...int) *TopicManager {
+func NewManager(ctx context.Context, store Store, chatModel model.ToolCallingChatModel, bufferCapacity ...int) *Manager {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -134,7 +133,7 @@ func NewTopicManager(ctx context.Context, store topicMemoryStore, chatModel mode
 	if len(bufferCapacity) > 0 {
 		capacity = bufferCapacity[0]
 	}
-	tm := &TopicManager{
+	tm := &Manager{
 		ctx:             ctx,
 		store:           store,
 		groupStates:     make(map[int64]*topicGroupState),
@@ -149,16 +148,8 @@ func NewTopicManager(ctx context.Context, store topicMemoryStore, chatModel mode
 		assignDone:      make(chan struct{}),
 		batchSize:       topicAssignmentBatchSize(capacity),
 	}
-	if summaryExtractor, err := newTopicSummaryExtractor(chatModel); err != nil {
-		zap.L().Warn("初始化话题摘要提取器失败", zap.Error(err))
-	} else {
-		tm.summaryExtractor = summaryExtractor
-	}
-	if assignExtractor, err := newTopicAssignmentExtractor(chatModel); err != nil {
-		zap.L().Warn("初始化话题分配器失败", zap.Error(err))
-	} else {
-		tm.assignExtractor = assignExtractor
-	}
+	tm.summaryModel = chatModel
+	tm.assignModel = chatModel
 	tm.summaryFn = tm.generateSummary
 	tm.assignFn = tm.generateTopicAssignments
 	tm.wg.Add(2)
@@ -167,7 +158,7 @@ func NewTopicManager(ctx context.Context, store topicMemoryStore, chatModel mode
 	return tm
 }
 
-func (tm *TopicManager) Close() {
+func (tm *Manager) Close() {
 	tm.closeOnce.Do(func() {
 		tm.assignMu.Lock()
 		tm.closed = true
@@ -180,14 +171,14 @@ func (tm *TopicManager) Close() {
 	})
 }
 
-func (tm *TopicManager) WithGroupLock(groupID int64, fn func() error) error {
+func (tm *Manager) withGroupLock(groupID int64, fn func() error) error {
 	lock := tm.getGroupLock(groupID)
 	lock.Lock()
 	defer lock.Unlock()
 	return fn()
 }
 
-func (tm *TopicManager) LoadFromDB(groupIDs []int64) error {
+func (tm *Manager) LoadFromDB(groupIDs []int64) error {
 	for _, groupID := range groupIDs {
 		if groupID == 0 {
 			continue
@@ -195,7 +186,7 @@ func (tm *TopicManager) LoadFromDB(groupIDs []int64) error {
 
 		for {
 			var victimTopicID uint
-			if err := tm.WithGroupLock(groupID, func() error {
+			if err := tm.withGroupLock(groupID, func() error {
 				activeTopics, err := tm.store.ListActiveTopicThreads(tm.ctx, groupID)
 				if err != nil {
 					return err
@@ -218,7 +209,7 @@ func (tm *TopicManager) LoadFromDB(groupIDs []int64) error {
 			}
 
 			archived := false
-			err := tm.WithGroupLock(groupID, func() error {
+			err := tm.withGroupLock(groupID, func() error {
 				activeTopics, err := tm.store.ListActiveTopicThreads(tm.ctx, groupID)
 				if err != nil {
 					return err
@@ -250,7 +241,7 @@ func (tm *TopicManager) LoadFromDB(groupIDs []int64) error {
 		}
 
 		var dirtyArchivedIDs []uint
-		if err := tm.WithGroupLock(groupID, func() error {
+		if err := tm.withGroupLock(groupID, func() error {
 			activeTopics, err := tm.store.ListActiveTopicThreads(tm.ctx, groupID)
 			if err != nil {
 				return err
@@ -293,29 +284,29 @@ func (tm *TopicManager) LoadFromDB(groupIDs []int64) error {
 	return nil
 }
 
-func (tm *TopicManager) BuildPromptContext(ctx context.Context, groupID int64, buffer []*onebot.GroupMessage, topicQuery string) (TopicPromptContext, error) {
+func (tm *Manager) BuildPromptContext(ctx context.Context, groupID int64, buffer []*onebot.GroupMessage, topicQuery string) (PromptContext, error) {
 	if len(buffer) == 0 {
-		return TopicPromptContext{}, nil
+		return PromptContext{}, nil
 	}
 
 	topicQuery = strings.TrimSpace(topicQuery)
 	archivedHits := tm.searchArchivedTopicHitsByText(ctx, groupID, topicQuery)
 	var selectedIDs []uint
-	if err := tm.WithGroupLock(groupID, func() error {
+	if err := tm.withGroupLock(groupID, func() error {
 		var err error
 		selectedIDs, err = tm.selectPromptTopicIDsLocked(ctx, groupID, buffer[len(buffer)-1], archivedHits, topicQuery)
 		return err
 	}); err != nil {
-		return TopicPromptContext{}, err
+		return PromptContext{}, err
 	}
 
 	if len(selectedIDs) == 0 {
-		return TopicPromptContext{
+		return PromptContext{
 			RetrievalQuery: topicQuery,
 		}, nil
 	}
-	var promptCtx TopicPromptContext
-	err := tm.WithGroupLock(groupID, func() error {
+	var promptCtx PromptContext
+	err := tm.withGroupLock(groupID, func() error {
 		var err error
 		promptCtx, err = tm.renderPromptContextLocked(ctx, groupID, buffer, selectedIDs, topicQuery)
 		for _, topicID := range selectedIDs {
@@ -328,7 +319,7 @@ func (tm *TopicManager) BuildPromptContext(ctx context.Context, groupID int64, b
 	return promptCtx, err
 }
 
-func (tm *TopicManager) PersistMessage(ctx context.Context, input PersistMessageInput) error {
+func (tm *Manager) PersistMessage(ctx context.Context, input PersistMessageInput) error {
 	if input.Message == nil {
 		return nil
 	}
@@ -350,15 +341,39 @@ func (tm *TopicManager) PersistMessage(ctx context.Context, input PersistMessage
 	if err != nil {
 		return err
 	}
+	var cloned *onebot.GroupMessage
+	if msg != nil {
+		clonedValue := *msg
+		if msg.Reply != nil {
+			replyCopy := *msg.Reply
+			clonedValue.Reply = &replyCopy
+		}
+		if len(msg.Images) > 0 {
+			clonedValue.Images = append([]onebot.ImageInfo(nil), msg.Images...)
+		}
+		if len(msg.Videos) > 0 {
+			clonedValue.Videos = append([]onebot.VideoInfo(nil), msg.Videos...)
+		}
+		if len(msg.Faces) > 0 {
+			clonedValue.Faces = append([]onebot.FaceInfo(nil), msg.Faces...)
+		}
+		if len(msg.AtList) > 0 {
+			clonedValue.AtList = append([]int64(nil), msg.AtList...)
+		}
+		if len(msg.Forwards) > 0 {
+			clonedValue.Forwards = append([]onebot.ForwardMessage(nil), msg.Forwards...)
+		}
+		cloned = &clonedValue
+	}
 	tm.enqueueAssignment(topicAssignJob{
 		groupID:      msg.GroupID,
 		messageLogID: saved.ID,
-		message:      cloneGroupMessage(msg),
+		message:      cloned,
 	})
 	return nil
 }
 
-func (tm *TopicManager) syncTopicVectors(ctx context.Context, topicIDs ...uint) error {
+func (tm *Manager) syncTopicVectors(ctx context.Context, topicIDs ...uint) error {
 	var syncErr error
 	for _, topicID := range uniqueTopicIDs(topicIDs) {
 		if topicID == 0 {
@@ -373,7 +388,7 @@ func (tm *TopicManager) syncTopicVectors(ctx context.Context, topicIDs ...uint) 
 	return syncErr
 }
 
-func (tm *TopicManager) enqueueAssignment(job topicAssignJob) {
+func (tm *Manager) enqueueAssignment(job topicAssignJob) {
 	if job.groupID == 0 || job.messageLogID == 0 {
 		return
 	}
@@ -397,7 +412,7 @@ func (tm *TopicManager) enqueueAssignment(job topicAssignJob) {
 	}
 }
 
-func (tm *TopicManager) assignmentScheduler() {
+func (tm *Manager) assignmentScheduler() {
 	defer tm.wg.Done()
 	defer close(tm.assignDone)
 	for {
@@ -417,7 +432,7 @@ func (tm *TopicManager) assignmentScheduler() {
 	}
 }
 
-func (tm *TopicManager) buildAssignmentCandidates(ctx context.Context, groupID int64, batch []topicAssignJob) []topicAssignmentCandidate {
+func (tm *Manager) buildAssignmentCandidates(ctx context.Context, groupID int64, batch []topicAssignJob) []topicAssignmentCandidate {
 	var queryParts []string
 	for _, job := range batch {
 		if text := messageTopicText(job.message); text != "" {
@@ -428,7 +443,7 @@ func (tm *TopicManager) buildAssignmentCandidates(ctx context.Context, groupID i
 	candidates := make([]topicAssignmentCandidate, 0)
 	seen := make(map[uint]struct{})
 
-	_ = tm.WithGroupLock(groupID, func() error {
+	_ = tm.withGroupLock(groupID, func() error {
 		for _, topic := range tm.activeTopicsLocked(groupID) {
 			if _, ok := seen[topic.ID]; ok {
 				continue
@@ -450,7 +465,7 @@ func (tm *TopicManager) buildAssignmentCandidates(ctx context.Context, groupID i
 	return candidates
 }
 
-func (tm *TopicManager) assignmentCandidateFromTopicLocked(topic memory.TopicThread, status memory.TopicThreadStatus) topicAssignmentCandidate {
+func (tm *Manager) assignmentCandidateFromTopicLocked(topic memory.TopicThread, status memory.TopicThreadStatus) topicAssignmentCandidate {
 	state := tm.lookupTopicStateLocked(topic.GroupID, topic.ID)
 	candidate := topicAssignmentCandidate{
 		ID:            topic.ID,
@@ -465,7 +480,7 @@ func (tm *TopicManager) assignmentCandidateFromTopicLocked(topic memory.TopicThr
 	return candidate
 }
 
-func (tm *TopicManager) assignmentCandidateFromTopic(ctx context.Context, topic memory.TopicThread, status memory.TopicThreadStatus) topicAssignmentCandidate {
+func (tm *Manager) assignmentCandidateFromTopic(ctx context.Context, topic memory.TopicThread, status memory.TopicThreadStatus) topicAssignmentCandidate {
 	candidate := topicAssignmentCandidate{
 		ID:            topic.ID,
 		Status:        status,
@@ -477,7 +492,7 @@ func (tm *TopicManager) assignmentCandidateFromTopic(ctx context.Context, topic 
 	return candidate
 }
 
-func (tm *TopicManager) assignmentItemsFromDecisions(batch []topicAssignJob, decisions []topicAssignmentDecision, candidates []topicAssignmentCandidate) []memory.TopicAssignmentBatchItem {
+func (tm *Manager) assignmentItemsFromDecisions(batch []topicAssignJob, decisions []topicAssignmentDecision, candidates []topicAssignmentCandidate) []memory.TopicAssignmentBatchItem {
 	decisionByKey := make(map[string]topicAssignmentDecision, len(decisions))
 	for _, decision := range decisions {
 		decision.MessageKey = strings.TrimSpace(decision.MessageKey)
@@ -528,7 +543,7 @@ func (tm *TopicManager) assignmentItemsFromDecisions(batch []topicAssignJob, dec
 	return items
 }
 
-func (tm *TopicManager) scheduleAssignmentFlush(groupID int64) {
+func (tm *Manager) scheduleAssignmentFlush(groupID int64) {
 	tm.assignMu.Lock()
 	if tm.closed {
 		tm.assignMu.Unlock()
@@ -551,7 +566,7 @@ func (tm *TopicManager) scheduleAssignmentFlush(groupID int64) {
 	go tm.runAssignmentFlush(groupID, batch)
 }
 
-func (tm *TopicManager) runAssignmentFlush(groupID int64, batch []topicAssignJob) {
+func (tm *Manager) runAssignmentFlush(groupID int64, batch []topicAssignJob) {
 	defer tm.wg.Done()
 	select {
 	case tm.assignSem <- struct{}{}:
@@ -569,7 +584,7 @@ func (tm *TopicManager) runAssignmentFlush(groupID int64, batch []topicAssignJob
 	tm.finishAssignmentFlush(groupID, batch)
 }
 
-func (tm *TopicManager) assignmentFlushContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+func (tm *Manager) assignmentFlushContext(timeout time.Duration) (context.Context, context.CancelFunc) {
 	base := tm.ctx
 	if base == nil {
 		base = context.Background()
@@ -585,7 +600,7 @@ func (tm *TopicManager) assignmentFlushContext(timeout time.Duration) (context.C
 	return ctx, cancel
 }
 
-func (tm *TopicManager) finishAssignmentFlush(groupID int64, batch []topicAssignJob) {
+func (tm *Manager) finishAssignmentFlush(groupID int64, batch []topicAssignJob) {
 	messageIDs := make([]uint, 0, len(batch))
 	for _, job := range batch {
 		messageIDs = append(messageIDs, job.messageLogID)
@@ -600,7 +615,7 @@ func (tm *TopicManager) finishAssignmentFlush(groupID int64, batch []topicAssign
 	}
 }
 
-func (tm *TopicManager) drainAssignmentQueueIntoBuffers() {
+func (tm *Manager) drainAssignmentQueueIntoBuffers() {
 	for {
 		select {
 		case job := <-tm.assignQueue:
@@ -613,12 +628,12 @@ func (tm *TopicManager) drainAssignmentQueueIntoBuffers() {
 	}
 }
 
-func (tm *TopicManager) drainAssignmentBuffers() {
+func (tm *Manager) drainAssignmentBuffers() {
 	tm.drainAssignmentQueueIntoBuffers()
 	tm.clearAssignmentBuffers()
 }
 
-func (tm *TopicManager) clearAssignmentBuffers() {
+func (tm *Manager) clearAssignmentBuffers() {
 	pendingByGroup := make(map[int64][]uint)
 	tm.assignMu.Lock()
 	for groupID, batch := range tm.assignBuffers {
@@ -634,7 +649,7 @@ func (tm *TopicManager) clearAssignmentBuffers() {
 	}
 }
 
-func (tm *TopicManager) flushAssignmentBatch(ctx context.Context, groupID int64, batch []topicAssignJob) error {
+func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batch []topicAssignJob) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -672,7 +687,7 @@ func (tm *TopicManager) flushAssignmentBatch(ctx context.Context, groupID int64,
 	return nil
 }
 
-func (tm *TopicManager) recoverPendingAssignments(groupIDs []int64) error {
+func (tm *Manager) RecoverPendingAssignments(groupIDs []int64) error {
 	for _, groupID := range groupIDs {
 		if groupID == 0 {
 			continue
@@ -708,7 +723,7 @@ func (tm *TopicManager) recoverPendingAssignments(groupIDs []int64) error {
 	return nil
 }
 
-func (tm *TopicManager) selectPromptTopicIDsLocked(ctx context.Context, groupID int64, latest *onebot.GroupMessage, archivedHits []memory.TopicThreadSearchHit, topicQuery string) ([]uint, error) {
+func (tm *Manager) selectPromptTopicIDsLocked(ctx context.Context, groupID int64, latest *onebot.GroupMessage, archivedHits []memory.TopicThreadSearchHit, topicQuery string) ([]uint, error) {
 	candidates, err := tm.collectCandidatesLocked(ctx, groupID, latest, archivedHits, topicQuery)
 	if err != nil {
 		return nil, err
@@ -726,9 +741,9 @@ func (tm *TopicManager) selectPromptTopicIDsLocked(ctx context.Context, groupID 
 	return uniqueTopicIDs(selectedIDs), nil
 }
 
-func (tm *TopicManager) renderPromptContextLocked(ctx context.Context, groupID int64, buffer []*onebot.GroupMessage, selectedIDs []uint, retrievalQuery string) (TopicPromptContext, error) {
+func (tm *Manager) renderPromptContextLocked(ctx context.Context, groupID int64, buffer []*onebot.GroupMessage, selectedIDs []uint, retrievalQuery string) (PromptContext, error) {
 	if len(buffer) == 0 {
-		return TopicPromptContext{}, nil
+		return PromptContext{}, nil
 	}
 
 	var builder strings.Builder
@@ -743,7 +758,7 @@ func (tm *TopicManager) renderPromptContextLocked(ctx context.Context, groupID i
 			var err error
 			topic, err = tm.store.GetTopicThread(ctx, topicID)
 			if err != nil {
-				return TopicPromptContext{}, err
+				return PromptContext{}, err
 			}
 		}
 		section := renderTopicPromptSection(topic, state)
@@ -765,7 +780,7 @@ func (tm *TopicManager) renderPromptContextLocked(ctx context.Context, groupID i
 		mainTopicID = injected[0]
 	}
 
-	return TopicPromptContext{
+	return PromptContext{
 		Prompt:         builder.String(),
 		RetrievalQuery: retrievalQuery,
 		TopicIDs:       injected,
@@ -773,7 +788,7 @@ func (tm *TopicManager) renderPromptContextLocked(ctx context.Context, groupID i
 	}, nil
 }
 
-func (tm *TopicManager) ensureTopicSummaryFresh(ctx context.Context, topicID uint) (*memory.TopicThread, error) {
+func (tm *Manager) ensureTopicSummaryFresh(ctx context.Context, topicID uint) (*memory.TopicThread, error) {
 	call, leader := tm.beginTopicSummaryCall(topicID)
 	if !leader {
 		select {
@@ -789,7 +804,7 @@ func (tm *TopicManager) ensureTopicSummaryFresh(ctx context.Context, topicID uin
 	return copyTopicThread(topic), err
 }
 
-func (tm *TopicManager) ensureTopicSummaryFreshOnce(ctx context.Context, topicID uint) (*memory.TopicThread, error) {
+func (tm *Manager) ensureTopicSummaryFreshOnce(ctx context.Context, topicID uint) (*memory.TopicThread, error) {
 	topic, err := tm.store.GetTopicThread(ctx, topicID)
 	if err != nil {
 		return nil, err
@@ -834,7 +849,7 @@ func (tm *TopicManager) ensureTopicSummaryFreshOnce(ctx context.Context, topicID
 	return copyTopicThread(&current), nil
 }
 
-func (tm *TopicManager) beginTopicSummaryCall(topicID uint) (*topicSummaryCall, bool) {
+func (tm *Manager) beginTopicSummaryCall(topicID uint) (*topicSummaryCall, bool) {
 	tm.summaryMu.Lock()
 	defer tm.summaryMu.Unlock()
 
@@ -847,7 +862,7 @@ func (tm *TopicManager) beginTopicSummaryCall(topicID uint) (*topicSummaryCall, 
 	return call, true
 }
 
-func (tm *TopicManager) finishTopicSummaryCall(topicID uint, call *topicSummaryCall, topic *memory.TopicThread, err error) {
+func (tm *Manager) finishTopicSummaryCall(topicID uint, call *topicSummaryCall, topic *memory.TopicThread, err error) {
 	tm.summaryMu.Lock()
 	defer tm.summaryMu.Unlock()
 
@@ -857,7 +872,7 @@ func (tm *TopicManager) finishTopicSummaryCall(topicID uint, call *topicSummaryC
 	delete(tm.summaryInFlight, topicID)
 }
 
-func (tm *TopicManager) summaryWorker() {
+func (tm *Manager) summaryWorker() {
 	defer tm.wg.Done()
 	for {
 		select {
@@ -866,7 +881,7 @@ func (tm *TopicManager) summaryWorker() {
 		case task := <-tm.summaryQueue:
 			topic, err := tm.store.GetTopicThread(tm.ctx, task.topicID)
 			if err == nil && topic != nil && topic.LastMessageLogID > topic.SummaryUntilMessageLogID {
-				if tm.WithGroupLock(task.groupID, func() error {
+				if tm.withGroupLock(task.groupID, func() error {
 					if tm.hasPendingAssignmentInRangeLocked(task.groupID, topic.SummaryUntilMessageLogID, topic.LastMessageLogID) {
 						return memory.ErrTopicStateChanged
 					}
@@ -888,7 +903,7 @@ func (tm *TopicManager) summaryWorker() {
 			topic, err = tm.ensureTopicSummaryFresh(tm.ctx, task.topicID)
 			if err != nil {
 				zap.L().Warn("刷新话题摘要失败", zap.Int64("group_id", task.groupID), zap.Uint("topic_id", task.topicID), zap.Error(err))
-				_ = tm.WithGroupLock(task.groupID, func() error {
+				_ = tm.withGroupLock(task.groupID, func() error {
 					if state := tm.lookupTopicStateLocked(task.groupID, task.topicID); state != nil {
 						state.queued = false
 					}
@@ -905,7 +920,7 @@ func (tm *TopicManager) summaryWorker() {
 	}
 }
 
-func (tm *TopicManager) syncTopicStateLocked(ctx context.Context, groupID int64, topic memory.TopicThread) {
+func (tm *Manager) syncTopicStateLocked(ctx context.Context, groupID int64, topic memory.TopicThread) {
 	state := tm.ensureTopicStateLocked(groupID, topic.ID)
 	state.thread = topic
 	state.dirty = topic.SummaryUntilMessageLogID < topic.LastMessageLogID
@@ -926,7 +941,7 @@ func (tm *TopicManager) syncTopicStateLocked(ctx context.Context, groupID int64,
 	delete(groupState.topics, topic.ID)
 }
 
-func (tm *TopicManager) markAssignmentPending(groupID int64, messageLogID uint) {
+func (tm *Manager) markAssignmentPending(groupID int64, messageLogID uint) {
 	if messageLogID == 0 {
 		return
 	}
@@ -940,7 +955,7 @@ func (tm *TopicManager) markAssignmentPending(groupID int64, messageLogID uint) 
 	groupState.pendingAssign[messageLogID] = struct{}{}
 }
 
-func (tm *TopicManager) clearAssignmentPending(groupID int64, messageLogIDs []uint) {
+func (tm *Manager) clearAssignmentPending(groupID int64, messageLogIDs []uint) {
 	if len(messageLogIDs) == 0 {
 		return
 	}
@@ -955,7 +970,7 @@ func (tm *TopicManager) clearAssignmentPending(groupID int64, messageLogIDs []ui
 	}
 }
 
-func (tm *TopicManager) hasPendingAssignmentInRangeLocked(groupID int64, afterID uint, untilID uint) bool {
+func (tm *Manager) hasPendingAssignmentInRangeLocked(groupID int64, afterID uint, untilID uint) bool {
 	if untilID <= afterID {
 		return false
 	}
@@ -974,7 +989,7 @@ func (tm *TopicManager) hasPendingAssignmentInRangeLocked(groupID int64, afterID
 	return false
 }
 
-func (tm *TopicManager) collectCandidatesLocked(ctx context.Context, groupID int64, msg *onebot.GroupMessage, archivedHits []memory.TopicThreadSearchHit, topicQuery string) ([]topicCandidate, error) {
+func (tm *Manager) collectCandidatesLocked(ctx context.Context, groupID int64, msg *onebot.GroupMessage, archivedHits []memory.TopicThreadSearchHit, topicQuery string) ([]topicCandidate, error) {
 	query := messageTopicText(msg)
 	archiveQuery := strings.TrimSpace(topicQuery)
 	replyTopicID := tm.resolveReplyTopicID(msg)
@@ -1045,7 +1060,7 @@ func (tm *TopicManager) collectCandidatesLocked(ctx context.Context, groupID int
 	return candidates, nil
 }
 
-func (tm *TopicManager) searchArchivedTopicHitsByText(ctx context.Context, groupID int64, query string) []memory.TopicThreadSearchHit {
+func (tm *Manager) searchArchivedTopicHitsByText(ctx context.Context, groupID int64, query string) []memory.TopicThreadSearchHit {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil
@@ -1058,7 +1073,7 @@ func (tm *TopicManager) searchArchivedTopicHitsByText(ctx context.Context, group
 	return hits
 }
 
-func (tm *TopicManager) resolveReplyTopicID(msg *onebot.GroupMessage) uint {
+func (tm *Manager) resolveReplyTopicID(msg *onebot.GroupMessage) uint {
 	if msg == nil || msg.Reply == nil || msg.Reply.MessageID == 0 {
 		return 0
 	}
@@ -1069,7 +1084,7 @@ func (tm *TopicManager) resolveReplyTopicID(msg *onebot.GroupMessage) uint {
 	return log.TopicThreadID
 }
 
-func (tm *TopicManager) enqueueSummaryLocked(groupID int64, topicID uint, state *topicRuntimeState) {
+func (tm *Manager) enqueueSummaryLocked(groupID int64, topicID uint, state *topicRuntimeState) {
 	if state == nil || state.queued {
 		return
 	}
@@ -1077,7 +1092,7 @@ func (tm *TopicManager) enqueueSummaryLocked(groupID int64, topicID uint, state 
 	tm.enqueueSummaryTask(topicSummaryTask{groupID: groupID, topicID: topicID})
 }
 
-func (tm *TopicManager) enqueueSummaryTask(task topicSummaryTask) {
+func (tm *Manager) enqueueSummaryTask(task topicSummaryTask) {
 	select {
 	case tm.summaryQueue <- task:
 		return
@@ -1093,7 +1108,7 @@ func (tm *TopicManager) enqueueSummaryTask(task topicSummaryTask) {
 	}
 }
 
-func (tm *TopicManager) activeTopicsLocked(groupID int64) []memory.TopicThread {
+func (tm *Manager) activeTopicsLocked(groupID int64) []memory.TopicThread {
 	groupState := tm.ensureGroupState(groupID)
 	topics := make([]memory.TopicThread, 0, len(groupState.topics))
 	for _, state := range groupState.topics {
@@ -1110,7 +1125,7 @@ func (tm *TopicManager) activeTopicsLocked(groupID int64) []memory.TopicThread {
 	return topics
 }
 
-func (tm *TopicManager) loadTopicTailMessages(ctx context.Context, topicID uint) []*onebot.GroupMessage {
+func (tm *Manager) loadTopicTailMessages(ctx context.Context, topicID uint) []*onebot.GroupMessage {
 	logs, err := tm.store.ListRecentTopicMessages(ctx, topicID, memory.TopicTailKeepMessages)
 	if err != nil {
 		return nil
@@ -1122,7 +1137,7 @@ func (tm *TopicManager) loadTopicTailMessages(ctx context.Context, topicID uint)
 	return msgs
 }
 
-func (tm *TopicManager) loadTopicParticipants(ctx context.Context, topicID uint) []memory.TopicParticipantRef {
+func (tm *Manager) loadTopicParticipants(ctx context.Context, topicID uint) []memory.TopicParticipantRef {
 	participants, err := tm.store.ListRecentTopicParticipants(ctx, topicID, memory.TopicTailKeepMessages)
 	if err != nil {
 		return nil
@@ -1130,18 +1145,18 @@ func (tm *TopicManager) loadTopicParticipants(ctx context.Context, topicID uint)
 	return participants
 }
 
-func (tm *TopicManager) refreshTopicState(ctx context.Context, topicID uint) error {
+func (tm *Manager) refreshTopicState(ctx context.Context, topicID uint) error {
 	topic, err := tm.store.GetTopicThread(ctx, topicID)
 	if err != nil {
 		return err
 	}
-	return tm.WithGroupLock(topic.GroupID, func() error {
+	return tm.withGroupLock(topic.GroupID, func() error {
 		_, err := tm.reloadTopicStateLocked(ctx, topic.GroupID, topicID)
 		return err
 	})
 }
 
-func (tm *TopicManager) reloadTopicStateLocked(ctx context.Context, groupID int64, topicID uint) (*memory.TopicThread, error) {
+func (tm *Manager) reloadTopicStateLocked(ctx context.Context, groupID int64, topicID uint) (*memory.TopicThread, error) {
 	topic, err := tm.store.GetTopicThread(ctx, topicID)
 	if err != nil {
 		return nil, err
@@ -1150,7 +1165,7 @@ func (tm *TopicManager) reloadTopicStateLocked(ctx context.Context, groupID int6
 	return copyTopicThread(topic), nil
 }
 
-func (tm *TopicManager) ensureGroupState(groupID int64) *topicGroupState {
+func (tm *Manager) ensureGroupState(groupID int64) *topicGroupState {
 	tm.statesMu.Lock()
 	defer tm.statesMu.Unlock()
 	groupState, ok := tm.groupStates[groupID]
@@ -1168,7 +1183,7 @@ func newTopicGroupState() *topicGroupState {
 	}
 }
 
-func (tm *TopicManager) lookupTopicStateLocked(groupID int64, topicID uint) *topicRuntimeState {
+func (tm *Manager) lookupTopicStateLocked(groupID int64, topicID uint) *topicRuntimeState {
 	tm.statesMu.RLock()
 	groupState := tm.groupStates[groupID]
 	tm.statesMu.RUnlock()
@@ -1178,7 +1193,7 @@ func (tm *TopicManager) lookupTopicStateLocked(groupID int64, topicID uint) *top
 	return groupState.topics[topicID]
 }
 
-func (tm *TopicManager) ensureTopicStateLocked(groupID int64, topicID uint) *topicRuntimeState {
+func (tm *Manager) ensureTopicStateLocked(groupID int64, topicID uint) *topicRuntimeState {
 	groupState := tm.ensureGroupState(groupID)
 	if state, ok := groupState.topics[topicID]; ok {
 		return state
@@ -1195,7 +1210,7 @@ func (tm *TopicManager) ensureTopicStateLocked(groupID int64, topicID uint) *top
 	return state
 }
 
-func (tm *TopicManager) getGroupLock(groupID int64) *sync.Mutex {
+func (tm *Manager) getGroupLock(groupID int64) *sync.Mutex {
 	tm.locksMu.Lock()
 	defer tm.locksMu.Unlock()
 	lock, ok := tm.groupLocks[groupID]
@@ -1206,8 +1221,8 @@ func (tm *TopicManager) getGroupLock(groupID int64) *sync.Mutex {
 	return lock
 }
 
-func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.TopicSummary, newMessages []memory.MessageLog) (memory.TopicSummary, error) {
-	if tm.summaryExtractor == nil {
+func (tm *Manager) generateSummary(ctx context.Context, oldSummary memory.TopicSummary, newMessages []memory.MessageLog) (memory.TopicSummary, error) {
+	if tm.summaryModel == nil {
 		return memory.TopicSummary{}, fmt.Errorf("topic summary extractor not configured")
 	}
 
@@ -1228,20 +1243,16 @@ func (tm *TopicManager) generateSummary(ctx context.Context, oldSummary memory.T
 	if rawMeta, err := memory.MarshalTopicSummaryItemMetaForPrompt(oldSummary); err == nil {
 		oldItemMetaJSON = rawMeta
 	}
-	target := &topicSummarySubmission{}
-	summaryCtx, cancel := context.WithTimeout(withTopicSummaryTarget(ctx, target), 30*time.Second)
+	summaryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	prompt := fmt.Sprintf("请根据旧摘要和新增消息，调用一次 %s 工具提交最新的话题摘要，不要输出普通文本。\n字段固定为 title,gist,facts,participants,open_loops,recent_turns,keywords。\nfacts 只写已经确认且对后续有用的稳定事实；open_loops 只写尚未解决、后续可能要接上的事项；recent_turns 保留近期推进，不复述全部聊天。\nparticipants 中每项包含 nickname 和 position。\n旧摘要里的 item_meta 只供你理解旧条目身份：如果新消息没有实质改变同一条事实或事项，尽量沿用旧 facts/open_loops 的原句，不要把同一事实改写成并列新条目；如果需要更新同一条事实，替换旧条目，不要同时保留新旧两条。\n旧摘要：%s\n旧条目元数据：%s\n新增消息：\n%s", topicSummaryToolName, oldSummaryJSON, oldItemMetaJSON, strings.Join(msgLines, "\n"))
-	_, err = tm.summaryExtractor.Generate(summaryCtx, []*schema.Message{
-		schema.SystemMessage("你负责维护群聊当前话题的结构化摘要。你必须调用工具提交结果，不要输出普通文本。"),
-		schema.UserMessage(prompt),
-	}, buildTopicSummaryOptions()...)
+	prompt := fmt.Sprintf("请根据旧摘要和新增消息输出最新的话题摘要。\n字段固定为 title,gist,facts,participants,open_loops,recent_turns,keywords。\nfacts 只写已经确认且对后续有用的稳定事实；open_loops 只写尚未解决、后续可能要接上的事项；recent_turns 保留近期推进，不复述全部聊天。\nparticipants 中每项包含 nickname 和 position。\n旧摘要里的 item_meta 只供你理解旧条目身份：如果新消息没有实质改变同一条事实或事项，尽量沿用旧 facts/open_loops 的原句，不要把同一事实改写成并列新条目；如果需要更新同一条事实，替换旧条目，不要同时保留新旧两条。\n旧摘要：%s\n旧条目元数据：%s\n新增消息：\n%s", oldSummaryJSON, oldItemMetaJSON, strings.Join(msgLines, "\n"))
+	target, err := llm.GenerateStructuredJSONObject[topicSummarySubmission](summaryCtx, tm.summaryModel, prompt)
 	if err != nil {
 		return memory.TopicSummary{}, err
 	}
 
-	return normalizeTopicSummarySubmission(target), nil
+	return normalizeTopicSummarySubmission(&target), nil
 }
 
 func messageLogToGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
@@ -1251,53 +1262,34 @@ func messageLogToGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
 	return msg
 }
 
-func (tm *TopicManager) generateTopicAssignments(ctx context.Context, groupID int64, messages []topicAssignJob, candidates []topicAssignmentCandidate) ([]topicAssignmentDecision, error) {
-	if tm.assignExtractor == nil {
+func messageLogBaseGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
+	messageID, _ := strconv.ParseInt(log.MessageID, 10, 64)
+	return &onebot.GroupMessage{
+		MessageID:   messageID,
+		GroupID:     log.GroupID,
+		UserID:      log.UserID,
+		Nickname:    log.Nickname,
+		Time:        log.CreatedAt,
+		MessageType: log.MsgType,
+	}
+}
+
+func (tm *Manager) generateTopicAssignments(ctx context.Context, groupID int64, messages []topicAssignJob, candidates []topicAssignmentCandidate) ([]topicAssignmentDecision, error) {
+	if tm.assignModel == nil {
 		return nil, fmt.Errorf("topic assignment extractor not configured")
 	}
-	target := &topicAssignmentSubmission{}
-	assignCtx, cancel := context.WithTimeout(withTopicAssignmentTarget(ctx, target), topicAssignTimeout)
+	assignCtx, cancel := context.WithTimeout(ctx, topicAssignTimeout)
 	defer cancel()
 
 	prompt := buildTopicAssignmentPrompt(groupID, messages, candidates)
-	_, err := tm.assignExtractor.Generate(assignCtx, []*schema.Message{
-		schema.SystemMessage("你负责把群聊消息批量归入话题。你必须调用工具提交结果，不要输出普通文本。"),
-		schema.UserMessage(prompt),
-	}, buildTopicAssignmentOptions()...)
+	target, err := llm.GenerateStructuredJSONObject[topicAssignmentSubmission](assignCtx, tm.assignModel, prompt)
 	if err != nil {
 		return nil, err
 	}
 	if len(target.Assignments) == 0 {
-		return nil, fmt.Errorf("topic assignment tool returned no assignments")
+		return nil, fmt.Errorf("topic assignment returned no assignments")
 	}
-	return normalizeTopicAssignmentSubmission(target), nil
-}
-
-func cloneGroupMessage(msg *onebot.GroupMessage) *onebot.GroupMessage {
-	if msg == nil {
-		return nil
-	}
-	cloned := *msg
-	if msg.Reply != nil {
-		replyCopy := *msg.Reply
-		cloned.Reply = &replyCopy
-	}
-	if len(msg.Images) > 0 {
-		cloned.Images = append([]onebot.ImageInfo(nil), msg.Images...)
-	}
-	if len(msg.Videos) > 0 {
-		cloned.Videos = append([]onebot.VideoInfo(nil), msg.Videos...)
-	}
-	if len(msg.Faces) > 0 {
-		cloned.Faces = append([]onebot.FaceInfo(nil), msg.Faces...)
-	}
-	if len(msg.AtList) > 0 {
-		cloned.AtList = append([]int64(nil), msg.AtList...)
-	}
-	if len(msg.Forwards) > 0 {
-		cloned.Forwards = append([]onebot.ForwardMessage(nil), msg.Forwards...)
-	}
-	return &cloned
+	return normalizeTopicAssignmentSubmission(&target), nil
 }
 
 func renderTopicPromptSection(topic *memory.TopicThread, state *topicRuntimeState) string {

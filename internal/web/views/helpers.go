@@ -298,7 +298,7 @@ func topicSummaryHistory(topic memory.TopicThread) []memory.TopicSummarySnapshot
 	return memory.ParseTopicSummaryHistory(topic.SummaryHistoryJSON)
 }
 
-func topicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
+func TopicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
 	history := topicSummaryHistory(topic)
 	if len(history) == 0 {
 		return nil
@@ -323,10 +323,6 @@ func topicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
 		changes[0].InitiallyOpen = true
 	}
 	return changes
-}
-
-func TopicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {
-	return topicSummaryChanges(topic)
 }
 
 func buildTopicSummaryChangeView(prev *memory.TopicSummarySnapshot, current memory.TopicSummarySnapshot) TopicSummaryChangeView {
