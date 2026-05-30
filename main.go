@@ -61,7 +61,7 @@ func main() {
 	adminService := services.NewAdminService(memoryMgr.GetDB(), stickerDir).
 		WithMemoryDeleter(memoryMgr).
 		WithJargonReloader(mumuAgent)
-	app := webapp.New(cfg, adminService, webapp.NewRuntimeSource(cfg, memoryMgr, mumuAgent))
+	app := webapp.New(cfg, adminService, memoryMgr, mumuAgent)
 	httpServer := app.Server()
 
 	go func() {

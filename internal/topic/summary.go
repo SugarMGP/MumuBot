@@ -17,7 +17,7 @@ type topicSummarySubmission struct {
 }
 
 func normalizeTopicSummarySubmission(raw *topicSummarySubmission) memory.TopicSummary {
-	summary := memory.EmptyTopicSummary()
+	summary := EmptySummary()
 	if raw == nil {
 		return summary
 	}
@@ -41,7 +41,7 @@ func normalizeTopicSummarySubmission(raw *topicSummarySubmission) memory.TopicSu
 				Nickname: nickname,
 				Position: position,
 			})
-			if len(participants) >= memory.TopicTailKeepMessages {
+			if len(participants) >= TailKeepMessages {
 				break
 			}
 		}

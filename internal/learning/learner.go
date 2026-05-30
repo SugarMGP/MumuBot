@@ -8,6 +8,7 @@ import (
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
+	"mumu-bot/internal/topic"
 	"strings"
 	"sync"
 	"time"
@@ -515,7 +516,7 @@ func selectLearnableMessages(msgs []memory.MessageLog) ([]memory.MessageLog, uin
 	lastID := msgs[len(msgs)-1].ID
 	firstLearnableIndex := -1
 	for idx, msg := range msgs {
-		if memory.IsTopicAssignmentProcessed(msg) {
+		if topic.IsAssignmentProcessed(msg) {
 			if firstLearnableIndex < 0 {
 				firstLearnableIndex = idx
 			}

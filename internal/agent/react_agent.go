@@ -135,7 +135,7 @@ func New(mem *memory.Manager) (*Agent, error) {
 		replyCache:        newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
 		visionCache:       newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
-	a.topicMgr = topic.NewManager(rootCtx, mem, topicModel)
+	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem.TopicVectorStore(), mem), topicModel)
 	constructed := false
 	defer func() {
 		if constructed {

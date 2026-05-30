@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"mumu-bot/internal/memory"
+	topicpkg "mumu-bot/internal/topic"
 	neturl "net/url"
 	"sort"
 	"strconv"
@@ -291,11 +292,11 @@ func topicStatusClass(status memory.TopicThreadStatus) string {
 }
 
 func topicSummary(topic memory.TopicThread) memory.TopicSummary {
-	return memory.ParseTopicSummary(topic.SummaryJSON)
+	return topicpkg.ParseSummary(topic.SummaryJSON)
 }
 
 func topicSummaryHistory(topic memory.TopicThread) []memory.TopicSummarySnapshot {
-	return memory.ParseTopicSummaryHistory(topic.SummaryHistoryJSON)
+	return topicpkg.ParseSummaryHistory(topic.SummaryHistoryJSON)
 }
 
 func TopicSummaryChanges(topic memory.TopicThread) []TopicSummaryChangeView {

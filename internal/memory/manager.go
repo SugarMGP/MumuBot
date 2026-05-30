@@ -265,7 +265,7 @@ type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
 }
 
-type vectorStore interface {
+type VectorStore interface {
 	Insert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error)
 	Search(ctx context.Context, embedding []float64, groupID int64, memType string, topK int, threshold float64) ([]vector.SearchResult, error)
 	Delete(ctx context.Context, memoryIDs []uint) error
@@ -274,14 +274,18 @@ type vectorStore interface {
 	GetConfig() *vector.MilvusConfig
 }
 
+type MemoryCandidateWriter interface {
+	UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error)
+}
+
 // Manager 记忆系统管理器
 type Manager struct {
 	db              *gorm.DB
 	embedding       EmbeddingProvider
 	claimModel      model.BaseChatModel
-	milvus          vectorStore // Memory 向量存储
-	styleCardMilvus vectorStore // StyleCard 向量存储
-	topicMilvus     vectorStore // Topic 摘要向量存储
+	milvus          VectorStore // Memory 向量存储
+	styleCardMilvus VectorStore // StyleCard 向量存储
+	topicMilvus     VectorStore // Topic 摘要向量存储
 	cleanupStop     chan struct{}
 }
 
@@ -1445,16 +1449,44 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 	}
 
 	for _, groupID := range groupIDs {
-		keepIDs, err := m.protectedTopicMessageIDs(groupID, keepLatest)
-		if err != nil {
-			zap.L().Warn("清理消息日志失败：获取保留ID失败", zap.Int64("group_id", groupID), zap.Error(err))
-			continue
+		var threshold struct {
+			ID        uint
+			CreatedAt time.Time
 		}
-		if len(keepIDs) == 0 {
+		err := m.db.Model(&MessageLog{}).
+			Select("id", "created_at").
+			Where("group_id = ?", groupID).
+			Order("created_at DESC").
+			Order("id DESC").
+			Offset(keepLatest - 1).
+			Limit(1).
+			Take(&threshold).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			zap.L().Warn("清理消息日志失败：获取最新保留边界失败", zap.Int64("group_id", groupID), zap.Error(err))
 			continue
 		}
 
-		result := m.db.Where("group_id = ? AND id NOT IN ?", groupID, keepIDs).Delete(&MessageLog{})
+		state, err := m.GetLearningState(groupID)
+		if err != nil {
+			zap.L().Warn("清理消息日志失败：获取学习进度失败", zap.Int64("group_id", groupID), zap.Error(err))
+			continue
+		}
+		if state.LastMessageID == 0 {
+			continue
+		}
+
+		query := m.db.Where(
+			"group_id = ? AND topic_thread_id = 0 AND (created_at < ? OR (created_at = ? AND id < ?))",
+			groupID,
+			threshold.CreatedAt,
+			threshold.CreatedAt,
+			threshold.ID,
+		)
+		query = query.Where("id <= ?", state.LastMessageID)
+		result := query.Delete(&MessageLog{})
 		if result.Error != nil {
 			zap.L().Warn("清理消息日志失败：删除旧记录失败", zap.Int64("group_id", groupID), zap.Error(result.Error))
 			continue
@@ -1500,14 +1532,20 @@ func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, gr
 	sortedMemories := make([]Memory, 0, len(results))
 	for _, r := range results {
 		if mem, ok := memoryMap[r.MemoryID]; ok {
-			m.db.WithContext(ctx).Model(&mem).Updates(map[string]any{
-				"access_count": gorm.Expr("access_count + 1"),
-			})
 			sortedMemories = append(sortedMemories, mem)
 			if len(sortedMemories) >= limit {
 				break
 			}
 		}
+	}
+	if len(sortedMemories) > 0 {
+		memoryIDs = memoryIDs[:0]
+		for _, mem := range sortedMemories {
+			memoryIDs = append(memoryIDs, mem.ID)
+		}
+		_ = m.db.WithContext(ctx).Model(&Memory{}).Where("id IN ?", memoryIDs).Updates(map[string]any{
+			"access_count": gorm.Expr("access_count + 1"),
+		}).Error
 	}
 
 	return sortedMemories, nil
@@ -1721,6 +1759,14 @@ func styleCardCollectionName(base string) string {
 		base = "mumu_memories"
 	}
 	return base + "_style_cards"
+}
+
+func topicSummaryCollectionName(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "mumu_memories"
+	}
+	return base + "_topic_summaries"
 }
 
 func styleCardStatusOnNewEvidence(status StyleCardStatus) StyleCardStatus {
@@ -2043,6 +2089,12 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) GetDB() *gorm.DB { return m.db }
+
+func (m *Manager) EmbeddingProvider() EmbeddingProvider { return m.embedding }
+
+func (m *Manager) TopicVectorStore() VectorStore {
+	return m.topicMilvus
+}
 
 func memoryVectorEligible(mem Memory) bool {
 	switch mem.EffectiveStatus() {

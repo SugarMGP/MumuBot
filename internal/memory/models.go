@@ -336,13 +336,6 @@ type MessageLog struct {
 
 func (MessageLog) TableName() string { return "message_logs" }
 
-const (
-	MaxActiveTopicThreadsPerGroup = 5
-	TopicSummaryHistoryLimit      = 5
-	TopicTailKeepMessages         = 8
-	TopicSummaryTriggerMessages   = 10
-)
-
 type TopicThreadStatus string
 
 const (

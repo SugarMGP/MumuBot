@@ -41,52 +41,13 @@ func (r RuntimeSnapshot) Snapshot() RuntimeSnapshot {
 	return r
 }
 
-type RuntimeSource interface {
-	Snapshot() RuntimeSnapshot
-}
-
-type runtimeSource struct {
+type App struct {
 	cfg       *config.Config
+	admin     *services.AdminService
+	auth      *auth.Manager
 	memMgr    *memory.Manager
 	mumuAgent *agent.Agent
-}
-
-func (s runtimeSource) Snapshot() RuntimeSnapshot {
-	snapshot := RuntimeSnapshot{}
-	if s.cfg != nil {
-		snapshot.LearningOn = s.cfg.Learning.Enabled
-		snapshot.EnabledGroups = countEnabledGroups(s.cfg.Groups)
-	}
-
-	if s.mumuAgent != nil {
-		snapshot.Connected = s.mumuAgent.OneBotConnected()
-		snapshot.SelfID = s.mumuAgent.BotSelfID()
-		snapshot.MCPToolCount = s.mumuAgent.MCPToolCount()
-	}
-
-	if s.memMgr != nil {
-		if mood, err := s.memMgr.GetMoodState(); err == nil {
-			snapshot.CurrentMood = mood
-		}
-	}
-
-	return snapshot
-}
-
-func NewRuntimeSource(cfg *config.Config, memMgr *memory.Manager, mumuAgent *agent.Agent) RuntimeSource {
-	return runtimeSource{
-		cfg:       cfg,
-		memMgr:    memMgr,
-		mumuAgent: mumuAgent,
-	}
-}
-
-type App struct {
-	cfg     *config.Config
-	admin   *services.AdminService
-	auth    *auth.Manager
-	runtime RuntimeSource
-	router  http.Handler
+	router    http.Handler
 }
 
 type sortOption struct {
@@ -96,12 +57,13 @@ type sortOption struct {
 
 const defaultListPageSize = 15
 
-func New(cfg *config.Config, admin *services.AdminService, runtime RuntimeSource) *App {
+func New(cfg *config.Config, admin *services.AdminService, memMgr *memory.Manager, mumuAgent *agent.Agent) *App {
 	app := &App{
-		cfg:     cfg,
-		admin:   admin,
-		auth:    auth.NewManager(cfg.Web.AdminKey, 24*time.Hour),
-		runtime: runtime,
+		cfg:       cfg,
+		admin:     admin,
+		auth:      auth.NewManager(cfg.Web.AdminKey, 24*time.Hour),
+		memMgr:    memMgr,
+		mumuAgent: mumuAgent,
 	}
 	app.router = app.routes()
 	return app
@@ -817,10 +779,22 @@ func (a *App) renderPageResponse(w http.ResponseWriter, r *http.Request, full te
 }
 
 func (a *App) runtimeSnapshot() RuntimeSnapshot {
-	if a.runtime == nil {
-		return RuntimeSnapshot{}
+	snapshot := RuntimeSnapshot{}
+	if a.cfg != nil {
+		snapshot.LearningOn = a.cfg.Learning.Enabled
+		snapshot.EnabledGroups = countEnabledGroups(a.cfg.Groups)
 	}
-	return a.runtime.Snapshot()
+	if a.mumuAgent != nil {
+		snapshot.Connected = a.mumuAgent.OneBotConnected()
+		snapshot.SelfID = a.mumuAgent.BotSelfID()
+		snapshot.MCPToolCount = a.mumuAgent.MCPToolCount()
+	}
+	if a.memMgr != nil {
+		if mood, err := a.memMgr.GetMoodState(); err == nil {
+			snapshot.CurrentMood = mood
+		}
+	}
+	return snapshot
 }
 
 func (a *App) loadCurrentMood() (*memory.MoodState, error) {
