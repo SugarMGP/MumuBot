@@ -8,6 +8,7 @@ import (
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/utils"
 	"sort"
 	"strconv"
 	"strings"
@@ -295,7 +296,7 @@ func (tm *Manager) LoadFromDB(groupIDs []int64) error {
 		}); err != nil {
 			return err
 		}
-		for _, topicID := range uniqueTopicIDs(dirtyArchivedIDs) {
+		for _, topicID := range utils.UniqueIDs(dirtyArchivedIDs) {
 			tm.enqueueSummaryTask(topicSummaryTask{groupID: groupID, topicID: topicID})
 		}
 	}
@@ -393,7 +394,7 @@ func (tm *Manager) PersistMessage(ctx context.Context, input PersistMessageInput
 
 func (tm *Manager) syncTopicVectors(ctx context.Context, topicIDs ...uint) error {
 	var syncErr error
-	for _, topicID := range uniqueTopicIDs(topicIDs) {
+	for _, topicID := range utils.UniqueIDs(topicIDs) {
 		if topicID == 0 {
 			continue
 		}
@@ -754,7 +755,7 @@ func (tm *Manager) selectPromptTopicIDsLocked(ctx context.Context, groupID int64
 		}
 		selectedIDs = append(selectedIDs, candidate.TopicID)
 	}
-	return uniqueTopicIDs(selectedIDs), nil
+	return utils.UniqueIDs(selectedIDs), nil
 }
 
 func (tm *Manager) renderPromptContextLocked(ctx context.Context, groupID int64, buffer []*onebot.GroupMessage, selectedIDs []uint, retrievalQuery string) (PromptContext, error) {
@@ -764,7 +765,7 @@ func (tm *Manager) renderPromptContextLocked(ctx context.Context, groupID int64,
 
 	var builder strings.Builder
 	var injected []uint
-	for _, topicID := range uniqueTopicIDs(selectedIDs) {
+	for _, topicID := range utils.UniqueIDs(selectedIDs) {
 		state := tm.lookupTopicStateLocked(groupID, topicID)
 		var topic *memory.TopicThread
 		if state != nil {
@@ -1275,22 +1276,10 @@ func (tm *Manager) generateSummary(ctx context.Context, oldSummary memory.TopicS
 }
 
 func messageLogToGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
-	msg := messageLogBaseGroupMessage(log)
+	msg := onebot.MessageLogToGroupMessage(log)
 	msg.Content = strings.TrimSpace(log.OriginalContent)
 	msg.FinalContent = strings.TrimSpace(log.Content)
 	return msg
-}
-
-func messageLogBaseGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
-	messageID, _ := strconv.ParseInt(log.MessageID, 10, 64)
-	return &onebot.GroupMessage{
-		MessageID:   messageID,
-		GroupID:     log.GroupID,
-		UserID:      log.UserID,
-		Nickname:    log.Nickname,
-		Time:        log.CreatedAt,
-		MessageType: log.MsgType,
-	}
 }
 
 func (tm *Manager) generateTopicAssignments(ctx context.Context, groupID int64, messages []topicAssignJob, candidates []topicAssignmentCandidate) ([]topicAssignmentDecision, error) {
@@ -1562,22 +1551,6 @@ func runeBigramSet(text string) map[string]struct{} {
 	result := make(map[string]struct{}, len(runes)-1)
 	for i := 0; i < len(runes)-1; i++ {
 		result[string(runes[i:i+2])] = struct{}{}
-	}
-	return result
-}
-
-func uniqueTopicIDs(ids []uint) []uint {
-	seen := make(map[uint]struct{}, len(ids))
-	result := make([]uint, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
 	}
 	return result
 }

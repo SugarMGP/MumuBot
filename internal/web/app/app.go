@@ -1219,17 +1219,11 @@ func joinOrDash(values []string) string {
 }
 
 func emptyDash(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "-"
-	}
-	return value
+	return views.EmptyDash(value)
 }
 
 func connectionText(value bool) string {
-	if value {
-		return "已连接"
-	}
-	return "未连接"
+	return views.ConnectionText(value)
 }
 
 func styleCardActionErrorText(err error) string {

@@ -53,10 +53,6 @@ const (
 	MemorySubjectClassUnknown MemorySubjectClass = "unknown"
 )
 
-const (
-	MemoryOpenLoopGraceWindow = 72 * time.Hour
-)
-
 // Memory 长期记忆
 type Memory struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
@@ -87,15 +83,6 @@ func (m Memory) EffectiveStatus() MemoryStatus {
 	return status
 }
 
-func (m Memory) RecallEligible() bool {
-	switch m.EffectiveStatus() {
-	case MemoryStatusActive, MemoryStatusLegacy:
-		return true
-	default:
-		return false
-	}
-}
-
 func IsKeyedCanonicalType(kind CanonicalMemoryType) bool {
 	switch kind {
 	case CanonicalMemoryTypeFact, CanonicalMemoryTypePreference, CanonicalMemoryTypeConstraint, CanonicalMemoryTypeGoal:
@@ -118,8 +105,8 @@ func oldMemoryTypeFromSubject(subjectClass MemorySubjectClass) MemoryType {
 	}
 }
 
-func buildFactKey(_ MemoryType, _ CanonicalMemoryType, content string) string {
-	normalized := normalizeMemoryContentForKey(content)
+func BuildFactKey(content string) string {
+	normalized := NormalizeContentForKey(content)
 	if normalized == "" {
 		return ""
 	}
@@ -127,7 +114,7 @@ func buildFactKey(_ MemoryType, _ CanonicalMemoryType, content string) string {
 	return hex.EncodeToString(hash[:])[:20]
 }
 
-func normalizeMemoryContentForKey(raw string) string {
+func NormalizeContentForKey(raw string) string {
 	text := strings.TrimSpace(strings.ToLower(raw))
 	if text == "" {
 		return ""

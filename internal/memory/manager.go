@@ -192,26 +192,11 @@ func MemberNamesForAdmin(records []MemberNameRecord, nickname string) []string {
 	return names
 }
 
-func MemberNamesSearchText(records []MemberNameRecord, nickname string) string {
-	names := MemberNamesForAdmin(records, nickname)
-	if len(names) == 0 {
-		return ""
-	}
-	return strings.Join(names, " ")
-}
-
 func (p *MemberProfile) MemberNameRecords() []MemberNameRecord {
 	if p == nil {
 		return nil
 	}
 	return ParseMemberNameRecords(p.NameRecords)
-}
-
-func (p *MemberProfile) SetMemberNameRecords(records []MemberNameRecord) {
-	if p == nil {
-		return
-	}
-	p.NameRecords = EncodeMemberNameRecords(records)
 }
 
 func (p *MemberProfile) UpsertGroupCard(groupID int64, card string, updatedAt time.Time) {
@@ -267,11 +252,10 @@ type EmbeddingProvider interface {
 
 type VectorStore interface {
 	Insert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error)
+	Upsert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error)
 	Search(ctx context.Context, embedding []float64, groupID int64, memType string, topK int, threshold float64) ([]vector.SearchResult, error)
 	Delete(ctx context.Context, memoryIDs []uint) error
-	DeleteByGroup(ctx context.Context, groupID int64) error
 	Close() error
-	GetConfig() *vector.MilvusConfig
 }
 
 type MemoryCandidateWriter interface {
@@ -477,31 +461,6 @@ func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupI
 	return memories, nil
 }
 
-// UpdateMemoryContent 更新记忆内容（用于合并）
-func (m *Manager) UpdateMemoryContent(ctx context.Context, id uint, newContent string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	updates := map[string]any{
-		"content":    newContent,
-		"updated_at": time.Now(),
-	}
-	if id != 0 {
-		var existing Memory
-		if err := m.db.WithContext(ctx).First(&existing, id).Error; err == nil {
-			if existing.CanonicalType == CanonicalMemoryTypeEpisode {
-				updates["fact_key"] = ""
-			} else {
-				updates["fact_key"] = buildFactKey(existing.Type, existing.CanonicalType, newContent)
-			}
-		}
-	}
-	if _, err := m.updateMemoryWithVector(ctx, id, updates); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (m *Manager) UpdateMemberProfileLearned(profile *MemberProfile) error {
 	if profile == nil {
 		return nil
@@ -542,18 +501,57 @@ func (m *Manager) DeleteMemory(ctx context.Context, id uint) error {
 	return nil
 }
 
+func (m *Manager) updateMemoryFields(ctx context.Context, id uint, modifier func(*Memory)) (*Memory, error) {
+	if id == 0 {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var old Memory
+	if err := m.db.WithContext(ctx).First(&old, id).Error; err != nil {
+		return nil, err
+	}
+	next := old
+	modifier(&next)
+	prepared, err := m.prepareMemoryVector(ctx, next)
+	if err != nil {
+		return nil, err
+	}
+	var updated Memory
+	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&next).Error; err != nil {
+			return err
+		}
+		updated = next
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if prepared != nil {
+		prepared.memory = updated
+	}
+	if err := m.upsertMemoryVector(ctx, prepared); err != nil {
+		m.restoreExistingMemoryRowBestEffort(ctx, old)
+		m.restoreMemoryVectorsBestEffort(ctx, old)
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func (m *Manager) ArchiveMemory(ctx context.Context, id uint) error {
-	_, err := m.updateMemoryWithVector(ctx, id, map[string]any{
-		"status":     MemoryStatusArchived,
-		"updated_at": time.Now(),
+	_, err := m.updateMemoryFields(ctx, id, func(mem *Memory) {
+		mem.Status = MemoryStatusArchived
+		mem.UpdatedAt = time.Now()
 	})
 	return err
 }
 
 func (m *Manager) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	_, err := m.updateMemoryWithVector(ctx, id, map[string]any{
-		"status":     MemoryStatusCandidate,
-		"updated_at": time.Now(),
+	_, err := m.updateMemoryFields(ctx, id, func(mem *Memory) {
+		mem.Status = MemoryStatusCandidate
+		mem.UpdatedAt = time.Now()
 	})
 	return err
 }
@@ -590,21 +588,20 @@ func (m *Manager) SaveMemory(ctx context.Context, mem *Memory) error {
 		}
 		return nil
 	}
-	updates := map[string]any{
-		"type":           mem.Type,
-		"group_id":       mem.GroupID,
-		"user_id":        mem.UserID,
-		"content":        mem.Content,
-		"importance":     mem.Importance,
-		"access_count":   mem.AccessCount,
-		"canonical_type": mem.CanonicalType,
-		"status":         mem.Status,
-		"evidence_count": mem.EvidenceCount,
-		"source_kind":    mem.SourceKind,
-		"source_ref":     mem.SourceRef,
-		"fact_key":       mem.FactKey,
-	}
-	updated, err := m.updateMemoryWithVector(ctx, mem.ID, updates)
+	updated, err := m.updateMemoryFields(ctx, mem.ID, func(existing *Memory) {
+		existing.Type = mem.Type
+		existing.GroupID = mem.GroupID
+		existing.UserID = mem.UserID
+		existing.Content = mem.Content
+		existing.Importance = mem.Importance
+		existing.AccessCount = mem.AccessCount
+		existing.CanonicalType = mem.CanonicalType
+		existing.Status = mem.Status
+		existing.EvidenceCount = mem.EvidenceCount
+		existing.SourceKind = mem.SourceKind
+		existing.SourceRef = mem.SourceRef
+		existing.FactKey = mem.FactKey
+	})
 	if err != nil {
 		return err
 	}
@@ -665,7 +662,7 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 	}
 	factKey := ""
 	if claim.CanonicalType != CanonicalMemoryTypeEpisode {
-		factKey = buildFactKey(memType, claim.CanonicalType, content)
+		factKey = BuildFactKey(content)
 	}
 
 	if claim.CanonicalType == CanonicalMemoryTypeEpisode {
@@ -789,7 +786,7 @@ func (m *Manager) findFirstCompatibleMemory(ctx context.Context, incoming Memory
 }
 
 func (m *Manager) findExactMemoryByContent(ctx context.Context, incoming Memory) (Memory, bool, error) {
-	normalized := normalizeMemoryContentForKey(incoming.Content)
+	normalized := NormalizeContentForKey(incoming.Content)
 	if normalized == "" {
 		return Memory{}, false, nil
 	}
@@ -828,7 +825,7 @@ func (m *Manager) findExactMemoryByContent(ctx context.Context, incoming Memory)
 			if !memorySubjectCompatible(incoming, candidate) {
 				continue
 			}
-			if normalizeMemoryContentForKey(candidate.Content) == normalized {
+			if NormalizeContentForKey(candidate.Content) == normalized {
 				return candidate, true, nil
 			}
 		}
@@ -855,20 +852,19 @@ func (m *Manager) reinforceExistingMemory(ctx context.Context, existing Memory, 
 	if nextStatus == MemoryStatusLegacy {
 		nextStatus = MemoryStatusActive
 	}
-	updates := map[string]any{
-		"status":         nextStatus,
-		"evidence_count": nextEvidenceCount,
-		"importance":     importanceForStatus(existing.CanonicalType, nextStatus, nextEvidenceCount),
-		"updated_at":     now,
-	}
-	if existing.CanonicalType != CanonicalMemoryTypeEpisode {
-		updates["fact_key"] = buildFactKey(existing.Type, existing.CanonicalType, existing.Content)
-	}
-	if action == "reinforced" {
-		updates["source_kind"] = input.SourceKind
-		updates["source_ref"] = input.SourceRef
-	}
-	mem, err := m.updateMemoryWithVector(ctx, existing.ID, updates)
+	mem, err := m.updateMemoryFields(ctx, existing.ID, func(mem *Memory) {
+		mem.Status = nextStatus
+		mem.EvidenceCount = nextEvidenceCount
+		mem.Importance = importanceForStatus(existing.CanonicalType, nextStatus, nextEvidenceCount)
+		mem.UpdatedAt = now
+		if existing.CanonicalType != CanonicalMemoryTypeEpisode {
+			mem.FactKey = BuildFactKey(existing.Content)
+		}
+		if action == "reinforced" {
+			mem.SourceKind = input.SourceKind
+			mem.SourceRef = input.SourceRef
+		}
+	})
 	return mem, action, err
 }
 
@@ -909,46 +905,6 @@ func (m *Manager) createMemoryWithVector(ctx context.Context, mem *Memory) (*Mem
 	return &created, nil
 }
 
-func (m *Manager) updateMemoryWithVector(ctx context.Context, id uint, updates map[string]any) (*Memory, error) {
-	if id == 0 {
-		return nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var old Memory
-	if err := m.db.WithContext(ctx).First(&old, id).Error; err != nil {
-		return nil, err
-	}
-	next := memoryWithUpdates(old, updates)
-	prepared, err := m.prepareMemoryVector(ctx, next)
-	if err != nil {
-		return nil, err
-	}
-	var updated Memory
-	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Memory{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return err
-		}
-		if err := tx.First(&updated, id).Error; err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if prepared != nil {
-		prepared.memory = updated
-	}
-	if err := m.replacePreparedMemoryVector(ctx, updated.ID, prepared); err != nil {
-		m.restoreExistingMemoryRowBestEffort(ctx, old)
-		m.restoreMemoryVectorsBestEffort(ctx, old)
-		return nil, err
-	}
-	return &updated, nil
-}
-
 func (m *Manager) applyMemoryMerge(ctx context.Context, input MemoryIngestInput, incoming Memory, candidates []Memory, decision memoryMergeDecision) (*Memory, error) {
 	targetID := decision.TargetID
 	if targetID == 0 && len(candidates) > 0 {
@@ -966,7 +922,7 @@ func (m *Manager) applyMemoryMerge(ctx context.Context, input MemoryIngestInput,
 		return nil, fmt.Errorf("语义合并目标不在候选列表中")
 	}
 
-	mergeIDs := uniqueMemoryIDs(append(decision.MergeIDs, targetID))
+	mergeIDs := utils.UniqueIDs(append(decision.MergeIDs, targetID))
 	content := strings.TrimSpace(decision.MergedContent)
 	if content == "" {
 		content = incoming.Content
@@ -994,26 +950,24 @@ func (m *Manager) applyMemoryMerge(ctx context.Context, input MemoryIngestInput,
 	if nextStatus == MemoryStatusLegacy {
 		nextStatus = MemoryStatusActive
 	}
-	updates := map[string]any{
-		"content":        content,
-		"status":         nextStatus,
-		"fact_key":       buildFactKey(target.Type, target.CanonicalType, content),
-		"evidence_count": nextEvidenceCount,
-		"importance":     importanceForStatus(target.CanonicalType, nextStatus, nextEvidenceCount),
-		"updated_at":     now,
-	}
+	nextTarget := target
+	nextTarget.Content = content
+	nextTarget.Status = nextStatus
+	nextTarget.FactKey = BuildFactKey(content)
+	nextTarget.EvidenceCount = nextEvidenceCount
+	nextTarget.Importance = importanceForStatus(target.CanonicalType, nextStatus, nextEvidenceCount)
+	nextTarget.UpdatedAt = now
 	if incomingAddsEvidence {
-		updates["source_kind"] = input.SourceKind
-		updates["source_ref"] = input.SourceRef
+		nextTarget.SourceKind = input.SourceKind
+		nextTarget.SourceRef = input.SourceRef
 	}
-	nextTarget := memoryWithUpdates(target, updates)
 	prepared, err := m.prepareMemoryVector(ctx, nextTarget)
 	if err != nil {
 		return nil, err
 	}
 	var updated Memory
 	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Memory{}).Where("id = ?", targetID).Updates(updates).Error; err != nil {
+		if err := tx.Save(&nextTarget).Error; err != nil {
 			return err
 		}
 		archiveIDs := make([]uint, 0, len(mergeIDs))
@@ -1027,9 +981,7 @@ func (m *Manager) applyMemoryMerge(ctx context.Context, input MemoryIngestInput,
 				return err
 			}
 		}
-		if err := tx.First(&updated, targetID).Error; err != nil {
-			return err
-		}
+		updated = nextTarget
 		return nil
 	})
 	if err != nil {
@@ -1123,22 +1075,6 @@ func sameEvidenceSource(leftKind MemorySourceKind, leftRef string, rightKind Mem
 	return leftKind == rightKind && strings.TrimSpace(leftRef) == strings.TrimSpace(rightRef)
 }
 
-func uniqueMemoryIDs(ids []uint) []uint {
-	seen := make(map[uint]struct{}, len(ids))
-	result := make([]uint, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
-}
-
 func (m *Manager) deleteMemoryVector(ctx context.Context, id uint) error {
 	if id == 0 || m.milvus == nil {
 		return nil
@@ -1170,20 +1106,21 @@ func (m *Manager) insertPreparedMemoryVector(ctx context.Context, prepared *prep
 	return err
 }
 
-func (m *Manager) replacePreparedMemoryVector(ctx context.Context, id uint, prepared *preparedMemoryVector) error {
-	if err := m.deleteMemoryVector(ctx, id); err != nil {
-		return err
+func (m *Manager) upsertMemoryVector(ctx context.Context, prepared *preparedMemoryVector) error {
+	if prepared == nil || m.milvus == nil {
+		return nil
 	}
-	return m.insertPreparedMemoryVector(ctx, prepared)
+	_, err := m.milvus.Upsert(ctx, prepared.memory.ID, prepared.memory.GroupID, string(prepared.memory.Type), prepared.embedding)
+	return err
 }
 
 func (m *Manager) replaceMergedMemoryVectors(ctx context.Context, prepared *preparedMemoryVector, oldIDs []uint) error {
-	for _, id := range uniqueMemoryIDs(oldIDs) {
+	for _, id := range utils.UniqueIDs(oldIDs) {
 		if err := m.deleteMemoryVector(ctx, id); err != nil {
 			return err
 		}
 	}
-	return m.insertPreparedMemoryVector(ctx, prepared)
+	return m.upsertMemoryVector(ctx, prepared)
 }
 
 func (m *Manager) restoreExistingMemoryRowBestEffort(ctx context.Context, mem Memory) {
@@ -1213,71 +1150,10 @@ func (m *Manager) restoreMemoryVectorsBestEffort(ctx context.Context, memories .
 			zap.L().Warn("补偿准备长期记忆向量失败", zap.Uint("memory_id", mem.ID), zap.Error(err))
 			continue
 		}
-		if err := m.replacePreparedMemoryVector(ctx, mem.ID, prepared); err != nil {
+		if err := m.upsertMemoryVector(ctx, prepared); err != nil {
 			zap.L().Warn("补偿恢复长期记忆向量失败", zap.Uint("memory_id", mem.ID), zap.Error(err))
 		}
 	}
-}
-
-func memoryWithUpdates(mem Memory, updates map[string]any) Memory {
-	next := mem
-	for key, value := range updates {
-		switch key {
-		case "type":
-			if v, ok := value.(MemoryType); ok {
-				next.Type = v
-			}
-		case "group_id":
-			if v, ok := value.(int64); ok {
-				next.GroupID = v
-			}
-		case "user_id":
-			if v, ok := value.(int64); ok {
-				next.UserID = v
-			}
-		case "content":
-			if v, ok := value.(string); ok {
-				next.Content = v
-			}
-		case "importance":
-			if v, ok := value.(float64); ok {
-				next.Importance = v
-			}
-		case "access_count":
-			if v, ok := value.(int); ok {
-				next.AccessCount = v
-			}
-		case "canonical_type":
-			if v, ok := value.(CanonicalMemoryType); ok {
-				next.CanonicalType = v
-			}
-		case "status":
-			if v, ok := value.(MemoryStatus); ok {
-				next.Status = v
-			}
-		case "evidence_count":
-			if v, ok := value.(int); ok {
-				next.EvidenceCount = v
-			}
-		case "source_kind":
-			if v, ok := value.(MemorySourceKind); ok {
-				next.SourceKind = v
-			}
-		case "source_ref":
-			if v, ok := value.(string); ok {
-				next.SourceRef = v
-			}
-		case "fact_key":
-			if v, ok := value.(string); ok {
-				next.FactKey = v
-			}
-		case "updated_at":
-			if v, ok := value.(time.Time); ok {
-				next.UpdatedAt = v
-			}
-		}
-	}
-	return next
 }
 
 func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error) {

@@ -412,6 +412,12 @@ func (a *Agent) drainStartupMessages() {
 
 // Stop 停止
 func (a *Agent) Stop() {
+	a.shutdown()
+	a.wg.Wait()
+	zap.L().Info("Agent 已停止")
+}
+
+func (a *Agent) shutdown() {
 	a.cancel()
 	a.clearPendingThinks()
 	a.stopCaches()
@@ -427,12 +433,9 @@ func (a *Agent) Stop() {
 	if a.topicMgr != nil {
 		a.topicMgr.Close()
 	}
-	a.wg.Wait()
-	// 关闭 MCP 连接
 	if a.mcpMgr != nil {
 		a.mcpMgr.Close()
 	}
-	zap.L().Info("Agent 已停止")
 }
 
 func (a *Agent) OneBotConnected() bool {
@@ -464,23 +467,7 @@ func (a *Agent) stopCaches() {
 }
 
 func (a *Agent) cleanupAfterInitFailure() {
-	a.cancel()
-	a.stopCaches()
-	if a.bot != nil {
-		_ = a.bot.Close()
-	}
-	if a.learner != nil {
-		a.learner.Stop()
-	}
-	if a.concurrencyMgr != nil {
-		a.concurrencyMgr.Close()
-	}
-	if a.topicMgr != nil {
-		a.topicMgr.Close()
-	}
-	if a.mcpMgr != nil {
-		a.mcpMgr.Close()
-	}
+	a.shutdown()
 }
 
 func (a *Agent) MCPToolCount() int {
@@ -636,13 +623,7 @@ func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
 }
 
 func displayNameForRenderedText(groupCard, fallbackName, qq string) string {
-	if card := strings.TrimSpace(groupCard); card != "" {
-		return card
-	}
-	if name := strings.TrimSpace(fallbackName); name != "" {
-		return name
-	}
-	return strings.TrimSpace(qq)
+	return utils.FirstNonEmpty(groupCard, fallbackName, qq)
 }
 
 func memberProfileDisplayName(profile *memory.MemberProfile, groupID int64, fallbackName string, allowLearnedAlias bool) string {

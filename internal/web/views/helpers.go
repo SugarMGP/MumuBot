@@ -66,7 +66,7 @@ func boolText(v bool) string {
 	return "未启用"
 }
 
-func connectionText(v bool) string {
+func ConnectionText(v bool) string {
 	if v {
 		return "已连接"
 	}
@@ -704,7 +704,7 @@ func formatOptionalTimeAttr(ts *time.Time) string {
 	return ts.Format(time.RFC3339)
 }
 
-func emptyDash(value string) string {
+func EmptyDash(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "-"
 	}

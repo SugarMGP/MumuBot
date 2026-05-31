@@ -163,6 +163,30 @@ func (c *MilvusClient) Insert(ctx context.Context, memoryID uint, groupID int64,
 	return 0, nil
 }
 
+// Upsert 更新或插入向量（memory_id 相同时覆盖，不存在时插入）
+func (c *MilvusClient) Upsert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error) {
+	emb32 := make([]float32, len(embedding))
+	for i, v := range embedding {
+		emb32[i] = float32(v)
+	}
+
+	memoryIDCol := column.NewColumnInt64("memory_id", []int64{int64(memoryID)})
+	groupIDCol := column.NewColumnInt64("group_id", []int64{groupID})
+	memTypeCol := column.NewColumnVarChar("mem_type", []string{memType})
+	embeddingCol := column.NewColumnFloatVector("embedding", c.cfg.VectorDim, [][]float32{emb32})
+
+	result, err := c.client.Upsert(ctx, milvusclient.NewColumnBasedInsertOption(c.collectionName, memoryIDCol, groupIDCol, memTypeCol, embeddingCol))
+	if err != nil {
+		return 0, fmt.Errorf("upsert 向量失败: %w", err)
+	}
+	if result.IDs != nil {
+		if ids, ok := result.IDs.(*column.ColumnInt64); ok && ids.Len() > 0 {
+			return ids.Data()[0], nil
+		}
+	}
+	return 0, nil
+}
+
 // SearchResult 搜索结果
 type SearchResult struct {
 	MemoryID uint    `json:"memory_id"`
@@ -255,22 +279,7 @@ func (c *MilvusClient) Delete(ctx context.Context, memoryIDs []uint) error {
 	return nil
 }
 
-// DeleteByGroup 按群删除向量
-func (c *MilvusClient) DeleteByGroup(ctx context.Context, groupID int64) error {
-	filter := fmt.Sprintf("group_id == %d", groupID)
-	_, err := c.client.Delete(ctx, milvusclient.NewDeleteOption(c.collectionName).WithExpr(filter))
-	if err != nil {
-		return fmt.Errorf("按群删除向量失败: %w", err)
-	}
-	return nil
-}
-
 // Close 关闭连接
 func (c *MilvusClient) Close() error {
 	return c.client.Close(context.Background())
-}
-
-// GetConfig 获取配置
-func (c *MilvusClient) GetConfig() *MilvusConfig {
-	return c.cfg
 }

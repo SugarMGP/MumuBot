@@ -52,13 +52,5 @@ func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 }
 
 func messageLogBaseGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
-	messageID, _ := strconv.ParseInt(log.MessageID, 10, 64)
-	return &onebot.GroupMessage{
-		MessageID:   messageID,
-		GroupID:     log.GroupID,
-		UserID:      log.UserID,
-		Nickname:    log.Nickname,
-		Time:        log.CreatedAt,
-		MessageType: log.MsgType,
-	}
+	return onebot.MessageLogToGroupMessage(log)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"mumu-bot/internal/llm"
+	"mumu-bot/internal/utils"
 	"strings"
 	"time"
 
@@ -83,7 +84,7 @@ func normalizeMemoryMergeDecision(candidates []Memory, raw rawMemoryMergeDecisio
 	return memoryMergeDecision{
 		ShouldMerge:   true,
 		TargetID:      raw.TargetID,
-		MergeIDs:      uniqueMemoryIDs(mergeIDs),
+		MergeIDs:      utils.UniqueIDs(mergeIDs),
 		MergedContent: strings.TrimSpace(raw.MergedContent),
 	}
 }

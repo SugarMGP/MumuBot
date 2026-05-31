@@ -66,7 +66,18 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 	// 获取文件扩展名
 	ext := getExtensionFromURL(url)
 	if ext == "" {
-		ext = getExtensionFromContentType(resp.Header.Get("Content-Type"))
+		switch ct := resp.Header.Get("Content-Type"); {
+		case strings.Contains(ct, "jpeg"):
+			ext = ".jpg"
+		case strings.Contains(ct, "png"):
+			ext = ".png"
+		case strings.Contains(ct, "gif"):
+			ext = ".gif"
+		case strings.Contains(ct, "webp"):
+			ext = ".webp"
+		case strings.Contains(ct, "bmp"):
+			ext = ".bmp"
+		}
 	}
 	if ext == "" {
 		ext = ".jpg" // 默认扩展名
@@ -148,24 +159,6 @@ func getExtensionFromURL(url string) string {
 		return ext
 	}
 	return ""
-}
-
-// getExtensionFromContentType 从Content-Type获取扩展名
-func getExtensionFromContentType(contentType string) string {
-	switch {
-	case strings.Contains(contentType, "jpeg"):
-		return ".jpg"
-	case strings.Contains(contentType, "png"):
-		return ".png"
-	case strings.Contains(contentType, "gif"):
-		return ".gif"
-	case strings.Contains(contentType, "webp"):
-		return ".webp"
-	case strings.Contains(contentType, "bmp"):
-		return ".bmp"
-	default:
-		return ""
-	}
 }
 
 // copyFile 复制文件

@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **已清理长期记忆模块中的死代码**：移除了从未使用的 `MemoryOpenLoopGraceWindow` 常量、`RecallEligible` 方法、`SetMemberNameRecords` 方法、`MemberNamesSearchText` 函数和 `UpdateMemoryContent` 方法。
+- **向量存储接口现已精简并改用原生 upsert**：移除了从未调用的 `DeleteByGroup` 和 `GetConfig` 接口方法及 Milvus 实现；记忆向量更新从先删后插改为 Milvus 原生 upsert，减少一次网络往返。
+- **长期记忆更新已从 map 改为结构体直接操作**：`memoryWithUpdates` 60 行手动字段映射和 `updateMemoryWithVector` 的 map 入参模式已移除，改为 `updateMemoryFields` 闭包回调，新增 `buildFactKey` 也去掉了从未使用的类型参数。
+- **Agent 关机逻辑已提取共享 `shutdown` 方法**：`Stop()` 和 `cleanupAfterInitFailure()` 的重复组件关闭代码已合并为单一 `shutdown()` 方法。
+- **Content-Type 扩展名检测已内联**：`getExtensionFromContentType` 单调用函数已内联到 `DownloadImage`。
+- **消息日志转换函数已去重**：`messageLogBaseGroupMessage` 在 `agent` 和 `topic` 两个包中的重复定义已合并为 `onebot.MessageLogToGroupMessage`。
+- **OneBot 数值解析已统一**：自定义 `parseInt` 现委托给 `utils.ParseInt64Value`，消除重复的类型 switch。
+- **显示名选取逻辑已统一**：`displayNameForRenderedText`、`displayNameFromNames`、`preferredGroupMemberDisplayName` 三个函数共用新的 `utils.FirstNonEmpty` 工具函数。
+- **跨包重复工具函数已去重**：`uniqueMemoryIDs` / `uniqueTopicIDs` 合并为 `utils.UniqueIDs`；`buildFactKey` / `buildSummaryFactKey` 和 `normalizeMemoryContentForKey` / `normalizeContentForKey` 已导出为 `memory.BuildFactKey` / `memory.NormalizeContentForKey`，topic 包直接复用；`emptyDash` / `connectionText` 已从 views 包导出，app 包不再重复定义。
+
 ## [1.3.7] - 2026-06-01
 
 ### 变更

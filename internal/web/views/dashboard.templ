@@ -43,7 +43,7 @@ templ DashboardBody(data DashboardPageData) {
 								@AdminIcon("connection", "size-3.5", "dashboard-connection")
 								<span>连接状态</span>
 							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ connectionText(data.OneBotConnected) }</div>
+							<div class="mt-2 text-base font-semibold text-slate-900">{ ConnectionText(data.OneBotConnected) }</div>
 						</div>
 						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
 							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
@@ -137,7 +137,7 @@ templ DashboardBody(data DashboardPageData) {
 						</div>
 						<div class="rounded-[1.15rem] bg-white/72 px-4 py-3.5 ring-1 ring-cyan-100/90">
 							<div class="text-[11px] font-extrabold uppercase tracking-[0.14em] text-cyan-700/80">最近原因</div>
-							<div class="mt-2 text-sm leading-6 text-slate-700">{ emptyDash(data.CurrentMood.LastReason) }</div>
+							<div class="mt-2 text-sm leading-6 text-slate-700">{ EmptyDash(data.CurrentMood.LastReason) }</div>
 						</div>
 					</div>
 				</section>

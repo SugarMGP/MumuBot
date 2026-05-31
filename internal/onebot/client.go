@@ -1322,23 +1322,11 @@ func preferredGroupMemberDisplayName(info *GroupMemberInfo) string {
 	if info == nil {
 		return ""
 	}
-	if card := strings.TrimSpace(info.Card); card != "" {
-		return card
-	}
-	if nickname := strings.TrimSpace(info.Nickname); nickname != "" {
-		return nickname
-	}
-	return ""
+	return utils.FirstNonEmpty(info.Card, info.Nickname)
 }
 
 func displayNameFromNames(groupCard, nickname string) string {
-	if card := strings.TrimSpace(groupCard); card != "" {
-		return card
-	}
-	if nick := strings.TrimSpace(nickname); nick != "" {
-		return nick
-	}
-	return ""
+	return utils.FirstNonEmpty(groupCard, nickname)
 }
 
 func (c *Client) resolveMentionDisplayName(ctx context.Context, groupID, userID int64) string {
@@ -1497,19 +1485,6 @@ func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath s
 }
 
 func parseInt(v interface{}) (int, bool) {
-	if v == nil {
-		return 0, false
-	}
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case float64:
-		return int(val), true
-	case int64:
-		return int(val), true
-	case string:
-		i, err := strconv.Atoi(val)
-		return i, err == nil
-	}
-	return 0, false
+	i64, ok := utils.ParseInt64Value(v)
+	return int(i64), ok
 }

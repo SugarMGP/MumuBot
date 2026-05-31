@@ -1,11 +1,8 @@
 package topic
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"strings"
 	"time"
-	"unicode"
 
 	"mumu-bot/internal/memory"
 
@@ -103,19 +100,19 @@ func normalizeSummaryItemMeta(summary memory.TopicSummary) []memory.TopicSummary
 		meta.Kind = strings.TrimSpace(meta.Kind)
 		meta.SlotKind = strings.TrimSpace(meta.SlotKind)
 		meta.Signature = strings.TrimSpace(meta.Signature)
-		oldByText[normalizeContentForKey(text)] = meta
+		oldByText[memory.NormalizeContentForKey(text)] = meta
 	}
 	push := func(kind string, text string) {
 		text = strings.TrimSpace(text)
 		if text == "" {
 			return
 		}
-		key := normalizeContentForKey(text)
+		key := memory.NormalizeContentForKey(text)
 		meta := oldByText[key]
 		meta.Text = text
 		meta.Kind = kind
 		if meta.Signature == "" {
-			meta.Signature = buildSummaryFactKey(text)
+			meta.Signature = memory.BuildFactKey(text)
 		}
 		result = append(result, meta)
 	}
@@ -168,26 +165,3 @@ func AppendSummaryHistory(raw string, summary memory.TopicSummary, capturedAt ti
 	return sonic.MarshalString(history)
 }
 
-func buildSummaryFactKey(content string) string {
-	normalized := normalizeContentForKey(content)
-	if normalized == "" {
-		return ""
-	}
-	hash := sha1.Sum([]byte(normalized))
-	return hex.EncodeToString(hash[:])[:20]
-}
-
-func normalizeContentForKey(raw string) string {
-	text := strings.TrimSpace(strings.ToLower(raw))
-	if text == "" {
-		return ""
-	}
-	var builder strings.Builder
-	for _, r := range text {
-		if unicode.IsSpace(r) || unicode.IsPunct(r) {
-			continue
-		}
-		builder.WriteRune(r)
-	}
-	return builder.String()
-}
