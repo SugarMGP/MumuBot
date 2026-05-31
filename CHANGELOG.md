@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-05-31
+
 ### 变更
 
 - **README 与示例配置现已补充结构化输出要求**：模型配置说明会明确提示中档模型和轻量模型需支持 OpenAI 兼容的 `json_object` 结构化输出，减少选型后才发现话题摘要、上下文分类或长期记忆提取无法工作的情况。
@@ -135,7 +137,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...HEAD
+[1.3.6]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/SugarMGP/MumuBot/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/SugarMGP/MumuBot/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/SugarMGP/MumuBot/compare/v1.3.2...v1.3.3
