@@ -20,11 +20,10 @@ import (
 )
 
 const (
-	topicPromptTailLines    = 4
-	topicAssignQueueSize    = 256
-	topicAssignDrainTimeout = 3 * time.Second
-	topicAssignTimeout      = 30 * time.Second
-	maxTopicAssignWorkers   = 2
+	topicPromptTailLines  = 4
+	topicAssignQueueSize  = 256
+	topicAssignTimeout    = 90 * time.Second
+	maxTopicAssignWorkers = 2
 )
 
 type Store interface {
