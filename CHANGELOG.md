@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.7] - 2026-06-01
+
 ### 变更
 
 - **话题分配超时已延长至 90 秒**：启动补偿和运行时批量归属的 LLM 调用超时从 30 秒提升到 90 秒，减少 API 响应较慢时频繁触发 `context deadline exceeded` 的情况。
@@ -142,7 +144,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.7...HEAD
+[1.3.7]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...v1.3.7
 [1.3.6]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/SugarMGP/MumuBot/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/SugarMGP/MumuBot/compare/v1.3.3...v1.3.4
