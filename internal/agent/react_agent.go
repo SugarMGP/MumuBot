@@ -750,36 +750,43 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 
 	// 处理图片（调用 Vision 模型识别）
 	for _, img := range msg.Images {
-		if img.SubType == 1 {
-			// 表情包类型
+		if img.SubType == 1 { // 表情包类型
+			if img.Desc != "" {
+				content += fmt.Sprintf(" [表情包:%s]", img.Desc)
+				continue
+			}
 			var visionDesc string
 			if a.vision != nil {
 				if d, err := a.describeImageCached(ctx, img); err == nil {
 					visionDesc = d
 				}
 			}
-			desc := strings.TrimSpace(visionDesc)
 			// 自动保存表情包
-			if img.URL != "" && desc != "" && config.Get().Sticker.AutoSave && a.ctx.Err() == nil {
+			if img.URL != "" && visionDesc != "" && config.Get().Sticker.AutoSave && a.ctx.Err() == nil {
 				a.wg.Add(1)
 				go func(url string, stickerDesc string) {
 					defer a.wg.Done()
 					a.autoSaveSticker(a.ctx, url, stickerDesc)
-				}(img.URL, desc)
+				}(img.URL, visionDesc)
 			}
-			if desc != "" {
-				content += fmt.Sprintf(" [表情包:%s]", desc)
+			if visionDesc != "" {
+				content += fmt.Sprintf(" [表情包:%s]", visionDesc)
 			} else {
 				content += " [表情包]"
 			}
-		} else {
-			// 普通图片
+		} else { // 普通图片
+			if img.Desc != "" {
+				content += fmt.Sprintf(" [图片:%s]", img.Desc)
+				continue
+			}
+			var visionDesc string
 			if a.vision != nil {
-				if desc, err := a.describeImageCached(ctx, img); err == nil && desc != "" {
-					content += fmt.Sprintf(" [图片:%s]", desc)
-				} else {
-					content += " [图片]"
+				if d, err := a.describeImageCached(ctx, img); err == nil {
+					visionDesc = d
 				}
+			}
+			if visionDesc != "" {
+				content += fmt.Sprintf(" [图片:%s]", visionDesc)
 			} else {
 				content += " [图片]"
 			}
@@ -1613,6 +1620,15 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		Time:        time.Now(),
 		MessageType: "group",
 	}
+
+	if replyTo > 0 {
+		msg.Reply = &onebot.ReplyInfo{MessageID: replyTo}
+	}
+
+	if len(mentions) > 0 {
+		msg.AtList = mentions
+	}
+
 	a.onMessage(msg)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
 	return msgID, nil
@@ -1635,7 +1651,10 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath strin
 		Time:        time.Now(),
 		MessageType: "group",
 		Images: []onebot.ImageInfo{
-			{SubType: 1},
+			{
+				SubType: 1,
+				Desc:    description,
+			},
 		},
 	}
 	a.onMessage(msg)

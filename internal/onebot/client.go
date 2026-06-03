@@ -103,6 +103,7 @@ type ImageInfo struct {
 	URL     string `json:"url"`
 	File    string `json:"file"`
 	SubType int    `json:"sub_type"` // 0普通图片 1表情包
+	Desc    string `json:"desc,omitempty"`
 }
 
 // VideoInfo 视频信息
