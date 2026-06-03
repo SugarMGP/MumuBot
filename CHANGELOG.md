@@ -6,8 +6,17 @@
 
 ## [Unreleased]
 
+（暂无待发布内容）
+
+## [1.3.8] - 2026-06-04
+
 ### 变更
 
+- **Agent 包已按职责拆分为多个文件**：原 1724 行的 `react_agent.go` 拆为 `react_agent.go`（核心定义+生命周期）、`message.go`（消息处理）、`think.go`（思考循环+执行）、`context.go`（上下文组装+媒体处理），`behavior_helpers.go` 合入 `message.go`。
+- **Memory 包已按职责拆分为多个文件**：原 2204 行的 `manager.go` 拆为 8 个文件，分别承担记忆 CRUD、入库合并、样式卡、黑话、表情包、情绪状态、成员名记录和消息清理等职责。
+- **OneBot 包已按职责拆分为多个文件**：原 1491 行的 `client.go` 拆为 `client.go`（连接+事件分发）、`client_types.go`（数据类型）、`client_api.go`（API 封装）、`client_parse.go`（消息解析+缓存）。
+- **Topic 包已完成轻量清理**：纯渲染函数移入新 `prompt.go`，评分辅助函数移入 `scoring.go`，`manager.go` 从 1584 行缩减至 1385 行。
+- **回复信息查找顺序已优化**：`resolveReplyInfo` 的缓存检查从数据库之后提前到数据库之前，减少不必要的数据库查询。
 - **已清理长期记忆模块中的死代码**：移除了从未使用的 `MemoryOpenLoopGraceWindow` 常量、`RecallEligible` 方法、`SetMemberNameRecords` 方法、`MemberNamesSearchText` 函数和 `UpdateMemoryContent` 方法。
 - **向量存储接口现已精简并改用原生 upsert**：移除了从未调用的 `DeleteByGroup` 和 `GetConfig` 接口方法及 Milvus 实现；记忆向量更新从先删后插改为 Milvus 原生 upsert，减少一次网络往返。
 - **长期记忆更新已从 map 改为结构体直接操作**：`memoryWithUpdates` 60 行手动字段映射和 `updateMemoryWithVector` 的 map 入参模式已移除，改为 `updateMemoryFields` 闭包回调，新增 `buildFactKey` 也去掉了从未使用的类型参数。
@@ -17,6 +26,10 @@
 - **OneBot 数值解析已统一**：自定义 `parseInt` 现委托给 `utils.ParseInt64Value`，消除重复的类型 switch。
 - **显示名选取逻辑已统一**：`displayNameForRenderedText`、`displayNameFromNames`、`preferredGroupMemberDisplayName` 三个函数共用新的 `utils.FirstNonEmpty` 工具函数。
 - **跨包重复工具函数已去重**：`uniqueMemoryIDs` / `uniqueTopicIDs` 合并为 `utils.UniqueIDs`；`buildFactKey` / `buildSummaryFactKey` 和 `normalizeMemoryContentForKey` / `normalizeContentForKey` 已导出为 `memory.BuildFactKey` / `memory.NormalizeContentForKey`，topic 包直接复用；`emptyDash` / `connectionText` 已从 views 包导出，app 包不再重复定义。
+- **ToolContext 中已移除从未使用的 TopicID 字段**：该字段被赋值但从未被任何工具读取，已从结构体和所有赋值处清理。
+- **重复防御性编程代码已清理**：`think()` 中 4 次 `getBuffer` 调用合并为 1 次并透传下游；`onMessage()`、`Start()`、`getSpeakProbability()`、`parseMessageContent()` 等函数中的重复 `config.Get()` 调用已提取为局部变量；`atDisplayName()` 和 `normalizeCanonicalType()` 中的重复 `TrimSpace` 已消除。
+- **长期记忆入库状态赋值逻辑已简化**：`IngestMemory` 中 6 行条件链（4 行死代码）已简化为 2 行有效逻辑：非 migration 来源直接设为 Active，migration 来源设为 Legacy。
+- **AGENTS.md 已补充 Go 代码规范约束**：新增"Go 代码结构"（文件行数上限、禁止重复调用）、"死代码"（发现即删）和"生成文件"（禁止手动修改）三个章节。
 
 ## [1.3.7] - 2026-06-01
 
@@ -156,7 +169,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.7...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.8...HEAD
+[1.3.8]: https://github.com/SugarMGP/MumuBot/compare/v1.3.7...v1.3.8
 [1.3.7]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...v1.3.7
 [1.3.6]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/SugarMGP/MumuBot/compare/v1.3.4...v1.3.5
