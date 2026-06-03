@@ -1,31 +1,47 @@
 <p align="center">
   <h1 align="center">沐沐 MumuBot</h1>
   <p align="center">一个会聊天、会记事、会融入群文化的赛博 QQ 群友</p>
-  <p align="center"><i>Powered by <a href="https://github.com/cloudwego/eino">Eino</a></i></p>
 </p>
 
-![MumuBot](https://socialify.git.ci/SugarMGP/MumuBot/image?font=Inter&forks=1&issues=1&language=1&name=1&owner=1&pattern=Circuit+Board&pulls=1&stargazers=1&theme=Auto)
+<p align="center">
+  <a href="https://github.com/SugarMGP/MumuBot/releases"><img alt="Release" src="https://img.shields.io/github/v/release/SugarMGP/MumuBot?logo=github&style=flat-square"></a>
+  <a href="https://github.com/SugarMGP/MumuBot/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/SugarMGP/MumuBot?color=ffcb47&style=flat-square"></a>
+  <a href="https://github.com/SugarMGP/MumuBot/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/SugarMGP/MumuBot?style=flat-square"></a>
+  <a href="https://github.com/SugarMGP/MumuBot/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+</p>
 
----
+<p align="center">
+  <!-- language-selector -->
+  <b>中文</b> · <a href="README.en.md">English</a>
+  <!-- /language-selector -->
+</p>
 
 > [!WARNING]
 > - 项目仍在快速迭代，配置项和运行行为可能随版本调整
 > - QQ 机器人存在账号风控风险，请谨慎使用
 > - AI 模型调用会消耗 Token，请按需控制用量
 
+## 🤔 什么是沐沐
+
+沐沐是一个运行在 QQ 群里的群友智能体。跟常见的问答机器人不同，沐沐会自己判断什么时候该说话、什么时候闭嘴，会记住群里聊过的事，会学群里的黑话和梗，还会随着聊天慢慢建立对每个群友的了解。
+
+简单说：它试着像一个真实的人一样待在群里，而不是一个随叫随到的工具。
+
 ## ✨ 特性
+
+本项目具有以下核心特性：
 
 - 🧠 **ReAct 智能体** — 通过观察、思考、行动循环，自主判断是否接话、查询信息或保持沉默
 - 💬 **拟人对话** — 可自定义人格、语言风格和兴趣话题，说话更接近真实群友
 - 🧵 **话题工作记忆** — 持续跟踪当前话题、摘要、参与者与未完事项，并可召回已归档话题
-- 🧩 **丰富工具集** — 发言、沉默、戳一戳、贴表情、发表情包、查群公告、网页浏览等 20+ 内置工具
+- 🧩 **丰富工具集** — 发言、沉默、戳一戳、贴表情、发表情包、查群信息、网页浏览等 20+ 内置工具
 - 📝 **长期记忆** — 基于 MySQL + Milvus 保存和检索事实、经历、偏好、约束与目标
-- 👤 **群友画像** — 自动记录群友说话风格、兴趣、活跃度、亲密度
-- 🎭 **情绪系统** — 心情、精力、社交意愿三维情绪状态，随对话自然变化
+- 👤 **群友画像** — 记录每个人的说话风格、兴趣、活跃度、亲密度
+- 🎭 **情绪系统** — 心情、精力、社交意愿三维情绪状态随对话自然变化，影响说话方式和活跃度
 - 👀 **多模态理解** — 支持视觉模型识别图片和视频内容
-- 🖼️ **表情包系统** — 自动收集群内表情包，按描述检索并发送
-- 📖 **持续学习** — 主动学习群内黑话、梗和独特表达方式，沉淀为可审核的群文化资料
-- ⏰ **时段策略** — 可配置不同时间段的发言活跃度
+- 🖼️ **表情包系统** — 自动收集群内表情包，由智能体自行决策使用
+- 📖 **持续学习** — 主动学习群内聊天氛围和常用梗，沉淀为可审核的群文化资料
+- ⏰ **时段策略** — 可配置不同时间段的发言活跃度，同时支持防话痨动态限流
 - 🔌 **MCP 扩展** — 支持通过 MCP 协议接入外部工具，无限扩展能力
 - 🖥️ **管理后台** — 查看总览、审核学习结果、管理话题/记忆/表情包，并浏览群友画像
 - 📊 **监控接口** — 提供健康检查与状态接口，方便接入部署和运维流程
@@ -37,7 +53,7 @@
 | 依赖 | 说明 |
 |------|------|
 | Go 1.26 | 编译运行 |
-| Node.js 22+ | 构建前端资源 |
+| Node.js 22+ | 构建前端资源（仅从源码构建时需要） |
 | MySQL | 存储记忆、消息日志、群友画像 |
 | Milvus | 向量数据库，用于长期记忆、风格卡片和归档话题检索 |
 | NapCat / go-cqhttp | OneBot 11 协议实现 |
