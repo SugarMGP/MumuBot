@@ -14,14 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/cloudwego/eino/components/model"
 	"go.uber.org/zap"
 )
 
 const (
-	topicPromptTailLines  = 4
 	topicAssignQueueSize  = 256
 	topicAssignTimeout    = 90 * time.Second
 	maxTopicAssignWorkers = 2
@@ -1300,100 +1298,6 @@ func (tm *Manager) generateTopicAssignments(ctx context.Context, groupID int64, 
 	return normalizeTopicAssignmentSubmission(&target), nil
 }
 
-func renderTopicPromptSection(topic *memory.TopicThread, state *topicRuntimeState) string {
-	if topic == nil {
-		return ""
-	}
-	summary := ParseSummary(topic.SummaryJSON)
-	title := strings.TrimSpace(summary.Title)
-	if title == "" {
-		title = fmt.Sprintf("话题 %d", topic.ID)
-	}
-
-	var lines []string
-	lines = append(lines, "### "+title)
-	if gist := strings.TrimSpace(summary.Gist); gist != "" {
-		lines = append(lines, "概况："+gist)
-	}
-	if len(summary.Facts) > 0 {
-		lines = append(lines, "已确认："+strings.Join(summary.Facts, "；"))
-	}
-	if len(summary.Participants) > 0 {
-		parts := make([]string, 0, len(summary.Participants))
-		for _, participant := range summary.Participants {
-			if participant.Nickname == "" || participant.Position == "" {
-				continue
-			}
-			parts = append(parts, participant.Nickname+"："+participant.Position)
-		}
-		if len(parts) > 0 {
-			lines = append(lines, "各方立场："+strings.Join(parts, "；"))
-		}
-	}
-	if len(summary.OpenLoops) > 0 {
-		lines = append(lines, "未完事项："+strings.Join(summary.OpenLoops, "；"))
-	}
-	if len(summary.RecentTurns) > 0 {
-		lines = append(lines, "最近摘要："+strings.Join(summary.RecentTurns, "；"))
-	}
-	if topic.Status == memory.TopicThreadStatusActive && state != nil {
-		if tail := renderTopicTailLines(state.tail, topicPromptTailLines); tail != "" {
-			lines = append(lines, "关键原文：\n"+tail)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func renderTopicTailLines(tail []*onebot.GroupMessage, limit int) string {
-	if limit <= 0 || len(tail) == 0 {
-		return ""
-	}
-	if len(tail) > limit {
-		tail = tail[len(tail)-limit:]
-	}
-	lines := make([]string, 0, len(tail))
-	for _, msg := range tail {
-		text := messageTopicText(msg)
-		if text == "" {
-			continue
-		}
-		lines = append(lines, text)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func renderTopicSummaryForAssignment(topic memory.TopicThread) string {
-	summary := ParseSummary(topic.SummaryJSON)
-	parts := []string{strings.TrimSpace(summary.Title), strings.TrimSpace(summary.Gist)}
-	if len(summary.Facts) > 0 {
-		parts = append(parts, strings.Join(summary.Facts, "；"))
-	}
-	if len(summary.OpenLoops) > 0 {
-		parts = append(parts, "未完事项："+strings.Join(summary.OpenLoops, "；"))
-	}
-	if len(summary.Keywords) > 0 {
-		parts = append(parts, "关键词："+strings.Join(summary.Keywords, "，"))
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-func participantNames(participants []memory.TopicParticipantRef) []string {
-	names := make([]string, 0, len(participants))
-	seen := make(map[string]struct{}, len(participants))
-	for _, participant := range participants {
-		name := strings.TrimSpace(participant.Nickname)
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	return names
-}
-
 func assignmentMessageKey(job topicAssignJob) string {
 	if job.messageLogID != 0 {
 		return fmt.Sprintf("m%d", job.messageLogID)
@@ -1444,115 +1348,12 @@ func messageTopicText(msg *onebot.GroupMessage) string {
 	return strings.TrimSpace(msg.Content)
 }
 
-func topicSemanticSimilarity(query string, topic memory.TopicThread, state *topicRuntimeState) float64 {
-	summary := ParseSummary(topic.SummaryJSON)
-	summaryText := strings.TrimSpace(summary.Title + "\n" + summary.Gist + "\n" + strings.Join(summary.Facts, "\n"))
-	tailText := ""
-	if state != nil {
-		tailText = renderTopicTailLines(state.tail, TailKeepMessages)
-	}
-	return max(textSimilarity(query, summaryText), textSimilarity(query, tailText))
-}
-
-func topicParticipantOverlap(msg *onebot.GroupMessage, state *topicRuntimeState) float64 {
-	if msg == nil {
-		return 0
-	}
-	if state != nil {
-		for _, participant := range state.participants {
-			if participant.UserID != 0 && participant.UserID == msg.UserID {
-				return 1
-			}
-			if participant.UserID == 0 && participant.Nickname != "" && participant.Nickname == msg.Nickname {
-				return 1
-			}
-		}
-	}
-	return 0
-}
-
 func copyTopicThread(topic *memory.TopicThread) *memory.TopicThread {
 	if topic == nil {
 		return nil
 	}
 	copied := *topic
 	return &copied
-}
-
-func topicKeywordContinuity(query string, topic memory.TopicThread) float64 {
-	summary := ParseSummary(topic.SummaryJSON)
-	if len(summary.Keywords) == 0 || strings.TrimSpace(query) == "" {
-		return 0
-	}
-	matched := 0
-	for _, keyword := range summary.Keywords {
-		keyword = strings.TrimSpace(keyword)
-		if keyword == "" {
-			continue
-		}
-		if strings.Contains(query, keyword) {
-			matched++
-		}
-	}
-	if matched == 0 {
-		return 0
-	}
-	return float64(matched) / float64(len(summary.Keywords))
-}
-
-func textSimilarity(left, right string) float64 {
-	left = normalizeTopicText(left)
-	right = normalizeTopicText(right)
-	if left == "" || right == "" {
-		return 0
-	}
-	if strings.Contains(right, left) || strings.Contains(left, right) {
-		return 0.95
-	}
-
-	leftSet := runeBigramSet(left)
-	rightSet := runeBigramSet(right)
-	if len(leftSet) == 0 || len(rightSet) == 0 {
-		return 0
-	}
-
-	intersection := 0
-	for gram := range leftSet {
-		if _, ok := rightSet[gram]; ok {
-			intersection++
-		}
-	}
-	if intersection == 0 {
-		return 0
-	}
-	union := len(leftSet) + len(rightSet) - intersection
-	return float64(intersection) / float64(union)
-}
-
-func normalizeTopicText(text string) string {
-	var builder strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(text)) {
-		if unicode.IsSpace(r) {
-			continue
-		}
-		if unicode.IsPunct(r) {
-			continue
-		}
-		builder.WriteRune(r)
-	}
-	return builder.String()
-}
-
-func runeBigramSet(text string) map[string]struct{} {
-	runes := []rune(text)
-	if len(runes) < 2 {
-		return map[string]struct{}{text: {}}
-	}
-	result := make(map[string]struct{}, len(runes)-1)
-	for i := 0; i < len(runes)-1; i++ {
-		result[string(runes[i:i+2])] = struct{}{}
-	}
-	return result
 }
 
 func actualMessageBufferCapacity() int {

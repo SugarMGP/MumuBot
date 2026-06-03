@@ -31,7 +31,6 @@ type ToolContext struct {
 	MemoryMgr           *memory.Manager
 	Bot                 *onebot.Client
 	MessageID           int64
-	TopicID             uint
 	SpeakCallback       SpeakCallback       // 发言回调
 	SendStickerCallback SendStickerCallback // 发送表情包回调
 

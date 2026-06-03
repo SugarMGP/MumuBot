@@ -45,13 +45,14 @@ var slotKindsByType = map[CanonicalMemoryType]map[string]struct{}{
 }
 
 func normalizeCanonicalType(raw string) CanonicalMemoryType {
-	switch CanonicalMemoryType(strings.TrimSpace(strings.ToLower(raw))) {
+	normalized := CanonicalMemoryType(strings.TrimSpace(strings.ToLower(raw)))
+	switch normalized {
 	case CanonicalMemoryTypeFact,
 		CanonicalMemoryTypeEpisode,
 		CanonicalMemoryTypePreference,
 		CanonicalMemoryTypeConstraint,
 		CanonicalMemoryTypeGoal:
-		return CanonicalMemoryType(strings.TrimSpace(strings.ToLower(raw)))
+		return normalized
 	case CanonicalMemoryType("ignore"):
 		return ""
 	default:
