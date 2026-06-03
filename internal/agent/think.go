@@ -230,7 +230,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 
 	ctx := a.buildToolContext(a.ctx, groupID, latestMessageID)
 
-	chatContext := a.buildChatContext(groupID, lastProcessedTime)
+	chatContext := a.buildChatContext(buffer, lastProcessedTime)
 	if chatContext == "" {
 		return
 	}
@@ -240,7 +240,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	}
 	promptCtx.GroupInfo = a.buildGroupContext(groupID)
 
-	classification, err := a.classifyContext(ctx, groupID)
+	classification, err := a.classifyContext(ctx, buffer)
 	if err != nil {
 		zap.L().Debug("上下文分类失败", zap.Int64("group_id", groupID), zap.Error(err))
 	}
@@ -249,7 +249,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		topicQuery = classification.TopicQuery
 	}
 
-	topicPromptCtx, err := a.topicMgr.BuildPromptContext(ctx, groupID, a.getBuffer(groupID), topicQuery)
+	topicPromptCtx, err := a.topicMgr.BuildPromptContext(ctx, groupID, buffer, topicQuery)
 	if err != nil {
 		zap.L().Warn("构建话题工作记忆失败", zap.Int64("group_id", groupID), zap.Error(err))
 	} else {
@@ -269,11 +269,11 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	}
 
 	if a.jargonMgr != nil {
-		promptCtx.JargonMatches = a.jargonMgr.Match(collectTextContext(a.getBuffer(groupID)))
+		promptCtx.JargonMatches = a.jargonMgr.Match(collectTextContext(buffer))
 	}
 	promptCtx.StyleHints = a.buildStyleHintContext(groupID, classification)
 
-	recentPeople := a.buildRecentPeopleContext(groupID)
+	recentPeople := a.buildRecentPeopleContext(buffer, groupID)
 
 	systemPrompt := a.persona.GetSystemPrompt()
 

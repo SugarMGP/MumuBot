@@ -147,9 +147,9 @@ func (a *Agent) buildStyleHintContext(groupID int64, classification *tools.Conte
 	return hints
 }
 
-func (a *Agent) classifyContext(ctx context.Context, groupID int64) (*tools.ContextClassification, error) {
+func (a *Agent) classifyContext(ctx context.Context, buffer []*onebot.GroupMessage) (*tools.ContextClassification, error) {
 	bufferSize := config.Get().Agent.MessageBufferSize
-	msgs := a.getBuffer(groupID)
+	msgs := buffer
 	window := bufferSize / 2
 	if window < 10 {
 		window = 10
@@ -246,15 +246,14 @@ func formatStyleHint(card memory.StyleCard) string {
 	return hint + "，可参考群里人说过的原话：" + strings.Join(sourceItems, " / ")
 }
 
-func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) string {
-	msgs := a.getBuffer(groupID)
-	if len(msgs) == 0 {
+func (a *Agent) buildChatContext(buffer []*onebot.GroupMessage, lastProcessedTime time.Time) string {
+	if len(buffer) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	selfID := a.bot.GetSelfID()
-	for _, m := range msgs {
+	for _, m := range buffer {
 		if (!lastProcessedTime.IsZero() && m.Time.Before(lastProcessedTime)) || (selfID != 0 && m.UserID == selfID) {
 			b.WriteString("(OLD)")
 		}
@@ -263,17 +262,16 @@ func (a *Agent) buildChatContext(groupID int64, lastProcessedTime time.Time) str
 	return b.String()
 }
 
-func (a *Agent) buildRecentPeopleContext(groupID int64) string {
-	msgs := a.getBuffer(groupID)
-	if len(msgs) == 0 {
+func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID int64) string {
+	if len(buffer) == 0 {
 		return ""
 	}
 
 	seenIDs := make(map[int64]struct{}, 3)
 	ids := make([]int64, 0, 3)
 	selfID := a.bot.GetSelfID()
-	for i := len(msgs) - 1; i >= 0; i-- {
-		userID := msgs[i].UserID
+	for i := len(buffer) - 1; i >= 0; i-- {
+		userID := buffer[i].UserID
 		if userID == 0 || userID == selfID {
 			continue
 		}
@@ -291,11 +289,11 @@ func (a *Agent) buildRecentPeopleContext(groupID int64) string {
 	}
 
 	latestNames := make(map[int64]*onebot.GroupMessage, len(ids))
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if _, ok := latestNames[msgs[i].UserID]; ok {
+	for i := len(buffer) - 1; i >= 0; i-- {
+		if _, ok := latestNames[buffer[i].UserID]; ok {
 			continue
 		}
-		latestNames[msgs[i].UserID] = msgs[i]
+		latestNames[buffer[i].UserID] = buffer[i]
 	}
 
 	lines := make([]string, 0, len(ids))

@@ -84,6 +84,12 @@ func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
 		return nil
 	}
 
+	if cached := a.replyCache.Get(msg.Reply.MessageID); cached != nil {
+		clone := cached.Value()
+		msg.Reply = &clone
+		return nil
+	}
+
 	if reply := findReplyInfoInMessages(a.getBuffer(msg.GroupID), msg.Reply.MessageID); reply != nil {
 		msg.Reply = reply
 		a.replyCache.Set(reply.MessageID, *reply, ttlcache.DefaultTTL)
@@ -97,12 +103,6 @@ func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
 			a.replyCache.Set(reply.MessageID, *reply, ttlcache.DefaultTTL)
 			return nil
 		}
-	}
-
-	if cached := a.replyCache.Get(msg.Reply.MessageID); cached != nil {
-		clone := cached.Value()
-		msg.Reply = &clone
-		return nil
 	}
 
 	reply, err := a.fetchReplyInfo(msg.Reply.MessageID)

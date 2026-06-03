@@ -46,21 +46,15 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 	}
 	subjectClass := claim.SubjectClass
 
-	status := MemoryStatusCandidate
-	if input.SourceKind == MemorySourceKindMigration {
-		status = MemoryStatusLegacy
-	}
-	if claim.CanonicalType == CanonicalMemoryTypeEpisode && input.SourceKind == MemorySourceKindMessage && subjectClass == MemorySubjectClassSelf {
-		status = MemoryStatusActive
-	}
 	if claim.CanonicalType == CanonicalMemoryTypeGoal && !claim.LongTerm {
 		return nil, "ignored", nil
 	}
 
-	memType := oldMemoryTypeFromSubject(subjectClass)
-	if input.SourceKind != MemorySourceKindMigration {
-		status = MemoryStatusActive
+	status := MemoryStatusActive
+	if input.SourceKind == MemorySourceKindMigration {
+		status = MemoryStatusLegacy
 	}
+	memType := oldMemoryTypeFromSubject(subjectClass)
 	factKey := ""
 	if claim.CanonicalType != CanonicalMemoryTypeEpisode {
 		factKey = BuildFactKey(content)
