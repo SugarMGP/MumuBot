@@ -478,6 +478,23 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	}
 
 	content := msg.Content
+	if len(msg.AtList) > 0 {
+		mentions := make([]string, 0, len(msg.AtList))
+		for _, userID := range msg.AtList {
+			if userID == onebot.AtAllUserID {
+				mentions = append(mentions, "@全体成员")
+				continue
+			}
+			if userID <= 0 {
+				continue
+			}
+			displayName := a.resolveRenderedDisplayName(msg.GroupID, userID, "", "", fmt.Sprintf("%d", userID))
+			mentions = append(mentions, "@"+displayName)
+		}
+		if len(mentions) > 0 {
+			content = strings.Join(mentions, " ") + " " + content
+		}
+	}
 
 	for _, face := range msg.Faces {
 		if face.Name != "" {
@@ -542,6 +559,41 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 		} else {
 			content += " [视频]"
 		}
+	}
+	if msg.HasRecord {
+		content += " [语音]"
+	}
+	for _, fileName := range msg.FileNames {
+		fileName = strings.TrimSpace(fileName)
+		if fileName == "" {
+			content += " [文件]"
+			continue
+		}
+		content += fmt.Sprintf(" [文件:%s]", fileName)
+	}
+	for _, card := range msg.Cards {
+		content += " " + card.Format()
+	}
+	if len(msg.Forwards) > 0 {
+		limit := 4
+		if len(msg.Forwards) < limit {
+			limit = len(msg.Forwards)
+		}
+		parts := make([]string, 0, limit)
+		for i := 0; i < limit; i++ {
+			node := msg.Forwards[i]
+			forwardContent := "[消息]"
+			if node.Content != "" {
+				runes := []rune(node.Content)
+				if len(runes) > 20 {
+					forwardContent = string(runes[:20]) + "..."
+				} else {
+					forwardContent = node.Content
+				}
+			}
+			parts = append(parts, fmt.Sprintf("%s(%d):%s", node.Nickname, node.UserID, forwardContent))
+		}
+		content += fmt.Sprintf(" [合并转发，共%d条，预览：%s]", len(msg.Forwards), strings.Join(parts, " / "))
 	}
 
 	var qid string

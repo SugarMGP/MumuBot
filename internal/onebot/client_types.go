@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const AtAllUserID int64 = -1
+
 // EventHandler 事件处理器
 type EventHandler func(event map[string]interface{})
 
@@ -57,6 +59,9 @@ type GroupMessage struct {
 	AtList       []int64          `json:"at_list,omitempty"`       // @的用户列表
 	Reply        *ReplyInfo       `json:"reply,omitempty"`         // 回复信息
 	Forwards     []ForwardMessage `json:"forwards,omitempty"`      // 合并转发内容
+	FileNames    []string         `json:"file_names,omitempty"`    // 文件消息名称
+	Cards        []CardMessage    `json:"cards,omitempty"`         // 卡片消息
+	HasRecord    bool             `json:"has_record,omitempty"`    // 是否包含语音消息
 	FinalContent string           `json:"final_content,omitempty"` // 处理后的最终内容
 }
 

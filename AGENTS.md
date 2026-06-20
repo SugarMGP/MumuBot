@@ -2,6 +2,50 @@
 
 本文件约束本仓库内 AI/人工协作时的默认开发行为。
 
+## 项目概览
+
+- MumuBot 是运行在 QQ 群里的智能体：通过 OneBot 11 接收群消息，使用 ReAct（观察、思考、行动循环）决定是否回复、调用工具或保持沉默。
+- 主链路由 `main.go` 启动：配置加载、模型客户端、记忆系统、聊天 agent、管理后台和退出清理都在这里串起来。
+- 语义能力分成几条边界清楚的链路：话题工作记忆负责当前对话脉络，长期记忆负责稳定事实，learner 只学习群文化，后台只负责查看和审核。
+
+## 目录地图
+
+- `internal/agent/`：运行编排层，连接 OneBot、话题、学习、工具、模型和思考循环。
+- `internal/onebot/`：OneBot 11 WebSocket 客户端、消息事件解析、发送 API。
+- `internal/topic/`：话题工作记忆、话题归属、摘要刷新、归档检索和提示词上下文。
+- `internal/memory/`：MySQL 数据模型、Milvus 向量存储、长期记忆、消息日志、成员画像。
+- `internal/learning/`：群文化学习，只处理黑话、风格卡片和成员画像。
+- `internal/tools/`：暴露给 ReAct agent 和学习审核流程使用的工具。
+- `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务。
+- `config/`：运行配置、人格提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
+
+## 常用入口
+
+| 任务 | 入口 |
+|------|------|
+| 看启动顺序 | `main.go` |
+| 看消息如何进入 bot | `internal/onebot/client.go`、`internal/agent/message.go` |
+| 看回复决策 | `internal/agent/think.go` |
+| 看话题分配和摘要 | `internal/topic/manager.go`、`internal/topic/assignment.go` |
+| 看长期记忆入库 | `internal/memory/memory_ingest.go` |
+| 看群文化学习 | `internal/learning/learner.go` |
+| 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
+
+## 运行与验证命令
+
+```bash
+npm ci
+npm run build
+go run github.com/a-h/templ/cmd/templ@latest generate ./internal/web/views
+go build ./...
+go vet ./...
+```
+
+- 只改 Go 逻辑时，至少运行 `go build ./...`；涉及语法或逻辑变更时再运行 `go vet ./...`。
+- 修改 `.templ` 后运行 `templ generate ./internal/web/views`。
+- 修改 `internal/web/assets/src/` 后运行 `npm run build`。
+- 文档类改动不需要为了形式重跑前端构建，但如果同时已有代码改动，交付时要说明本轮实际验证了什么。
+
 ## 产品与文案
 
 - 管理后台中的文案默认是给后台使用者看的，不是给开发者看的。

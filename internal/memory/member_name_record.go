@@ -156,34 +156,6 @@ func MemberLearnedAliases(records []MemberNameRecord) []string {
 	return aliases
 }
 
-func MemberNamesForAdmin(records []MemberNameRecord, nickname string) []string {
-	normalized := normalizeMemberNameRecords(records)
-	if len(normalized) == 0 && strings.TrimSpace(nickname) == "" {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(normalized)+1)
-	names := make([]string, 0, len(normalized)+1)
-	push := func(name string) {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		names = append(names, name)
-	}
-
-	push(nickname)
-	for _, record := range normalized {
-		push(record.Content)
-	}
-	return names
-}
-
 func (p *MemberProfile) MemberNameRecords() []MemberNameRecord {
 	if p == nil {
 		return nil

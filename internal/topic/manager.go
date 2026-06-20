@@ -358,34 +358,44 @@ func (tm *Manager) PersistMessage(ctx context.Context, input PersistMessageInput
 	if err != nil {
 		return err
 	}
-	var cloned *onebot.GroupMessage
-	if msg != nil {
-		clonedValue := *msg
-		if msg.Reply != nil {
-			replyCopy := *msg.Reply
-			clonedValue.Reply = &replyCopy
-		}
-		if len(msg.Images) > 0 {
-			clonedValue.Images = append([]onebot.ImageInfo(nil), msg.Images...)
-		}
-		if len(msg.Videos) > 0 {
-			clonedValue.Videos = append([]onebot.VideoInfo(nil), msg.Videos...)
-		}
-		if len(msg.Faces) > 0 {
-			clonedValue.Faces = append([]onebot.FaceInfo(nil), msg.Faces...)
-		}
-		if len(msg.AtList) > 0 {
-			clonedValue.AtList = append([]int64(nil), msg.AtList...)
-		}
-		if len(msg.Forwards) > 0 {
-			clonedValue.Forwards = append([]onebot.ForwardMessage(nil), msg.Forwards...)
-		}
-		cloned = &clonedValue
+	if strings.TrimSpace(msg.Content) == "" {
+		_, err := tm.store.ApplyTopicAssignmentBatch(ctx, AssignmentBatchInput{
+			GroupID: msg.GroupID,
+			Items: []AssignmentBatchItem{
+				{
+					MessageLogID: saved.ID,
+					Action:       AssignmentActionNoTopic,
+					MatchReason:  string(AssignmentActionNoTopic),
+					MatchScore:   0,
+				},
+			},
+		})
+		return err
+	}
+	clonedValue := *msg
+	if msg.Reply != nil {
+		replyCopy := *msg.Reply
+		clonedValue.Reply = &replyCopy
+	}
+	if len(msg.Images) > 0 {
+		clonedValue.Images = append([]onebot.ImageInfo(nil), msg.Images...)
+	}
+	if len(msg.Videos) > 0 {
+		clonedValue.Videos = append([]onebot.VideoInfo(nil), msg.Videos...)
+	}
+	if len(msg.Faces) > 0 {
+		clonedValue.Faces = append([]onebot.FaceInfo(nil), msg.Faces...)
+	}
+	if len(msg.AtList) > 0 {
+		clonedValue.AtList = append([]int64(nil), msg.AtList...)
+	}
+	if len(msg.Forwards) > 0 {
+		clonedValue.Forwards = append([]onebot.ForwardMessage(nil), msg.Forwards...)
 	}
 	tm.enqueueAssignment(topicAssignJob{
 		groupID:      msg.GroupID,
 		messageLogID: saved.ID,
-		message:      cloned,
+		message:      &clonedValue,
 	})
 	return nil
 }
@@ -509,7 +519,7 @@ func (tm *Manager) assignmentCandidateFromTopic(ctx context.Context, topic memor
 	return candidate
 }
 
-func (tm *Manager) assignmentItemsFromDecisions(batch []topicAssignJob, decisions []topicAssignmentDecision, candidates []topicAssignmentCandidate) []AssignmentBatchItem {
+func (tm *Manager) assignmentItemsFromDecisions(groupID int64, batch []topicAssignJob, decisions []topicAssignmentDecision, candidates []topicAssignmentCandidate) []AssignmentBatchItem {
 	decisionByKey := make(map[string]topicAssignmentDecision, len(decisions))
 	for _, decision := range decisions {
 		decision.MessageKey = strings.TrimSpace(decision.MessageKey)
@@ -524,36 +534,54 @@ func (tm *Manager) assignmentItemsFromDecisions(batch []topicAssignJob, decision
 	}
 	items := make([]AssignmentBatchItem, 0, len(batch))
 	for _, job := range batch {
-		decision, ok := decisionByKey[assignmentMessageKey(job)]
+		messageKey := assignmentMessageKey(job)
+		decision, ok := decisionByKey[messageKey]
 		if !ok {
+			zap.L().Warn("话题分配结果缺少消息项，保留待处理状态",
+				zap.Int64("group_id", groupID),
+				zap.Uint("message_log_id", job.messageLogID),
+				zap.String("message_key", messageKey))
+			continue
+		}
+		rawAction := strings.ToLower(strings.TrimSpace(decision.Action))
+		if rawAction != string(AssignmentActionNoTopic) && rawAction != string(AssignmentActionReuse) && rawAction != string(AssignmentActionNew) {
+			zap.L().Warn("话题分配结果动作无效，保留待处理状态",
+				zap.Int64("group_id", groupID),
+				zap.Uint("message_log_id", job.messageLogID),
+				zap.String("message_key", messageKey),
+				zap.String("action", decision.Action))
 			continue
 		}
 		item := AssignmentBatchItem{
 			MessageLogID: job.messageLogID,
-			Action:       normalizeAssignmentAction(decision.Action),
+			Action:       AssignmentAction(rawAction),
 			TopicID:      decision.TopicID,
-			NewTopicKey:  decision.NewTopicKey,
-			MatchReason:  assignmentMatchReason(decision),
+			NewTopicKey:  strings.TrimSpace(decision.NewTopicKey),
+			MatchReason:  assignmentMatchReason(AssignmentAction(rawAction), decision.Reason),
 			MatchScore:   clamp01(decision.Confidence),
 		}
 		switch item.Action {
 		case AssignmentActionReuse:
 			if status := candidateIDs[item.TopicID]; status != memory.TopicThreadStatusActive && status != memory.TopicThreadStatusArchived {
-				item.Action = AssignmentActionNoTopic
-				item.TopicID = 0
-				item.MatchReason = string(AssignmentActionNoTopic)
+				zap.L().Warn("话题分配结果引用了无效候选话题，保留待处理状态",
+					zap.Int64("group_id", groupID),
+					zap.Uint("message_log_id", job.messageLogID),
+					zap.String("message_key", messageKey),
+					zap.Uint("topic_id", item.TopicID))
+				continue
 			}
 		case AssignmentActionNew:
-			if strings.TrimSpace(item.NewTopicKey) == "" {
-				item.NewTopicKey = assignmentMessageKey(job)
+			if item.NewTopicKey == "" {
+				zap.L().Warn("话题分配结果缺少新话题编号，保留待处理状态",
+					zap.Int64("group_id", groupID),
+					zap.Uint("message_log_id", job.messageLogID),
+					zap.String("message_key", messageKey))
+				continue
 			}
 		case AssignmentActionNoTopic:
 			if strings.TrimSpace(item.MatchReason) == "" {
 				item.MatchReason = string(AssignmentActionNoTopic)
 			}
-		default:
-			item.Action = AssignmentActionNoTopic
-			item.MatchReason = string(AssignmentActionNoTopic)
 		}
 		items = append(items, item)
 	}
@@ -589,16 +617,22 @@ func (tm *Manager) runAssignmentFlush(groupID int64, batch []topicAssignJob) {
 	case tm.assignSem <- struct{}{}:
 		defer func() { <-tm.assignSem }()
 	case <-tm.stopCh:
-		tm.finishAssignmentFlush(groupID, batch)
+		tm.clearAssignmentPending(groupID, assignmentJobMessageIDs(batch))
+		tm.finishAssignmentFlush(groupID, nil)
 		return
 	}
 
 	ctx, cancel := tm.assignmentFlushContext(topicAssignTimeout)
 	defer cancel()
-	if err := tm.flushAssignmentBatch(ctx, groupID, batch); err != nil {
+	processedMessageIDs, err := tm.flushAssignmentBatch(ctx, groupID, batch)
+	if err != nil {
 		zap.L().Warn("批量话题分配失败，消息暂不归属话题", zap.Int64("group_id", groupID), zap.Int("count", len(batch)), zap.Error(err))
+		tm.clearAssignmentPending(groupID, assignmentJobMessageIDs(batch))
+		tm.finishAssignmentFlush(groupID, nil)
+		return
 	}
-	tm.finishAssignmentFlush(groupID, batch)
+	tm.clearAssignmentPending(groupID, processedMessageIDs)
+	tm.finishAssignmentFlush(groupID, unprocessedAssignmentJobs(batch, processedMessageIDs))
 }
 
 func (tm *Manager) assignmentFlushContext(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -618,14 +652,12 @@ func (tm *Manager) assignmentFlushContext(timeout time.Duration) (context.Contex
 }
 
 func (tm *Manager) finishAssignmentFlush(groupID int64, batch []topicAssignJob) {
-	messageIDs := make([]uint, 0, len(batch))
-	for _, job := range batch {
-		messageIDs = append(messageIDs, job.messageLogID)
-	}
-	tm.clearAssignmentPending(groupID, messageIDs)
 	tm.assignMu.Lock()
+	if len(batch) > 0 && !tm.closed {
+		tm.assignBuffers[groupID] = append(batch, tm.assignBuffers[groupID]...)
+	}
 	delete(tm.assignInFlight, groupID)
-	ready := !tm.closed && len(tm.assignBuffers[groupID]) >= tm.batchSize
+	ready := !tm.closed && len(batch) == 0 && len(tm.assignBuffers[groupID]) >= tm.batchSize
 	tm.assignMu.Unlock()
 	if ready {
 		tm.scheduleAssignmentFlush(groupID)
@@ -666,9 +698,9 @@ func (tm *Manager) clearAssignmentBuffers() {
 	}
 }
 
-func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batch []topicAssignJob) error {
+func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batch []topicAssignJob) ([]uint, error) {
 	if len(batch) == 0 {
-		return nil
+		return nil, nil
 	}
 	sort.SliceStable(batch, func(i, j int) bool {
 		return batch[i].messageLogID < batch[j].messageLogID
@@ -676,15 +708,15 @@ func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batc
 	candidates := tm.buildAssignmentCandidates(ctx, groupID, batch)
 	decisions, err := tm.assignFn(ctx, groupID, batch, candidates)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	items := tm.assignmentItemsFromDecisions(batch, decisions, candidates)
+	items := tm.assignmentItemsFromDecisions(groupID, batch, decisions, candidates)
 	result, err := tm.store.ApplyTopicAssignmentBatch(ctx, AssignmentBatchInput{
 		GroupID: groupID,
 		Items:   items,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, topicID := range result.ArchivedTopicIDs {
 		if err := tm.syncTopicVectors(ctx, topicID); err != nil {
@@ -701,7 +733,35 @@ func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batc
 			zap.L().Warn("话题向量同步失败", zap.Int64("group_id", groupID), zap.Uint("topic_id", topicID), zap.Error(err))
 		}
 	}
-	return nil
+	processedMessageIDs := append([]uint(nil), result.MessageLogIDs...)
+	processedMessageIDs = append(processedMessageIDs, result.NoTopicMessageIDs...)
+	return processedMessageIDs, nil
+}
+
+func assignmentJobMessageIDs(batch []topicAssignJob) []uint {
+	messageIDs := make([]uint, 0, len(batch))
+	for _, job := range batch {
+		messageIDs = append(messageIDs, job.messageLogID)
+	}
+	return messageIDs
+}
+
+func unprocessedAssignmentJobs(batch []topicAssignJob, processedMessageIDs []uint) []topicAssignJob {
+	if len(batch) == 0 || len(processedMessageIDs) == len(batch) {
+		return nil
+	}
+	processed := make(map[uint]struct{}, len(processedMessageIDs))
+	for _, id := range processedMessageIDs {
+		processed[id] = struct{}{}
+	}
+	unprocessed := make([]topicAssignJob, 0, len(batch)-len(processedMessageIDs))
+	for _, job := range batch {
+		if _, ok := processed[job.messageLogID]; ok {
+			continue
+		}
+		unprocessed = append(unprocessed, job)
+	}
+	return unprocessed
 }
 
 func (tm *Manager) RecoverPendingAssignments(groupIDs []int64) error {
@@ -718,8 +778,18 @@ func (tm *Manager) RecoverPendingAssignments(groupIDs []int64) error {
 		}
 
 		batch := make([]topicAssignJob, 0, len(pending))
+		noTopicItems := make([]AssignmentBatchItem, 0)
 		for _, log := range pending {
 			if log.ID == 0 {
+				continue
+			}
+			if strings.TrimSpace(log.OriginalContent) == "" {
+				noTopicItems = append(noTopicItems, AssignmentBatchItem{
+					MessageLogID: log.ID,
+					Action:       AssignmentActionNoTopic,
+					MatchReason:  string(AssignmentActionNoTopic),
+					MatchScore:   0,
+				})
 				continue
 			}
 			batch = append(batch, topicAssignJob{
@@ -728,11 +798,22 @@ func (tm *Manager) RecoverPendingAssignments(groupIDs []int64) error {
 				message:      messageLogToGroupMessage(log),
 			})
 		}
-		if len(batch) == 0 {
-			continue
+		if len(noTopicItems) > 0 {
+			result, err := tm.store.ApplyTopicAssignmentBatch(tm.ctx, AssignmentBatchInput{
+				GroupID: groupID,
+				Items:   noTopicItems,
+			})
+			if err != nil {
+				return err
+			}
+			tm.clearAssignmentPending(groupID, result.NoTopicMessageIDs)
 		}
-		if err := tm.flushAssignmentBatch(tm.ctx, groupID, batch); err != nil {
-			return err
+		if len(batch) > 0 {
+			if processedMessageIDs, err := tm.flushAssignmentBatch(tm.ctx, groupID, batch); err != nil {
+				return err
+			} else {
+				tm.clearAssignmentPending(groupID, processedMessageIDs)
+			}
 		}
 	}
 	return nil
@@ -1308,20 +1389,8 @@ func assignmentMessageKey(job topicAssignJob) string {
 	return ""
 }
 
-func normalizeAssignmentAction(action string) AssignmentAction {
-	switch strings.ToLower(strings.TrimSpace(action)) {
-	case string(AssignmentActionReuse):
-		return AssignmentActionReuse
-	case string(AssignmentActionNew):
-		return AssignmentActionNew
-	default:
-		return AssignmentActionNoTopic
-	}
-}
-
-func assignmentMatchReason(decision topicAssignmentDecision) string {
-	action := normalizeAssignmentAction(decision.Action)
-	reason := strings.TrimSpace(decision.Reason)
+func assignmentMatchReason(action AssignmentAction, rawReason string) string {
+	reason := strings.TrimSpace(rawReason)
 	if reason == "" {
 		if action == AssignmentActionNoTopic {
 			return string(AssignmentActionNoTopic)
@@ -1374,12 +1443,5 @@ func topicAssignmentBatchSize(bufferCapacity int) int {
 		}
 		return bufferCapacity
 	}
-	size := bufferCapacity / 2
-	if size < 10 {
-		size = 10
-	}
-	if size > 50 {
-		size = 50
-	}
-	return size
+	return min(max(bufferCapacity/2, 10), 50)
 }

@@ -37,10 +37,6 @@ type RuntimeSnapshot struct {
 	EnabledGroups int
 }
 
-func (r RuntimeSnapshot) Snapshot() RuntimeSnapshot {
-	return r
-}
-
 type App struct {
 	cfg       *config.Config
 	admin     *services.AdminService

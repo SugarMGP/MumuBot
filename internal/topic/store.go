@@ -3,6 +3,7 @@ package topic
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -306,10 +307,7 @@ func (s *DBStore) ListRecentTopicParticipants(ctx context.Context, topicID uint,
 	participants := make([]memory.TopicParticipantRef, 0, limit)
 	seen := make(map[int64]struct{}, limit)
 	lastID := uint(0)
-	pageSize := limit * 3
-	if pageSize < 16 {
-		pageSize = 16
-	}
+	pageSize := max(limit*3, 16)
 	for len(participants) < limit {
 		var logs []memory.MessageLog
 		query := s.db.WithContext(ctx).
@@ -616,9 +614,6 @@ func normalizeAssignmentItems(items []AssignmentBatchItem) []AssignmentBatchItem
 		if item.MessageLogID == 0 {
 			continue
 		}
-		if item.Action == "" {
-			item.Action = AssignmentActionNoTopic
-		}
 		item.NewTopicKey = strings.TrimSpace(item.NewTopicKey)
 		item.MatchReason = strings.TrimSpace(item.MatchReason)
 		if item.Action == AssignmentActionNoTopic && item.MatchReason == "" {
@@ -783,6 +778,6 @@ func sortedTopicIDs(set map[uint]struct{}) []uint {
 	for id := range set {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }

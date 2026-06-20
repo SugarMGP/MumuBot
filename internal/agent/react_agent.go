@@ -351,6 +351,12 @@ func (a *Agent) handleIncomingMessage(msg *onebot.GroupMessage) {
 			if len(msg.Forwards) > 0 {
 				cloned.Forwards = append([]onebot.ForwardMessage(nil), msg.Forwards...)
 			}
+			if len(msg.FileNames) > 0 {
+				cloned.FileNames = append([]string(nil), msg.FileNames...)
+			}
+			if len(msg.Cards) > 0 {
+				cloned.Cards = append([]onebot.CardMessage(nil), msg.Cards...)
+			}
 			a.startupQueue = append(a.startupQueue, &cloned)
 		}
 		a.startupMu.Unlock()

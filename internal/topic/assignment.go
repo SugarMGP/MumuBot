@@ -54,6 +54,7 @@ func buildTopicAssignmentPrompt(groupID int64, messages []topicAssignJob, candid
 	b.WriteString("- no_topic: 灌水、纯表情、单字附和、无可持续上下文的消息。\n")
 	b.WriteString("- reuse: 归入已有候选话题，topic_id 必须来自候选；候选可能是 active，也可能是 archived。\n")
 	b.WriteString("- new: 新话题，使用 new_topic_key；同一新话题多条消息必须复用同一个 key。\n")
+	b.WriteString("- 每个 message_key 只能返回一次，不能重复。\n")
 	b.WriteString("\n候选话题：\n")
 	if len(candidates) == 0 {
 		b.WriteString("无\n")

@@ -139,12 +139,9 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			msg.Faces = append(msg.Faces, face)
 
 		case "at":
-			text, qqID, ok := c.parseAtSegmentForGroup(msg, data)
+			qqID, ok := parseAtSegmentForGroup(data)
 			if ok {
 				msg.AtList = append(msg.AtList, qqID)
-			}
-			if text != "" {
-				textParts = append(textParts, text)
 			}
 
 		case "reply":
@@ -163,7 +160,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 
 		case "record": // 语音消息
-			textParts = append(textParts, "[语音]")
+			msg.HasRecord = true
 
 		case "video": // 视频消息
 			vid := VideoInfo{}
@@ -179,21 +176,17 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 
 		case "file": // 文件
 			if name, ok := data["name"].(string); ok {
-				textParts = append(textParts, fmt.Sprintf("[文件:%s]", name))
+				msg.FileNames = append(msg.FileNames, name)
 			} else {
-				textParts = append(textParts, "[文件]")
+				msg.FileNames = append(msg.FileNames, "")
 			}
 
 		case "json": // JSON 卡片消息
 			if jsonStr, ok := data["data"].(string); ok {
 				card := parseCardMessage(jsonStr)
 				if card != nil {
-					textParts = append(textParts, card.Format())
-				} else {
-					textParts = append(textParts, "[卡片消息]")
+					msg.Cards = append(msg.Cards, *card)
 				}
-			} else {
-				textParts = append(textParts, "[卡片消息]")
 			}
 
 		case "forward": // 合并转发
@@ -202,32 +195,9 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 				nodes, err := c.GetForwardMsg(forwardCtx, forwardID)
 				cancel()
 				if err == nil && len(nodes) > 0 {
-					// 仅显示前四条，每条限制20个rune
-					limit := 4
-					if len(nodes) < limit {
-						limit = len(nodes)
-					}
-					var parts []string
-					for i := 0; i < limit; i++ {
-						node := nodes[i]
-						content := "[消息]"
-						if node.Content != "" {
-							runes := []rune(node.Content)
-							if len(runes) > 20 {
-								content = string(runes[:20]) + "..."
-							} else {
-								content = node.Content
-							}
-						}
-						parts = append(parts, fmt.Sprintf("%s(%d):%s", node.Nickname, node.UserID, content))
-					}
 					msg.Forwards = nodes
-					summary := fmt.Sprintf("[合并转发，共%d条，预览：%s] ", len(nodes), strings.Join(parts, " / "))
-					textParts = append(textParts, summary)
-					continue
 				}
 			}
-			textParts = append(textParts, "[合并转发]")
 		}
 	}
 
@@ -379,29 +349,23 @@ func parseForwardMessages(data map[string]interface{}) []ForwardMessage {
 	return result
 }
 
-func (c *Client) parseAtSegmentForGroup(msg *GroupMessage, data map[string]interface{}) (string, int64, bool) {
+func parseAtSegmentForGroup(data map[string]interface{}) (int64, bool) {
 	if qq, ok := data["qq"].(string); ok {
 		if qq == "all" {
-			return "@全体成员", 0, false
+			return AtAllUserID, true
 		}
 		qqID, err := strconv.ParseInt(qq, 10, 64)
 		if err != nil {
-			return "", 0, false
+			return 0, false
 		}
-		if displayName := c.resolveMentionDisplayName(c.ctx, msg.GroupID, qqID); displayName != "" {
-			return "@" + displayName, qqID, true
-		}
-		return "@" + qq, qqID, true
+		return qqID, true
 	}
 
 	qqID, ok := utils.ParseInt64Value(data["qq"])
 	if !ok {
-		return "", 0, false
+		return 0, false
 	}
-	if displayName := c.resolveMentionDisplayName(c.ctx, msg.GroupID, qqID); displayName != "" {
-		return "@" + displayName, qqID, true
-	}
-	return fmt.Sprintf("@%d", qqID), qqID, true
+	return qqID, true
 }
 
 func atDisplayName(data map[string]interface{}) string {
@@ -439,35 +403,6 @@ func parseAtSegment(data map[string]interface{}) (string, int64, bool) {
 	return fmt.Sprintf("@%d", qqID), qqID, true
 }
 
-func (c *Client) resolveMentionDisplayName(ctx context.Context, groupID, userID int64) string {
-	if displayName := preferredGroupMemberDisplayName(c.getCachedGroupMemberInfo(groupID, userID)); displayName != "" {
-		return displayName
-	}
-
-	if c == nil || groupID <= 0 || userID <= 0 {
-		return ""
-	}
-
-	if ctx == nil {
-		ctx = c.ctx
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	info, err := c.GetGroupMemberInfo(lookupCtx, groupID, userID, false)
-	if err != nil {
-		zap.L().Debug("获取群成员信息失败，mention 回退为 QQ 号",
-			zap.Int64("group_id", groupID),
-			zap.Int64("user_id", userID),
-			zap.Error(err),
-		)
-		return ""
-	}
-
-	c.cacheGroupMemberInfo(info)
-	return preferredGroupMemberDisplayName(info)
-}
-
 func newGroupMemberInfoCache() *ttlcache.Cache[string, *GroupMemberInfo] {
 	return ttlcache.New(
 		ttlcache.WithTTL[string, *GroupMemberInfo](10*time.Minute),
@@ -480,29 +415,11 @@ func groupMemberCacheKey(groupID, userID int64) string {
 	return fmt.Sprintf("%d:%d", groupID, userID)
 }
 
-func (c *Client) getCachedGroupMemberInfo(groupID, userID int64) *GroupMemberInfo {
-	if c == nil || c.memberInfoCache == nil || groupID <= 0 || userID <= 0 {
-		return nil
-	}
-	item := c.memberInfoCache.Get(groupMemberCacheKey(groupID, userID))
-	if item == nil {
-		return nil
-	}
-	return item.Value()
-}
-
 func (c *Client) cacheGroupMemberInfo(info *GroupMemberInfo) {
 	if c == nil || c.memberInfoCache == nil || info == nil || info.GroupID <= 0 || info.UserID <= 0 {
 		return
 	}
 	c.memberInfoCache.Set(groupMemberCacheKey(info.GroupID, info.UserID), info, ttlcache.DefaultTTL)
-}
-
-func preferredGroupMemberDisplayName(info *GroupMemberInfo) string {
-	if info == nil {
-		return ""
-	}
-	return utils.FirstNonEmpty(info.Card, info.Nickname)
 }
 
 func displayNameFromNames(groupCard, nickname string) string {
