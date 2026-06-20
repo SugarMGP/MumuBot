@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.10] - 2026-06-20
+
 ### 变更
 
 - **消息日志清理不再等待后台学习进度**：旧消息清理只保留已归属话题的消息和每群最新消息，不再因为 learner 尚未处理而额外保留普通旧消息。
@@ -190,7 +192,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.9...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.10...HEAD
+[1.3.10]: https://github.com/SugarMGP/MumuBot/compare/v1.3.9...v1.3.10
 [1.3.9]: https://github.com/SugarMGP/MumuBot/compare/v1.3.8...v1.3.9
 [1.3.8]: https://github.com/SugarMGP/MumuBot/compare/v1.3.7...v1.3.8
 [1.3.7]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...v1.3.7
