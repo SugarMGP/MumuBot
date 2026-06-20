@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.9] - 2026-06-20
+
 ### 变更
 
 - **仓库协作规则已扩展为分层知识库**：根目录和核心子目录补充了职责边界、入口文件和修改约束，后续排查话题、消息解析、学习、记忆和后台问题时更容易定位。
@@ -177,7 +179,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.8...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v1.3.9...HEAD
+[1.3.9]: https://github.com/SugarMGP/MumuBot/compare/v1.3.8...v1.3.9
 [1.3.8]: https://github.com/SugarMGP/MumuBot/compare/v1.3.7...v1.3.8
 [1.3.7]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...v1.3.7
 [1.3.6]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...v1.3.6
