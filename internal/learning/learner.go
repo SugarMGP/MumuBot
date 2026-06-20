@@ -411,9 +411,9 @@ func (l *Learner) processMemberProfileExtraction(groupID int64, msgs []memory.Me
 
 	ctx, cancel := context.WithTimeout(l.ctx, 90*time.Second)
 	defer cancel()
-	ctx = tools.WithToolContext(ctx, &tools.ToolContext{
-		GroupID:   groupID,
-		MemoryMgr: l.memMgr,
+	ctx = tools.WithLearningContext(ctx, &tools.LearningContext{
+		GroupID: groupID,
+		MemMgr:  l.memMgr,
 	})
 
 	opts := []agentflow.AgentOption{}

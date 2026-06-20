@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	topicAssignQueueSize  = 256
+	topicAssignQueueSize  = 1024
 	topicAssignTimeout    = 90 * time.Second
 	maxTopicAssignWorkers = 2
 )
@@ -434,8 +434,12 @@ func (tm *Manager) enqueueAssignment(job topicAssignJob) {
 	}
 	tm.assignMu.Unlock()
 	if !queued {
+		if err := tm.markAssignmentBatchNoTopic(tm.ctx, job.groupID, []topicAssignJob{job}); err != nil {
+			zap.L().Warn("话题分配队列已满，标记无话题失败", zap.Int64("group_id", job.groupID), zap.Uint("message_log_id", job.messageLogID), zap.Error(err))
+			return
+		}
 		tm.clearAssignmentPending(job.groupID, []uint{job.messageLogID})
-		zap.L().Warn("话题分配队列已满，消息暂不归属话题", zap.Int64("group_id", job.groupID), zap.Uint("message_log_id", job.messageLogID))
+		zap.L().Warn("话题分配队列已满，消息已标记为无话题", zap.Int64("group_id", job.groupID), zap.Uint("message_log_id", job.messageLogID))
 	}
 }
 
@@ -537,19 +541,21 @@ func (tm *Manager) assignmentItemsFromDecisions(groupID int64, batch []topicAssi
 		messageKey := assignmentMessageKey(job)
 		decision, ok := decisionByKey[messageKey]
 		if !ok {
-			zap.L().Warn("话题分配结果缺少消息项，保留待处理状态",
+			zap.L().Warn("话题分配结果缺少消息项，改为无话题",
 				zap.Int64("group_id", groupID),
 				zap.Uint("message_log_id", job.messageLogID),
 				zap.String("message_key", messageKey))
+			items = append(items, noTopicAssignmentItem(job.messageLogID))
 			continue
 		}
 		rawAction := strings.ToLower(strings.TrimSpace(decision.Action))
 		if rawAction != string(AssignmentActionNoTopic) && rawAction != string(AssignmentActionReuse) && rawAction != string(AssignmentActionNew) {
-			zap.L().Warn("话题分配结果动作无效，保留待处理状态",
+			zap.L().Warn("话题分配结果动作无效，改为无话题",
 				zap.Int64("group_id", groupID),
 				zap.Uint("message_log_id", job.messageLogID),
 				zap.String("message_key", messageKey),
 				zap.String("action", decision.Action))
+			items = append(items, noTopicAssignmentItem(job.messageLogID))
 			continue
 		}
 		item := AssignmentBatchItem{
@@ -563,19 +569,21 @@ func (tm *Manager) assignmentItemsFromDecisions(groupID int64, batch []topicAssi
 		switch item.Action {
 		case AssignmentActionReuse:
 			if status := candidateIDs[item.TopicID]; status != memory.TopicThreadStatusActive && status != memory.TopicThreadStatusArchived {
-				zap.L().Warn("话题分配结果引用了无效候选话题，保留待处理状态",
+				zap.L().Warn("话题分配结果引用了无效候选话题，改为无话题",
 					zap.Int64("group_id", groupID),
 					zap.Uint("message_log_id", job.messageLogID),
 					zap.String("message_key", messageKey),
 					zap.Uint("topic_id", item.TopicID))
+				items = append(items, noTopicAssignmentItem(job.messageLogID))
 				continue
 			}
 		case AssignmentActionNew:
 			if item.NewTopicKey == "" {
-				zap.L().Warn("话题分配结果缺少新话题编号，保留待处理状态",
+				zap.L().Warn("话题分配结果缺少新话题编号，改为无话题",
 					zap.Int64("group_id", groupID),
 					zap.Uint("message_log_id", job.messageLogID),
 					zap.String("message_key", messageKey))
+				items = append(items, noTopicAssignmentItem(job.messageLogID))
 				continue
 			}
 		case AssignmentActionNoTopic:
@@ -586,6 +594,15 @@ func (tm *Manager) assignmentItemsFromDecisions(groupID int64, batch []topicAssi
 		items = append(items, item)
 	}
 	return items
+}
+
+func noTopicAssignmentItem(messageLogID uint) AssignmentBatchItem {
+	return AssignmentBatchItem{
+		MessageLogID: messageLogID,
+		Action:       AssignmentActionNoTopic,
+		MatchReason:  string(AssignmentActionNoTopic),
+		MatchScore:   0,
+	}
 }
 
 func (tm *Manager) scheduleAssignmentFlush(groupID int64) {
@@ -626,9 +643,8 @@ func (tm *Manager) runAssignmentFlush(groupID int64, batch []topicAssignJob) {
 	defer cancel()
 	processedMessageIDs, err := tm.flushAssignmentBatch(ctx, groupID, batch)
 	if err != nil {
-		zap.L().Warn("批量话题分配失败，消息暂不归属话题", zap.Int64("group_id", groupID), zap.Int("count", len(batch)), zap.Error(err))
-		tm.clearAssignmentPending(groupID, assignmentJobMessageIDs(batch))
-		tm.finishAssignmentFlush(groupID, nil)
+		zap.L().Warn("批量话题分配写入失败，保留待处理状态", zap.Int64("group_id", groupID), zap.Int("count", len(batch)), zap.Error(err))
+		tm.finishAssignmentFlush(groupID, batch)
 		return
 	}
 	tm.clearAssignmentPending(groupID, processedMessageIDs)
@@ -698,6 +714,24 @@ func (tm *Manager) clearAssignmentBuffers() {
 	}
 }
 
+func (tm *Manager) markAssignmentBatchNoTopic(ctx context.Context, groupID int64, batch []topicAssignJob) error {
+	items := make([]AssignmentBatchItem, 0, len(batch))
+	for _, job := range batch {
+		if job.messageLogID == 0 {
+			continue
+		}
+		items = append(items, noTopicAssignmentItem(job.messageLogID))
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	_, err := tm.store.ApplyTopicAssignmentBatch(ctx, AssignmentBatchInput{
+		GroupID: groupID,
+		Items:   items,
+	})
+	return err
+}
+
 func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batch []topicAssignJob) ([]uint, error) {
 	if len(batch) == 0 {
 		return nil, nil
@@ -708,7 +742,10 @@ func (tm *Manager) flushAssignmentBatch(ctx context.Context, groupID int64, batc
 	candidates := tm.buildAssignmentCandidates(ctx, groupID, batch)
 	decisions, err := tm.assignFn(ctx, groupID, batch, candidates)
 	if err != nil {
-		return nil, err
+		if markErr := tm.markAssignmentBatchNoTopic(ctx, groupID, batch); markErr != nil {
+			return nil, markErr
+		}
+		return assignmentJobMessageIDs(batch), nil
 	}
 	items := tm.assignmentItemsFromDecisions(groupID, batch, decisions, candidates)
 	result, err := tm.store.ApplyTopicAssignmentBatch(ctx, AssignmentBatchInput{
@@ -784,12 +821,7 @@ func (tm *Manager) RecoverPendingAssignments(groupIDs []int64) error {
 				continue
 			}
 			if strings.TrimSpace(log.OriginalContent) == "" {
-				noTopicItems = append(noTopicItems, AssignmentBatchItem{
-					MessageLogID: log.ID,
-					Action:       AssignmentActionNoTopic,
-					MatchReason:  string(AssignmentActionNoTopic),
-					MatchScore:   0,
-				})
+				noTopicItems = append(noTopicItems, noTopicAssignmentItem(log.ID))
 				continue
 			}
 			batch = append(batch, topicAssignJob{
@@ -1437,11 +1469,8 @@ func topicAssignmentBatchSize(bufferCapacity int) int {
 	if bufferCapacity <= 0 {
 		bufferCapacity = actualMessageBufferCapacity()
 	}
-	if bufferCapacity < 10 {
-		if bufferCapacity < 1 {
-			return 1
-		}
-		return bufferCapacity
+	if bufferCapacity < 1 {
+		return 1
 	}
-	return min(max(bufferCapacity/2, 10), 50)
+	return bufferCapacity
 }

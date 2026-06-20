@@ -79,15 +79,6 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 			continue
 		}
 
-		state, err := m.GetLearningState(groupID)
-		if err != nil {
-			zap.L().Warn("清理消息日志失败：获取学习进度失败", zap.Int64("group_id", groupID), zap.Error(err))
-			continue
-		}
-		if state.LastMessageID == 0 {
-			continue
-		}
-
 		query := m.db.Where(
 			"group_id = ? AND topic_thread_id = 0 AND (created_at < ? OR (created_at = ? AND id < ?))",
 			groupID,
@@ -95,7 +86,6 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 			threshold.CreatedAt,
 			threshold.ID,
 		)
-		query = query.Where("id <= ?", state.LastMessageID)
 		result := query.Delete(&MessageLog{})
 		if result.Error != nil {
 			zap.L().Warn("清理消息日志失败：删除旧记录失败", zap.Int64("group_id", groupID), zap.Error(result.Error))
