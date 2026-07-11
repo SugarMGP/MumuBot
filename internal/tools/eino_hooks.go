@@ -55,7 +55,7 @@ func ToolDedupMiddleware() compose.InvokableToolMiddleware {
 				return next(ctx, input)
 			}
 
-			if tc.MarkToolCallSeen(input.Name, input.Arguments) {
+			if tc.IsToolCallSeen(input.Name, input.Arguments) {
 				zap.L().Debug("工具调用被中间件去重",
 					zap.String("tool", input.Name),
 					zap.String("arguments", input.Arguments))
@@ -69,9 +69,26 @@ func ToolDedupMiddleware() compose.InvokableToolMiddleware {
 				return &compose.ToolOutput{Result: output}, nil
 			}
 
-			return next(ctx, input)
+			output, err := next(ctx, input)
+			if err == nil && toolOutputSucceeded(output) {
+				tc.MarkToolCallSucceeded(input.Name, input.Arguments)
+			}
+			return output, err
 		}
 	}
+}
+
+func toolOutputSucceeded(output *compose.ToolOutput) bool {
+	if output == nil {
+		return false
+	}
+	var result struct {
+		Success *bool `json:"success"`
+	}
+	if err := sonic.UnmarshalString(output.Result, &result); err != nil || result.Success == nil {
+		return true
+	}
+	return *result.Success
 }
 
 // NewToolLogHandler 创建统一的工具调用日志回调。

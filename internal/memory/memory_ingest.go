@@ -40,15 +40,14 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 			zap.String("source_ref", input.SourceRef))
 		return nil, "ignored", nil
 	}
+	if !claim.LongTerm {
+		return nil, "ignored", nil
+	}
 	relatedUserID := input.RelatedUserID
 	if relatedUserID == 0 {
 		relatedUserID = resolveSubjectCandidateUserID(claim.SubjectName, input.SubjectCandidates)
 	}
 	subjectClass := claim.SubjectClass
-
-	if claim.CanonicalType == CanonicalMemoryTypeGoal && !claim.LongTerm {
-		return nil, "ignored", nil
-	}
 
 	status := MemoryStatusActive
 	if input.SourceKind == MemorySourceKindMigration {

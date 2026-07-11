@@ -7,9 +7,6 @@ import (
 
 const AtAllUserID int64 = -1
 
-// EventHandler 事件处理器
-type EventHandler func(event map[string]interface{})
-
 // APIResponse OneBot API 响应
 type APIResponse struct {
 	Status  string      `json:"status"`  // ok / failed

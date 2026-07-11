@@ -60,6 +60,10 @@ type VectorStore interface {
 	Close() error
 }
 
+type duplicateMemoryVectorStore interface {
+	RepairDuplicateMemoryVectors(ctx context.Context) error
+}
+
 type MemoryCandidateWriter interface {
 	UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error)
 }
@@ -176,6 +180,17 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 		styleCardMilvus: styleMilvusClient,
 		topicMilvus:     topicMilvusClient,
 		cleanupStop:     make(chan struct{}),
+	}
+	if duplicateStore, ok := m.milvus.(duplicateMemoryVectorStore); ok {
+		if err := duplicateStore.RepairDuplicateMemoryVectors(context.Background()); err != nil {
+			_ = topicMilvusClient.Close()
+			_ = styleMilvusClient.Close()
+			_ = milvusClient.Close()
+			if sqlDB, dbErr := db.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+			return nil, fmt.Errorf("修复重复记忆向量失败: %w", err)
+		}
 	}
 	// 启动消息日志清理任务
 	m.startMessageLogCleanup()
@@ -610,25 +625,6 @@ func (m *Manager) UpdateMemberProfile(profile *MemberProfile) error {
 
 	profile.Activity = applyActivityUpdate(profile.Activity, existing.LastSpeak, profile.LastSpeak)
 	return m.db.Save(profile).Error
-}
-
-// ==================== 统计 ====================
-
-// GetStats 获取统计信息
-func (m *Manager) GetStats() map[string]int64 {
-	stats := make(map[string]int64)
-	var memories, members, messages, styleCards, jargons int64
-	m.db.Model(&Memory{}).Count(&memories)
-	m.db.Model(&MemberProfile{}).Count(&members)
-	m.db.Model(&MessageLog{}).Count(&messages)
-	m.db.Model(&StyleCard{}).Count(&styleCards)
-	m.db.Model(&Jargon{}).Count(&jargons)
-	stats["memories"] = memories
-	stats["members"] = members
-	stats["messages"] = messages
-	stats["style_cards"] = styleCards
-	stats["jargons"] = jargons
-	return stats
 }
 
 // ==================== 列表查询（供管理界面用）====================

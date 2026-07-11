@@ -309,7 +309,7 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 		}
 		profile, err := a.memory.GetMemberProfile(userID)
 		if err != nil {
-			name := displayNameForRenderedText(groupCard, displayName, nickname)
+			name := utils.FirstNonEmpty(groupCard, displayName, nickname)
 			if name == "" {
 				name = strings.TrimSpace(nickname)
 			}
@@ -405,7 +405,7 @@ func (a *Agent) resolveRenderedDisplayName(groupID, userID int64, groupCard, run
 			return name
 		}
 	}
-	return displayNameForRenderedText("", runtimeName, qq)
+	return utils.FirstNonEmpty(runtimeName, qq)
 }
 
 func visionCacheKey(kind string, remoteURL string, file string) string {

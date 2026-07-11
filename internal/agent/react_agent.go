@@ -84,7 +84,10 @@ func New(mem *memory.Manager) (*Agent, error) {
 		return nil, fmt.Errorf("配置未加载")
 	}
 
-	p := persona.NewPersona(&cfg.Persona)
+	p, err := persona.NewPersona(&cfg.Persona)
+	if err != nil {
+		return nil, fmt.Errorf("加载人格失败: %w", err)
+	}
 
 	chatModel, err := llm.NewClientForTier(llm.TierHigh)
 	if err != nil {

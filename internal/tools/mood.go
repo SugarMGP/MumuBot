@@ -3,8 +3,6 @@ package tools
 import (
 	"context"
 
-	mutils "mumu-bot/internal/utils"
-
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 )
@@ -43,9 +41,9 @@ func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (*UpdateMoodOut
 	}
 
 	// 限制单次变化量，防止极端变化
-	valenceDelta := mutils.ClampFloat64(input.ValenceDelta, -0.5, 0.5)
-	energyDelta := mutils.ClampFloat64(input.EnergyDelta, -0.3, 0.3)
-	sociabilityDelta := mutils.ClampFloat64(input.SociabilityDelta, -0.3, 0.3)
+	valenceDelta := min(max(input.ValenceDelta, -0.5), 0.5)
+	energyDelta := min(max(input.EnergyDelta, -0.3), 0.3)
+	sociabilityDelta := min(max(input.SociabilityDelta, -0.3), 0.3)
 
 	mood, err := tc.MemoryMgr.UpdateMoodState(valenceDelta, energyDelta, sociabilityDelta, input.Reason)
 	if err != nil {

@@ -53,7 +53,7 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 			msg.GroupCard = card
 		}
 	}
-	msg.DisplayName = displayNameFromNames(msg.GroupCard, msg.Nickname)
+	msg.DisplayName = utils.FirstNonEmpty(msg.GroupCard, msg.Nickname)
 	if msg.GroupID > 0 && msg.UserID > 0 && (strings.TrimSpace(msg.GroupCard) != "" || strings.TrimSpace(msg.Nickname) != "") {
 		c.cacheGroupMemberInfo(&GroupMemberInfo{
 			GroupID:  msg.GroupID,
@@ -420,10 +420,6 @@ func (c *Client) cacheGroupMemberInfo(info *GroupMemberInfo) {
 		return
 	}
 	c.memberInfoCache.Set(groupMemberCacheKey(info.GroupID, info.UserID), info, ttlcache.DefaultTTL)
-}
-
-func displayNameFromNames(groupCard, nickname string) string {
-	return utils.FirstNonEmpty(groupCard, nickname)
 }
 
 func parseInt(v interface{}) (int, bool) {

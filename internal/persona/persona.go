@@ -38,30 +38,34 @@ type PromptContext struct {
 
 // Persona 人格定义
 type Persona struct {
-	cfg *config.PersonaConfig
+	cfg          *config.PersonaConfig
+	systemPrompt string
 }
 
-func NewPersona(cfg *config.PersonaConfig) *Persona {
-	return &Persona{cfg: cfg}
+func NewPersona(cfg *config.PersonaConfig) (*Persona, error) {
+	tmpl, err := template.New("persona.prompt").Option("missingkey=error").Parse(cfg.PromptTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse persona.prompt: %w", err)
+	}
+
+	var b strings.Builder
+	if err := tmpl.Execute(&b, newSystemPromptData(cfg)); err != nil {
+		return nil, fmt.Errorf("render persona.prompt: %w", err)
+	}
+	return &Persona{cfg: cfg, systemPrompt: b.String()}, nil
 }
 
 // GetSystemPrompt 获取系统提示词（纯静态）
 func (p *Persona) GetSystemPrompt() string {
-	var b strings.Builder
-	data := systemPromptData{
-		Name:      p.cfg.Name,
-		QQ:        p.cfg.QQ,
-		Interests: strings.Join(p.cfg.Interests, "、"),
-	}
+	return p.systemPrompt
+}
 
-	tmpl, err := template.New("persona.prompt").Option("missingkey=error").Parse(p.cfg.PromptTemplate)
-	if err != nil {
-		panic(fmt.Sprintf("parse persona.prompt: %v", err))
+func newSystemPromptData(cfg *config.PersonaConfig) systemPromptData {
+	return systemPromptData{
+		Name:      cfg.Name,
+		QQ:        cfg.QQ,
+		Interests: strings.Join(cfg.Interests, "、"),
 	}
-	if err := tmpl.Execute(&b, data); err != nil {
-		panic(fmt.Sprintf("render persona.prompt: %v", err))
-	}
-	return b.String()
 }
 
 // GetThinkPrompt 获取思考提示词（包含动态上下文）
@@ -237,9 +241,7 @@ func (p *Persona) getMoodPrompt(mood *MoodInfo) string {
 	return b.String()
 }
 
-func (p *Persona) GetName() string         { return p.cfg.Name }
-func (p *Persona) GetAliasNames() []string { return p.cfg.AliasNames }
-func (p *Persona) GetInterests() []string  { return p.cfg.Interests }
+func (p *Persona) GetName() string { return p.cfg.Name }
 
 // IsMentioned 检查消息是否提及了该人格（名字或别名）
 func (p *Persona) IsMentioned(text string) bool {
@@ -251,16 +253,6 @@ func (p *Persona) IsMentioned(text string) bool {
 	// 检查别名
 	for _, alias := range p.cfg.AliasNames {
 		if strings.Contains(text, strings.ToLower(alias)) {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *Persona) IsInterested(topic string) bool {
-	topic = strings.ToLower(topic)
-	for _, interest := range p.cfg.Interests {
-		if strings.Contains(topic, strings.ToLower(interest)) {
 			return true
 		}
 	}

@@ -59,93 +59,9 @@ func (rb *RingBuffer[T]) GetAll() []T {
 	return result
 }
 
-// Len 返回缓冲区中的元素数量
-func (rb *RingBuffer[T]) Len() int {
-	rb.mu.RLock()
-	defer rb.mu.RUnlock()
-	return rb.count
-}
-
-// Cap 返回缓冲区容量
-func (rb *RingBuffer[T]) Cap() int {
-	return rb.cap
-}
-
-// Clear 清空缓冲区
-func (rb *RingBuffer[T]) Clear() {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	rb.head = 0
-	rb.tail = 0
-	rb.count = 0
-	// 清除引用以便 GC
-	var zero T
-	for i := range rb.data {
-		rb.data[i] = zero
-	}
-}
-
 // IsEmpty 检查缓冲区是否为空
 func (rb *RingBuffer[T]) IsEmpty() bool {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 	return rb.count == 0
-}
-
-// IsFull 检查缓冲区是否已满
-func (rb *RingBuffer[T]) IsFull() bool {
-	rb.mu.RLock()
-	defer rb.mu.RUnlock()
-	return rb.count == rb.cap
-}
-
-// Peek 查看最新的元素但不移除
-func (rb *RingBuffer[T]) Peek() (T, bool) {
-	rb.mu.RLock()
-	defer rb.mu.RUnlock()
-
-	var zero T
-	if rb.count == 0 {
-		return zero, false
-	}
-
-	// 最新元素在 tail 前一个位置
-	idx := (rb.tail - 1 + rb.cap) % rb.cap
-	return rb.data[idx], true
-}
-
-// PeekOldest 查看最旧的元素但不移除
-func (rb *RingBuffer[T]) PeekOldest() (T, bool) {
-	rb.mu.RLock()
-	defer rb.mu.RUnlock()
-
-	var zero T
-	if rb.count == 0 {
-		return zero, false
-	}
-
-	return rb.data[rb.head], true
-}
-
-// GetLast 获取最后 n 个元素（从旧到新排序）
-func (rb *RingBuffer[T]) GetLast(n int) []T {
-	rb.mu.RLock()
-	defer rb.mu.RUnlock()
-
-	if rb.count == 0 || n <= 0 {
-		return nil
-	}
-
-	if n > rb.count {
-		n = rb.count
-	}
-
-	result := make([]T, n)
-	// 从最新元素往前数 n 个
-	startIdx := (rb.head + rb.count - n + rb.cap) % rb.cap
-	for i := 0; i < n; i++ {
-		idx := (startIdx + i) % rb.cap
-		result[i] = rb.data[idx]
-	}
-	return result
 }

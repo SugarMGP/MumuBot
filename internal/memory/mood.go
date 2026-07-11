@@ -4,8 +4,6 @@ import (
 	"errors"
 	"time"
 
-	"mumu-bot/internal/utils"
-
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -57,9 +55,9 @@ func (m *Manager) UpdateMoodState(valenceDelta, energyDelta, sociabilityDelta fl
 		return nil, err
 	}
 
-	mood.Valence = utils.ClampFloat64(mood.Valence+valenceDelta, -1.0, 1.0)
-	mood.Energy = utils.ClampFloat64(mood.Energy+energyDelta, 0.0, 1.0)
-	mood.Sociability = utils.ClampFloat64(mood.Sociability+sociabilityDelta, 0.0, 1.0)
+	mood.Valence = min(max(mood.Valence+valenceDelta, -1.0), 1.0)
+	mood.Energy = min(max(mood.Energy+energyDelta, 0.0), 1.0)
+	mood.Sociability = min(max(mood.Sociability+sociabilityDelta, 0.0), 1.0)
 	mood.LastReason = reason
 
 	if err := m.db.Save(mood).Error; err != nil {

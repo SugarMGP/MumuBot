@@ -147,13 +147,9 @@ func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
 			reply.GroupCard = card
 		}
 	}
-	reply.Display = displayNameForRenderedText(reply.GroupCard, reply.Nickname, "")
+	reply.Display = utils.FirstNonEmpty(reply.GroupCard, reply.Nickname)
 
 	return reply, nil
-}
-
-func displayNameForRenderedText(groupCard, fallbackName, qq string) string {
-	return utils.FirstNonEmpty(groupCard, fallbackName, qq)
 }
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {

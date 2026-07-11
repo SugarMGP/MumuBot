@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	mutils "mumu-bot/internal/utils"
-
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -72,7 +70,7 @@ func updateMemberProfileFunc(ctx context.Context, input *UpdateMemberProfileInpu
 	}
 
 	delta := input.IntimacyDelta
-	profile.Intimacy = mutils.ClampFloat64(profile.Intimacy+delta, 0, 1)
+	profile.Intimacy = min(max(profile.Intimacy+delta, 0), 1)
 
 	if err := lc.MemMgr.UpdateMemberProfileLearned(profile); err != nil {
 		return &UpdateMemberProfileOutput{Success: false, Message: err.Error()}, nil

@@ -2,9 +2,11 @@ package onebot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/utils"
+	"net/http"
 	"sync"
 	"time"
 
@@ -14,11 +16,21 @@ import (
 	"go.uber.org/zap"
 )
 
+type webSocketConnection interface {
+	ReadMessage() (messageType int, p []byte, err error)
+	WriteMessage(messageType int, data []byte) error
+	Close() error
+}
+
+type webSocketDialFunc func(context.Context, string, http.Header) (webSocketConnection, error)
+
+var errReconnectSuperseded = errors.New("重连来源已失效")
+
 // Client OneBot WebSocket客户端
 type Client struct {
-	conn      *websocket.Conn
+	conn      webSocketConnection
 	connMu    sync.Mutex
-	handlers  map[string][]EventHandler
+	connectMu sync.Mutex
 	selfID    int64
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -33,7 +45,10 @@ type Client struct {
 	onMessage func(*GroupMessage)
 
 	// 重连控制
-	reconnecting bool
+	reconnecting      bool
+	reconnectInterval time.Duration
+	reconnect         func(webSocketConnection) error
+	dial              webSocketDialFunc
 
 	// API 调用响应等待
 	echoCounter uint64
@@ -45,11 +60,11 @@ func NewClient() *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	memberInfoCache := newGroupMemberInfoCache()
 	client := &Client{
-		handlers:        make(map[string][]EventHandler),
 		ctx:             ctx,
 		cancel:          cancel,
 		mutedUntil:      make(map[int64]time.Time),
 		memberInfoCache: memberInfoCache,
+		dial:            dialWebSocket,
 	}
 	go memberInfoCache.Start()
 	return client
@@ -57,32 +72,79 @@ func NewClient() *Client {
 
 // Connect 连接到OneBot服务
 func (c *Client) Connect() error {
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
-
 	cfg := config.Get()
-	header := make(map[string][]string)
+	header := make(http.Header)
 	if cfg.OneBot.AccessToken != "" {
-		header["Authorization"] = []string{"Bearer " + cfg.OneBot.AccessToken}
+		header.Set("Authorization", "Bearer "+cfg.OneBot.AccessToken)
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(cfg.OneBot.WsURL, header)
-	if err != nil {
-		return fmt.Errorf("WebSocket连接失败: %w", err)
+	if err := c.connect(cfg.OneBot.WsURL, header); err != nil {
+		return err
 	}
-
-	c.conn = conn
-	c.reconnecting = false
-
-	// 启动消息接收循环
-	go c.receiveLoop()
 
 	zap.L().Info("已连接到 OneBot", zap.String("url", cfg.OneBot.WsURL))
 	return nil
 }
 
+func dialWebSocket(ctx context.Context, wsURL string, header http.Header) (webSocketConnection, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
+	return conn, err
+}
+
+func (c *Client) connect(wsURL string, header http.Header) error {
+	return c.connectFrom(wsURL, header, nil)
+}
+
+func (c *Client) connectFrom(wsURL string, header http.Header, expected webSocketConnection) error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+	dial := c.dial
+	if dial == nil {
+		dial = dialWebSocket
+	}
+	conn, err := dial(c.ctx, wsURL, header)
+	if err != nil {
+		return fmt.Errorf("WebSocket连接失败: %w", err)
+	}
+
+	c.connMu.Lock()
+	if err := c.ctx.Err(); err != nil {
+		c.connMu.Unlock()
+		_ = conn.Close()
+		return err
+	}
+	if expected != nil && (c.conn != expected || !c.reconnecting) {
+		c.connMu.Unlock()
+		_ = conn.Close()
+		return errReconnectSuperseded
+	}
+	oldConn := c.conn
+	c.conn = conn
+	c.reconnecting = false
+	c.connMu.Unlock()
+
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	go c.receiveLoop(conn)
+	return nil
+}
+
+func (c *Client) reconnectFrom(conn webSocketConnection) error {
+	cfg := config.Get()
+	header := make(http.Header)
+	if cfg.OneBot.AccessToken != "" {
+		header.Set("Authorization", "Bearer "+cfg.OneBot.AccessToken)
+	}
+	return c.connectFrom(cfg.OneBot.WsURL, header, conn)
+}
+
 // receiveLoop 消息接收循环
-func (c *Client) receiveLoop() {
+func (c *Client) receiveLoop(conn webSocketConnection) {
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -90,10 +152,10 @@ func (c *Client) receiveLoop() {
 		default:
 		}
 
-		_, message, err := c.conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			zap.L().Error("读取消息失败", zap.Error(err))
-			c.handleDisconnect()
+			c.handleDisconnect(conn)
 			return
 		}
 
@@ -145,7 +207,10 @@ func (c *Client) handleAPIResponse(event map[string]interface{}, echo string) {
 		if msg, ok := event["message"].(string); ok {
 			resp.Message = msg
 		}
-		ch.(chan *APIResponse) <- resp
+		select {
+		case ch.(chan *APIResponse) <- resp:
+		default:
+		}
 	}
 }
 
@@ -289,37 +354,61 @@ func (c *Client) Close() error {
 		}
 
 		c.connMu.Lock()
-		defer c.connMu.Unlock()
+		conn := c.conn
+		c.conn = nil
+		c.connMu.Unlock()
 
-		if c.conn != nil {
-			closeErr = c.conn.Close()
-			c.conn = nil
+		if conn != nil {
+			closeErr = conn.Close()
 		}
 	})
 	return closeErr
 }
 
 // handleDisconnect 处理断开连接
-func (c *Client) handleDisconnect() {
-	if c.reconnecting {
+func (c *Client) handleDisconnect(conn webSocketConnection) {
+	c.connMu.Lock()
+	if c.conn != conn || c.ctx.Err() != nil || c.reconnecting {
+		c.connMu.Unlock()
 		return
 	}
 	c.reconnecting = true
+	c.connMu.Unlock()
 
 	zap.L().Warn("连接断开，尝试重连...")
 
-	interval := time.Duration(config.Get().OneBot.ReconnectInterval) * time.Second
+	interval := c.reconnectInterval
+	if interval <= 0 {
+		interval = time.Duration(config.Get().OneBot.ReconnectInterval) * time.Second
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-time.After(interval):
+		case <-timer.C:
 		}
 
-		if err := c.Connect(); err == nil {
+		c.connMu.Lock()
+		if c.conn != conn || c.ctx.Err() != nil || !c.reconnecting {
+			c.connMu.Unlock()
+			return
+		}
+		c.connMu.Unlock()
+		reconnect := c.reconnect
+		if reconnect == nil {
+			reconnect = c.reconnectFrom
+		}
+		err := reconnect(conn)
+		if err == nil {
 			zap.L().Info("重连成功")
 			return
 		}
+		if errors.Is(err, errReconnectSuperseded) {
+			return
+		}
 		zap.L().Warn("重连失败，继续尝试...")
+		timer.Reset(interval)
 	}
 }

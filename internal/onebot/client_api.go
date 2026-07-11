@@ -3,6 +3,7 @@ package onebot
 import (
 	"context"
 	"fmt"
+	"math"
 	"mumu-bot/internal/utils"
 	"strconv"
 	"sync/atomic"
@@ -28,10 +29,7 @@ func (c *Client) callAPI(ctx context.Context, action string, params map[string]i
 	// 创建响应通道
 	respCh := make(chan *APIResponse, 1)
 	c.pendingReqs.Store(echo, respCh)
-	defer func() {
-		c.pendingReqs.Delete(echo)
-		close(respCh)
-	}()
+	defer c.pendingReqs.Delete(echo)
 
 	// 发送请求
 	c.connMu.Lock()
@@ -119,12 +117,7 @@ func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content st
 	if err != nil {
 		return 0, err
 	}
-	if data := resp.DataMap(); data != nil {
-		if msgID, ok := utils.ParseInt64Value(data["message_id"]); ok {
-			return msgID, nil
-		}
-	}
-	return 0, nil
+	return messageIDFromResponse(resp)
 }
 
 // SendPrivateMessage 发送私聊消息
@@ -136,12 +129,7 @@ func (c *Client) SendPrivateMessage(ctx context.Context, userID int64, content s
 	if err != nil {
 		return 0, err
 	}
-	if data := resp.DataMap(); data != nil {
-		if msgID, ok := utils.ParseInt64Value(data["message_id"]); ok {
-			return msgID, nil
-		}
-	}
-	return 0, nil
+	return messageIDFromResponse(resp)
 }
 
 // SendImageMessage 发送图片/表情包消息
@@ -170,12 +158,22 @@ func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath s
 	if err != nil {
 		return 0, err
 	}
-	if data := resp.DataMap(); data != nil {
-		if msgID, ok := utils.ParseInt64Value(data["message_id"]); ok {
-			return msgID, nil
-		}
+	return messageIDFromResponse(resp)
+}
+
+func messageIDFromResponse(resp *APIResponse) (int64, error) {
+	data := resp.DataMap()
+	if data == nil {
+		return 0, fmt.Errorf("OneBot 响应缺少有效的 message_id")
 	}
-	return 0, nil
+	messageID, ok := utils.ParseInt64Value(data["message_id"])
+	if value, isFloat := data["message_id"].(float64); isFloat {
+		ok = !math.IsNaN(value) && !math.IsInf(value, 0) && math.Trunc(value) == value && value < float64(math.MaxInt64)
+	}
+	if !ok || messageID <= 0 {
+		return 0, fmt.Errorf("OneBot 响应缺少有效的 message_id")
+	}
+	return messageID, nil
 }
 
 // DeleteMsg 撤回消息

@@ -52,7 +52,7 @@ Core capabilities of this project:
 
 | Dependency | Purpose |
 |------|------|
-| Go 1.26 | Build and run |
+| Go 1.26.5+ | Build and run |
 | Node.js 22+ | Build frontend assets (only needed for source builds) |
 | MySQL | Store memories, message logs, member profiles |
 | Milvus | Vector database for long-term memory, style cards, and archived topic retrieval |

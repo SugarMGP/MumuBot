@@ -9,7 +9,6 @@ import (
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
-	"mumu-bot/internal/utils"
 	"time"
 
 	"github.com/cloudwego/eino/compose"
@@ -80,6 +79,9 @@ func (a *Agent) scheduleThink(groupID int64, isMention bool, fromLoop bool) {
 		pending.isMention = pending.isMention || isMention
 		pending.generation++
 		gen := pending.generation
+		if pending.timer != nil {
+			pending.timer.Stop()
+		}
 		pending.timer = time.AfterFunc(debounce, func() {
 			a.flushPendingThink(groupID, gen)
 		})
@@ -180,8 +182,8 @@ func (a *Agent) getSpeakProbability(groupID int64) float64 {
 			oldProb := baseProb
 			baseProb *= decay
 
-			minProb := utils.ClampFloat64(limitCfg.MinProb, 0, 1)
-			baseProb = utils.ClampFloat64(baseProb, minProb, 1)
+			minProb := min(max(limitCfg.MinProb, 0), 1)
+			baseProb = min(max(baseProb, minProb), 1)
 
 			if decay < 1.0 {
 				zap.L().Debug("触发防话痨限制",

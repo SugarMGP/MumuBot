@@ -34,7 +34,6 @@ func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64
 		ctx:            ctx,
 		cancel:         cancel,
 		maxConcurrency: max,
-		currentRunning: 0,
 		inQueue:        make(map[int64]bool),
 		handler:        h,
 	}

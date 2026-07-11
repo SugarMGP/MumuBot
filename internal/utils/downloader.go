@@ -118,18 +118,17 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 		return nil, fmt.Errorf("文件大小超过限制")
 	}
 
-	// 关闭临时文件
-	_ = tmpFile.Close()
+	// 关闭临时文件后再移动，确保内容已刷新。
+	if err := tmpFile.Close(); err != nil {
+		return nil, fmt.Errorf("关闭临时文件失败: %w", err)
+	}
 
 	// 计算MD5哈希
 	fileHash := hex.EncodeToString(hash.Sum(nil))
 
 	// 移动临时文件到目标位置
 	if err := os.Rename(tmpPath, filePath); err != nil {
-		// 如果重命名失败（可能跨文件系统），尝试复制
-		if err := copyFile(tmpPath, filePath); err != nil {
-			return nil, fmt.Errorf("保存文件失败: %w", err)
-		}
+		return nil, fmt.Errorf("保存文件失败: %w", err)
 	}
 
 	return &DownloadResult{
@@ -159,22 +158,4 @@ func getExtensionFromURL(url string) string {
 		return ext
 	}
 	return ""
-}
-
-// copyFile 复制文件
-func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	return err
 }

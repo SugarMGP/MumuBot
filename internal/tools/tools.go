@@ -57,22 +57,26 @@ func GetToolContext(ctx context.Context) *ToolContext {
 	return nil
 }
 
-// MarkToolCallSeen 记录本轮 think 中已执行过的工具调用。
-// 同一个 ToolContext 只在单个群、单轮思考内使用，因此这里的缓存天然是按群按轮隔离的。
-func (tc *ToolContext) MarkToolCallSeen(toolName string, arguments string) bool {
+// IsToolCallSeen 判断本轮是否已经成功执行过相同工具调用。
+func (tc *ToolContext) IsToolCallSeen(toolName string, arguments string) bool {
 	key := toolName + "-" + arguments
 
 	tc.seenMu.Lock()
 	defer tc.seenMu.Unlock()
 
+	_, ok := tc.seenToolCalls[key]
+	return ok
+}
+
+// MarkToolCallSucceeded 记录已经成功执行的工具调用。
+func (tc *ToolContext) MarkToolCallSucceeded(toolName string, arguments string) {
+	key := toolName + "-" + arguments
+	tc.seenMu.Lock()
+	defer tc.seenMu.Unlock()
 	if tc.seenToolCalls == nil {
 		tc.seenToolCalls = make(map[string]struct{}, 8)
 	}
-	if _, ok := tc.seenToolCalls[key]; ok {
-		return true
-	}
 	tc.seenToolCalls[key] = struct{}{}
-	return false
 }
 
 // LearningContext 学习任务上下文
