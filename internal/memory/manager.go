@@ -53,15 +53,10 @@ type EmbeddingProvider interface {
 }
 
 type VectorStore interface {
-	Insert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error)
 	Upsert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error)
 	Search(ctx context.Context, embedding []float64, groupID int64, memType string, topK int, threshold float64) ([]vector.SearchResult, error)
 	Delete(ctx context.Context, memoryIDs []uint) error
 	Close() error
-}
-
-type duplicateMemoryVectorStore interface {
-	RepairDuplicateMemoryVectors(ctx context.Context) error
 }
 
 type MemoryCandidateWriter interface {
@@ -180,17 +175,6 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 		styleCardMilvus: styleMilvusClient,
 		topicMilvus:     topicMilvusClient,
 		cleanupStop:     make(chan struct{}),
-	}
-	if duplicateStore, ok := m.milvus.(duplicateMemoryVectorStore); ok {
-		if err := duplicateStore.RepairDuplicateMemoryVectors(context.Background()); err != nil {
-			_ = topicMilvusClient.Close()
-			_ = styleMilvusClient.Close()
-			_ = milvusClient.Close()
-			if sqlDB, dbErr := db.DB(); dbErr == nil {
-				_ = sqlDB.Close()
-			}
-			return nil, fmt.Errorf("修复重复记忆向量失败: %w", err)
-		}
 	}
 	// 启动消息日志清理任务
 	m.startMessageLogCleanup()

@@ -554,11 +554,10 @@ func (s *DBStore) SyncTopicThreadVector(ctx context.Context, topicID uint) error
 		return err
 	}
 
-	if err := s.topicMilvus.Delete(ctx, []uint{topicID}); err != nil {
-		return fmt.Errorf("删除旧话题向量失败: %w", err)
-	}
-
 	if topic.Status != memory.TopicThreadStatusArchived || topic.SummaryUntilMessageLogID < topic.LastMessageLogID || s.embedding == nil {
+		if err := s.topicMilvus.Delete(ctx, []uint{topicID}); err != nil {
+			return fmt.Errorf("删除话题向量失败: %w", err)
+		}
 		return nil
 	}
 
@@ -566,8 +565,8 @@ func (s *DBStore) SyncTopicThreadVector(ctx context.Context, topicID uint) error
 	if err != nil {
 		return err
 	}
-	if _, err := s.topicMilvus.Insert(ctx, topic.ID, topic.GroupID, summaryVectorType, embedding); err != nil {
-		return fmt.Errorf("插入话题向量失败: %w", err)
+	if _, err := s.topicMilvus.Upsert(ctx, topic.ID, topic.GroupID, summaryVectorType, embedding); err != nil {
+		return fmt.Errorf("更新话题向量失败: %w", err)
 	}
 	return nil
 }

@@ -287,7 +287,7 @@ func (m *Manager) createMemoryWithVector(ctx context.Context, mem *Memory) (*Mem
 	if prepared != nil {
 		prepared.memory = created
 	}
-	if err := m.insertPreparedMemoryVector(ctx, prepared); err != nil {
+	if err := m.upsertMemoryVector(ctx, prepared); err != nil {
 		if err := m.db.WithContext(ctx).Delete(&Memory{}, created.ID).Error; err != nil {
 			zap.L().Warn("补偿删除长期记忆行失败", zap.Uint("memory_id", created.ID), zap.Error(err))
 		}
@@ -490,14 +490,6 @@ func (m *Manager) prepareMemoryVector(ctx context.Context, mem Memory) (*prepare
 		return nil, err
 	}
 	return &preparedMemoryVector{memory: mem, embedding: embedding}, nil
-}
-
-func (m *Manager) insertPreparedMemoryVector(ctx context.Context, prepared *preparedMemoryVector) error {
-	if prepared == nil || m.milvus == nil {
-		return nil
-	}
-	_, err := m.milvus.Insert(ctx, prepared.memory.ID, prepared.memory.GroupID, string(prepared.memory.Type), prepared.embedding)
-	return err
 }
 
 func (m *Manager) upsertMemoryVector(ctx context.Context, prepared *preparedMemoryVector) error {

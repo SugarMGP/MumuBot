@@ -97,7 +97,7 @@ func (m *Manager) SaveStyleCardCandidate(ctx context.Context, card *StyleCard) (
 	if err := m.db.Create(card).Error; err != nil {
 		return false, err
 	}
-	if err := m.insertStyleCardVector(ctx, card, embedding); err != nil {
+	if err := m.upsertStyleCardVector(ctx, card, embedding); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -250,12 +250,12 @@ func styleCardVectorText(card *StyleCard) string {
 	))
 }
 
-func (m *Manager) insertStyleCardVector(ctx context.Context, card *StyleCard, embedding []float64) error {
+func (m *Manager) upsertStyleCardVector(ctx context.Context, card *StyleCard, embedding []float64) error {
 	if card == nil || m.styleCardMilvus == nil {
 		return nil
 	}
-	if _, err := m.styleCardMilvus.Insert(ctx, card.ID, card.GroupID, styleCardVectorKey(card.Intent, card.Tone), embedding); err != nil {
-		return fmt.Errorf("插入风格卡片向量失败: %w", err)
+	if _, err := m.styleCardMilvus.Upsert(ctx, card.ID, card.GroupID, styleCardVectorKey(card.Intent, card.Tone), embedding); err != nil {
+		return fmt.Errorf("更新风格卡片向量失败: %w", err)
 	}
 	return nil
 }
@@ -264,14 +264,11 @@ func (m *Manager) refreshStyleCardVector(ctx context.Context, card *StyleCard) e
 	if card == nil || m.embedding == nil || m.styleCardMilvus == nil {
 		return nil
 	}
-	if err := m.styleCardMilvus.Delete(ctx, []uint{card.ID}); err != nil {
-		return fmt.Errorf("删除风格卡片旧向量失败: %w", err)
-	}
 	embedding, err := m.embedding.Embed(ctx, styleCardVectorText(card))
 	if err != nil {
 		return err
 	}
-	return m.insertStyleCardVector(ctx, card, embedding)
+	return m.upsertStyleCardVector(ctx, card, embedding)
 }
 
 func shouldPreferShorterText(existing, candidate string) bool {
