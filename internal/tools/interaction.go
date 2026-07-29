@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -12,21 +13,27 @@ import (
 
 // ==================== 发言工具 ====================
 
+const maxSpeakMessages = 5
+
+// SpeakMessage 单条发言及其独立的回复、提及信息。
+type SpeakMessage struct {
+	Content  string  `json:"content" jsonschema:"description=要发送的口语化纯文本，不使用 markdown"`
+	ReplyTo  int64   `json:"reply_to,omitempty" jsonschema:"description=这条消息要回复的消息 ID"`
+	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=这条消息要 @ 的用户 QQ 号列表"`
+}
+
 // SpeakInput 发言的输入参数
 type SpeakInput struct {
-	// Content 你想说的话
-	Content string `json:"content" jsonschema:"description=你想说的话，不要用markdown，说话要口语化"`
-	// ReplyTo 要回复的消息ID（可选）
-	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的消息ID"`
-	// Mentions 要@的用户QQ号列表（可选）
-	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
+	Messages []SpeakMessage `json:"messages" jsonschema:"description=按顺序发送的 1 至 5 条消息"`
 }
 
 // SpeakOutput 发言的输出
 type SpeakOutput struct {
-	Success   bool   `json:"success"`
-	MessageID int64  `json:"message_id,omitempty"` // 发送成功后的消息 ID
-	Message   string `json:"message,omitempty"`
+	Success     bool    `json:"success"`
+	Complete    bool    `json:"complete"`
+	MessageIDs  []int64 `json:"message_ids,omitempty"`
+	FailedIndex int     `json:"failed_index,omitempty"`
+	Message     string  `json:"message,omitempty"`
 }
 
 // speakFunc 发言的实际实现 - 会通过回调实际发送消息
@@ -38,23 +45,56 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	if tc.SpeakCallback == nil {
 		return &SpeakOutput{Success: false, Message: "发言回调未初始化"}, nil
 	}
-	if input.Content == "" {
-		return &SpeakOutput{Success: false, Message: "说话内容不能为空"}, nil
+	if input == nil || len(input.Messages) == 0 || len(input.Messages) > maxSpeakMessages {
+		return &SpeakOutput{Success: false, Message: "每次发言必须包含 1 至 5 条消息"}, nil
 	}
 
-	// 通过回调发送消息，获取返回的消息ID
-	msgID, err := tc.SpeakCallback(ctx, tc.GroupID, input.Content, input.ReplyTo, input.Mentions)
-	if err != nil {
-		return &SpeakOutput{
-			Success: false,
-			Message: err.Error(),
-		}, nil
+	normalized := make([]SpeakMessage, len(input.Messages))
+	for i, message := range input.Messages {
+		message.Content = strings.TrimSpace(message.Content)
+		if message.Content == "" {
+			return &SpeakOutput{Success: false, FailedIndex: i + 1, Message: fmt.Sprintf("第 %d 条消息内容不能为空", i+1)}, nil
+		}
+		if message.ReplyTo < 0 {
+			return &SpeakOutput{Success: false, FailedIndex: i + 1, Message: fmt.Sprintf("第 %d 条消息的 reply_to 不能为负数", i+1)}, nil
+		}
+
+		mentions := make([]int64, 0, len(message.Mentions))
+		seenMentions := make(map[int64]struct{}, len(message.Mentions))
+		for _, userID := range message.Mentions {
+			if userID <= 0 {
+				return &SpeakOutput{Success: false, FailedIndex: i + 1, Message: fmt.Sprintf("第 %d 条消息包含无效的 mentions", i+1)}, nil
+			}
+			if _, seen := seenMentions[userID]; seen {
+				continue
+			}
+			seenMentions[userID] = struct{}{}
+			mentions = append(mentions, userID)
+		}
+		message.Mentions = mentions
+		normalized[i] = message
+	}
+
+	messageIDs := make([]int64, 0, len(normalized))
+	for i, message := range normalized {
+		messageID, err := tc.SpeakCallback(ctx, tc.GroupID, message.Content, message.ReplyTo, message.Mentions)
+		if err != nil {
+			return &SpeakOutput{
+				Success:     len(messageIDs) > 0,
+				Complete:    false,
+				MessageIDs:  messageIDs,
+				FailedIndex: i + 1,
+				Message:     fmt.Sprintf("第 %d 条消息发送失败：%v，已发送 %d 条", i+1, err, len(messageIDs)),
+			}, nil
+		}
+		messageIDs = append(messageIDs, messageID)
 	}
 
 	return &SpeakOutput{
-		Success:   true,
-		MessageID: msgID,
-		Message:   fmt.Sprintf("发言成功，消息ID: %d", msgID),
+		Success:    true,
+		Complete:   true,
+		MessageIDs: messageIDs,
+		Message:    fmt.Sprintf("发言成功，共发送 %d 条消息", len(messageIDs)),
 	}, nil
 }
 
@@ -62,15 +102,13 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		`在群里说话。只有当你真的想说什么的时候才用，不用强迫自己每次都说话。说话要自然，像个真人群友。
+		`在群里发送一轮文字消息。只有真的想说什么时才使用，不用强迫自己每次都说话。
 
 【重要】使用规则：
-- speak每次只能发送**一条**消息，不要把多句话合在一起；如果要说多句话，请多次调用speak
-- 不要用分号、句号或换行符连接多个独立的句子
-- 正确示例：speak("你好")，再调用speak("今天天气真好")
-- 错误示例：speak("你好。今天天气真好")或speak("你好\n今天天气真好")
-- 回复某条消息时使用reply_to参数，不要回复自己的话
-- at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号`,
+- 一般发送一至三条消息，只有多个相对独立的内容都需要立刻表达时才增加，最多五条；同一个意思不要硬拆
+- 每条消息都应自然完整，前后顺序符合正常聊天节奏
+- 每条可独立设置 reply_to 和 mentions；不要回复自己的消息，也不要在 content 里直接写 @ 符号
+- content 只写群友实际会看到的口语化纯文本，不使用 markdown，不要夹带分析过程、说明、工具调用理由或“回复：”等标签`,
 		speakFunc,
 	)
 }
@@ -101,7 +139,7 @@ func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput
 func NewStayQuietTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"stayQuiet",
-		`选择不说话，保持沉默。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时使用。stayQuiet 应该在你决定不发言时**最后调用**`,
+		`保持沉默并结束思考。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时可直接使用。当你已经发言完毕且不再有新的内容要表达，使用本工具来结束思考。`,
 		stayQuietFunc,
 	)
 }

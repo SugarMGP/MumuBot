@@ -218,32 +218,13 @@ func buildStyleHints(intent string, cards []memory.StyleCard) []string {
 }
 
 func formatStyleHint(card memory.StyleCard) string {
-	hint := fmt.Sprintf(
+	return fmt.Sprintf(
 		`想说得%s一点时，可在%s的时候像"%s"这样接话，但%s时别这么说`,
 		card.Tone,
 		card.TriggerRule,
 		card.Example,
 		card.AvoidRule,
 	)
-
-	if strings.TrimSpace(card.SourceExcerpt) == "" {
-		return hint
-	}
-
-	rawItems := strings.Split(card.SourceExcerpt, "|")
-	sourceItems := make([]string, 0, len(rawItems))
-	for _, item := range rawItems {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		sourceItems = append(sourceItems, item)
-	}
-	if len(sourceItems) == 0 {
-		return hint
-	}
-
-	return hint + "，可参考群里人说过的原话：" + strings.Join(sourceItems, " / ")
 }
 
 func (a *Agent) buildChatContext(buffer []*onebot.GroupMessage, lastProcessedTime time.Time) string {

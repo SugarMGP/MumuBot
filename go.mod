@@ -159,7 +159,6 @@ require (
 )
 
 require (
-	github.com/6tail/lunar-go v1.4.6
 	github.com/a-h/templ v0.3.1020
 	github.com/bytedance/sonic v1.15.1
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260527130239-95019b303cc6

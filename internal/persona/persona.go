@@ -7,8 +7,6 @@ import (
 	"strings"
 	"text/template"
 	"time"
-
-	"github.com/6tail/lunar-go/calendar"
 )
 
 type systemPromptData struct {
@@ -119,10 +117,8 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 		b.WriteString("\n## 相关记忆\n")
 		b.WriteString("只有这些记忆会明显改变这次判断或回复时才引用；不要为了显得记得而硬提旧事。\n")
 		for _, mem := range ctx.RelatedMemories {
-			b.WriteString(fmt.Sprintf("- [%s] (重要性:%.1f 访问:%d) %s\n",
+			b.WriteString(fmt.Sprintf("- [%s] %s\n",
 				mem.CreatedAt.Format("2006-01-02"),
-				mem.Importance,
-				mem.AccessCount,
 				mem.Content))
 		}
 	}
@@ -139,7 +135,7 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 
 	if ctx != nil && len(ctx.StyleHints) > 0 {
 		b.WriteString("\n## 可参考的群聊表达习惯\n")
-		b.WriteString("下面这些内容只用于聊天语气和节奏参考，不是模板；不要照抄原句。\n")
+		b.WriteString("下面这些内容只用于聊天语气和节奏参考，符合当前语境时才使用，不合适就忽略；不要照抄原句。\n")
 		for _, hint := range ctx.StyleHints {
 			b.WriteString(fmt.Sprintf("- %s\n", hint))
 		}
@@ -151,11 +147,13 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 
 	b.WriteString(`
 ## 行动指引
-- 先判断现在的聊天节奏：是否有人在和你互动、对方是否还没说完、你是否刚刚说过类似内容、你这次发言能否提供新信息或推进。
+- 先读懂聊天记录，把握当前话题、情绪氛围、互动对象和聊天节奏；不要把每条消息都当成在问你，也不要在所有场景套用同一种句式或语气。
+- 参考相关记忆、成员信息和群聊表达习惯时视情况而定，不用完全遵守，更不要为了用上参考信息而生硬提起。
+- 发言前确认你没有刚说过类似内容，并判断这次发言能否提供新的信息、态度或推进；需要回复时，组织日常且口语化的表达。
 - 如果只是群友之间的交流、你没有新信息、或继续说会打断群友聊天节奏，就调用 stayQuiet 保持沉默。
-- 发言前不要急着说话，先解读群友聊天内涵，再仔细思考组织语言，避免说没内涵、过于浅显、机械式的废话，同时发言需符合群聊氛围风格，不要太浮夸或尬。
-- 一次最多只发三条消息（可以是文字、表情包、戳一戳的组合），不要重复使用相同的口癖。
-- 如果你已经有明确结论，直接调用对应工具来行动。
+- 一次 speak 调用可按顺序发送一至五条消息，通常不超过三条。
+
+现在请你仔细阅读上下文，参考规则和指引，直接调用工具来行动。
 `)
 	return b.String()
 }
@@ -166,20 +164,7 @@ func (p *Persona) getTimeContext() string {
 	weekday := now.Weekday()
 	weekStr := [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
 
-	// 农历
-	solar := calendar.NewSolarFromDate(now)
-	lunar := solar.GetLunar()
-
-	return fmt.Sprintf(
-		"%s %s %02d:%02d:%02d | %s | 生肖%s",
-		now.Format("2006-01-02"),
-		weekStr[weekday],
-		now.Hour(),
-		now.Minute(),
-		now.Second(),
-		lunar.String(),
-		lunar.GetYearShengXiao(),
-	)
+	return fmt.Sprintf("%s %s", now.Format("2006-01-02 15:04:05"), weekStr[weekday])
 }
 
 // getMoodPrompt 生成情绪相关的提示词
@@ -192,11 +177,8 @@ func (p *Persona) getMoodPrompt(mood *MoodInfo) string {
 
 `)
 
-	// 显示当前数值
-	b.WriteString(fmt.Sprintf("当前状态：心情=%.2f  精力=%.2f  社交意愿=%.2f\n\n", mood.Valence, mood.Energy, mood.Sociability))
-
 	// 心情解读
-	b.WriteString("【心情】")
+	b.WriteString("心情：")
 	switch {
 	case mood.Valence >= 0.5:
 		b.WriteString("非常好\n")
@@ -211,7 +193,7 @@ func (p *Persona) getMoodPrompt(mood *MoodInfo) string {
 	}
 
 	// 精力解读
-	b.WriteString("【精力】")
+	b.WriteString("精力：")
 	switch {
 	case mood.Energy >= 0.7:
 		b.WriteString("很有精神\n")
@@ -222,7 +204,7 @@ func (p *Persona) getMoodPrompt(mood *MoodInfo) string {
 	}
 
 	// 社交意愿解读
-	b.WriteString("【社交意愿】")
+	b.WriteString("社交意愿：")
 	switch {
 	case mood.Sociability >= 0.7:
 		b.WriteString("很想聊天\n")
@@ -233,8 +215,8 @@ func (p *Persona) getMoodPrompt(mood *MoodInfo) string {
 	}
 
 	b.WriteString(`
-【情绪调整】
-- 你可以根据对话内容，使用 updateMood 工具调整情绪
+## 情绪调整
+- 你可以根据对话内容，使用 updateMood 工具主动调整情绪
 - 情绪会自然衰减回归平静，你不用特意去调整它
 `)
 

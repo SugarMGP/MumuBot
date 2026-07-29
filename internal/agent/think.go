@@ -33,6 +33,7 @@ func (a *Agent) thinkLoop() {
 
 func (a *Agent) thinkCycle() {
 	cfg := config.Get()
+	selfID := a.bot.GetSelfID()
 	for _, gc := range cfg.Groups {
 		if !gc.Enabled {
 			continue
@@ -51,7 +52,7 @@ func (a *Agent) thinkCycle() {
 			continue
 		}
 
-		if lastMsg.UserID == a.bot.GetSelfID() {
+		if lastMsg.UserID == selfID {
 			continue
 		}
 
@@ -182,7 +183,7 @@ func (a *Agent) getSpeakProbability(groupID int64) float64 {
 			oldProb := baseProb
 			baseProb *= decay
 
-			minProb := min(max(limitCfg.MinProb, 0), 1)
+			minProb := min(max(limitCfg.MinProb, 0), oldProb)
 			baseProb = min(max(baseProb, minProb), 1)
 
 			if decay < 1.0 {
