@@ -1,789 +1,435 @@
 package services
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"mumu-bot/internal/memory"
-	"os"
-	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type Page[T any] struct {
-	Items    []T
-	Total    int64
-	Page     int
-	PageSize int
+	Items          []T
+	Total          int64
+	Page, PageSize int
 }
 
-type StyleCardFilter struct {
-	GroupID  int64
-	Status   string
-	Keyword  string
-	Sort     string
-	Order    string
-	Page     int
-	PageSize int
-}
-
-type JargonFilter struct {
-	GroupID  int64
-	Status   string
-	Keyword  string
-	Sort     string
-	Order    string
-	Page     int
-	PageSize int
+type ListFilter struct {
+	GroupID                      int64
+	Status, Keyword, Sort, Order string
+	Page, PageSize               int
 }
 
 type MemoryFilter struct {
-	GroupID       int64
-	Type          string
-	Status        string
-	CanonicalType string
-	SourceKind    string
-	Keyword       string
-	Sort          string
-	Order         string
-	Page          int
-	PageSize      int
+	GroupID                                   int64
+	Scope, Kind, Status, Keyword, Sort, Order string
+	Page, PageSize                            int
 }
 
-type TopicFilter struct {
-	GroupID  int64
-	Status   string
-	Keyword  string
-	Sort     string
-	Order    string
-	Page     int
-	PageSize int
+type TopicThreadView struct {
+	ID                   uint
+	GroupID              int64
+	CreatedAt, UpdatedAt time.Time
+	LastAssignmentID     uint
+	Summaries            []memory.TopicSummaryRecord
 }
 
-type StickerFilter struct {
-	Keyword  string
-	Sort     string
-	Order    string
-	Page     int
-	PageSize int
+func (t TopicThreadView) LatestSummary() *memory.TopicSummaryRecord {
+	if len(t.Summaries) == 0 {
+		return nil
+	}
+	return &t.Summaries[len(t.Summaries)-1]
 }
 
-type MemberFilter struct {
-	Keyword  string
-	Sort     string
-	Order    string
-	Page     int
-	PageSize int
+type MemberProfileView struct {
+	memory.MemberProfile
+	Names  []memory.MemberName
+	Traits []memory.MemberTrait
+}
+
+type StylePatternView struct {
+	memory.StylePattern
+	Evidence []memory.MessageLog
+}
+
+type JargonView struct {
+	memory.Jargon
+	Evidence []memory.MessageLog
 }
 
 type AdminService struct {
-	db         *gorm.DB
-	stickerDir string
-	memDeleter interface {
-		DeleteMemory(ctx context.Context, id uint) error
-		ArchiveMemory(ctx context.Context, id uint) error
-		RestoreMemoryToCandidate(ctx context.Context, id uint) error
-	}
-	jargonReloader interface {
-		ReloadJargons()
-	}
+	db            *gorm.DB
+	memory        *memory.Manager
+	stickerDir    string
+	reloadJargons func()
 }
 
-type OverviewStats struct {
-	MemoryCount    int64
-	MemberCount    int64
-	JargonCount    int64
-	StyleCardCount int64
-	StickerCount   int64
-}
+type OverviewStats struct{ MemoryCount, MemberCount, JargonCount, StyleCardCount, StickerCount int64 }
 
-func NewAdminService(db *gorm.DB, stickerDir string) *AdminService {
-	return &AdminService{
-		db:         db,
-		stickerDir: stickerDir,
-	}
+func NewAdminService(memoryManager *memory.Manager, stickerDir string, reloadJargons func()) *AdminService {
+	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir, reloadJargons: reloadJargons}
 }
+func (s *AdminService) StickerDir() string { return s.stickerDir }
 
-func (s *AdminService) DB() *gorm.DB {
-	return s.db
-}
-
-func (s *AdminService) StickerDir() string {
-	return s.stickerDir
-}
-
-func (s *AdminService) WithMemoryDeleter(deleter interface {
-	DeleteMemory(ctx context.Context, id uint) error
-	ArchiveMemory(ctx context.Context, id uint) error
-	RestoreMemoryToCandidate(ctx context.Context, id uint) error
-},
-) *AdminService {
-	s.memDeleter = deleter
-	return s
-}
-
-func (s *AdminService) WithJargonReloader(reloader interface {
-	ReloadJargons()
-},
-) *AdminService {
-	s.jargonReloader = reloader
-	return s
-}
-
-func normalizePage(page, pageSize int) (int, int) {
+func normalizePage(page, size int) (int, int) {
 	if page < 1 {
 		page = 1
 	}
-	if pageSize <= 0 {
-		pageSize = 20
+	if size <= 0 {
+		size = 20
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	if size > 100 {
+		size = 100
 	}
-	return page, pageSize
+	return page, size
 }
 
-// normalizeSort 只返回白名单内的页面排序键，SQL 列名仍由 apply*Sort 中的固定映射决定。
-func normalizeSort(rawSort, rawOrder, defaultSort string, allowed map[string]struct{}) (string, string) {
-	sortKey := strings.TrimSpace(strings.ToLower(rawSort))
-	if _, ok := allowed[sortKey]; !ok {
-		sortKey = defaultSort
+func normalizeSort(rawSort, rawOrder, fallback string, allowed ...string) (string, string) {
+	sortKey := strings.ToLower(strings.TrimSpace(rawSort))
+	ok := false
+	for _, candidate := range allowed {
+		if candidate == sortKey {
+			ok = true
+			break
+		}
 	}
-
-	order := strings.TrimSpace(strings.ToLower(rawOrder))
-	if order != "asc" && order != "desc" {
+	if !ok {
+		sortKey = fallback
+	}
+	order := strings.ToLower(strings.TrimSpace(rawOrder))
+	if order != "asc" {
 		order = "desc"
 	}
-
 	return sortKey, order
 }
 
-func sortDirection(order string) string {
-	if strings.EqualFold(strings.TrimSpace(order), "asc") {
-		return "ASC"
+func NormalizeStyleCardSort(s, o string) (string, string) {
+	return normalizeSort(s, o, "updated", "updated", "created")
+}
+func NormalizeJargonSort(s, o string) (string, string) {
+	return normalizeSort(s, o, "updated", "updated", "created", "group")
+}
+func NormalizeMemorySort(s, o string) (string, string) {
+	return normalizeSort(s, o, "updated", "updated", "created")
+}
+func NormalizeTopicSort(s, o string) (string, string) {
+	return normalizeSort(s, o, "recent", "recent", "created", "group")
+}
+func NormalizeStickerSort(s, o string) (string, string) {
+	return normalizeSort(s, o, "use", "use", "updated", "created")
+}
+func NormalizeMemberSort(s, o string) (string, string) {
+	return normalizeSort(s, o, "messages", "messages", "recent")
+}
+
+func order(q *gorm.DB, key, direction string, columns map[string]string) *gorm.DB {
+	column := columns[key]
+	if column == "" {
+		column = columns["default"]
 	}
-	return "DESC"
-}
-
-func orderClause(column string, order string) string {
-	return fmt.Sprintf("%s %s", column, sortDirection(order))
-}
-
-func applyOrder(q *gorm.DB, clauses ...string) *gorm.DB {
-	for _, clause := range clauses {
-		if strings.TrimSpace(clause) == "" {
-			continue
-		}
-		q = q.Order(clause)
+	if direction == "asc" {
+		return q.Order(column + " ASC").Order("id ASC")
 	}
-	return q
-}
-
-func NormalizeStyleCardSort(rawSort, rawOrder string) (string, string) {
-	return normalizeSort(rawSort, rawOrder, "updated", map[string]struct{}{
-		"updated":  {},
-		"created":  {},
-		"use":      {},
-		"evidence": {},
-	})
-}
-
-func NormalizeJargonSort(rawSort, rawOrder string) (string, string) {
-	return normalizeSort(rawSort, rawOrder, "updated", map[string]struct{}{
-		"updated": {},
-		"created": {},
-		"group":   {},
-	})
-}
-
-func NormalizeMemorySort(rawSort, rawOrder string) (string, string) {
-	return normalizeSort(rawSort, rawOrder, "updated", map[string]struct{}{
-		"updated":    {},
-		"created":    {},
-		"access":     {},
-		"importance": {},
-		"evidence":   {},
-	})
-}
-
-func NormalizeTopicSort(rawSort, rawOrder string) (string, string) {
-	return normalizeSort(rawSort, rawOrder, "recent", map[string]struct{}{
-		"recent":  {},
-		"updated": {},
-		"created": {},
-		"group":   {},
-	})
-}
-
-func NormalizeStickerSort(rawSort, rawOrder string) (string, string) {
-	return normalizeSort(rawSort, rawOrder, "use", map[string]struct{}{
-		"use":     {},
-		"updated": {},
-		"created": {},
-	})
-}
-
-func NormalizeMemberSort(rawSort, rawOrder string) (string, string) {
-	return normalizeSort(rawSort, rawOrder, "messages", map[string]struct{}{
-		"messages": {},
-		"activity": {},
-		"intimacy": {},
-		"recent":   {},
-		"updated":  {},
-	})
-}
-
-func applyStyleCardSort(q *gorm.DB, rawSort, rawOrder string) *gorm.DB {
-	sortKey, order := NormalizeStyleCardSort(rawSort, rawOrder)
-	switch sortKey {
-	case "created":
-		return applyOrder(q, orderClause("created_at", order), orderClause("id", order))
-	case "use":
-		return applyOrder(q, orderClause("use_count", order), "updated_at DESC", "id DESC")
-	case "evidence":
-		return applyOrder(q, orderClause("evidence_count", order), "updated_at DESC", "id DESC")
-	default:
-		return applyOrder(q, orderClause("updated_at", order), orderClause("id", order))
-	}
-}
-
-func applyJargonSort(q *gorm.DB, rawSort, rawOrder string) *gorm.DB {
-	sortKey, order := NormalizeJargonSort(rawSort, rawOrder)
-	switch sortKey {
-	case "created":
-		return applyOrder(q, orderClause("created_at", order), orderClause("id", order))
-	case "group":
-		return applyOrder(q, orderClause("group_id", order), "updated_at DESC", "id DESC")
-	default:
-		return applyOrder(q, orderClause("updated_at", order), orderClause("id", order))
-	}
-}
-
-func applyMemorySort(q *gorm.DB, rawSort, rawOrder string) *gorm.DB {
-	sortKey, order := NormalizeMemorySort(rawSort, rawOrder)
-	switch sortKey {
-	case "created":
-		return applyOrder(q, orderClause("created_at", order), orderClause("id", order))
-	case "access":
-		return applyOrder(q, orderClause("access_count", order), "updated_at DESC", "id DESC")
-	case "importance":
-		return applyOrder(q, orderClause("importance", order), "updated_at DESC", "id DESC")
-	case "evidence":
-		return applyOrder(q, orderClause("evidence_count", order), "updated_at DESC", "id DESC")
-	default:
-		return applyOrder(q, orderClause("updated_at", order), orderClause("id", order))
-	}
-}
-
-func applyStickerSort(q *gorm.DB, rawSort, rawOrder string) *gorm.DB {
-	sortKey, order := NormalizeStickerSort(rawSort, rawOrder)
-	switch sortKey {
-	case "updated":
-		return applyOrder(q, orderClause("updated_at", order), orderClause("id", order))
-	case "created":
-		return applyOrder(q, orderClause("created_at", order), orderClause("id", order))
-	default:
-		return applyOrder(q, orderClause("use_count", order), "updated_at DESC", "id DESC")
-	}
-}
-
-func applyTopicSort(q *gorm.DB, rawSort, rawOrder string) *gorm.DB {
-	sortKey, order := NormalizeTopicSort(rawSort, rawOrder)
-	switch sortKey {
-	case "updated":
-		return applyOrder(q, orderClause("updated_at", order), orderClause("id", order))
-	case "created":
-		return applyOrder(q, orderClause("created_at", order), orderClause("id", order))
-	case "group":
-		return applyOrder(q, orderClause("group_id", order), "last_message_log_id DESC", "id DESC")
-	default:
-		return applyOrder(q, orderClause("last_message_log_id", order), "updated_at DESC", "id DESC")
-	}
-}
-
-func applyMemberSort(q *gorm.DB, rawSort, rawOrder string) *gorm.DB {
-	sortKey, order := NormalizeMemberSort(rawSort, rawOrder)
-	switch sortKey {
-	case "activity":
-		return applyOrder(q, orderClause("activity", order), "updated_at DESC", "id DESC")
-	case "intimacy":
-		return applyOrder(q, orderClause("intimacy", order), "updated_at DESC", "id DESC")
-	case "recent":
-		return applyOrder(q, orderClause("last_speak", order), "updated_at DESC", "id DESC")
-	case "updated":
-		return applyOrder(q, orderClause("updated_at", order), orderClause("id", order))
-	default:
-		return applyOrder(q, orderClause("msg_count", order), "updated_at DESC", "id DESC")
-	}
+	return q.Order(column + " DESC").Order("id DESC")
 }
 
 func (s *AdminService) OverviewStats() (OverviewStats, error) {
-	var stats OverviewStats
-
-	counts := []struct {
+	var out OverviewStats
+	items := []struct {
 		model any
-		dest  *int64
+		count *int64
 	}{
-		{model: &memory.Memory{}, dest: &stats.MemoryCount},
-		{model: &memory.MemberProfile{}, dest: &stats.MemberCount},
-		{model: &memory.Jargon{}, dest: &stats.JargonCount},
-		{model: &memory.StyleCard{}, dest: &stats.StyleCardCount},
-		{model: &memory.Sticker{}, dest: &stats.StickerCount},
+		{&memory.Memory{}, &out.MemoryCount}, {&memory.MemberProfile{}, &out.MemberCount},
+		{&memory.Jargon{}, &out.JargonCount}, {&memory.StylePattern{}, &out.StyleCardCount},
+		{&memory.Sticker{}, &out.StickerCount},
 	}
-
-	for _, item := range counts {
-		if err := s.db.Model(item.model).Count(item.dest).Error; err != nil {
-			return stats, err
+	for _, item := range items {
+		if err := s.db.Model(item.model).Count(item.count).Error; err != nil {
+			return out, err
 		}
 	}
-
-	return stats, nil
+	return out, nil
 }
 
-func (s *AdminService) ListStyleCards(filter StyleCardFilter) (Page[memory.StyleCard], error) {
-	page, pageSize := normalizePage(filter.Page, filter.PageSize)
-	result := Page[memory.StyleCard]{Page: page, PageSize: pageSize}
-
-	q := s.db.Model(&memory.StyleCard{})
-	if filter.GroupID > 0 {
-		q = q.Where("group_id = ?", filter.GroupID)
+func paginate[T any](q *gorm.DB, page, size int, items *[]T) (Page[T], error) {
+	page, size = normalizePage(page, size)
+	out := Page[T]{Page: page, PageSize: size}
+	if err := q.Count(&out.Total).Error; err != nil {
+		return out, err
 	}
-	if strings.TrimSpace(filter.Status) != "" {
-		q = q.Where("status = ?", strings.TrimSpace(filter.Status))
+	if err := q.Offset((page - 1) * size).Limit(size).Find(items).Error; err != nil {
+		return out, err
 	}
-	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
-		pattern := "%" + keyword + "%"
-		q = q.Where("intent LIKE ? OR tone LIKE ? OR trigger_rule LIKE ? OR avoid_rule LIKE ? OR example LIKE ? OR source_excerpt LIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern)
-	}
-
-	if err := q.Count(&result.Total).Error; err != nil {
-		return result, err
-	}
-	q = applyStyleCardSort(q, filter.Sort, filter.Order)
-	if err := q.Offset((page - 1) * pageSize).Limit(pageSize).Find(&result.Items).Error; err != nil {
-		return result, err
-	}
-	return result, nil
+	out.Items = *items
+	return out, nil
 }
 
-func (s *AdminService) GetStyleCard(id uint) (memory.StyleCard, error) {
-	var item memory.StyleCard
-	err := s.db.First(&item, id).Error
-	return item, err
+func (s *AdminService) ListStyleCards(f ListFilter) (Page[StylePatternView], error) {
+	var items []memory.StylePattern
+	q := s.db.Model(&memory.StylePattern{})
+	if f.GroupID > 0 {
+		q = q.Where("group_id = ?", f.GroupID)
+	}
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if k := strings.TrimSpace(f.Keyword); k != "" {
+		p := "%" + k + "%"
+		q = q.Where("situation ILIKE ? OR expression ILIKE ?", p, p)
+	}
+	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "default": "updated_at"})
+	page, err := paginate(q, f.Page, f.PageSize, &items)
+	if err != nil {
+		return Page[StylePatternView]{}, err
+	}
+	evidence, err := s.stylePatternEvidence(items)
+	if err != nil {
+		return Page[StylePatternView]{}, err
+	}
+	views := make([]StylePatternView, 0, len(items))
+	for _, item := range items {
+		views = append(views, StylePatternView{StylePattern: item, Evidence: evidence[item.ID]})
+	}
+	return Page[StylePatternView]{Items: views, Total: page.Total, Page: page.Page, PageSize: page.PageSize}, nil
 }
 
-func (s *AdminService) ListJargons(filter JargonFilter) (Page[memory.Jargon], error) {
-	page, pageSize := normalizePage(filter.Page, filter.PageSize)
-	result := Page[memory.Jargon]{Page: page, PageSize: pageSize}
+func (s *AdminService) GetStyleCard(id uint) (memory.StylePattern, error) {
+	var v memory.StylePattern
+	return v, s.db.First(&v, id).Error
+}
 
+func (s *AdminService) ListJargons(f ListFilter) (Page[JargonView], error) {
+	var items []memory.Jargon
 	q := s.db.Model(&memory.Jargon{})
-	if filter.GroupID > 0 {
-		q = q.Where("group_id = ?", filter.GroupID)
+	if f.GroupID > 0 {
+		q = q.Where("group_id = ?", f.GroupID)
 	}
-	switch strings.TrimSpace(filter.Status) {
-	case "pending":
-		q = q.Where("checked = ? AND rejected = ?", false, false)
-	case "approved":
-		q = q.Where("checked = ? AND rejected = ?", true, false)
-	case "rejected":
-		q = q.Where("checked = ? AND rejected = ?", true, true)
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
 	}
-	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
-		pattern := "%" + keyword + "%"
-		q = q.Where("content LIKE ? OR meaning LIKE ? OR context LIKE ?", pattern, pattern, pattern)
+	if k := strings.TrimSpace(f.Keyword); k != "" {
+		p := "%" + k + "%"
+		q = q.Where("term ILIKE ? OR meaning ILIKE ?", p, p)
 	}
-
-	if err := q.Count(&result.Total).Error; err != nil {
-		return result, err
+	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "group": "group_id", "default": "updated_at"})
+	page, err := paginate(q, f.Page, f.PageSize, &items)
+	if err != nil {
+		return Page[JargonView]{}, err
 	}
-	q = applyJargonSort(q, filter.Sort, filter.Order)
-	if err := q.Offset((page - 1) * pageSize).Limit(pageSize).Find(&result.Items).Error; err != nil {
-		return result, err
+	evidence, err := s.jargonEvidence(items)
+	if err != nil {
+		return Page[JargonView]{}, err
 	}
-	return result, nil
+	views := make([]JargonView, 0, len(items))
+	for _, item := range items {
+		views = append(views, JargonView{Jargon: item, Evidence: evidence[item.ID]})
+	}
+	return Page[JargonView]{Items: views, Total: page.Total, Page: page.Page, PageSize: page.PageSize}, nil
 }
 
 func (s *AdminService) GetJargon(id uint) (memory.Jargon, error) {
-	var item memory.Jargon
-	err := s.db.First(&item, id).Error
-	return item, err
+	var v memory.Jargon
+	return v, s.db.First(&v, id).Error
 }
 
-func (s *AdminService) ListMemories(filter MemoryFilter) (Page[memory.Memory], error) {
-	page, pageSize := normalizePage(filter.Page, filter.PageSize)
-	result := Page[memory.Memory]{Page: page, PageSize: pageSize}
+func (s *AdminService) stylePatternEvidence(items []memory.StylePattern) (map[uint][]memory.MessageLog, error) {
+	ids := make([]uint, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []struct {
+		StylePatternID uint
+		memory.MessageLog
+	}
+	err := s.db.Table("style_pattern_evidence e").Select("e.style_pattern_id, ml.*").
+		Joins("JOIN message_logs ml ON ml.id = e.message_log_id").Where("e.style_pattern_id IN ?", ids).
+		Order("e.style_pattern_id, ml.message_time, ml.id").Scan(&rows).Error
+	result := make(map[uint][]memory.MessageLog, len(ids))
+	for _, row := range rows {
+		result[row.StylePatternID] = append(result[row.StylePatternID], row.MessageLog)
+	}
+	return result, err
+}
 
+func (s *AdminService) jargonEvidence(items []memory.Jargon) (map[uint][]memory.MessageLog, error) {
+	ids := make([]uint, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []struct {
+		JargonID uint
+		memory.MessageLog
+	}
+	err := s.db.Table("jargon_evidence e").Select("e.jargon_id, ml.*").
+		Joins("JOIN message_logs ml ON ml.id = e.message_log_id").Where("e.jargon_id IN ?", ids).
+		Order("e.jargon_id, ml.message_time, ml.id").Scan(&rows).Error
+	result := make(map[uint][]memory.MessageLog, len(ids))
+	for _, row := range rows {
+		result[row.JargonID] = append(result[row.JargonID], row.MessageLog)
+	}
+	return result, err
+}
+
+func (s *AdminService) ListMemories(f MemoryFilter) (Page[memory.Memory], error) {
+	var items []memory.Memory
 	q := s.db.Model(&memory.Memory{})
-	if filter.GroupID > 0 {
-		q = q.Where("group_id = ?", filter.GroupID)
+	if f.GroupID > 0 {
+		q = q.Where("group_id = ?", f.GroupID)
 	}
-	if strings.TrimSpace(filter.Type) != "" {
-		q = q.Where("type = ?", strings.TrimSpace(filter.Type))
+	if f.Scope != "" {
+		q = q.Where("scope = ?", f.Scope)
 	}
-	if strings.TrimSpace(filter.CanonicalType) != "" {
-		q = q.Where("canonical_type = ?", strings.TrimSpace(filter.CanonicalType))
+	if f.Kind != "" {
+		q = q.Where("kind = ?", f.Kind)
 	}
-	if clause, args := memoryStatusFilterClause(filter.Status); clause != "" {
-		q = q.Where(clause, args...)
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
 	}
-	if clause, args := memorySourceFilterClause(filter.SourceKind); clause != "" {
-		q = q.Where(clause, args...)
+	if k := strings.TrimSpace(f.Keyword); k != "" {
+		q = q.Where("content ILIKE ?", "%"+k+"%")
 	}
-	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
-		pattern := "%" + keyword + "%"
-		q = q.Where("content LIKE ? OR source_ref LIKE ? OR fact_key LIKE ?", pattern, pattern, pattern)
-	}
-
-	if err := q.Count(&result.Total).Error; err != nil {
-		return result, err
-	}
-	q = applyMemorySort(q, filter.Sort, filter.Order)
-	if err := q.Offset((page - 1) * pageSize).Limit(pageSize).Find(&result.Items).Error; err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
-func memoryStatusFilterClause(raw string) (string, []any) {
-	switch strings.TrimSpace(raw) {
-	case "":
-		return "", nil
-	case string(memory.MemoryStatusLegacy):
-		return "(status = ? OR status = '' OR status IS NULL)", []any{memory.MemoryStatusLegacy}
-	case string(memory.MemoryStatusActive), string(memory.MemoryStatusCandidate), string(memory.MemoryStatusArchived):
-		return "status = ?", []any{strings.TrimSpace(raw)}
-	default:
-		return "", nil
-	}
-}
-
-func memorySourceFilterClause(raw string) (string, []any) {
-	switch strings.TrimSpace(raw) {
-	case "":
-		return "", nil
-	case string(memory.MemorySourceKindMessage):
-		return "(source_kind = ? OR ((source_kind = '' OR source_kind IS NULL) AND source_ref LIKE ?))", []any{memory.MemorySourceKindMessage, "message:%"}
-	case string(memory.MemorySourceKindTopic):
-		return "(source_kind = ? OR ((source_kind = '' OR source_kind IS NULL) AND source_ref LIKE ?))", []any{memory.MemorySourceKindTopic, "topic:%"}
-	default:
-		return "source_kind = ?", []any{strings.TrimSpace(raw)}
-	}
-}
-
-func (s *AdminService) ListTopicThreads(filter TopicFilter) (Page[memory.TopicThread], error) {
-	page, pageSize := normalizePage(filter.Page, filter.PageSize)
-	result := Page[memory.TopicThread]{Page: page, PageSize: pageSize}
-
-	q := s.db.Model(&memory.TopicThread{})
-	if filter.GroupID > 0 {
-		q = q.Where("group_id = ?", filter.GroupID)
-	}
-	if status := strings.TrimSpace(filter.Status); status != "" {
-		q = q.Where("status = ?", status)
-	}
-	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
-		pattern := "%" + keyword + "%"
-		q = q.Where("summary_json LIKE ?", pattern)
-	}
-
-	if err := q.Count(&result.Total).Error; err != nil {
-		return result, err
-	}
-	q = applyTopicSort(q, filter.Sort, filter.Order)
-	if err := q.Offset((page - 1) * pageSize).Limit(pageSize).Find(&result.Items).Error; err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
-func (s *AdminService) GetTopicThread(id uint) (memory.TopicThread, error) {
-	var item memory.TopicThread
-	err := s.db.First(&item, id).Error
-	return item, err
-}
-
-func (s *AdminService) ListTopicMessages(topicID uint, limit int) ([]memory.MessageLog, error) {
-	var items []memory.MessageLog
-	q := s.db.Model(&memory.MessageLog{}).
-		Where("topic_thread_id = ?", topicID).
-		Order("id DESC")
-	if limit > 0 {
-		q = q.Limit(limit)
-	}
-	if err := q.Find(&items).Error; err != nil {
-		return nil, err
-	}
-	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-		items[i], items[j] = items[j], items[i]
-	}
-	return items, nil
+	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "default": "updated_at"})
+	return paginate(q, f.Page, f.PageSize, &items)
 }
 
 func (s *AdminService) GetMemory(id uint) (memory.Memory, error) {
-	var item memory.Memory
-	err := s.db.First(&item, id).Error
-	return item, err
+	var v memory.Memory
+	return v, s.db.First(&v, id).Error
 }
 
-func (s *AdminService) ListStickers(filter StickerFilter) (Page[memory.Sticker], error) {
-	page, pageSize := normalizePage(filter.Page, filter.PageSize)
-	result := Page[memory.Sticker]{Page: page, PageSize: pageSize}
-
-	q := s.db.Model(&memory.Sticker{})
-	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
-		pattern := "%" + keyword + "%"
-		q = q.Where("description LIKE ? OR file_name LIKE ? OR file_hash LIKE ?", pattern, pattern, pattern)
+func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], error) {
+	page, size := normalizePage(f.Page, f.PageSize)
+	base := s.db.Model(&memory.TopicThread{})
+	if f.GroupID > 0 {
+		base = base.Where("group_id = ?", f.GroupID)
 	}
-
-	if err := q.Count(&result.Total).Error; err != nil {
-		return result, err
+	if k := strings.TrimSpace(f.Keyword); k != "" {
+		base = base.Where("EXISTS (SELECT 1 FROM topic_assignments ta JOIN topic_summaries ts ON ts.through_topic_assignment_id = ta.id WHERE ta.topic_id = topic_threads.id AND ts.summary_json::text ILIKE ?)", "%"+k+"%")
 	}
-	q = applyStickerSort(q, filter.Sort, filter.Order)
-	if err := q.Offset((page - 1) * pageSize).Limit(pageSize).Find(&result.Items).Error; err != nil {
-		return result, err
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return Page[TopicThreadView]{}, err
 	}
-	return result, nil
-}
-
-func (s *AdminService) GetSticker(id uint) (memory.Sticker, error) {
-	var item memory.Sticker
-	err := s.db.First(&item, id).Error
-	return item, err
-}
-
-func (s *AdminService) ListMemberProfiles(filter MemberFilter) (Page[memory.MemberProfile], error) {
-	page, pageSize := normalizePage(filter.Page, filter.PageSize)
-	result := Page[memory.MemberProfile]{Page: page, PageSize: pageSize}
-
-	q := s.db.Model(&memory.MemberProfile{})
-	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
-		pattern := "%" + keyword + "%"
-		q = q.Where(
-			"nickname LIKE ? OR name_records LIKE ? OR speak_style LIKE ? OR interests LIKE ? OR common_words LIKE ? OR CAST(user_id AS CHAR) LIKE ?",
-			pattern, pattern, pattern, pattern, pattern, pattern,
-		)
+	if f.Sort == "group" {
+		base = base.Order("group_id " + strings.ToUpper(f.Order))
+	} else if f.Sort == "recent" {
+		direction := strings.ToUpper(f.Order)
+		base = base.Order("(SELECT MAX(ml.message_time) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) " + direction + " NULLS LAST").
+			Order("(SELECT MAX(ml.id) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) " + direction + " NULLS LAST")
+	} else {
+		base = base.Order("id " + strings.ToUpper(f.Order))
 	}
-
-	if err := q.Count(&result.Total).Error; err != nil {
-		return result, err
+	var threads []memory.TopicThread
+	if err := base.Offset((page - 1) * size).Limit(size).Find(&threads).Error; err != nil {
+		return Page[TopicThreadView]{}, err
 	}
-	q = applyMemberSort(q, filter.Sort, filter.Order)
-	if err := q.Offset((page - 1) * pageSize).Limit(pageSize).Find(&result.Items).Error; err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
-func validateStyleCardTransition(current memory.StyleCardStatus, target memory.StyleCardStatus) error {
-	switch target {
-	case memory.StyleCardStatusCandidate, memory.StyleCardStatusActive, memory.StyleCardStatusRejected:
-	default:
-		return fmt.Errorf("invalid style card status: %s", target)
-	}
-
-	if current == target {
-		return nil
-	}
-
-	switch current {
-	case memory.StyleCardStatusCandidate:
-		if target == memory.StyleCardStatusActive || target == memory.StyleCardStatusRejected {
-			return nil
-		}
-	case memory.StyleCardStatusActive:
-		if target == memory.StyleCardStatusRejected {
-			return nil
-		}
-	case memory.StyleCardStatusRejected:
-		if target == memory.StyleCardStatusActive {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid style card transition: %s -> %s", current, target)
-}
-
-func jargonStatusValue(current memory.Jargon) string {
-	switch {
-	case !current.Checked:
-		return "pending"
-	case current.Rejected:
-		return "rejected"
-	default:
-		return "approved"
-	}
-}
-
-func validateJargonTransition(current string, target string) error {
-	switch target {
-	case "pending", "approved", "rejected":
-	default:
-		return fmt.Errorf("invalid jargon status: %s", target)
-	}
-
-	if current == target {
-		return nil
-	}
-
-	switch current {
-	case "pending":
-		if target == "approved" || target == "rejected" {
-			return nil
-		}
-	case "approved":
-		if target == "rejected" {
-			return nil
-		}
-	case "rejected":
-		if target == "approved" {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid jargon transition: %s -> %s", current, target)
-}
-
-func (s *AdminService) UpdateStyleCardStatus(id uint, status string) error {
-	target := memory.StyleCardStatus(strings.TrimSpace(status))
-
-	var current memory.StyleCard
-	if err := s.db.Select("id", "status").First(&current, id).Error; err != nil {
-		return err
-	}
-	if err := validateStyleCardTransition(current.Status, target); err != nil {
-		return err
-	}
-
-	return s.db.Model(&memory.StyleCard{}).
-		Where("id = ?", id).
-		Updates(map[string]any{
-			"status":     target,
-			"updated_at": time.Now(),
-		}).Error
-}
-
-func (s *AdminService) UpdateJargonStatus(id uint, status string) error {
-	status = strings.TrimSpace(status)
-
-	var current memory.Jargon
-	if err := s.db.Select("id", "checked", "rejected").First(&current, id).Error; err != nil {
-		return err
-	}
-	if err := validateJargonTransition(jargonStatusValue(current), status); err != nil {
-		return err
-	}
-
-	updates := map[string]any{}
-	switch status {
-	case "pending":
-		updates["checked"] = false
-		updates["rejected"] = false
-	case "approved":
-		updates["checked"] = true
-		updates["rejected"] = false
-	case "rejected":
-		updates["checked"] = true
-		updates["rejected"] = true
-	default:
-		return fmt.Errorf("invalid jargon status: %s", status)
-	}
-
-	if err := s.db.Model(&memory.Jargon{}).
-		Where("id = ?", id).
-		Updates(updates).Error; err != nil {
-		return err
-	}
-
-	if s.jargonReloader != nil {
-		s.jargonReloader.ReloadJargons()
-	}
-
-	return nil
-}
-
-func (s *AdminService) DeleteSticker(id uint) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var sticker memory.Sticker
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&sticker, id).Error; err != nil {
-			return err
-		}
-
-		filePath, err := s.stickerFilePath(sticker.FileName)
+	items := make([]TopicThreadView, 0, len(threads))
+	for _, thread := range threads {
+		view, err := s.loadTopicThread(thread)
 		if err != nil {
-			return err
+			return Page[TopicThreadView]{}, err
 		}
-		if filePath != "" {
-			if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+		items = append(items, view)
+	}
+	return Page[TopicThreadView]{Items: items, Total: total, Page: page, PageSize: size}, nil
+}
+
+func (s *AdminService) loadTopicThread(thread memory.TopicThread) (TopicThreadView, error) {
+	view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt}
+	if err := s.db.Model(&memory.TopicAssignment{}).Where("topic_id = ?", thread.ID).Select("COALESCE(MAX(id), 0)").Scan(&view.LastAssignmentID).Error; err != nil {
+		return view, err
+	}
+	err := s.db.Table("topic_summaries ts").Select("ts.*").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id = ?", thread.ID).Order("ts.through_topic_assignment_id ASC").Scan(&view.Summaries).Error
+	if err == nil && len(view.Summaries) > 0 {
+		view.UpdatedAt = view.Summaries[len(view.Summaries)-1].CreatedAt
+	}
+	return view, err
+}
+
+func (s *AdminService) GetTopicThread(id uint) (TopicThreadView, error) {
+	var t memory.TopicThread
+	if err := s.db.First(&t, id).Error; err != nil {
+		return TopicThreadView{}, err
+	}
+	return s.loadTopicThread(t)
+}
+
+func (s *AdminService) ListTopicMessages(topicID uint, limit int) ([]memory.MessageLog, error) {
+	var out []memory.MessageLog
+	q := s.db.Table("message_logs ml").Select("ml.*").Joins("JOIN topic_assignments ta ON ta.message_log_id = ml.id").Where("ta.topic_id = ?", topicID).Order("ml.id DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(&out).Error; err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
+func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView], error) {
+	page, size := normalizePage(f.Page, f.PageSize)
+	q := s.db.Model(&memory.MemberProfile{})
+	if k := strings.TrimSpace(f.Keyword); k != "" {
+		p := "%" + k + "%"
+		q = q.Where("nickname ILIKE ? OR CAST(user_id AS TEXT) ILIKE ? OR EXISTS (SELECT 1 FROM member_traits mt WHERE mt.user_id=member_profiles.user_id AND mt.value ILIKE ?)", p, p, p)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return Page[MemberProfileView]{}, err
+	}
+	if f.Sort == "recent" {
+		q = q.Order("last_seen_at " + strings.ToUpper(f.Order))
+	} else {
+		q = q.Order("message_count " + strings.ToUpper(f.Order))
+	}
+	var profiles []memory.MemberProfile
+	if err := q.Offset((page - 1) * size).Limit(size).Find(&profiles).Error; err != nil {
+		return Page[MemberProfileView]{}, err
+	}
+	items := make([]MemberProfileView, 0, len(profiles))
+	for _, p := range profiles {
+		v := MemberProfileView{MemberProfile: p}
+		if err := s.db.Where("user_id = ?", p.UserID).Order("updated_at DESC").Find(&v.Names).Error; err != nil {
+			return Page[MemberProfileView]{}, err
 		}
-
-		return tx.Delete(&memory.Sticker{}, id).Error
-	})
+		if err := s.db.Where("user_id = ?", p.UserID).Order("updated_at DESC").Find(&v.Traits).Error; err != nil {
+			return Page[MemberProfileView]{}, err
+		}
+		items = append(items, v)
+	}
+	return Page[MemberProfileView]{Items: items, Total: total, Page: page, PageSize: size}, nil
 }
 
-func (s *AdminService) DeleteMemory(id uint) error {
-	if s.memDeleter != nil {
-		return s.memDeleter.DeleteMemory(context.Background(), id)
+func (s *AdminService) ListStickers(f ListFilter) (Page[memory.Sticker], error) {
+	var items []memory.Sticker
+	q := s.db.Model(&memory.Sticker{})
+	if k := strings.TrimSpace(f.Keyword); k != "" {
+		p := "%" + k + "%"
+		q = q.Where("description ILIKE ? OR file_name ILIKE ? OR file_hash ILIKE ?", p, p, p)
 	}
-	return s.db.Delete(&memory.Memory{}, id).Error
+	q = order(q, f.Sort, f.Order, map[string]string{"use": "use_count", "updated": "updated_at", "created": "created_at", "default": "use_count"})
+	return paginate(q, f.Page, f.PageSize, &items)
+}
+func (s *AdminService) GetSticker(id uint) (memory.Sticker, error) {
+	var v memory.Sticker
+	return v, s.db.First(&v, id).Error
 }
 
-func (s *AdminService) ArchiveMemory(id uint) error {
-	if s.memDeleter != nil {
-		return s.memDeleter.ArchiveMemory(context.Background(), id)
+func (s *AdminService) validateStatus(raw string, allowed ...string) error {
+	for _, v := range allowed {
+		if raw == v {
+			return nil
+		}
 	}
-	return s.db.Model(&memory.Memory{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     memory.MemoryStatusArchived,
-		"updated_at": time.Now(),
-	}).Error
-}
-
-func (s *AdminService) RestoreMemoryToCandidate(id uint) error {
-	if s.memDeleter != nil {
-		return s.memDeleter.RestoreMemoryToCandidate(context.Background(), id)
-	}
-	return s.db.Model(&memory.Memory{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     memory.MemoryStatusCandidate,
-		"updated_at": time.Now(),
-	}).Error
-}
-
-func (s *AdminService) stickerFilePath(fileName string) (string, error) {
-	baseDir := strings.TrimSpace(s.stickerDir)
-	fileName = strings.TrimSpace(fileName)
-	if baseDir == "" || fileName == "" {
-		return "", nil
-	}
-	if strings.Contains(fileName, `\`) {
-		return "", fmt.Errorf("invalid sticker file path")
-	}
-
-	cleanPath := path.Clean("/" + filepath.ToSlash(fileName))
-	if cleanPath == "/" || strings.HasPrefix(cleanPath, "/../") || strings.HasSuffix(fileName, "/") {
-		return "", fmt.Errorf("invalid sticker file path")
-	}
-
-	relativePath := strings.TrimPrefix(cleanPath, "/")
-	candidate := filepath.Join(baseDir, filepath.FromSlash(relativePath))
-
-	absBase, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", err
-	}
-	absFile, err := filepath.Abs(candidate)
-	if err != nil {
-		return "", err
-	}
-	if absFile != absBase && !strings.HasPrefix(absFile, absBase+string(os.PathSeparator)) {
-		return "", fmt.Errorf("invalid sticker file path")
-	}
-
-	return absFile, nil
+	return fmt.Errorf("invalid status: %s", raw)
 }

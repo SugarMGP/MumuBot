@@ -13,7 +13,6 @@ import (
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 	"mumu-bot/internal/topic"
-	"mumu-bot/internal/utils"
 	"sync"
 	"time"
 
@@ -56,15 +55,14 @@ type Agent struct {
 	visionCache *ttlcache.Cache[string, string]
 	topicMgr    *topic.Manager
 
-	buffers   map[int64]*utils.RingBuffer[*onebot.GroupMessage]
+	buffers   map[int64][]*onebot.GroupMessage
 	buffersMu sync.RWMutex
 
 	pendingThinks map[int64]*pendingThink
 	pendingMu     sync.Mutex
 
-	processing        map[int64]bool
-	lastProcessedTime map[int64]time.Time
-	processingMu      sync.RWMutex
+	lastReadMessageID map[int64]int64
+	readMu            sync.RWMutex
 	startupMu         sync.Mutex
 	startupRecovering bool
 	startupQueue      []*onebot.GroupMessage
@@ -120,20 +118,19 @@ func New(mem *memory.Manager) (*Agent, error) {
 		model:             chatModel,
 		vision:            visionClient,
 		bot:               botClient,
-		buffers:           make(map[int64]*utils.RingBuffer[*onebot.GroupMessage]),
+		buffers:           make(map[int64][]*onebot.GroupMessage),
 		pendingThinks:     make(map[int64]*pendingThink),
-		processing:        make(map[int64]bool),
-		lastProcessedTime: make(map[int64]time.Time),
+		lastReadMessageID: make(map[int64]int64),
 		replyCache:        newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
 		visionCache:       newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
-	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem.TopicVectorStore(), mem), topicModel)
+	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem), topicModel)
 	constructed := false
 	defer func() {
 		if constructed {
 			return
 		}
-		a.cleanupAfterInitFailure()
+		a.shutdown()
 	}()
 
 	zap.L().Info("人格已加载", zap.String("name", a.persona.GetName()))
@@ -176,8 +173,6 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewQueryMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchJargonTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchStyleCardsTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetMemberInfoTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -226,9 +221,7 @@ func (a *Agent) initReact() error {
 			ToolArgumentsHandler: func(ctx context.Context, name, arguments string) (string, error) {
 				return tools.CanonicalizeToolArguments(arguments)
 			},
-			ToolCallMiddlewares: []compose.ToolMiddleware{{
-				Invokable: tools.ToolDedupMiddleware(),
-			}},
+			ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: tools.ToolDedupMiddleware()}},
 		},
 		MaxStep:            maxStep,
 		ToolReturnDirectly: map[string]struct{}{"stayQuiet": {}},
@@ -275,12 +268,7 @@ func (a *Agent) Start() {
 			groupIDs = append(groupIDs, group.GroupID)
 		}
 	}
-	if err := a.topicMgr.LoadFromDB(groupIDs); err != nil {
-		zap.L().Fatal("加载话题工作记忆失败", zap.Error(err))
-	}
-	if err := a.topicMgr.RecoverPendingAssignments(groupIDs); err != nil {
-		zap.L().Fatal("补偿待分配话题消息失败", zap.Error(err))
-	}
+	a.topicMgr.RecoverPendingAssignments(groupIDs)
 	a.drainStartupMessages()
 	a.wg.Add(1)
 	go a.thinkLoop()
@@ -299,31 +287,37 @@ func (a *Agent) loadBuffersFromDB() {
 			bufSize = 15
 		}
 
-		logs := a.memory.GetRecentMessages(gc.GroupID, bufSize, 0)
+		logs := a.memory.GetRecentMessages(gc.GroupID, 0, bufSize, 0)
 		if len(logs) == 0 {
 			continue
 		}
 
 		a.buffersMu.Lock()
-		buf := utils.NewRingBuffer[*onebot.GroupMessage](bufSize)
-		a.buffers[gc.GroupID] = buf
-
+		messages := make([]*onebot.GroupMessage, 0, len(logs))
 		for _, log := range logs {
-			buf.Push(messageLogToBufferedGroupMessage(log))
+			messages = append(messages, messageLogToBufferedGroupMessage(log))
 		}
+		a.buffers[gc.GroupID] = messages
 		a.buffersMu.Unlock()
+		a.commitReadSnapshot(gc.GroupID, logs[len(logs)-1].OneBotMessageID)
 
 		zap.L().Info("已从数据库加载消息历史", zap.Int64("group_id", gc.GroupID), zap.Int("count", len(logs)))
 	}
 }
 
 func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
-	msg := onebot.MessageLogToGroupMessage(log)
-	msg.Content = log.OriginalContent
-	msg.FinalContent = log.Content
-	msg.IsMentioned = log.IsMentioned
-	if log.Forwards != "" {
-		_ = sonic.UnmarshalString(log.Forwards, &msg.Forwards)
+	msg := &onebot.GroupMessage{
+		MessageID:    log.OneBotMessageID,
+		GroupID:      log.GroupID,
+		UserID:       log.UserID,
+		Nickname:     log.Nickname,
+		Content:      log.TextContent,
+		FinalContent: log.DisplayContent,
+		IsMentioned:  log.IsMentioned,
+		Time:         log.MessageTime,
+	}
+	if log.ForwardPayload != nil {
+		_ = sonic.UnmarshalString(*log.ForwardPayload, &msg.Forwards)
 	}
 	return msg
 }
@@ -331,37 +325,7 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 func (a *Agent) handleIncomingMessage(msg *onebot.GroupMessage) {
 	a.startupMu.Lock()
 	if a.startupRecovering {
-		if msg == nil {
-			a.startupQueue = append(a.startupQueue, nil)
-		} else {
-			cloned := *msg
-			if msg.Reply != nil {
-				replyCopy := *msg.Reply
-				cloned.Reply = &replyCopy
-			}
-			if len(msg.Images) > 0 {
-				cloned.Images = append([]onebot.ImageInfo(nil), msg.Images...)
-			}
-			if len(msg.Videos) > 0 {
-				cloned.Videos = append([]onebot.VideoInfo(nil), msg.Videos...)
-			}
-			if len(msg.Faces) > 0 {
-				cloned.Faces = append([]onebot.FaceInfo(nil), msg.Faces...)
-			}
-			if len(msg.AtList) > 0 {
-				cloned.AtList = append([]int64(nil), msg.AtList...)
-			}
-			if len(msg.Forwards) > 0 {
-				cloned.Forwards = append([]onebot.ForwardMessage(nil), msg.Forwards...)
-			}
-			if len(msg.FileNames) > 0 {
-				cloned.FileNames = append([]string(nil), msg.FileNames...)
-			}
-			if len(msg.Cards) > 0 {
-				cloned.Cards = append([]onebot.CardMessage(nil), msg.Cards...)
-			}
-			a.startupQueue = append(a.startupQueue, &cloned)
-		}
+		a.startupQueue = append(a.startupQueue, msg)
 		a.startupMu.Unlock()
 		return
 	}
@@ -395,12 +359,14 @@ func (a *Agent) Stop() {
 }
 
 func (a *Agent) shutdown() {
+	if a.bot != nil {
+		if err := a.bot.Close(); err != nil {
+			zap.L().Warn("关闭 OneBot 连接失败", zap.Error(err))
+		}
+	}
 	a.cancel()
 	a.clearPendingThinks()
 	a.stopCaches()
-	if a.bot != nil {
-		_ = a.bot.Close()
-	}
 	if a.learner != nil {
 		a.learner.Stop()
 	}
@@ -441,10 +407,6 @@ func (a *Agent) stopCaches() {
 	if a.visionCache != nil {
 		a.visionCache.Stop()
 	}
-}
-
-func (a *Agent) cleanupAfterInitFailure() {
-	a.shutdown()
 }
 
 func (a *Agent) MCPToolCount() int {

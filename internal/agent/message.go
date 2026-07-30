@@ -2,13 +2,11 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
-	"mumu-bot/internal/topic"
 	"mumu-bot/internal/utils"
-	"strconv"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +16,9 @@ import (
 )
 
 func (a *Agent) onMessage(msg *onebot.GroupMessage) {
+	if msg == nil {
+		return
+	}
 	if err := a.ctx.Err(); err != nil {
 		return
 	}
@@ -26,40 +27,50 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		return
 	}
 
+	selfID := a.bot.GetSelfID()
+	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content)
+	msg.IsMentioned = isMentioned
+	msg.FinalContent = initialMessageContent(msg)
+
+	item, created, persistErr := a.topicMgr.PersistMessage(a.ctx, msg, isMentioned)
+	if persistErr != nil {
+		zap.L().Error("写入话题工作记忆失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(persistErr))
+		return
+	}
+	if item == nil || !created {
+		return
+	}
+
+	if err := a.markMessageRead(msg.MessageID); err != nil {
+		zap.L().Error("标记消息已读失败", zap.Int64("message_id", msg.MessageID), zap.Error(err))
+	}
 	if err := a.resolveReplyInfo(msg); err != nil {
 		zap.L().Debug("解析回复消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
-
-	selfID := a.bot.GetSelfID()
-	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content) || (msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID)
-
-	forwardsJSON := ""
-	if len(msg.Forwards) > 0 {
-		if b, err := sonic.MarshalString(msg.Forwards); err == nil {
-			forwardsJSON = b
-		}
+	if msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID {
+		isMentioned = true
+		msg.IsMentioned = true
 	}
-
+	a.resolveForwardMessages(msg)
 	parsedContent := a.parseMessageContent(msg)
-
 	for _, t := range a.tools {
 		info, _ := t.Info(a.ctx)
 		parsedContent = strings.ReplaceAll(parsedContent, info.Name, "\"危险指令，已屏蔽\"")
 	}
 	msg.FinalContent = parsedContent
-
-	persistErr := a.topicMgr.PersistMessage(a.ctx, topic.PersistMessageInput{
-		Message:      msg,
-		IsMentioned:  isMentioned,
-		ForwardsJSON: forwardsJSON,
-	})
-	if persistErr != nil {
-		zap.L().Error("写入话题工作记忆失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(persistErr))
+	var forwardsJSON *string
+	if len(msg.Forwards) > 0 {
+		if b, err := sonic.MarshalString(msg.Forwards); err == nil {
+			forwardsJSON = &b
+		}
+	}
+	if err := a.topicMgr.UpdateMessagePresentation(a.ctx, item.ID, msg.FinalContent, forwardsJSON, isMentioned); err != nil {
+		zap.L().Error("更新消息展示内容失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
 
 	a.addBuffer(msg)
 
-	if msg.UserID == a.bot.GetSelfID() {
+	if msg.UserID == selfID {
 		return
 	}
 
@@ -73,6 +84,58 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	}()
 
 	a.scheduleThink(msg.GroupID, isMentioned, false)
+}
+
+func initialMessageContent(msg *onebot.GroupMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if content := strings.TrimSpace(msg.Content); content != "" {
+		return content
+	}
+	switch {
+	case len(msg.Images) > 0:
+		return "[图片]"
+	case len(msg.Videos) > 0:
+		return "[视频]"
+	case len(msg.Faces) > 0:
+		return "[表情]"
+	case msg.HasRecord:
+		return "[语音]"
+	case len(msg.FileNames) > 0:
+		return "[文件]"
+	case len(msg.Cards) > 0:
+		return "[卡片]"
+	case len(msg.ForwardIDs) > 0:
+		return "[合并转发]"
+	default:
+		return ""
+	}
+}
+
+func (a *Agent) markMessageRead(messageID int64) error {
+	if a.bot == nil || messageID == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+	defer cancel()
+	return a.bot.MarkMsgAsRead(ctx, messageID)
+}
+
+func (a *Agent) resolveForwardMessages(msg *onebot.GroupMessage) {
+	if msg == nil || a.bot == nil || len(msg.ForwardIDs) == 0 {
+		return
+	}
+	for _, forwardID := range msg.ForwardIDs {
+		ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+		nodes, err := a.bot.GetForwardMsg(ctx, forwardID)
+		cancel()
+		if err != nil {
+			zap.L().Debug("解析合并转发失败", zap.String("forward_id", forwardID), zap.Error(err))
+			continue
+		}
+		msg.Forwards = append(msg.Forwards, nodes...)
+	}
 }
 
 func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
@@ -96,7 +159,7 @@ func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
 		return nil
 	}
 
-	log, err := a.memory.GetMessageLogByID(fmt.Sprintf("%d", msg.Reply.MessageID))
+	log, err := a.memory.GetMessageLogByID(msg.Reply.MessageID)
 	if err == nil {
 		if reply := replyInfoFromMessageLog(log); reply != nil {
 			msg.Reply = reply
@@ -154,46 +217,32 @@ func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
 
 func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 	a.buffersMu.Lock()
-	buf, ok := a.buffers[msg.GroupID]
-	if !ok {
-		bufSize := config.Get().Agent.MessageBufferSize
-		if bufSize <= 0 {
-			bufSize = 15
-		}
-		buf = utils.NewRingBuffer[*onebot.GroupMessage](bufSize)
-		a.buffers[msg.GroupID] = buf
+	defer a.buffersMu.Unlock()
+	bufSize := config.Get().Agent.MessageBufferSize
+	if bufSize <= 0 {
+		bufSize = 15
 	}
-	a.buffersMu.Unlock()
-
-	buf.Push(msg)
+	messages := append(a.buffers[msg.GroupID], msg)
+	if len(messages) > bufSize {
+		messages = slices.Delete(messages, 0, len(messages)-bufSize)
+	}
+	a.buffers[msg.GroupID] = messages
 }
 
 func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
 	a.buffersMu.RLock()
-	buf, ok := a.buffers[groupID]
-	a.buffersMu.RUnlock()
-
-	if !ok || buf.IsEmpty() {
-		return nil
-	}
-	return buf.GetAll()
+	defer a.buffersMu.RUnlock()
+	return slices.Clone(a.buffers[groupID])
 }
 
 func (a *Agent) updateMember(msg *onebot.GroupMessage) {
-	if err := a.ctx.Err(); err != nil {
-		return
-	}
-	p, err := a.memory.GetOrCreateMemberProfile(msg.UserID, msg.Nickname)
+	_, err := a.memory.GetOrCreateMemberProfile(msg.UserID, msg.Nickname, msg.Time)
 	if err != nil {
 		zap.L().Error("获取成员画像失败", zap.Error(err))
 		return
 	}
-	p.MsgCount++
-	p.LastSpeak = msg.Time
-	p.Nickname = msg.Nickname
-	p.UpsertGroupCard(msg.GroupID, msg.GroupCard, msg.Time)
-	if err := a.memory.UpdateMemberProfile(p); err != nil {
-		zap.L().Error("更新成员画像失败", zap.Error(err))
+	if err := a.memory.RecordMemberName(msg.UserID, msg.GroupID, msg.GroupCard, msg.Time); err != nil {
+		zap.L().Error("更新成员群名片失败", zap.Error(err))
 	}
 }
 
@@ -226,15 +275,13 @@ func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 		return nil
 	}
 
-	content := strings.TrimSpace(log.OriginalContent)
+	content := strings.TrimSpace(log.TextContent)
 	if content == "" {
-		content = strings.TrimSpace(log.Content)
+		content = strings.TrimSpace(log.DisplayContent)
 	}
 
-	messageID, _ := strconv.ParseInt(log.MessageID, 10, 64)
-
 	return &onebot.ReplyInfo{
-		MessageID: messageID,
+		MessageID: log.OneBotMessageID,
 		Content:   content,
 		SenderID:  log.UserID,
 		Nickname:  log.Nickname,

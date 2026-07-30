@@ -4,7 +4,7 @@
 
 ## 入口与职责
 
-- `app/app.go`：chi 路由、运行态快照、页面处理器和后台 API。
+- `app/app.go`：应用依赖和 chi 路由；`pages.go`、`actions.go`、`system.go` 分别承载页面、管理动作和系统信息处理器。
 - `auth/`：后台访问鉴权。
 - `services/`：给页面和接口使用的后台业务查询。
 - `views/*.templ`：templ 页面模板源码。
@@ -33,7 +33,7 @@ templ generate ./internal/web/views
 npm run build
 ```
 
-- 涉及后台 UI 的改动，交付前要做真实页面验证，包含截图、交互、控制台和网络请求检查。
+- 涉及后台 UI 的改动，交付前使用 Codex 内置浏览器做真实页面验证，包含截图、交互、控制台和网络请求检查；不要使用 Chrome DevTools MCP。
 
 ## 修改注意
 

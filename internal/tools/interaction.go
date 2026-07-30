@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +86,7 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 				Message:     fmt.Sprintf("第 %d 条消息发送失败：%v，已发送 %d 条", i+1, err, len(messageIDs)),
 			}, nil
 		}
+		tc.MarkActed()
 		messageIDs = append(messageIDs, messageID)
 	}
 
@@ -174,6 +174,7 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 	if err := tc.Bot.GroupPoke(ctx, tc.GroupID, input.UserID); err != nil {
 		return &PokeOutput{Success: false, Message: err.Error()}, nil
 	}
+	tc.MarkActed()
 
 	return &PokeOutput{Success: true, Message: "已戳一戳"}, nil
 }
@@ -222,6 +223,7 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	if err := tc.Bot.SetMsgEmojiLike(ctx, input.MessageID, input.EmojiID); err != nil {
 		return &ReactToMessageOutput{Success: false, Message: err.Error()}, nil
 	}
+	tc.MarkActed()
 
 	return &ReactToMessageOutput{Success: true, Message: "已回应表情"}, nil
 }
@@ -267,7 +269,7 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return &RecallMessageOutput{Success: false, Message: "记忆管理器未初始化"}, nil
 	}
 
-	log, err := tc.MemoryMgr.GetMessageLogByID(strconv.FormatInt(input.MessageID, 10))
+	log, err := tc.MemoryMgr.GetMessageLogByID(input.MessageID)
 	if err != nil {
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}
@@ -277,13 +279,14 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if selfID := tc.Bot.GetSelfID(); selfID > 0 && log.UserID != 0 && log.UserID != selfID {
 		return &RecallMessageOutput{Success: false, Message: "只能撤回你自己发的消息"}, nil
 	}
-	if time.Since(log.CreatedAt) > 2*time.Minute {
+	if time.Since(log.MessageTime) > 2*time.Minute {
 		return &RecallMessageOutput{Success: false, Message: "消息已超过两分钟，无法撤回"}, nil
 	}
 
 	if err := tc.Bot.DeleteMsg(ctx, input.MessageID); err != nil {
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}
+	tc.MarkActed()
 
 	return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
 }

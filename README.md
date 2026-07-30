@@ -34,9 +34,9 @@
 - 🧠 **ReAct 智能体** — 通过观察、思考、行动循环，自主判断是否接话、查询信息或保持沉默
 - 💬 **拟人对话** — 可自定义人格、语言风格和兴趣话题，说话更接近真实群友
 - 🧵 **话题工作记忆** — 持续跟踪当前话题、摘要、参与者与未完事项，并可召回已归档话题
-- 🧩 **丰富工具集** — 发言、沉默、戳一戳、贴表情、发表情包、查群信息、网页浏览等 20+ 内置工具
-- 📝 **长期记忆** — 基于 MySQL + Milvus 保存和检索事实、经历、偏好、约束与目标
-- 👤 **群友画像** — 记录每个人的说话风格、兴趣、活跃度、亲密度
+- 🧩 **丰富工具集** — 18 个内置工具覆盖发言、沉默、戳一戳、贴表情、发表情包、查群信息和网页浏览，并可通过 MCP 扩展
+- 📝 **长期记忆** — 基于 PostgreSQL、pgvector 与 pg_trgm 保存和检索事实、经历、偏好、约束与目标
+- 👤 **群友画像** — 记录每个人有明确消息证据的别名、表达习惯、兴趣和常用语
 - 🎭 **情绪系统** — 心情、精力、社交意愿三维情绪状态随对话自然变化，影响说话方式和活跃度
 - 👀 **多模态理解** — 支持视觉模型识别图片和视频内容
 - 🖼️ **表情包系统** — 自动收集群内表情包，由智能体自行决策使用
@@ -54,9 +54,8 @@
 |------|------|
 | Go 1.26.5+ | 编译运行 |
 | Node.js 22+ | 构建前端资源（仅从源码构建时需要） |
-| MySQL | 存储记忆、消息日志、群友画像 |
-| Milvus | 向量数据库，用于长期记忆、风格卡片和归档话题检索 |
-| NapCat / go-cqhttp | OneBot 11 协议实现 |
+| PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量，并启用 `pg_trgm` 扩展 |
+| NapCat | OneBot 11 协议实现 |
 | 大语言模型 API | 兼容 OpenAI 格式；需支持工具调用与结构化输出 |
 
 ### 使用发布包
@@ -106,13 +105,20 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_EMBEDDING_API_KEY              - Embedding 模型 API Key
 #   MUMU_VISION_API_KEY                 - 视觉模型 API Key
 #   MUMU_ONEBOT_TOKEN                   - OneBot 访问令牌
-#   MUMU_MYSQL_PASSWORD                 - MySQL 密码
+#   MUMU_DATABASE_DSN                   - PostgreSQL 连接串
 
 # 静态人格提示词模板位于 config/persona.prompt
 # persona.name、persona.qq、persona.alias_names、persona.interests 仍在 config/config.yaml 中配置
 
 # 3. 启动
 ./mumu-bot
+```
+
+数据库使用 PostgreSQL。部署时先由高权限账户在全新数据库安装扩展；运行账户必须拥有目标 schema 和应用数据表，或具备创建表、修改表、创建索引及外键等 DDL 所需权限，因为应用启动时会自动创建和校验数据结构。普通读写权限不足以启动。应用不会迁移旧 MySQL/Milvus 数据。
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
 默认情况下服务监听 `8080` 端口，可在配置中修改。

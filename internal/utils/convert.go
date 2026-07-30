@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 )
@@ -12,8 +13,9 @@ func ParseInt64Value(v any) (int64, bool) {
 		return value, true
 	case int:
 		return int64(value), true
-	case float64:
-		return int64(value), true
+	case json.Number:
+		parsed, err := value.Int64()
+		return parsed, err == nil
 	case string:
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {

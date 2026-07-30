@@ -120,6 +120,7 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	if err != nil {
 		return &SendStickerOutput{Success: false, Message: err.Error()}, nil
 	}
+	tc.MarkActed()
 
 	// 更新使用记录
 	_ = tc.MemoryMgr.UpdateStickerUsage(input.StickerID)

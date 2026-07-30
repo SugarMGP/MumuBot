@@ -7,37 +7,6 @@ import (
 
 const AtAllUserID int64 = -1
 
-// APIResponse OneBot API 响应
-type APIResponse struct {
-	Status  string      `json:"status"`  // ok / failed
-	RetCode int         `json:"retcode"` // 0 表示成功
-	Data    interface{} `json:"data"`    // 可以是 map 或 array
-	Echo    string      `json:"echo"`
-	Message string      `json:"message,omitempty"` // 错误信息
-}
-
-// DataMap 获取响应数据为 map 类型（用于普通 API）
-func (r *APIResponse) DataMap() map[string]interface{} {
-	if r.Data == nil {
-		return nil
-	}
-	if m, ok := r.Data.(map[string]interface{}); ok {
-		return m
-	}
-	return nil
-}
-
-// DataList 获取响应数据为数组类型（用于列表 API）
-func (r *APIResponse) DataList() []interface{} {
-	if r.Data == nil {
-		return nil
-	}
-	if arr, ok := r.Data.([]interface{}); ok {
-		return arr
-	}
-	return nil
-}
-
 // GroupMessage 群消息
 type GroupMessage struct {
 	MessageID    int64            `json:"message_id"`
@@ -49,12 +18,12 @@ type GroupMessage struct {
 	Content      string           `json:"content"`                 // 纯文本内容
 	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
 	Time         time.Time        `json:"time"`                    // 消息时间
-	MessageType  string           `json:"message_type"`            // 消息类型
 	Images       []ImageInfo      `json:"images,omitempty"`        // 图片列表
 	Videos       []VideoInfo      `json:"videos,omitempty"`        // 视频列表
 	Faces        []FaceInfo       `json:"faces,omitempty"`         // 表情列表
 	AtList       []int64          `json:"at_list,omitempty"`       // @的用户列表
 	Reply        *ReplyInfo       `json:"reply,omitempty"`         // 回复信息
+	ForwardIDs   []string         `json:"-"`                       // 待延迟展开的合并转发 ID
 	Forwards     []ForwardMessage `json:"forwards,omitempty"`      // 合并转发内容
 	FileNames    []string         `json:"file_names,omitempty"`    // 文件消息名称
 	Cards        []CardMessage    `json:"cards,omitempty"`         // 卡片消息
@@ -136,9 +105,7 @@ type GroupNotice struct {
 // EssenceMessage 群精华消息
 type EssenceMessage struct {
 	MessageID    int64  `json:"message_id"`
-	SenderID     int64  `json:"sender_id"`
 	SenderNick   string `json:"sender_nick"`
-	OperatorID   int64  `json:"operator_id"`
 	OperatorNick string `json:"operator_nick"`
 	OperatorTime int64  `json:"operator_time"`
 	Content      string `json:"content"`
@@ -163,10 +130,4 @@ type GroupMemberInfo struct {
 	LastSentTime int64  `json:"last_sent_time"`
 	Level        string `json:"level"`
 	Title        string `json:"title"` // 专属头衔
-}
-
-// LoginInfo 登录信息
-type LoginInfo struct {
-	UserID   int64  `json:"user_id"`
-	Nickname string `json:"nickname"`
 }

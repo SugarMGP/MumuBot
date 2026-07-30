@@ -28,12 +28,7 @@ func (m *Manager) decideMemoryMerge(ctx context.Context, input memoryMergeInput)
 
 	candidateLines := make([]string, 0, len(input.Candidates))
 	for _, candidate := range input.Candidates {
-		candidateLines = append(candidateLines, fmt.Sprintf(
-			"- id=%d evidence_count=%d content=%s",
-			candidate.ID,
-			max(candidate.EvidenceCount, 1),
-			strings.TrimSpace(candidate.Content),
-		))
+		candidateLines = append(candidateLines, fmt.Sprintf("- id=%d content=%s", candidate.ID, strings.TrimSpace(candidate.Content)))
 	}
 	prompt := fmt.Sprintf(`请判断新长期记忆是否与候选中的已有记忆语义重复。
 
@@ -45,12 +40,12 @@ func (m *Manager) decideMemoryMerge(ctx context.Context, input memoryMergeInput)
 - 如果候选中有多条重复项，可以把它们都放进 merge_ids；非重复项不要放入。
 
 新记忆：
-- canonical_type=%s
+- kind=%s
 - content=%s
 
 候选记忆：
 %s`,
-		input.Incoming.CanonicalType,
+		input.Incoming.Kind,
 		strings.TrimSpace(input.Incoming.Content),
 		strings.Join(candidateLines, "\n"),
 	)

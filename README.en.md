@@ -34,9 +34,9 @@ Core capabilities of this project:
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
 - 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
 - 🧵 **Topic Working Memory** — Continuously tracks current topics, summaries, participants, and open threads; can recall archived topics
-- 🧩 **Rich Toolset** — 20+ built-in tools: speak, stay quiet, poke, react with emoji, send stickers, check group announcements, browse the web, and more
-- 📝 **Long-term Memory** — Stores and retrieves facts, experiences, preferences, constraints, and goals via MySQL + Milvus
-- 👤 **Member Profiles** — Records each person's speaking style, interests, activity level, and closeness
+- 🧩 **Rich Toolset** — 18 built-in tools for speaking, staying quiet, poking, emoji reactions, stickers, group information, and web browsing, with more available through MCP
+- 📝 **Long-term Memory** — Stores and retrieves facts, experiences, preferences, constraints, and goals with PostgreSQL, pgvector, and pg_trgm
+- 👤 **Member Profiles** — Records evidence-backed aliases, speaking habits, interests, and common phrases for each member
 - 🎭 **Emotion System** — Three-dimensional mood (valence, energy, sociability) shifts naturally during conversation, affecting tone and activity
 - 👀 **Multimodal Understanding** — Vision model recognizes image and video content
 - 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
@@ -54,9 +54,8 @@ Core capabilities of this project:
 |------|------|
 | Go 1.26.5+ | Build and run |
 | Node.js 22+ | Build frontend assets (only needed for source builds) |
-| MySQL | Store memories, message logs, member profiles |
-| Milvus | Vector database for long-term memory, style cards, and archived topic retrieval |
-| NapCat / go-cqhttp | OneBot 11 protocol implementation |
+| PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors with the `pg_trgm` extension enabled |
+| NapCat | OneBot 11 protocol implementation |
 | LLM API | OpenAI-compatible; must support tool calling and structured output |
 
 ### Using Release Packages
@@ -106,13 +105,20 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_EMBEDDING_API_KEY              - Embedding model API key
 #   MUMU_VISION_API_KEY                 - Vision model API key
 #   MUMU_ONEBOT_TOKEN                   - OneBot access token
-#   MUMU_MYSQL_PASSWORD                 - MySQL password
+#   MUMU_DATABASE_DSN                   - PostgreSQL connection string
 
 # The static persona prompt template is at config/persona.prompt
 # persona.name, persona.qq, persona.alias_names, persona.interests are still set in config/config.yaml
 
 # 3. Launch
 ./mumu-bot
+```
+
+Storage uses PostgreSQL. Install the extensions in a fresh database with a privileged account first. The runtime account must own the target schema and application tables, or otherwise have the DDL privileges needed to create and alter tables, indexes, and foreign keys, because MumuBot creates and verifies its schema at startup. Ordinary read/write grants are not sufficient. Old MySQL or Milvus data is not migrated.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
 The service listens on port `8080` by default (configurable).

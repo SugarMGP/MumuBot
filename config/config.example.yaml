@@ -45,7 +45,6 @@ agent:
   message_buffer_size: 20       # 消息缓冲区大小
   max_step: 12                  # ReAct 最大步数
   max_coroutine: 3              # 最大并发思考进程数（0表示不限制）
-  enable_active_retrieval: true # 是否启用主动记忆检索
 
 # 聊天行为配置
 chat:
@@ -70,8 +69,7 @@ learning:
   enabled: true                 # 是否启用
   interval_minutes: 10          # 学习任务间隔（分钟）
   review_interval_minutes: 45   # 审核任务间隔（分钟）
-  max_step: 10                  # 学习 Agent 最大步数
-  batch_size: 100               # 每次学习的消息数量限制
+  batch_size: 100               # 每次学习的消息数量限制，必须不小于 min_msg_count
   min_msg_count: 5              # 触发学习的最少消息数量
 
 # 三档模型配置（需为 OpenAI 兼容 ChatModel，并支持工具调用和结构化输出）
@@ -104,6 +102,7 @@ embedding:
   api_key: ""        # 留空则使用 MUMU_EMBEDDING_API_KEY 环境变量
   base_url: ""
   model: ""
+  dimensions: 1024
 
 # 多模态视觉模型配置（用于理解图片和表情包）
 vision_llm:
@@ -112,23 +111,11 @@ vision_llm:
   base_url: ""
   model: ""
 
+database:
+  dsn: "postgres://mumu:password@127.0.0.1:5432/mumu_bot?sslmode=disable"
+
 # 记忆系统配置
 memory:
-  # MySQL 数据库配置
-  mysql:
-    host: "127.0.0.1"
-    port: 3306
-    user: "root"
-    password: ""            # 留空则使用 MUMU_MYSQL_PASSWORD 环境变量
-    db_name: "mumu_bot"
-
-  # Milvus 向量数据库配置
-  milvus:
-    address: "localhost:19530"
-    db_name: "default"
-    collection_name: "mumu_memories"
-    vector_dim: 1024        # embedding 维度
-    metric_type: "COSINE"   # 相似度度量类型: IP, L2, COSINE
 
   # 消息日志清理
   message_log_cleanup:

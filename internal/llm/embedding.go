@@ -26,7 +26,7 @@ func NewEmbeddingClient() (*EmbeddingClient, error) {
 		BaseURL:    cfg.Embedding.BaseURL,
 		APIKey:     cfg.Embedding.APIKey,
 		Model:      cfg.Embedding.Model,
-		Dimensions: &cfg.Memory.Milvus.VectorDim,
+		Dimensions: &cfg.Embedding.Dimensions,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建 Embedder 失败: %w", err)

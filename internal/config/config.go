@@ -28,6 +28,7 @@ type Config struct {
 	ModelTiers ModelTiersConfig `mapstructure:"model_tiers"`
 	Embedding  EmbeddingConfig  `mapstructure:"embedding"`
 	VisionLLM  VisionLLMConfig  `mapstructure:"vision_llm"`
+	Database   DatabaseConfig   `mapstructure:"database"`
 	Memory     MemoryConfig     `mapstructure:"memory"`
 	Sticker    StickerConfig    `mapstructure:"sticker"` // 表情包配置
 	Server     ServerConfig     `mapstructure:"server"`
@@ -66,13 +67,12 @@ type GroupConfig struct {
 
 // AgentConfig Agent决策配置
 type AgentConfig struct {
-	ObserveWindow         int  `mapstructure:"observe_window"`          // 观察窗口时间（秒）
-	ThinkInterval         int  `mapstructure:"think_interval"`          // 决策间隔（秒）
-	ThinkDebounceMS       int  `mapstructure:"think_debounce_ms"`       // 思考聚合窗口（毫秒）
-	MessageBufferSize     int  `mapstructure:"message_buffer_size"`     // 消息缓冲区大小
-	MaxStep               int  `mapstructure:"max_step"`                // ReAct 最大步数
-	MaxCoroutine          int  `mapstructure:"max_coroutine"`           // 最大并发思考进程数（0表示不限制）
-	EnableActiveRetrieval bool `mapstructure:"enable_active_retrieval"` // 是否启用主动记忆检索（阈值固定0.7）
+	ObserveWindow     int `mapstructure:"observe_window"`      // 观察窗口时间（秒）
+	ThinkInterval     int `mapstructure:"think_interval"`      // 决策间隔（秒）
+	ThinkDebounceMS   int `mapstructure:"think_debounce_ms"`   // 思考聚合窗口（毫秒）
+	MessageBufferSize int `mapstructure:"message_buffer_size"` // 消息缓冲区大小
+	MaxStep           int `mapstructure:"max_step"`            // ReAct 最大步数
+	MaxCoroutine      int `mapstructure:"max_coroutine"`       // 最大并发思考进程数（0表示不限制）
 }
 
 // ChatConfig 聊天行为配置
@@ -105,7 +105,6 @@ type LearningConfig struct {
 	Enabled               bool `mapstructure:"enabled"`                 // 是否启用
 	IntervalMinutes       int  `mapstructure:"interval_minutes"`        // 学习任务间隔（分钟）
 	ReviewIntervalMinutes int  `mapstructure:"review_interval_minutes"` // 审核任务间隔（分钟）
-	MaxStep               int  `mapstructure:"max_step"`                // 学习 Agent 最大步数
 	BatchSize             int  `mapstructure:"batch_size"`              // 每次学习的消息数量限制
 	MinMsgCount           int  `mapstructure:"min_msg_count"`           // 触发学习的最少消息数量
 }
@@ -127,9 +126,10 @@ type ModelTiersConfig struct {
 
 // EmbeddingConfig Embedding 模型配置
 type EmbeddingConfig struct {
-	APIKey  string `mapstructure:"api_key"`
-	BaseURL string `mapstructure:"base_url"`
-	Model   string `mapstructure:"model"`
+	APIKey     string `mapstructure:"api_key"`
+	BaseURL    string `mapstructure:"base_url"`
+	Model      string `mapstructure:"model"`
+	Dimensions int    `mapstructure:"dimensions"`
 }
 
 // VisionLLMConfig 多模态视觉模型配置
@@ -142,9 +142,11 @@ type VisionLLMConfig struct {
 
 // MemoryConfig 记忆系统配置
 type MemoryConfig struct {
-	MySQL             MySQLConfig             `mapstructure:"mysql"`
-	Milvus            MilvusConfig            `mapstructure:"milvus"`
 	MessageLogCleanup MessageLogCleanupConfig `mapstructure:"message_log_cleanup"`
+}
+
+type DatabaseConfig struct {
+	DSN string `mapstructure:"dsn"`
 }
 
 // MessageLogCleanupConfig 消息日志清理配置
@@ -152,24 +154,6 @@ type MessageLogCleanupConfig struct {
 	Enabled       *bool `mapstructure:"enabled"`        // 是否启用，默认 true
 	IntervalHours int   `mapstructure:"interval_hours"` // 清理间隔（小时），默认 6
 	KeepLatest    int   `mapstructure:"keep_latest"`    // 每个群保留最新消息数
-}
-
-// MySQLConfig MySQL 数据库配置
-type MySQLConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	User     string `mapstructure:"user"`
-	Password string `mapstructure:"password"`
-	DBName   string `mapstructure:"db_name"`
-}
-
-// MilvusConfig Milvus 向量数据库配置
-type MilvusConfig struct {
-	Address        string `mapstructure:"address"`
-	DBName         string `mapstructure:"db_name"`
-	CollectionName string `mapstructure:"collection_name"`
-	VectorDim      int    `mapstructure:"vector_dim"`
-	MetricType     string `mapstructure:"metric_type"` // IP, L2, COSINE
 }
 
 // StickerConfig 表情包配置
@@ -237,12 +221,10 @@ func Load(path string) (*Config, error) {
 		if token := os.Getenv("MUMU_ONEBOT_TOKEN"); token != "" {
 			loaded.OneBot.AccessToken = token
 		}
-		// MySQL 密码
-		if password := os.Getenv("MUMU_MYSQL_PASSWORD"); password != "" {
-			loaded.Memory.MySQL.Password = password
+		if dsn := os.Getenv("MUMU_DATABASE_DSN"); dsn != "" {
+			loaded.Database.DSN = dsn
 		}
 
-		normalize(loaded)
 		if err := validate(loaded); err != nil {
 			loadErr = err
 			return
@@ -252,13 +234,22 @@ func Load(path string) (*Config, error) {
 	return cfg, loadErr
 }
 
-func normalize(c *Config) {
-	if c.Memory.Milvus.MetricType != "" {
-		c.Memory.Milvus.MetricType = strings.ToUpper(c.Memory.Milvus.MetricType)
-	}
-}
-
 func validate(c *Config) error {
+	if c.Learning.BatchSize == 0 {
+		c.Learning.BatchSize = 100
+	}
+	if c.Learning.MinMsgCount == 0 {
+		c.Learning.MinMsgCount = 5
+	}
+	if c.Learning.BatchSize < 0 {
+		return fmt.Errorf("learning.batch_size 不能小于 0")
+	}
+	if c.Learning.MinMsgCount < 0 {
+		return fmt.Errorf("learning.min_msg_count 不能小于 0")
+	}
+	if c.Learning.BatchSize < c.Learning.MinMsgCount {
+		return fmt.Errorf("learning.batch_size 不能小于 learning.min_msg_count")
+	}
 	if c.OneBot.ReconnectInterval <= 0 {
 		return fmt.Errorf("onebot.reconnect_interval 必须大于 0")
 	}
@@ -276,18 +267,11 @@ func validate(c *Config) error {
 			return fmt.Errorf("chat.time_rules[%d].talk_value 必须在 0 到 1 之间", i)
 		}
 	}
-	if c.Memory.MySQL.Port <= 0 || c.Memory.MySQL.Port > 65535 {
-		return fmt.Errorf("memory.mysql.port 必须在 1 到 65535 之间")
+	if strings.TrimSpace(c.Database.DSN) == "" {
+		return fmt.Errorf("database.dsn 不能为空")
 	}
-	if c.Memory.Milvus.VectorDim < 0 {
-		return fmt.Errorf("memory.milvus.vector_dim 不能小于 0")
-	}
-	if c.Memory.Milvus.MetricType != "" {
-		switch strings.ToUpper(c.Memory.Milvus.MetricType) {
-		case "IP", "L2", "COSINE":
-		default:
-			return fmt.Errorf("memory.milvus.metric_type 必须是 IP、L2 或 COSINE")
-		}
+	if c.Embedding.Dimensions <= 0 {
+		return fmt.Errorf("embedding.dimensions 必须大于 0")
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 必须在 1 到 65535 之间")

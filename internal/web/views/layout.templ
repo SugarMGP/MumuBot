@@ -6,14 +6,14 @@ templ AdminHead(title string, flash *FlashMessage) {
 		<meta name="viewport" content="width=device-width, initial-scale=1"/>
 		<meta name="color-scheme" content="light"/>
 		<title>{ title } - MumuBot</title>
-		<link rel="icon" type="image/svg+xml" href={ faviconHref() }/>
+		<link rel="icon" type="image/svg+xml" href="/favicon.ico"/>
 		<link rel="preconnect" href="https://fonts.font.im"/>
 		<link href="https://fonts.font.im/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 		if flash != nil {
 			<meta id="admin-flash-payload" name="admin-flash" content={ flashJSON(flash) }/>
 		}
-		<link rel="stylesheet" href={ adminCSSHref() }/>
-		<script type="text/javascript" src={ adminJSHref() } defer></script>
+		<link rel="stylesheet" href="/assets/admin.css"/>
+		<script type="text/javascript" src="/assets/admin.js" defer></script>
 	</head>
 }
 

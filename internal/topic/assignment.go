@@ -3,8 +3,6 @@ package topic
 import (
 	"fmt"
 	"strings"
-
-	"mumu-bot/internal/memory"
 )
 
 type topicAssignmentSubmission struct {
@@ -12,22 +10,18 @@ type topicAssignmentSubmission struct {
 }
 
 type topicAssignmentDecision struct {
-	MessageKey  string  `json:"message_key" jsonschema:"description=输入消息的编号，例如 m123"`
-	Action      string  `json:"action" jsonschema:"enum=no_topic,enum=new,enum=reuse,description=分配动作"`
-	TopicID     uint    `json:"topic_id,omitempty" jsonschema:"description=reuse 时填写已有话题 ID"`
-	NewTopicKey string  `json:"new_topic_key,omitempty" jsonschema:"description=创建新话题时填写批内新话题临时编号"`
-	Reason      string  `json:"reason,omitempty" jsonschema:"description=简短判断理由"`
-	Confidence  float64 `json:"confidence,omitempty" jsonschema:"description=0 到 1 的置信度"`
+	MessageKey  string `json:"message_key" jsonschema:"description=输入消息的编号，例如 m123"`
+	Action      string `json:"action" jsonschema:"enum=no_topic,enum=new,enum=reuse,description=分配动作"`
+	TopicID     uint   `json:"topic_id,omitempty" jsonschema:"description=reuse 时填写已有话题 ID"`
+	NewTopicKey string `json:"new_topic_key,omitempty" jsonschema:"description=创建新话题时填写批内新话题临时编号"`
 }
 
 type topicAssignmentCandidate struct {
 	ID            uint
-	Status        memory.TopicThreadStatus
 	Summary       string
 	Tail          string
 	Participants  []string
 	LastMessageID uint
-	Score         float64
 }
 
 func normalizeTopicAssignmentSubmission(raw *topicAssignmentSubmission) []topicAssignmentDecision {
@@ -39,10 +33,6 @@ func normalizeTopicAssignmentSubmission(raw *topicAssignmentSubmission) []topicA
 		item.MessageKey = strings.TrimSpace(item.MessageKey)
 		item.Action = strings.ToLower(strings.TrimSpace(item.Action))
 		item.NewTopicKey = strings.TrimSpace(item.NewTopicKey)
-		item.Reason = strings.TrimSpace(item.Reason)
-		if item.MessageKey == "" {
-			continue
-		}
 		result = append(result, item)
 	}
 	return result
@@ -52,7 +42,7 @@ func buildTopicAssignmentPrompt(groupID int64, messages []topicAssignJob, candid
 	var b strings.Builder
 	fmt.Fprintf(&b, "群 %d 有一批新消息需要分配话题。请按时间顺序判断每条消息：\n", groupID)
 	b.WriteString("- no_topic: 灌水、纯表情、单字附和、无可持续上下文的消息。\n")
-	b.WriteString("- reuse: 归入已有候选话题，topic_id 必须来自候选；候选可能是 active，也可能是 archived。\n")
+	b.WriteString("- reuse: 归入已有候选话题，topic_id 必须来自候选。\n")
 	b.WriteString("- new: 新话题，使用 new_topic_key；同一新话题多条消息必须复用同一个 key。\n")
 	b.WriteString("- 每个 message_key 只能返回一次，不能重复。\n")
 	b.WriteString("\n候选话题：\n")
@@ -60,11 +50,7 @@ func buildTopicAssignmentPrompt(groupID int64, messages []topicAssignJob, candid
 		b.WriteString("无\n")
 	}
 	for _, candidate := range candidates {
-		fmt.Fprintf(&b, "topic_id=%d status=%v last_message_log_id=%d", candidate.ID, candidate.Status, candidate.LastMessageID)
-		if candidate.Score > 0 {
-			fmt.Fprintf(&b, " score=%.3f", candidate.Score)
-		}
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "topic_id=%d last_message_log_id=%d\n", candidate.ID, candidate.LastMessageID)
 		if candidate.Summary != "" {
 			b.WriteString(candidate.Summary + "\n")
 		}
@@ -77,13 +63,11 @@ func buildTopicAssignmentPrompt(groupID int64, messages []topicAssignJob, candid
 	}
 	b.WriteString("\n待分配消息：\n")
 	for _, msg := range messages {
-		text := ""
-		nickname := ""
-		if msg.message != nil {
-			text = messageTopicText(msg.message)
-			nickname = strings.TrimSpace(msg.message.Nickname)
+		fmt.Fprintf(&b, "%s", assignmentMessageKey(msg))
+		if msg.replyTopicID != 0 {
+			fmt.Fprintf(&b, " reply_topic_id=%d", msg.replyTopicID)
 		}
-		fmt.Fprintf(&b, "%s %s: %s\n", assignmentMessageKey(msg), nickname, text)
+		fmt.Fprintf(&b, " %s: %s\n", msg.nickname, msg.text)
 	}
 	b.WriteString("\nassignments 必须覆盖每条输入消息，不要遗漏。")
 	return b.String()

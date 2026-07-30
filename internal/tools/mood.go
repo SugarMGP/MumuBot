@@ -49,6 +49,7 @@ func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (*UpdateMoodOut
 	if err != nil {
 		return &UpdateMoodOutput{Success: false, Message: "更新情绪失败: " + err.Error()}, nil
 	}
+	tc.MarkActed()
 
 	return &UpdateMoodOutput{
 		Success:     true,

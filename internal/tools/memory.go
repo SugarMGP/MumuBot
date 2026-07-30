@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"mumu-bot/internal/memory"
-	"strconv"
+	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -39,7 +39,10 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 	if tc.MessageID <= 0 {
 		return &SaveMemoryOutput{Success: false, Message: "当前消息来源缺失，暂时不能写入长期记忆"}, nil
 	}
-	sourceRef := "message:" + strconv.FormatInt(tc.MessageID, 10)
+	source, err := tc.MemoryMgr.GetMessageLogByID(tc.MessageID)
+	if err != nil {
+		return &SaveMemoryOutput{Success: false, Message: "当前消息来源不存在，暂时不能写入长期记忆"}, nil
+	}
 
 	selfID := int64(0)
 	if tc.Bot != nil {
@@ -51,8 +54,7 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 		RelatedUserID: input.RelatedUserID,
 		SelfID:        selfID,
 		Content:       input.Content,
-		SourceKind:    memory.MemorySourceKindMessage,
-		SourceRef:     sourceRef,
+		MessageLogID:  &source.ID,
 	})
 	if err != nil {
 		return &SaveMemoryOutput{Success: false, Message: err.Error()}, nil
@@ -60,12 +62,11 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 	if mem == nil {
 		return &SaveMemoryOutput{Success: true, Message: "这条信息先不进入长期记忆"}, nil
 	}
+	tc.MarkActed()
 
 	switch action {
 	case "deduplicated":
 		return &SaveMemoryOutput{Success: true, Message: "已补充到已有记忆"}, nil
-	case "reinforced":
-		return &SaveMemoryOutput{Success: true, Message: "已增强已有记忆"}, nil
 	case "merged":
 		return &SaveMemoryOutput{Success: true, Message: "已合并到已有记忆"}, nil
 	default:
@@ -91,7 +92,7 @@ type QueryMemoryInput struct {
 	// Query 搜索关键词或描述
 	Query string `json:"query" jsonschema:"description=搜索关键词或自然语言描述"`
 	// Type 限定记忆类型（可选）
-	Type string `json:"type,omitempty" jsonschema:"enum=,enum=group_fact,enum=self_experience,enum=conversation,description=筛选记忆类型（空字符串时不筛选）"`
+	Scope string `json:"scope,omitempty" jsonschema:"enum=,enum=group,enum=self,enum=member,description=筛选记忆主体范围（空字符串时不筛选）"`
 	// Scoped 是否只搜索当前聊天群的记忆
 	Scoped bool `json:"scoped,omitempty" jsonschema:"description=是否只搜索当前聊天群的记忆，默认false"`
 	// Limit 返回结果数量限制，默认10，最大50
@@ -131,7 +132,8 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 		limit = 50
 	}
 
-	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, groupID, memory.MemoryType(input.Type), limit)
+	scope := memory.MemoryScope(strings.TrimSpace(input.Scope))
+	memories, err := tc.MemoryMgr.QueryMemory(ctx, input.Query, groupID, scope, limit)
 	if err != nil {
 		return &QueryMemoryOutput{Success: false, Message: err.Error()}, nil
 	}
@@ -139,9 +141,9 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 	results := make([]map[string]interface{}, 0, len(memories))
 	for _, m := range memories {
 		results = append(results, map[string]interface{}{
-			"type":       m.Type,
+			"scope":      m.Scope,
+			"kind":       m.Kind,
 			"content":    m.Content,
-			"importance": m.Importance,
 			"created_at": m.CreatedAt.Format("2006-01-02 15:04"),
 		})
 	}

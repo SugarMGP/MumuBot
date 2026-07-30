@@ -4,35 +4,47 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/vector"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"mumu-bot/internal/config"
+
 	"github.com/cloudwego/eino/components/model"
+	pgvector "github.com/pgvector/pgvector-go"
 	"go.uber.org/zap"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
+type EmbeddingProvider interface {
+	Embed(ctx context.Context, text string) ([]float64, error)
+}
+
 type MemoryIngestInput struct {
-	GroupID               int64
-	RelatedUserID         int64
-	SelfID                int64
-	Content               string
-	SourceKind            MemorySourceKind
-	SourceRef             string
-	SubjectCandidates     []TopicParticipantRef
-	AllowedCanonicalTypes []CanonicalMemoryType
+	GroupID           int64
+	RelatedUserID     int64
+	SelfID            int64
+	Content           string
+	MessageLogID      *uint
+	TopicSummaryID    *uint
+	SubjectCandidates []TopicParticipantRef
+	AllowedKinds      []MemoryKind
 }
 
 type TopicMemoryCandidateInput struct {
-	GroupID               int64
-	TopicID               uint
-	SelfID                int64
-	Claims                []string
-	Participants          []TopicParticipantRef
-	AllowedCanonicalTypes []CanonicalMemoryType
+	GroupID        int64
+	TopicSummaryID uint
+	SelfID         int64
+	Claims         []TopicMemoryClaimInput
+	Participants   []TopicParticipantRef
+}
+
+type TopicMemoryClaimInput struct {
+	Content      string
+	AllowedKinds []MemoryKind
 }
 
 type memoryMergeInput struct {
@@ -47,712 +59,367 @@ type memoryMergeDecision struct {
 	MergedContent string
 }
 
-// EmbeddingProvider 向量嵌入接口
-type EmbeddingProvider interface {
-	Embed(ctx context.Context, text string) ([]float64, error)
-}
-
-type VectorStore interface {
-	Upsert(ctx context.Context, memoryID uint, groupID int64, memType string, embedding []float64) (int64, error)
-	Search(ctx context.Context, embedding []float64, groupID int64, memType string, topK int, threshold float64) ([]vector.SearchResult, error)
-	Delete(ctx context.Context, memoryIDs []uint) error
-	Close() error
-}
-
-type MemoryCandidateWriter interface {
-	UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error)
-}
-
-// Manager 记忆系统管理器
 type Manager struct {
-	db              *gorm.DB
-	embedding       EmbeddingProvider
-	claimModel      model.BaseChatModel
-	milvus          VectorStore // Memory 向量存储
-	styleCardMilvus VectorStore // StyleCard 向量存储
-	topicMilvus     VectorStore // Topic 摘要向量存储
-	cleanupStop     chan struct{}
+	db          *gorm.DB
+	embedding   EmbeddingProvider
+	claimModel  model.BaseChatModel
+	cleanupStop chan struct{}
+	stopOnce    sync.Once
+	background  sync.WaitGroup
 }
 
-// NewManager 创建记忆管理器
 func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatModel) (*Manager, error) {
 	if embedding == nil {
-		return nil, fmt.Errorf("embedding 未初始化，Milvus 为强制依赖")
+		return nil, fmt.Errorf("embedding 未初始化")
 	}
 	if claimModel == nil {
 		return nil, fmt.Errorf("claimModel 未初始化")
 	}
-
-	// 构建 MySQL DSN
 	cfg := config.Get()
-	mysqlCfg := cfg.Memory.MySQL
-	if mysqlCfg.Host == "" {
-		mysqlCfg.Host = "127.0.0.1"
-	}
-	if mysqlCfg.Port == 0 {
-		mysqlCfg.Port = 3306
-	}
-	if mysqlCfg.DBName == "" {
-		mysqlCfg.DBName = "mumu_bot"
-	}
-
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		mysqlCfg.User,
-		mysqlCfg.Password,
-		mysqlCfg.Host,
-		mysqlCfg.Port,
-		mysqlCfg.DBName,
-	)
-
-	db, err := gorm.Open(mysql.Open(dsn))
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN))
 	if err != nil {
-		return nil, fmt.Errorf("连接 MySQL 数据库失败: %w", err)
+		return nil, fmt.Errorf("连接 PostgreSQL 数据库失败: %w", err)
 	}
-
-	// 迁移所有表
-	if err := db.AutoMigrate(
-		&Memory{},
-		&MemberProfile{},
-		&StyleCard{},
-		&Jargon{},
-		&MessageLog{},
-		&TopicThread{},
-		&Sticker{},
-		&MoodState{},
-		&LearningState{},
-	); err != nil {
-		return nil, fmt.Errorf("数据库迁移失败: %w", err)
+	if err := verifyExtensions(db); err != nil {
+		return nil, err
 	}
-	milvusCfg := &vector.MilvusConfig{
-		Address:        cfg.Memory.Milvus.Address,
-		DBName:         cfg.Memory.Milvus.DBName,
-		CollectionName: cfg.Memory.Milvus.CollectionName,
-		VectorDim:      cfg.Memory.Milvus.VectorDim,
-		MetricType:     cfg.Memory.Milvus.MetricType,
+	if err := migrateSchema(db, cfg.Embedding.Dimensions); err != nil {
+		return nil, fmt.Errorf("初始化 PostgreSQL 数据结构失败: %w", err)
 	}
-	milvusClient, err := vector.NewMilvusClient(milvusCfg)
-	if err != nil {
-		return nil, fmt.Errorf("连接记忆 Milvus 失败: %w", err)
-	}
-
-	styleMilvusCfg := &vector.MilvusConfig{
-		Address:        cfg.Memory.Milvus.Address,
-		DBName:         cfg.Memory.Milvus.DBName,
-		CollectionName: styleCardCollectionName(cfg.Memory.Milvus.CollectionName),
-		VectorDim:      cfg.Memory.Milvus.VectorDim,
-		MetricType:     cfg.Memory.Milvus.MetricType,
-	}
-	styleMilvusClient, err := vector.NewMilvusClient(styleMilvusCfg)
-	if err != nil {
-		_ = milvusClient.Close()
-		return nil, fmt.Errorf("连接风格卡片 Milvus 失败: %w", err)
-	}
-
-	topicMilvusCfg := &vector.MilvusConfig{
-		Address:        cfg.Memory.Milvus.Address,
-		DBName:         cfg.Memory.Milvus.DBName,
-		CollectionName: topicSummaryCollectionName(cfg.Memory.Milvus.CollectionName),
-		VectorDim:      cfg.Memory.Milvus.VectorDim,
-		MetricType:     cfg.Memory.Milvus.MetricType,
-	}
-	topicMilvusClient, err := vector.NewMilvusClient(topicMilvusCfg)
-	if err != nil {
-		_ = styleMilvusClient.Close()
-		_ = milvusClient.Close()
-		return nil, fmt.Errorf("连接话题摘要 Milvus 失败: %w", err)
-	}
-
-	zap.L().Info("Milvus 向量存储已连接",
-		zap.String("memory_collection", milvusCfg.CollectionName),
-		zap.String("style_card_collection", styleMilvusCfg.CollectionName),
-		zap.String("topic_summary_collection", topicMilvusCfg.CollectionName))
-
-	m := &Manager{
-		db:              db,
-		embedding:       embedding,
-		claimModel:      claimModel,
-		milvus:          milvusClient,
-		styleCardMilvus: styleMilvusClient,
-		topicMilvus:     topicMilvusClient,
-		cleanupStop:     make(chan struct{}),
-	}
-	// 启动消息日志清理任务
+	m := &Manager{db: db, embedding: embedding, claimModel: claimModel, cleanupStop: make(chan struct{})}
 	m.startMessageLogCleanup()
-
-	// 启动情绪衰减任务
 	m.startMoodDecay()
-
 	return m, nil
 }
 
-// ==================== 短期记忆 ====================
+func verifyExtensions(db *gorm.DB) error {
+	for _, name := range []string{"vector", "pg_trgm"} {
+		var count int64
+		if err := db.Raw("SELECT count(*) FROM pg_extension WHERE extname = ?", name).Scan(&count).Error; err != nil {
+			return fmt.Errorf("检查 PostgreSQL 扩展 %s: %w", name, err)
+		}
+		if count != 1 {
+			return fmt.Errorf("PostgreSQL 缺少扩展 %s，请由数据库管理员先安装", name)
+		}
+	}
+	return nil
+}
 
-// GetRecentMessages 获取最近的消息记录
-func (m *Manager) GetRecentMessages(groupID int64, limit, offset int) []MessageLog {
-	var dbMsgs []MessageLog
-	q := m.db.Where("group_id = ?", groupID).Order("created_at DESC").Limit(limit)
+func migrateSchema(db *gorm.DB, dimensions int) error {
+	models := []any{
+		&MessageLog{}, &TopicThread{}, &TopicAssignment{}, &TopicSummaryRecord{},
+		&Memory{}, &MemoryEvidence{}, &StylePattern{}, &StylePatternEvidence{},
+		&Jargon{}, &JargonEvidence{}, &MemberProfile{}, &MemberName{}, &MemberTrait{},
+		&MemberTraitEvidence{}, &LearningState{}, &Sticker{}, &MoodState{},
+	}
+	if err := db.AutoMigrate(models...); err != nil {
+		return err
+	}
+	for _, table := range []string{"memories", "topic_summaries", "style_patterns"} {
+		stmt := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN embedding TYPE vector(%d)", table, dimensions)
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+	statements := []string{
+		`ALTER TABLE topic_assignments DROP CONSTRAINT IF EXISTS fk_topic_assignments_message`,
+		`ALTER TABLE topic_assignments ADD CONSTRAINT fk_topic_assignments_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE CASCADE`,
+		`ALTER TABLE topic_assignments DROP CONSTRAINT IF EXISTS fk_topic_assignments_topic`,
+		`ALTER TABLE topic_assignments ADD CONSTRAINT fk_topic_assignments_topic FOREIGN KEY (topic_id) REFERENCES topic_threads(id) ON DELETE RESTRICT`,
+		`ALTER TABLE topic_summaries DROP CONSTRAINT IF EXISTS fk_topic_summaries_assignment`,
+		`ALTER TABLE topic_summaries ADD CONSTRAINT fk_topic_summaries_assignment FOREIGN KEY (through_topic_assignment_id) REFERENCES topic_assignments(id) ON DELETE RESTRICT`,
+		`ALTER TABLE memories DROP CONSTRAINT IF EXISTS memories_scope_subject_check`,
+		`ALTER TABLE memories ADD CONSTRAINT memories_scope_subject_check CHECK ((scope = 'member' AND subject_user_id IS NOT NULL) OR (scope <> 'member' AND subject_user_id IS NULL))`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_active_memory_content ON memories (group_id, scope, COALESCE(subject_user_id, 0), kind, lower(btrim(content))) WHERE status = 'active'`,
+		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS memory_evidence_source_check`,
+		`ALTER TABLE memory_evidence ADD CONSTRAINT memory_evidence_source_check CHECK ((message_log_id IS NOT NULL)::int + (topic_summary_id IS NOT NULL)::int = 1)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_message_evidence ON memory_evidence(memory_id, message_log_id) WHERE message_log_id IS NOT NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_summary_evidence ON memory_evidence(memory_id, topic_summary_id) WHERE topic_summary_id IS NOT NULL`,
+		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS fk_memory_evidence_memory`,
+		`ALTER TABLE memory_evidence ADD CONSTRAINT fk_memory_evidence_memory FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE`,
+		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS fk_memory_evidence_message`,
+		`ALTER TABLE memory_evidence ADD CONSTRAINT fk_memory_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
+		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS fk_memory_evidence_summary`,
+		`ALTER TABLE memory_evidence ADD CONSTRAINT fk_memory_evidence_summary FOREIGN KEY (topic_summary_id) REFERENCES topic_summaries(id) ON DELETE RESTRICT`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_style_pattern_text ON style_patterns(group_id, lower(btrim(situation)), lower(btrim(expression)))`,
+		`ALTER TABLE style_pattern_evidence DROP CONSTRAINT IF EXISTS fk_style_evidence_pattern`,
+		`ALTER TABLE style_pattern_evidence ADD CONSTRAINT fk_style_evidence_pattern FOREIGN KEY (style_pattern_id) REFERENCES style_patterns(id) ON DELETE CASCADE`,
+		`ALTER TABLE style_pattern_evidence DROP CONSTRAINT IF EXISTS fk_style_evidence_message`,
+		`ALTER TABLE style_pattern_evidence ADD CONSTRAINT fk_style_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_jargon_term ON jargons(group_id, lower(btrim(term)))`,
+		`ALTER TABLE jargon_evidence DROP CONSTRAINT IF EXISTS fk_jargon_evidence_jargon`,
+		`ALTER TABLE jargon_evidence ADD CONSTRAINT fk_jargon_evidence_jargon FOREIGN KEY (jargon_id) REFERENCES jargons(id) ON DELETE CASCADE`,
+		`ALTER TABLE jargon_evidence DROP CONSTRAINT IF EXISTS fk_jargon_evidence_message`,
+		`ALTER TABLE jargon_evidence ADD CONSTRAINT fk_jargon_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_member_trait ON member_traits(user_id, kind, lower(btrim(value)))`,
+		`ALTER TABLE member_names DROP CONSTRAINT IF EXISTS fk_member_names_profile`,
+		`ALTER TABLE member_names ADD CONSTRAINT fk_member_names_profile FOREIGN KEY (user_id) REFERENCES member_profiles(user_id) ON DELETE CASCADE`,
+		`ALTER TABLE member_traits DROP CONSTRAINT IF EXISTS fk_member_traits_profile`,
+		`ALTER TABLE member_traits ADD CONSTRAINT fk_member_traits_profile FOREIGN KEY (user_id) REFERENCES member_profiles(user_id) ON DELETE CASCADE`,
+		`ALTER TABLE member_trait_evidence DROP CONSTRAINT IF EXISTS fk_member_trait_evidence_trait`,
+		`ALTER TABLE member_trait_evidence ADD CONSTRAINT fk_member_trait_evidence_trait FOREIGN KEY (member_trait_id) REFERENCES member_traits(id) ON DELETE CASCADE`,
+		`ALTER TABLE member_trait_evidence DROP CONSTRAINT IF EXISTS fk_member_trait_evidence_message`,
+		`ALTER TABLE member_trait_evidence ADD CONSTRAINT fk_member_trait_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
+	}
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&MoodState{ID: 1, Energy: 0.5, Sociability: 0.5}).Error
+}
+
+func EmbeddingVector(values []float64) (pgvector.Vector, error) {
+	expected := config.Get().Embedding.Dimensions
+	if len(values) != expected {
+		return pgvector.Vector{}, fmt.Errorf("embedding 维度不匹配: got %d, want %d", len(values), expected)
+	}
+	result := make([]float32, len(values))
+	for i, value := range values {
+		result[i] = float32(value)
+	}
+	return pgvector.NewVector(result), nil
+}
+
+func (m *Manager) GetRecentMessages(groupID, throughOneBotMessageID int64, limit, offset int) []MessageLog {
+	var items []MessageLog
+	q := m.db.Where("group_id = ?", groupID).Order("message_time DESC, id DESC").Limit(limit)
+	if throughOneBotMessageID > 0 {
+		upperBound := m.db.Model(&MessageLog{}).Select("id").
+			Where("group_id = ? AND one_bot_message_id = ?", groupID, throughOneBotMessageID)
+		q = q.Where("message_logs.id <= (?)", upperBound)
+	}
 	if offset > 0 {
 		q = q.Offset(offset)
 	}
-	q.Find(&dbMsgs)
-
-	// 反转，按时间正序排列
-	for i, j := 0, len(dbMsgs)-1; i < j; i, j = i+1, j-1 {
-		dbMsgs[i], dbMsgs[j] = dbMsgs[j], dbMsgs[i]
+	if err := q.Find(&items).Error; err != nil {
+		zap.L().Warn("读取最近消息失败", zap.Int64("group_id", groupID), zap.Error(err))
+		return nil
 	}
-	return dbMsgs
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+	return items
 }
 
-func (m *Manager) GetProcessableLearningMessages(groupID int64, selfID int64, lastID uint, limit int) ([]MessageLog, error) {
-	var dbMsgs []MessageLog
-	err := m.db.Where("group_id = ? AND id > ? AND user_id != ?", groupID, lastID, selfID).
-		Order("id ASC").Limit(limit).Find(&dbMsgs).Error
-	if err != nil || len(dbMsgs) == 0 {
-		return dbMsgs, err
-	}
-
-	ready := make([]MessageLog, 0, len(dbMsgs))
-	for _, msg := range dbMsgs {
-		if msg.TopicThreadID == 0 && strings.TrimSpace(msg.TopicMatchReason) == "" {
-			break
-		}
-		ready = append(ready, msg)
-	}
-	return ready, nil
-}
-
-// GetMessageCountByTime 获取指定用户在指定群组一段时间内的消息数量
-func (m *Manager) GetMessageCountByTime(groupID, userID int64, startTime time.Time) (int64, error) {
+func (m *Manager) GetMessageCountByTime(groupID, userID int64, start time.Time) (int64, error) {
 	var count int64
-	err := m.db.Model(&MessageLog{}).
-		Where("group_id = ? AND user_id = ? AND created_at >= ?", groupID, userID, startTime).
-		Count(&count).Error
+	err := m.db.Model(&MessageLog{}).Where("group_id = ? AND user_id = ? AND message_time >= ?", groupID, userID, start).Count(&count).Error
 	return count, err
 }
 
-// ==================== 长期记忆 ====================
+type rankedID struct {
+	ID   uint
+	Rank int
+}
 
-// SearchSimilarMemories 按群和记忆类型搜索相似记忆
-func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupID int64, memType MemoryType, limit int, threshold float64) ([]Memory, error) {
-	if m.milvus == nil || m.embedding == nil {
-		return nil, errors.New("向量检索未启用")
-	}
-	if limit <= 0 {
-		limit = 15
-	}
+type rankedIDRow struct{ ID uint }
 
-	emb, err := m.embedding.Embed(ctx, text)
-	if err != nil {
-		return nil, err
+func rankRows(rows []rankedIDRow) []rankedID {
+	result := make([]rankedID, len(rows))
+	for i, row := range rows {
+		result[i] = rankedID{ID: row.ID, Rank: i + 1}
 	}
+	return result
+}
 
-	results, err := m.milvusVectorSearch(ctx, emb, groupID, string(memType), limit, threshold)
-	if err != nil {
-		return nil, err
-	}
-	memories := prioritizeRecallMemories(results, limit)
-	if len(memories) < limit {
-		exclude := memoryIDSet(memories)
-		extra, err := m.keywordSearchMemories(ctx, text, groupID, memType, limit-len(memories), exclude)
-		if err != nil {
-			return nil, err
+func fuseRRF(lists ...[]rankedID) []uint {
+	scores := make(map[uint]float64)
+	for _, list := range lists {
+		for _, item := range list {
+			scores[item.ID] += 1 / float64(60+item.Rank)
 		}
-		memories = append(memories, extra...)
 	}
-	return memories, nil
+	ids := make([]uint, 0, len(scores))
+	for id := range scores {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if scores[ids[i]] == scores[ids[j]] {
+			return ids[i] < ids[j]
+		}
+		return scores[ids[i]] > scores[ids[j]]
+	})
+	return ids
 }
 
-// DeleteMemory 删除记忆
-func (m *Manager) DeleteMemory(ctx context.Context, id uint) error {
-	if id == 0 {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var old Memory
-	if err := m.db.WithContext(ctx).First(&old, id).Error; err != nil {
-		return err
-	}
-	if err := m.db.WithContext(ctx).Delete(&Memory{}, id).Error; err != nil {
-		return err
-	}
-	if err := m.deleteMemoryVector(ctx, id); err != nil {
-		m.restoreDeletedMemoryRowsBestEffort(ctx, old)
-		return err
-	}
-	return nil
-}
-
-func (m *Manager) updateMemoryFields(ctx context.Context, id uint, modifier func(*Memory)) (*Memory, error) {
-	if id == 0 {
+func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupID int64, scope MemoryScope, limit int, vectorThreshold float64) ([]Memory, error) {
+	text = strings.TrimSpace(text)
+	if text == "" || limit <= 0 {
 		return nil, nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var old Memory
-	if err := m.db.WithContext(ctx).First(&old, id).Error; err != nil {
-		return nil, err
-	}
-	next := old
-	modifier(&next)
-	prepared, err := m.prepareMemoryVector(ctx, next)
+	embedding, err := m.embedding.Embed(ctx, text)
 	if err != nil {
 		return nil, err
 	}
-	var updated Memory
-	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(&next).Error; err != nil {
-			return err
+	base := "status = 'active'"
+	args := []any{}
+	if groupID != 0 {
+		base += " AND group_id = ?"
+		args = append(args, groupID)
+	}
+	if scope != "" {
+		base += " AND scope = ?"
+		args = append(args, scope)
+	}
+	var vectorRows []rankedIDRow
+	vectorSQL := "SELECT id FROM memories WHERE " + base + " AND 1 - (embedding <=> ?) >= ? ORDER BY embedding <=> ? LIMIT 20"
+	vector, err := EmbeddingVector(embedding)
+	if err != nil {
+		return nil, err
+	}
+	vectorArgs := append(append([]any{}, args...), vector, vectorThreshold, vector)
+	if err := m.db.WithContext(ctx).Raw(vectorSQL, vectorArgs...).Scan(&vectorRows).Error; err != nil {
+		return nil, err
+	}
+	var textRows []rankedIDRow
+	textSQL := "SELECT id FROM memories WHERE " + base + " AND similarity(content, ?) >= 0.1 ORDER BY similarity(content, ?) DESC LIMIT 20"
+	textArgs := append(append([]any{}, args...), text, text)
+	if err := m.db.WithContext(ctx).Raw(textSQL, textArgs...).Scan(&textRows).Error; err != nil {
+		return nil, err
+	}
+	ids := fuseRRF(rankRows(vectorRows), rankRows(textRows))
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	return m.loadMemoriesInOrder(ctx, ids)
+}
+
+func (m *Manager) loadMemoriesInOrder(ctx context.Context, ids []uint) ([]Memory, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []Memory
+	if err := m.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[uint]Memory, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	result := make([]Memory, 0, len(rows))
+	for _, id := range ids {
+		if row, ok := byID[id]; ok {
+			result = append(result, row)
 		}
-		updated = next
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	if prepared != nil {
-		prepared.memory = updated
+	return result, nil
+}
+
+func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, scope MemoryScope, limit int) ([]Memory, error) {
+	if limit <= 0 {
+		limit = 10
 	}
-	if err := m.upsertMemoryVector(ctx, prepared); err != nil {
-		m.restoreExistingMemoryRowBestEffort(ctx, old)
-		m.restoreMemoryVectorsBestEffort(ctx, old)
-		return nil, err
-	}
-	return &updated, nil
+	return m.SearchSimilarMemories(ctx, query, groupID, scope, limit, 0.3)
+}
+
+func (m *Manager) DeleteMemory(ctx context.Context, id uint) error {
+	return m.db.WithContext(ctx).Delete(&Memory{}, id).Error
 }
 
 func (m *Manager) ArchiveMemory(ctx context.Context, id uint) error {
-	_, err := m.updateMemoryFields(ctx, id, func(mem *Memory) {
-		mem.Status = MemoryStatusArchived
-		mem.UpdatedAt = time.Now()
-	})
-	return err
+	return m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusArchived).Error
 }
 
 func (m *Manager) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	_, err := m.updateMemoryFields(ctx, id, func(mem *Memory) {
-		mem.Status = MemoryStatusCandidate
-		mem.UpdatedAt = time.Now()
-	})
-	return err
-}
-
-// SaveMemory 保存长期记忆
-func (m *Manager) SaveMemory(ctx context.Context, mem *Memory) error {
-	if mem == nil {
-		return nil
-	}
-	mem.Content = strings.TrimSpace(mem.Content)
-	if mem.Content == "" {
-		return fmt.Errorf("记忆内容不能为空")
-	}
-	if mem.EvidenceCount <= 0 {
-		mem.EvidenceCount = 1
-	}
-	if mem.Status == "" {
-		mem.Status = MemoryStatusActive
-	}
-	if mem.CanonicalType == "" {
-		return fmt.Errorf("记忆规范类型不能为空")
-	}
-	if mem.Importance <= 0 {
-		mem.Importance = importanceForStatus(mem.CanonicalType, mem.Status, mem.EvidenceCount)
-	}
-
-	if mem.ID == 0 {
-		created, err := m.createMemoryWithVector(ctx, mem)
-		if err != nil {
-			return err
-		}
-		if created != nil {
-			*mem = *created
-		}
-		return nil
-	}
-	updated, err := m.updateMemoryFields(ctx, mem.ID, func(existing *Memory) {
-		existing.Type = mem.Type
-		existing.GroupID = mem.GroupID
-		existing.UserID = mem.UserID
-		existing.Content = mem.Content
-		existing.Importance = mem.Importance
-		existing.AccessCount = mem.AccessCount
-		existing.CanonicalType = mem.CanonicalType
-		existing.Status = mem.Status
-		existing.EvidenceCount = mem.EvidenceCount
-		existing.SourceKind = mem.SourceKind
-		existing.SourceRef = mem.SourceRef
-		existing.FactKey = mem.FactKey
-	})
-	if err != nil {
-		return err
-	}
-	if updated != nil {
-		*mem = *updated
-	}
-	return nil
+	return m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusCandidate).Error
 }
 
 func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error) {
-	if input.TopicID == 0 || input.GroupID == 0 || len(input.Claims) == 0 {
+	if input.TopicSummaryID == 0 {
 		return nil, nil
 	}
-
-	created := make([]Memory, 0, len(input.Claims))
-	seen := make(map[string]struct{}, len(input.Claims))
-	for idx, line := range input.Claims {
-		line = strings.TrimSpace(strings.TrimLeft(line, "-•*1234567890. "))
-		if line == "" {
+	preparedItems := make([]preparedMemory, 0, len(input.Claims))
+	seen := make(map[string]struct{})
+	for _, claim := range input.Claims {
+		content := strings.TrimSpace(strings.TrimLeft(claim.Content, "-•*1234567890. "))
+		if content == "" {
 			continue
 		}
-		if _, ok := seen[line]; ok {
+		key := NormalizeContent(content) + "|" + allowedKindsPrompt(claim.AllowedKinds)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[line] = struct{}{}
-
-		mem, action, err := m.IngestMemory(ctx, MemoryIngestInput{
-			GroupID:               input.GroupID,
-			SelfID:                input.SelfID,
-			Content:               line,
-			SourceKind:            MemorySourceKindTopic,
-			SourceRef:             fmt.Sprintf("topic:%d", input.TopicID),
-			SubjectCandidates:     input.Participants,
-			AllowedCanonicalTypes: input.AllowedCanonicalTypes,
+		seen[key] = struct{}{}
+		prepared, err := m.prepareMemory(ctx, MemoryIngestInput{
+			GroupID: input.GroupID, SelfID: input.SelfID, Content: content,
+			TopicSummaryID: &input.TopicSummaryID, SubjectCandidates: input.Participants, AllowedKinds: claim.AllowedKinds,
 		})
 		if err != nil {
 			return nil, err
 		}
-		if mem == nil {
-			continue
+		if prepared != nil {
+			preparedItems = append(preparedItems, *prepared)
 		}
-		if action != "ignored" {
-			created = append(created, *mem)
-		}
-		if idx >= 11 {
+		if len(preparedItems) == 12 {
 			break
 		}
 	}
-	return created, nil
-}
-
-// QueryMemory 查询相关记忆
-func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, memType MemoryType, limit int) ([]Memory, error) {
-	if limit <= 0 {
-		limit = 10
-	}
-	var memories []Memory
-	// 尝试 Milvus 向量搜索
-	if m.milvus != nil && m.embedding != nil {
-		if emb, err := m.embedding.Embed(ctx, query); err == nil {
-			if results, err := m.milvusVectorSearch(ctx, emb, groupID, string(memType), limit, 0.7); err == nil && len(results) > 0 {
-				memories = prioritizeRecallMemories(results, limit)
+	result := make([]Memory, 0, len(preparedItems))
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, prepared := range preparedItems {
+			item, _, err := applyPreparedMemory(tx, MemoryIngestInput{TopicSummaryID: &input.TopicSummaryID}, prepared)
+			if err != nil {
+				return err
 			}
+			result = append(result, *item)
 		}
-	}
-	if len(memories) >= limit {
-		return memories, nil
-	}
-
-	extra, err := m.keywordSearchMemories(ctx, query, groupID, memType, limit-len(memories), memoryIDSet(memories))
-	if err != nil {
-		return memories, err
-	}
-	memories = append(memories, extra...)
-	return prioritizeRecallMemories(memories, limit), nil
+		return tx.Model(&TopicSummaryRecord{}).Where("id = ? AND memory_processed = false", input.TopicSummaryID).
+			Update("memory_processed", true).Error
+	})
+	return result, err
 }
 
-func (m *Manager) keywordSearchMemories(ctx context.Context, query string, groupID int64, memType MemoryType, limit int, exclude map[uint]struct{}) ([]Memory, error) {
-	var memories []Memory
-	if limit <= 0 {
-		return memories, nil
-	}
-	q := m.db.Model(&Memory{})
-	if groupID != 0 {
-		q = q.Where("group_id = ?", groupID)
-	}
-	if memType != "" {
-		q = q.Where("type = ?", memType)
-	}
-	q = q.Where("(status = ? OR status = ? OR status = '')", MemoryStatusActive, MemoryStatusLegacy)
-	if len(exclude) > 0 {
-		ids := make([]uint, 0, len(exclude))
-		for id := range exclude {
-			ids = append(ids, id)
-		}
-		q = q.Where("id NOT IN ?", ids)
-	}
-	keywords := strings.Fields(query)
-	if len(keywords) == 0 {
-		return memories, nil
-	}
-	likeConditions := make([]string, 0, len(keywords))
-	args := make([]interface{}, 0, len(keywords))
-	for _, kw := range keywords {
-		likeConditions = append(likeConditions, "content LIKE ?")
-		args = append(args, "%"+kw+"%")
-	}
-	err := q.WithContext(ctx).Where(strings.Join(likeConditions, " OR "), args...).
-		Order("importance DESC, updated_at DESC").
-		Limit(limit).
-		Find(&memories).Error
-	if err != nil {
-		return memories, err
-	}
-
-	if len(memories) > 0 {
-		memoryIDs := make([]uint, 0, len(memories))
-		for _, mem := range memories {
-			memoryIDs = append(memoryIDs, mem.ID)
-		}
-		_ = m.db.WithContext(ctx).Model(&Memory{}).Where("id IN ?", memoryIDs).Updates(map[string]any{
-			"access_count": gorm.Expr("access_count + 1"),
-		}).Error
-	}
-
-	return prioritizeRecallMemories(memories, limit), nil
-}
-
-// milvusVectorSearch 使用 Milvus 进行向量搜索并返回完整的 Memory 对象
-func (m *Manager) milvusVectorSearch(ctx context.Context, queryEmb []float64, groupID int64, memType string, limit int, threshold float64) ([]Memory, error) {
-	searchLimit := limit * 3
-	if searchLimit < limit+20 {
-		searchLimit = limit + 20
-	}
-	results, err := m.milvus.Search(ctx, queryEmb, groupID, memType, searchLimit, threshold)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(results) == 0 {
-		return nil, nil
-	}
-
-	// 获取对应的记忆
-	memoryIDs := make([]uint, 0, len(results))
-	for _, r := range results {
-		memoryIDs = append(memoryIDs, r.MemoryID)
-	}
-
-	var memories []Memory
-	if err := m.db.Where("id IN ? AND (status = ? OR status = ? OR status = '')", memoryIDs, MemoryStatusActive, MemoryStatusLegacy).Find(&memories).Error; err != nil {
-		return nil, err
-	}
-
-	// 按照搜索结果的顺序排序
-	memoryMap := make(map[uint]Memory)
-	for _, mem := range memories {
-		memoryMap[mem.ID] = mem
-	}
-
-	sortedMemories := make([]Memory, 0, len(results))
-	for _, r := range results {
-		if mem, ok := memoryMap[r.MemoryID]; ok {
-			sortedMemories = append(sortedMemories, mem)
-			if len(sortedMemories) >= limit {
-				break
-			}
-		}
-	}
-	if len(sortedMemories) > 0 {
-		memoryIDs = memoryIDs[:0]
-		for _, mem := range sortedMemories {
-			memoryIDs = append(memoryIDs, mem.ID)
-		}
-		_ = m.db.WithContext(ctx).Model(&Memory{}).Where("id IN ?", memoryIDs).Updates(map[string]any{
-			"access_count": gorm.Expr("access_count + 1"),
-		}).Error
-	}
-
-	return sortedMemories, nil
-}
-
-// ==================== 成员画像 ====================
-
-// GetMemberProfile 获取成员画像
 func (m *Manager) GetMemberProfile(userID int64) (*MemberProfile, error) {
 	var profile MemberProfile
-	err := m.db.Where("user_id = ?", userID).First(&profile).Error
-	if err != nil {
+	if err := m.db.First(&profile, "user_id = ?", userID).Error; err != nil {
 		return nil, err
 	}
 	return &profile, nil
 }
 
-// GetOrCreateMemberProfile 获取或创建成员画像
-func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string) (*MemberProfile, error) {
-	var profile MemberProfile
-	err := m.db.Where("user_id = ?", userID).First(&profile).Error
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		profile = MemberProfile{
-			UserID:    userID,
-			Nickname:  nickname,
-			Activity:  0.5, // 初始活跃度
-			Intimacy:  0.3, // 初始亲密度
-			LastSpeak: time.Now(),
-		}
-		if err := m.db.Create(&profile).Error; err != nil {
-			return nil, err
-		}
-		return &profile, nil
-	}
-	return &profile, err
-}
-
-// UpdateMemberProfile 更新成员画像
-func (m *Manager) UpdateMemberProfile(profile *MemberProfile) error {
-	var existing MemberProfile
-	if err := m.db.Where("user_id = ?", profile.UserID).First(&existing).Error; err != nil {
-		return err
-	}
-
-	profile.Activity = applyActivityUpdate(profile.Activity, existing.LastSpeak, profile.LastSpeak)
-	return m.db.Save(profile).Error
-}
-
-// ==================== 列表查询（供管理界面用）====================
-
-func (m *Manager) ListMemories(groupID int64, memType string, page, pageSize int) ([]Memory, int64, error) {
-	var items []Memory
-	var total int64
-
-	q := m.db.Model(&Memory{})
-	if groupID > 0 {
-		q = q.Where("group_id = ?", groupID)
-	}
-	if memType != "" {
-		q = q.Where("type = ?", memType)
-	}
-	q.Count(&total)
-
-	err := q.Order("updated_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
-	return items, total, err
-}
-
-func (m *Manager) ListMemberProfiles(page, pageSize int) ([]MemberProfile, int64, error) {
-	var items []MemberProfile
-	var total int64
-
-	q := m.db.Model(&MemberProfile{})
-	q.Count(&total)
-
-	err := q.Order("msg_count DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
-	return items, total, err
-}
-
-func (m *Manager) ListMessageLogs(groupID int64, page, pageSize int) ([]MessageLog, int64, error) {
-	var items []MessageLog
-	var total int64
-
-	q := m.db.Model(&MessageLog{})
-	if groupID > 0 {
-		q = q.Where("group_id = ?", groupID)
-	}
-	q.Count(&total)
-
-	err := q.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
-	return items, total, err
-}
-
-// GetMessageLogByID 根据消息ID获取消息日志
-func (m *Manager) GetMessageLogByID(messageID string) (*MessageLog, error) {
-	var log MessageLog
-	err := m.db.Where("message_id = ?", messageID).First(&log).Error
+func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt time.Time) (*MemberProfile, error) {
+	profile := MemberProfile{UserID: userID, Nickname: nickname, LastSeenAt: seenAt, MessageCount: 1}
+	err := m.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"nickname":      gorm.Expr("CASE WHEN EXCLUDED.last_seen_at >= member_profiles.last_seen_at THEN EXCLUDED.nickname ELSE member_profiles.nickname END"),
+			"last_seen_at":  gorm.Expr("GREATEST(member_profiles.last_seen_at, EXCLUDED.last_seen_at)"),
+			"message_count": gorm.Expr("member_profiles.message_count + 1"),
+		}),
+	}).Create(&profile).Error
 	if err != nil {
 		return nil, err
 	}
-	return &log, nil
+	return m.GetMemberProfile(userID)
 }
 
-// Close 关闭连接
+func (m *Manager) GetMessageLogByID(messageID int64) (*MessageLog, error) {
+	var item MessageLog
+	if err := m.db.Where("one_bot_message_id = ?", messageID).First(&item).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 func (m *Manager) Close() error {
-	// 停止清理任务
-	if m.cleanupStop != nil {
-		close(m.cleanupStop)
-		m.cleanupStop = nil
+	m.stopOnce.Do(func() { close(m.cleanupStop) })
+	m.background.Wait()
+	sqlDB, err := m.db.DB()
+	if err != nil {
+		return err
 	}
-	// 关闭 Milvus 连接
-	if m.milvus != nil {
-		_ = m.milvus.Close()
-	}
-	if m.styleCardMilvus != nil {
-		_ = m.styleCardMilvus.Close()
-	}
-	if m.topicMilvus != nil {
-		_ = m.topicMilvus.Close()
-	}
-	// 关闭 MySQL 连接
-	if sqlDB, err := m.db.DB(); err == nil {
-		return sqlDB.Close()
-	}
-	return nil
+	return sqlDB.Close()
 }
 
 func (m *Manager) GetDB() *gorm.DB { return m.db }
 
 func (m *Manager) EmbeddingProvider() EmbeddingProvider { return m.embedding }
 
-func (m *Manager) TopicVectorStore() VectorStore {
-	return m.topicMilvus
-}
-
-func memoryVectorEligible(mem Memory) bool {
-	switch mem.EffectiveStatus() {
-	case MemoryStatusActive, MemoryStatusLegacy:
-		return true
-	default:
-		return false
+func createEvidence(tx *gorm.DB, memoryID uint, input MemoryIngestInput) error {
+	evidence := MemoryEvidence{MemoryID: memoryID, MessageLogID: input.MessageLogID, TopicSummaryID: input.TopicSummaryID}
+	if (evidence.MessageLogID == nil) == (evidence.TopicSummaryID == nil) {
+		return errors.New("长期记忆证据必须且只能有一个来源")
 	}
-}
-
-func memoryIDSet(memories []Memory) map[uint]struct{} {
-	ids := make(map[uint]struct{}, len(memories))
-	for _, mem := range memories {
-		if mem.ID != 0 {
-			ids[mem.ID] = struct{}{}
-		}
-	}
-	return ids
-}
-
-func containsCanonicalType(allowed []CanonicalMemoryType, kind CanonicalMemoryType) bool {
-	for _, candidate := range allowed {
-		if candidate == kind {
-			return true
-		}
-	}
-	return false
-}
-
-func prioritizeRecallMemories(memories []Memory, limit int) []Memory {
-	if limit <= 0 || limit > len(memories) {
-		limit = len(memories)
-	}
-
-	active := make([]Memory, 0, len(memories))
-	legacy := make([]Memory, 0, len(memories))
-	for _, mem := range memories {
-		switch mem.EffectiveStatus() {
-		case MemoryStatusActive:
-			active = append(active, mem)
-		case MemoryStatusLegacy:
-			legacy = append(legacy, mem)
-		}
-	}
-
-	result := make([]Memory, 0, limit)
-	for _, mem := range active {
-		if len(result) >= limit {
-			return result
-		}
-		result = append(result, mem)
-	}
-	for _, mem := range legacy {
-		if len(result) >= limit {
-			return result
-		}
-		result = append(result, mem)
-	}
-	return result
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&evidence).Error
 }

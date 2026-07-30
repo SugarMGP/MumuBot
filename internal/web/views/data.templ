@@ -31,7 +31,7 @@ templ StickerListBody(data StickerListPageData) {
 								<img class="block h-full w-full object-contain" src={ stickerFileURL(item.FileName) } alt={ stickerDescriptionText(item.Description) } loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"/>
 								<span class="hidden text-4xl font-extrabold uppercase tracking-[-0.08em] text-white">{ stickerPreviewText(item.Description) }</span>
 							</button>
-						} else {
+							} else {
 							<div class="flex h-40 items-center justify-center overflow-hidden rounded-[1.5rem] bg-[radial-gradient(circle_at_top,rgba(96,165,250,0.24),transparent_55%),linear-gradient(135deg,rgba(16,26,50,0.98),rgba(14,116,144,0.9))] p-3">
 								<div class="flex flex-col items-center gap-3 text-center text-white/92">
 									<div class="flex size-14 items-center justify-center rounded-2xl bg-white/12 ring-1 ring-white/15">
@@ -131,24 +131,30 @@ templ MemoryListBody(data MemoryListPageData) {
 		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
 			@FilterPanel("memory-filters", "筛选条件", "按群号、状态、归类、来源或关键词收窄结果，快速查看不同阶段的记忆。", MemoryFilterControls(data), true, MemoryFilterForm(data))
 			@SortToolbar(data.Sort)
-			if len(data.Items) == 0 {
-				<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500">暂无记忆</div>
-			} else {
+				if len(data.Items) == 0 {
+					<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500">暂无记忆</div>
+				}
+				if len(data.Items) > 0 {
 				<div class="grid gap-4 xl:grid-cols-2">
 				for _, item := range data.Items {
 					<article class="rounded-[1.45rem] border border-slate-200/70 bg-white/76 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)] motion-safe:animate-[admin-fade-up_220ms_ease-out]">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
 									<div class="flex flex-wrap gap-2">
-										<span class="inline-flex items-center rounded-full bg-slate-950/5 px-3 py-1 text-xs font-semibold text-slate-700">{ memoryTypeText(item.Type) }</span>
-										<span class={ memoryStatusClass(item.EffectiveStatus()) }>{ memoryStatusText(item.EffectiveStatus()) }</span>
-										<span class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700 ring-1 ring-cyan-200/80">{ memoryCanonicalTypeText(item.CanonicalType) }</span>
+										<span class="inline-flex items-center rounded-full bg-slate-950/5 px-3 py-1 text-xs font-semibold text-slate-700">{ memoryScopeText(item.Scope) }</span>
+										<span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span>
+										<span class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700 ring-1 ring-cyan-200/80">{ memoryKindText(item.Kind) }</span>
 									</div>
 									<div class="mt-4 text-[1.02rem] font-bold leading-8 tracking-[-0.03em] text-slate-950">{ item.Content }</div>
-									<div class="mt-3 text-sm leading-6 text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 用户 { fmt.Sprintf("%d", item.UserID) } · 来源 { memorySourceKindText(item) }</div>
+										<div class="mt-3 text-sm leading-6 text-slate-500">
+											<span>群 { fmt.Sprintf("%d", item.GroupID) }</span>
+											if item.SubjectUserID != nil {
+												<span> · 成员 { fmt.Sprintf("%d", *item.SubjectUserID) }</span>
+											}
+										</div>
 								</div>
 								<div class="flex shrink-0 flex-col gap-2">
-									if item.EffectiveStatus() == memory.MemoryStatusArchived {
+									if item.Status == memory.MemoryStatusArchived {
 										<button
 											class="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-700 ring-1 ring-teal-200/80 transition duration-200 ease-out hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
 											type="button"
@@ -174,23 +180,13 @@ templ MemoryListBody(data MemoryListPageData) {
 										hx-swap="innerHTML">删除</button>
 								</div>
 							</div>
-							<div class="mt-5 grid gap-3 sm:grid-cols-4">
-								<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
-									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">重要度</div>
-									<div class="mt-1 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%.2f", item.Importance) }</div>
-								</div>
-								<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
-									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">访问次数</div>
-									<div class="mt-1 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%d", item.AccessCount) } 次</div>
-								</div>
+							<div class="mt-5 grid gap-3 sm:grid-cols-3">
 								<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
 									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">内容长度</div>
 									<div class="mt-1 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%d", len([]rune(item.Content))) } 字</div>
 								</div>
-								<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
-									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">证据数</div>
-									<div class="mt-1 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%d", item.EvidenceCount) }</div>
-								</div>
+								<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80"><div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">创建时间</div><div class="mt-1 text-sm font-semibold text-slate-900">{ formatTime(item.CreatedAt) }</div></div>
+								<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80"><div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最近更新</div><div class="mt-1 text-sm font-semibold text-slate-900">{ formatTime(item.UpdatedAt) }</div></div>
 							</div>
 						</article>
 					}
@@ -203,20 +199,19 @@ templ MemoryListBody(data MemoryListPageData) {
 
 templ MemoryFilterControls(data MemoryListPageData) {
 	<div class="grid gap-2.5 lg:justify-items-end">
-		@ChoiceFilterGroupForForm("memory-filter-form", "type", data.Type, []FilterChoice{
-			{Label: "全部类型", Value: ""},
-			{Label: "群长期事实", Value: "group_fact"},
-			{Label: "自身经历", Value: "self_experience"},
-			{Label: "重要对话", Value: "conversation"},
+		@ChoiceFilterGroupForForm("memory-filter-form", "scope", data.Scope, []FilterChoice{
+			{Label: "全部范围", Value: ""},
+			{Label: "群组", Value: "group"},
+			{Label: "自身", Value: "self"},
+			{Label: "成员", Value: "member"},
 		})
 		@ChoiceFilterGroupForForm("memory-filter-form", "status", data.Status, []FilterChoice{
 			{Label: "全部状态", Value: ""},
 			{Label: "生效中", Value: "active"},
 			{Label: "待收敛", Value: "candidate"},
 			{Label: "已归档", Value: "archived"},
-			{Label: "旧版记录", Value: "legacy"},
 		})
-		@ChoiceFilterGroupForForm("memory-filter-form", "canonical_type", data.CanonicalType, []FilterChoice{
+		@ChoiceFilterGroupForForm("memory-filter-form", "kind", data.Kind, []FilterChoice{
 			{Label: "全部归类", Value: ""},
 			{Label: "事实", Value: "fact"},
 			{Label: "经历", Value: "episode"},
@@ -224,7 +219,6 @@ templ MemoryFilterControls(data MemoryListPageData) {
 			{Label: "约束", Value: "constraint"},
 			{Label: "目标", Value: "goal"},
 		})
-		@ChoiceFilterGroupForForm("memory-filter-form", "source_kind", data.SourceKind, data.SourceOptions)
 	</div>
 }
 
@@ -299,19 +293,16 @@ templ MemberListBody(data MemberListPageData) {
 							</div>
 							<div class="rounded-[1.15rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
 								<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">说话风格</div>
-								<div class="mt-2 text-sm leading-6 text-slate-700">{ displayText(item.SpeakStyle, "暂无画像") }</div>
+								<div class="mt-2 text-sm leading-6 text-slate-700">{ displayText(memberTraitText(item, "speaking"), "暂无画像") }</div>
 							</div>
 						</section>
 						<section class="min-w-0 items-start grid gap-4 lg:grid-cols-2">
 							<div class="self-start rounded-[1.15rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
 								<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">兴趣</div>
-								if len(memberTags(item.Interests, 6)) > 0 {
+								if len(memberTraits(item, "interest", 6)) > 0 {
 									<div class="mt-3 flex flex-wrap gap-2">
-										for _, tag := range memberTags(item.Interests, 6) {
+										for _, tag := range memberTraits(item, "interest", 6) {
 											<span class="inline-flex max-w-full items-center rounded-full bg-teal-50 px-3 py-1 text-[11px] font-semibold text-teal-700 ring-1 ring-teal-200/80">{ tag }</span>
-										}
-										if memberTagOverflow(item.Interests, 6) > 0 {
-											<span class="inline-flex max-w-full items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-500">+{ fmt.Sprintf("%d", memberTagOverflow(item.Interests, 6)) }</span>
 										}
 									</div>
 								} else {
@@ -320,13 +311,10 @@ templ MemberListBody(data MemberListPageData) {
 							</div>
 							<div class="self-start rounded-[1.15rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
 								<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">常用词</div>
-								if len(memberTags(item.CommonWords, 6)) > 0 {
+								if len(memberTraits(item, "phrase", 6)) > 0 {
 									<div class="mt-3 flex flex-wrap gap-2">
-										for _, tag := range memberTags(item.CommonWords, 6) {
+										for _, tag := range memberTraits(item, "phrase", 6) {
 											<span class="inline-flex max-w-full items-center rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200/80">{ tag }</span>
-										}
-										if memberTagOverflow(item.CommonWords, 6) > 0 {
-											<span class="inline-flex max-w-full items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-500">+{ fmt.Sprintf("%d", memberTagOverflow(item.CommonWords, 6)) }</span>
 										}
 									</div>
 								} else {
@@ -339,19 +327,11 @@ templ MemberListBody(data MemberListPageData) {
 							<div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
 								<div class="rounded-[1.05rem] bg-slate-50/90 p-3.5 ring-1 ring-slate-200/80">
 									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">发言数</div>
-									<div class="mt-2 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%d", item.MsgCount) }</div>
-								</div>
-								<div class="rounded-[1.05rem] bg-slate-50/90 p-3.5 ring-1 ring-slate-200/80">
-									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">活跃度</div>
-									<div class="mt-2 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%.2f", item.Activity) }</div>
-								</div>
-								<div class="rounded-[1.05rem] bg-slate-50/90 p-3.5 ring-1 ring-slate-200/80">
-									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">亲密度</div>
-									<div class="mt-2 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%.2f", item.Intimacy) }</div>
+									<div class="mt-2 text-sm font-semibold text-slate-900">{ fmt.Sprintf("%d", item.MessageCount) }</div>
 								</div>
 								<div class="rounded-[1.05rem] bg-slate-50/90 p-3.5 ring-1 ring-slate-200/80">
 									<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最后发言</div>
-									<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(item.LastSpeak) }>{ formatTime(item.LastSpeak) }</time></div>
+									<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time></div>
 								</div>
 							</div>
 						</section>
@@ -367,7 +347,7 @@ templ MemberFilterForm(data MemberListPageData) {
 	<form class="grid gap-2.5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" method="get" action="/admin/members" hx-get="/admin/members" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="昵称、群名片、别称、QQ、兴趣、常用词"/>
+		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="昵称、QQ 或画像特征"/>
 		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 xl:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }

@@ -6,14 +6,14 @@
 
 - MumuBot 是运行在 QQ 群里的智能体：通过 OneBot 11 接收群消息，使用 ReAct（观察、思考、行动循环）决定是否回复、调用工具或保持沉默。
 - 主链路由 `main.go` 启动：配置加载、模型客户端、记忆系统、聊天 agent、管理后台和退出清理都在这里串起来。
-- 语义能力分成几条边界清楚的链路：话题工作记忆负责当前对话脉络，长期记忆负责稳定事实，learner 只学习群文化，后台只负责查看和审核。
+- 语义能力分成几条边界清楚的链路：话题工作记忆负责当前对话脉络，长期记忆负责稳定事实，learner 只学习群文化，后台负责查看、审核和管理。
 
 ## 目录地图
 
 - `internal/agent/`：运行编排层，连接 OneBot、话题、学习、工具、模型和思考循环。
-- `internal/onebot/`：OneBot 11 WebSocket 客户端、消息事件解析、发送 API。
+- `internal/onebot/`：napcat-sdk 接入、OneBot 11 Adapter、消息事件解析和发送 API。
 - `internal/topic/`：话题工作记忆、话题归属、摘要刷新、归档检索和提示词上下文。
-- `internal/memory/`：MySQL 数据模型、Milvus 向量存储、长期记忆、消息日志、成员画像。
+- `internal/memory/`：PostgreSQL 数据模型、pgvector/pg_trgm 检索、长期记忆、消息日志、成员画像。
 - `internal/learning/`：群文化学习，只处理黑话、风格卡片和成员画像。
 - `internal/tools/`：暴露给 ReAct agent 和学习审核流程使用的工具。
 - `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务。
@@ -27,7 +27,7 @@
 | 看消息如何进入 bot | `internal/onebot/client.go`、`internal/agent/message.go` |
 | 看回复决策 | `internal/agent/think.go` |
 | 看话题分配和摘要 | `internal/topic/manager.go`、`internal/topic/assignment.go` |
-| 看长期记忆入库 | `internal/memory/memory_ingest.go` |
+| 看长期记忆入库 | `internal/memory/claim_extractor.go`、`internal/memory/memory_ingest.go` |
 | 看群文化学习 | `internal/learning/learner.go` |
 | 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
 
@@ -36,7 +36,7 @@
 ```bash
 npm ci
 npm run build
-go run github.com/a-h/templ/cmd/templ@latest generate ./internal/web/views
+templ generate ./internal/web/views
 go build ./...
 go vet ./...
 ```
@@ -75,21 +75,28 @@ go vet ./...
 - 根目录 `CHANGELOG.md` 是 GitHub Release 的发布说明来源。
 - 更新日志遵循 Keep a Changelog 1.1.0 风格：保留 `Unreleased` 区块，版本按倒序排列，变更类型使用中文小标题：`新增`、`变更`、`废弃`、`移除`、`修复`、`安全`。
 - 每条更新日志使用“**加粗概括**：详细说明”的形式，先说明用户或维护者能感知到的结果，再补充影响范围。
-- 每次完成会进入仓库的代码、配置、文档或工作流改动时，交付前必须同步更新 `CHANGELOG.md`。
+- 只有项目代码、运行配置、用户文档或发布工作流产生了使用者或维护者可感知的变化时，才更新 `CHANGELOG.md`。
 - 更新日志面向使用者和维护者，描述影响和结果，不堆砌 git 提交，不写内部实现流水账。
+- 调研报告、方案讨论、审查过程、验证记录和 `AGENTS.md` 等协作说明不属于项目变更，不写入 `CHANGELOG.md`。
 - 发布新版本前，必须把 `Unreleased` 中待发布的内容移动到 `## [x.y.z] - YYYY-MM-DD` 版本区块；tag 使用 `vx.y.z`，并确保版本区块存在，否则发布流程会失败。
 
 ## 验证
 
-- 涉及后台 UI 的改动，交付前必须做实际页面验证，优先使用 Chrome DevTools MCP 逐页检查布局、交互、控制台和网络请求。
-- Chrome DevTools MCP 验证必须包含真实页面截图，并以截图作为布局与视觉结果的主要验收依据；仅查看 DOM 树、可访问性树、脚本返回值或静态 HTML，不算完成验收。
+- 涉及后台 UI 的改动，交付前使用 Codex 内置浏览器逐页检查布局、交互、控制台和网络请求；不要使用 Chrome DevTools MCP。
+- 页面验证必须包含真实截图，并以截图作为布局与视觉结果的主要验收依据；仅查看 DOM 树、可访问性树、脚本返回值或静态 HTML，不算完成验收。
 - 发现页面问题时，优先依据真实截图修正，不靠主观猜测收尾。
+- 本机缺少 PostgreSQL、NapCat 或 QQ 等真实集成环境时，不把这一既知条件重复当作代码审查阻断；改用构建、静态检查和调用链复核，并在交付时说明未覆盖的真实集成测试。
+- 构建、静态检查和浏览器验收串行执行；结束后清理本轮启动的进程和临时目录。
 
 ## 修改原则
 
 - 优先做直接、可维护的实现，不保留多余的兼容层或过渡性写法。
 - 不要为了抽象而抽象；只有在多个页面稳定复用时再提炼帮助函数或共享结构。
+- 优先使用 Go 标准库和现有依赖；不新增单实现接口、generic repository 或只为未来预留的结构。
+- 只增强现有功能和效果，不自行扩展新的产品功能。
 - 不要改动与当前任务无关的脏文件。
+- `docs/` 下的研究报告默认是只读基线，除非用户明确要求，否则不修改。
+- 未经用户明确要求，不创建 commit、切换分支或推送远端。
 
 ## Go 代码结构
 
@@ -98,7 +105,8 @@ go vet ./...
 - 同一函数内不要重复调用 `strings.TrimSpace` 处理同一个值；如果上层已经 Trim 过，下层不应再 Trim。
 - 不要在同一表达式或相邻行中对同一值重复调用（如 `a.bot.GetSelfID()` 在同一条件中出现两次），提取为局部变量。
 - 同一函数中多次使用同一缓冲区/切片时，取一次后复用变量，不要重复加锁取数据。
-- 项目无测试文件，所有改动必须通过 `go build ./...` 验证；涉及语法或逻辑变更时额外运行 `go vet ./...`。
+- 项目当前无测试文件；未经用户明确要求，不新增 `*_test.go`。所有代码改动必须通过 `go build ./...`，涉及语法或逻辑变更时额外运行 `go vet ./...`。
+- JSON 解析和序列化优先复用项目已有的 Sonic；`json.Number`、`json.RawMessage` 等标准库边界类型可保留。
 
 ## 死代码
 
@@ -113,6 +121,10 @@ go vet ./...
 ## 核心架构约束
 
 - 话题工作记忆是主路径能力，不按“可关闭功能”设计，也不要为核心链路补可选回退开关。
+- 回复决策保持单次 ReAct `Generate`，不拆 Planner/Replyer；`classifyContext` 只做轻量的参与判断、检索词和风格场景规划，不生成第二套聊天上下文。
+- 强提及、点名和回复机器人必须进入 ReAct；分类失败不能拦截强交互。每群保持单任务串行和必要的 rerun，普通触发继续使用既有概率门控。
+- `think` 必须基于固定消息快照，思考期间新到消息留给下一轮；`speak` 保持一至五条消息，每条可独立设置 `reply_to` 和 `mentions`。
+- 人格提示词只做增量调整；保留 `config/persona.prompt` 中 B站、贴吧、知乎和微博四个平台的参考原句，不恢复已删除的成组矫正案例。
 - 学习系统只负责群文化学习：黑话、风格卡片、成员画像。学习系统不承担自动长期记忆写入职责。
 - 自动长期记忆下沉只由话题摘要链路触发；显式工具调用（如 `saveMemory`）与该自动链路分开考虑，不要把 learner 扩展成长期记忆写入宿主。
 - learner 的消费应由话题系统决定，只消费“话题系统已处理完成”的消息；不要让 learner 与话题摘要重复扫描同一批未判定原文。
@@ -120,9 +132,11 @@ go vet ./...
 
 ## 数据与检索边界
 
-- `MessageLog.Content`、`GroupMessage.FinalContent` 只用于展示给 bot 的聊天上下文，不作为检索、分类、学习、摘要或长期记忆提取的语义输入。
+- `GroupMessage.Content`、`MessageLog.TextContent` 保存原始文本；`GroupMessage.FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文。
 - 话题归属、话题摘要、主动长期记忆检索、黑话匹配、风格分类、成员画像学习、长期记忆提取等语义链路默认只使用原始文本；如果原始文本为空，就直接跳过，不要回退到渲染后的展示文本。
 - 当主动检索或话题检索词生成失败时，优先跳过该步骤，不要回退到最近聊天展示文本或其他启发式拼接结果。
+- 持久化使用 PostgreSQL；当前按全新数据库设计，不保留旧数据迁移、兼容字段或过渡表。
+- 第一版检索固定为 pgvector 精确向量、pg_trgm 文本召回和 RRF 融合；没有明确需求和测量依据时，不引入 BM25 扩展、HNSW、Milvus、Elasticsearch、MMR、reranker、聚类或额外分类器。
 
 ## 质量取向
 

@@ -58,9 +58,7 @@ func main() {
 	if stickerDir == "" {
 		stickerDir = "./stickers"
 	}
-	adminService := services.NewAdminService(memoryMgr.GetDB(), stickerDir).
-		WithMemoryDeleter(memoryMgr).
-		WithJargonReloader(mumuAgent)
+	adminService := services.NewAdminService(memoryMgr, stickerDir, mumuAgent.ReloadJargons)
 	app := webapp.New(cfg, adminService, memoryMgr, mumuAgent)
 	httpServer := app.Server()
 

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,7 +22,6 @@ type DownloadResult struct {
 	FilePath string // 本地文件完整路径
 	FileName string // 文件名（uuid.ext）
 	FileHash string // 文件MD5哈希
-	FileSize int64  // 文件大小
 }
 
 // DownloadImage 下载图片到指定目录
@@ -135,26 +136,18 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 		FilePath: filePath,
 		FileName: fileName,
 		FileHash: fileHash,
-		FileSize: written,
 	}, nil
 }
 
 // getExtensionFromURL 从URL获取文件扩展名
-func getExtensionFromURL(url string) string {
-	// 移除查询参数
-	if idx := strings.Index(url, "?"); idx > 0 {
-		url = url[:idx]
+func getExtensionFromURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
 	}
-
-	// 获取扩展名
-	ext := filepath.Ext(url)
-	ext = strings.ToLower(ext)
-
-	// 验证是否是有效的图片扩展名
-	validExts := map[string]bool{
-		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".bmp": true,
-	}
-	if validExts[ext] {
+	ext := strings.ToLower(path.Ext(parsed.Path))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
 		return ext
 	}
 	return ""

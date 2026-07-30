@@ -2,7 +2,6 @@ package topic
 
 import (
 	"strings"
-	"time"
 
 	"mumu-bot/internal/memory"
 
@@ -10,14 +9,7 @@ import (
 )
 
 func EmptySummary() memory.TopicSummary {
-	return memory.TopicSummary{
-		Version:      1,
-		Facts:        []string{},
-		Participants: []memory.TopicSummaryParticipant{},
-		OpenLoops:    []string{},
-		RecentTurns:  []string{},
-		Keywords:     []string{},
-	}
+	return memory.TopicSummary{Version: 1, Facts: []string{}, Participants: []memory.TopicSummaryParticipant{}, OpenLoops: []string{}, RecentTurns: []string{}, Keywords: []string{}}
 }
 
 func MarshalSummary(summary memory.TopicSummary) (string, error) {
@@ -39,16 +31,7 @@ func MarshalSummary(summary memory.TopicSummary) (string, error) {
 	if summary.Keywords == nil {
 		summary.Keywords = []string{}
 	}
-	summary.ItemMeta = normalizeSummaryItemMeta(summary)
 	return sonic.MarshalString(summary)
-}
-
-func mustMarshalSummary(summary memory.TopicSummary) string {
-	raw, err := MarshalSummary(summary)
-	if err != nil {
-		return `{"version":1,"title":"","gist":"","facts":[],"participants":[],"open_loops":[],"recent_turns":[],"keywords":[]}`
-	}
-	return raw
 }
 
 func ParseSummary(raw string) memory.TopicSummary {
@@ -62,106 +45,5 @@ func ParseSummary(raw string) memory.TopicSummary {
 	if summary.Version == 0 {
 		summary.Version = 1
 	}
-	if summary.Facts == nil {
-		summary.Facts = []string{}
-	}
-	if summary.Participants == nil {
-		summary.Participants = []memory.TopicSummaryParticipant{}
-	}
-	if summary.OpenLoops == nil {
-		summary.OpenLoops = []string{}
-	}
-	if summary.RecentTurns == nil {
-		summary.RecentTurns = []string{}
-	}
-	if summary.Keywords == nil {
-		summary.Keywords = []string{}
-	}
-	summary.ItemMeta = normalizeExistingSummaryItemMeta(summary)
 	return summary
 }
-
-func normalizeExistingSummaryItemMeta(summary memory.TopicSummary) []memory.TopicSummaryItemMeta {
-	if len(summary.ItemMeta) == 0 {
-		return []memory.TopicSummaryItemMeta{}
-	}
-	return normalizeSummaryItemMeta(summary)
-}
-
-func normalizeSummaryItemMeta(summary memory.TopicSummary) []memory.TopicSummaryItemMeta {
-	result := make([]memory.TopicSummaryItemMeta, 0, len(summary.Facts)+len(summary.OpenLoops))
-	oldByText := make(map[string]memory.TopicSummaryItemMeta, len(summary.ItemMeta))
-	for _, meta := range summary.ItemMeta {
-		text := strings.TrimSpace(meta.Text)
-		if text == "" {
-			continue
-		}
-		meta.Text = text
-		meta.Kind = strings.TrimSpace(meta.Kind)
-		meta.SlotKind = strings.TrimSpace(meta.SlotKind)
-		meta.Signature = strings.TrimSpace(meta.Signature)
-		oldByText[memory.NormalizeContentForKey(text)] = meta
-	}
-	push := func(kind string, text string) {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			return
-		}
-		key := memory.NormalizeContentForKey(text)
-		meta := oldByText[key]
-		meta.Text = text
-		meta.Kind = kind
-		if meta.Signature == "" {
-			meta.Signature = memory.BuildFactKey(text)
-		}
-		result = append(result, meta)
-	}
-	for _, fact := range summary.Facts {
-		push("fact", fact)
-	}
-	for _, loop := range summary.OpenLoops {
-		push("open_loop", loop)
-	}
-	return result
-}
-
-func MergeSummaryItemMeta(oldSummary memory.TopicSummary, nextSummary memory.TopicSummary) []memory.TopicSummaryItemMeta {
-	nextSummary.ItemMeta = append([]memory.TopicSummaryItemMeta(nil), oldSummary.ItemMeta...)
-	return normalizeSummaryItemMeta(nextSummary)
-}
-
-func MarshalSummaryItemMetaForPrompt(summary memory.TopicSummary) (string, error) {
-	return sonic.MarshalString(normalizeSummaryItemMeta(summary))
-}
-
-func ParseSummaryHistory(raw string) []memory.TopicSummarySnapshot {
-	if strings.TrimSpace(raw) == "" {
-		return []memory.TopicSummarySnapshot{}
-	}
-	var snapshots []memory.TopicSummarySnapshot
-	if err := sonic.UnmarshalString(raw, &snapshots); err != nil {
-		return []memory.TopicSummarySnapshot{}
-	}
-	return snapshots
-}
-
-func DefaultSummaryJSON() string {
-	return mustMarshalSummary(EmptySummary())
-}
-
-func DefaultSummaryHistoryJSON() string {
-	return "[]"
-}
-
-func AppendSummaryHistory(raw string, summary memory.TopicSummary, capturedAt time.Time) (string, error) {
-	history := ParseSummaryHistory(raw)
-	history = append(history, memory.TopicSummarySnapshot{
-		CapturedAt: capturedAt.Format(time.RFC3339),
-		Summary:    ParseSummary(mustMarshalSummary(summary)),
-	})
-	if len(history) > SummaryHistoryLimit {
-		history = history[len(history)-SummaryHistoryLimit:]
-	}
-	return sonic.MarshalString(history)
-}
-

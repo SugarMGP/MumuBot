@@ -1,6 +1,9 @@
 package views
 
-import "mumu-bot/internal/memory"
+import (
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/web/services"
+)
 
 type NavItem struct {
 	Label string
@@ -117,7 +120,7 @@ type StyleCardListPageData struct {
 	Status  string
 	Keyword string
 	Sort    SortToolbarData
-	Items   []memory.StyleCard
+	Items   []services.StylePatternView
 	Meta    ListMeta
 	Flash   *FlashMessage
 }
@@ -127,7 +130,7 @@ type JargonListPageData struct {
 	Status  string
 	Keyword string
 	Sort    SortToolbarData
-	Items   []memory.Jargon
+	Items   []services.JargonView
 	Meta    ListMeta
 	Flash   *FlashMessage
 }
@@ -141,17 +144,15 @@ type StickerListPageData struct {
 }
 
 type MemoryListPageData struct {
-	GroupID       string
-	Type          string
-	Status        string
-	CanonicalType string
-	SourceKind    string
-	SourceOptions []FilterChoice
-	Keyword       string
-	Sort          SortToolbarData
-	Items         []memory.Memory
-	Meta          ListMeta
-	Flash         *FlashMessage
+	GroupID string
+	Scope   string
+	Status  string
+	Kind    string
+	Keyword string
+	Sort    SortToolbarData
+	Items   []memory.Memory
+	Meta    ListMeta
+	Flash   *FlashMessage
 }
 
 type TopicListPageData struct {
@@ -159,13 +160,13 @@ type TopicListPageData struct {
 	Status  string
 	Keyword string
 	Sort    SortToolbarData
-	Items   []memory.TopicThread
+	Items   []services.TopicThreadView
 	Meta    ListMeta
 	Flash   *FlashMessage
 }
 
 type TopicDetailPageData struct {
-	Thread         memory.TopicThread
+	Thread         services.TopicThreadView
 	SummaryChanges []TopicSummaryChangeView
 	Messages       []memory.MessageLog
 	Flash          *FlashMessage
@@ -174,7 +175,7 @@ type TopicDetailPageData struct {
 type MemberListPageData struct {
 	Keyword string
 	Sort    SortToolbarData
-	Items   []memory.MemberProfile
+	Items   []services.MemberProfileView
 	Meta    ListMeta
 	Flash   *FlashMessage
 }

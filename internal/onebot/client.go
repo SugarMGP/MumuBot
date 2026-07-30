@@ -1,264 +1,251 @@
 package onebot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/utils"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/bytedance/sonic"
-	"github.com/gorilla/websocket"
 	"github.com/jellydator/ttlcache/v3"
+	napcat "github.com/zjutjh/napcat-sdk"
 	"go.uber.org/zap"
 )
 
-type webSocketConnection interface {
-	ReadMessage() (messageType int, p []byte, err error)
-	WriteMessage(messageType int, data []byte) error
-	Close() error
-}
+const groupEventQueueSize = 256
 
-type webSocketDialFunc func(context.Context, string, http.Header) (webSocketConnection, error)
-
-var errReconnectSuperseded = errors.New("重连来源已失效")
-
-// Client OneBot WebSocket客户端
 type Client struct {
-	conn      webSocketConnection
-	connMu    sync.Mutex
-	connectMu sync.Mutex
-	selfID    int64
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+	transportCtx  context.Context
+	stopTransport context.CancelFunc
+	closeOnce     sync.Once
+
+	connMu     sync.RWMutex
+	sdk        *napcat.Client
+	generation uint64
 
 	mutedMu    sync.RWMutex
 	mutedUntil map[int64]time.Time
+	selfMu     sync.RWMutex
+	selfID     int64
 
 	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
-
-	// 消息回调
-	onMessage func(*GroupMessage)
-
-	// 重连控制
-	reconnecting      bool
-	reconnectInterval time.Duration
-	reconnect         func(webSocketConnection) error
-	dial              webSocketDialFunc
-
-	// API 调用响应等待
-	echoCounter uint64
-	pendingReqs sync.Map // map[string]chan *APIResponse
+	onMessage       func(*GroupMessage)
+	workersMu       sync.Mutex
+	workers         map[int64]chan []byte
+	workerWG        sync.WaitGroup
+	transportWG     sync.WaitGroup
 }
 
-// NewClient 创建OneBot客户端
 func NewClient() *Client {
-	ctx, cancel := context.WithCancel(context.Background())
-	memberInfoCache := newGroupMemberInfoCache()
-	client := &Client{
-		ctx:             ctx,
-		cancel:          cancel,
+	transportCtx, stopTransport := context.WithCancel(context.Background())
+	cache := newGroupMemberInfoCache()
+	c := &Client{
+		transportCtx:    transportCtx,
+		stopTransport:   stopTransport,
 		mutedUntil:      make(map[int64]time.Time),
-		memberInfoCache: memberInfoCache,
-		dial:            dialWebSocket,
+		memberInfoCache: cache,
+		workers:         make(map[int64]chan []byte),
 	}
-	go memberInfoCache.Start()
-	return client
+	go cache.Start()
+	return c
 }
 
-// Connect 连接到OneBot服务
 func (c *Client) Connect() error {
-	cfg := config.Get()
-	header := make(http.Header)
-	if cfg.OneBot.AccessToken != "" {
-		header.Set("Authorization", "Bearer "+cfg.OneBot.AccessToken)
-	}
-
-	if err := c.connect(cfg.OneBot.WsURL, header); err != nil {
+	if err := c.connect(); err != nil {
 		return err
 	}
-
-	zap.L().Info("已连接到 OneBot", zap.String("url", cfg.OneBot.WsURL))
+	zap.L().Info("已连接到 OneBot", zap.String("url", config.Get().OneBot.WsURL))
 	return nil
 }
 
-func dialWebSocket(ctx context.Context, wsURL string, header http.Header) (webSocketConnection, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
-	return conn, err
-}
-
-func (c *Client) connect(wsURL string, header http.Header) error {
-	return c.connectFrom(wsURL, header, nil)
-}
-
-func (c *Client) connectFrom(wsURL string, header http.Header, expected webSocketConnection) error {
-	c.connectMu.Lock()
-	defer c.connectMu.Unlock()
-
-	if err := c.ctx.Err(); err != nil {
-		return err
+func (c *Client) connect() error {
+	if c.transportCtx.Err() != nil {
+		return context.Canceled
 	}
-	dial := c.dial
-	if dial == nil {
-		dial = dialWebSocket
-	}
-	conn, err := dial(c.ctx, wsURL, header)
+	cfg := config.Get()
+	sdk, err := napcat.DialWebSocket(c.transportCtx, cfg.OneBot.WsURL, napcat.WithToken(cfg.OneBot.AccessToken), napcat.WithRequestTimeout(30*time.Second), napcat.WithEventBuffer(1024), napcat.WithEventDeliveryTimeout(time.Second))
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
-
 	c.connMu.Lock()
-	if err := c.ctx.Err(); err != nil {
+	if c.transportCtx.Err() != nil {
 		c.connMu.Unlock()
-		_ = conn.Close()
-		return err
+		_ = sdk.Close()
+		return context.Canceled
 	}
-	if expected != nil && (c.conn != expected || !c.reconnecting) {
-		c.connMu.Unlock()
-		_ = conn.Close()
-		return errReconnectSuperseded
-	}
-	oldConn := c.conn
-	c.conn = conn
-	c.reconnecting = false
+	old := c.sdk
+	c.sdk = sdk
+	c.generation++
+	generation := c.generation
+	c.transportWG.Add(1)
 	c.connMu.Unlock()
-
-	if oldConn != nil {
-		_ = oldConn.Close()
+	if old != nil {
+		_ = old.Close()
 	}
-	go c.receiveLoop(conn)
+	go func() {
+		defer c.transportWG.Done()
+		c.consumeEvents(sdk, generation)
+	}()
 	return nil
 }
 
-func (c *Client) reconnectFrom(conn webSocketConnection) error {
-	cfg := config.Get()
-	header := make(http.Header)
-	if cfg.OneBot.AccessToken != "" {
-		header.Set("Authorization", "Bearer "+cfg.OneBot.AccessToken)
+func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
+	for ev := range sdk.Events() {
+		selfID := ev.SelfID()
+		if selfID > 0 {
+			c.selfMu.Lock()
+			c.selfID = selfID
+			c.selfMu.Unlock()
+		}
+		c.enqueueEvent(ev.Raw())
 	}
-	return c.connectFrom(cfg.OneBot.WsURL, header, conn)
+	err := sdk.Err()
+	c.connMu.RLock()
+	current := c.sdk == sdk && c.generation == generation
+	c.connMu.RUnlock()
+	switch {
+	case c.transportCtx.Err() != nil || !current:
+		zap.L().Debug("OneBot 事件流已主动关闭", zap.Error(err))
+	case errors.Is(err, napcat.ErrEventBackpressure):
+		zap.L().Error("OneBot SDK 事件背压超时，连接将重建", zap.Error(err))
+	case err != nil:
+		zap.L().Warn("OneBot 网络事件流中断", zap.Error(err))
+	default:
+		zap.L().Warn("OneBot 事件流意外结束")
+	}
+	c.startReconnect(sdk, generation)
 }
 
-// receiveLoop 消息接收循环
-func (c *Client) receiveLoop(conn webSocketConnection) {
+func (c *Client) enqueueEvent(raw []byte) {
+	var event map[string]interface{}
+	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&event); err != nil {
+		zap.L().Warn("解析事件分组键失败", zap.Error(err))
+		return
+	}
+	postType, _ := event["post_type"].(string)
+	switch postType {
+	case "meta_event":
+		c.handleMetaEvent(event)
+		return
+	case "notice":
+		c.handleNoticeEvent(event)
+		return
+	case "request":
+		c.handleRequestEvent(event)
+		return
+	case "message":
+		if event["message_type"] != "group" {
+			return
+		}
+	default:
+		return
+	}
+	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
+	messageID, messageOK := utils.ParseInt64Value(event["message_id"])
+	if !groupOK || groupID <= 0 || !messageOK || messageID <= 0 {
+		zap.L().Warn("忽略缺少有效编号的群消息")
+		return
+	}
+	c.workersMu.Lock()
+	queue := c.workers[groupID]
+	if queue == nil {
+		queue = make(chan []byte, groupEventQueueSize)
+		c.workers[groupID] = queue
+		c.workerWG.Add(1)
+		go c.runEventWorker(queue)
+	}
+	c.workersMu.Unlock()
+	queue <- raw
+}
+
+func (c *Client) runEventWorker(queue <-chan []byte) {
+	defer c.workerWG.Done()
+	for raw := range queue {
+		c.handleMessage(raw)
+	}
+}
+
+func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) {
+	c.connMu.Lock()
+	if c.transportCtx.Err() != nil || c.sdk != disconnected || c.generation != generation {
+		c.connMu.Unlock()
+		return
+	}
+	c.sdk = nil
+	c.connMu.Unlock()
+	_ = disconnected.Close()
+	zap.L().Warn("连接断开，尝试重连")
+	interval := time.Duration(config.Get().OneBot.ReconnectInterval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
 	for {
+		timer := time.NewTimer(interval)
 		select {
-		case <-c.ctx.Done():
+		case <-c.transportCtx.Done():
+			timer.Stop()
 			return
-		default:
+		case <-timer.C:
 		}
-
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			zap.L().Error("读取消息失败", zap.Error(err))
-			c.handleDisconnect(conn)
+		c.connMu.RLock()
+		valid := c.sdk == nil && c.generation == generation
+		c.connMu.RUnlock()
+		if !valid {
 			return
 		}
-
-		go c.handleMessage(message)
+		if err := c.connect(); err == nil {
+			zap.L().Info("重连成功")
+			return
+		} else {
+			zap.L().Warn("重连失败", zap.Error(err))
+		}
 	}
 }
 
-// handleMessage 处理收到的消息
 func (c *Client) handleMessage(data []byte) {
 	var event map[string]interface{}
-	if err := sonic.Unmarshal(data, &event); err != nil {
+	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&event); err != nil {
 		zap.L().Error("解析消息失败", zap.Error(err))
 		return
 	}
-
-	// 检查是否是 API 响应（有 echo 字段）
-	if echo, ok := event["echo"].(string); ok && echo != "" {
-		c.handleAPIResponse(event, echo)
-		return
-	}
-
-	// 处理事件
-	if postType, ok := event["post_type"].(string); ok {
-		switch postType {
-		case "meta_event":
-			c.handleMetaEvent(event)
-		case "message":
-			c.handleMessageEvent(event)
-		case "notice":
-			c.handleNoticeEvent(event)
-		case "request":
-			c.handleRequestEvent(event)
-		}
-	}
+	c.handleMessageEvent(event)
 }
 
-// handleAPIResponse 处理 API 响应
-func (c *Client) handleAPIResponse(event map[string]interface{}, echo string) {
-	if ch, ok := c.pendingReqs.Load(echo); ok {
-		resp := &APIResponse{Echo: echo}
-		if status, ok := event["status"].(string); ok {
-			resp.Status = status
-		}
-		if retCode, ok := parseInt(event["retcode"]); ok {
-			resp.RetCode = retCode
-		}
-		// Data 可能是 map 或 array
-		resp.Data = event["data"]
-		if msg, ok := event["message"].(string); ok {
-			resp.Message = msg
-		}
-		select {
-		case ch.(chan *APIResponse) <- resp:
-		default:
-		}
-	}
-}
-
-// handleMetaEvent 处理元事件
 func (c *Client) handleMetaEvent(event map[string]interface{}) {
-	metaType, _ := event["meta_event_type"].(string)
-
-	if metaType == "lifecycle" {
-		subType, _ := event["sub_type"].(string)
-		if subType == "connect" {
-			if selfID, ok := utils.ParseInt64Value(event["self_id"]); ok {
-				c.selfID = selfID
-				zap.L().Info("Bot 已上线", zap.Int64("qq", c.selfID))
-			}
+	if event["meta_event_type"] == "lifecycle" && event["sub_type"] == "connect" {
+		if id, ok := utils.ParseInt64Value(event["self_id"]); ok {
+			c.selfMu.Lock()
+			c.selfID = id
+			c.selfMu.Unlock()
 		}
 	}
 }
-
-// handleMessageEvent 处理消息事件
 func (c *Client) handleMessageEvent(event map[string]interface{}) {
-	msgType, _ := event["message_type"].(string)
-
-	// 只处理群消息
-	if msgType != "group" {
+	if event["message_type"] != "group" {
 		return
 	}
-
-	// 解析消息
-	msg := c.parseGroupMessage(event)
-	if msg == nil {
-		return
-	}
-
-	// 调用消息回调
-	if c.onMessage != nil {
+	if msg := c.parseGroupMessage(event); msg != nil && c.onMessage != nil {
 		c.onMessage(msg)
 	}
 }
-
-// handleNoticeEvent 处理通知事件
 func (c *Client) handleNoticeEvent(event map[string]interface{}) {
-	noticeType, _ := event["notice_type"].(string)
-	subType, _ := event["sub_type"].(string)
-	zap.L().Debug("收到通知", zap.String("type", noticeType), zap.String("sub_type", subType))
-
-	if noticeType == "group_ban" {
-		c.handleGroupBanNotice(event, subType)
+	notice, _ := event["notice_type"].(string)
+	sub, _ := event["sub_type"].(string)
+	if notice == "group_ban" {
+		c.handleGroupBanNotice(event, sub)
 	}
+}
+func (c *Client) handleRequestEvent(event map[string]interface{}) {
+	request, _ := event["request_type"].(string)
+	zap.L().Debug("收到请求", zap.String("type", request))
 }
 
 func (c *Client) handleGroupBanNotice(event map[string]interface{}, subType string) {
@@ -266,43 +253,33 @@ func (c *Client) handleGroupBanNotice(event map[string]interface{}, subType stri
 	if !ok || groupID == 0 {
 		return
 	}
-
 	userID, ok := utils.ParseInt64Value(event["user_id"])
-	if !ok || userID != c.selfID {
+	if !ok || userID != c.GetSelfID() {
 		return
 	}
-
 	if subType == "lift_ban" {
 		c.clearSelfMuted(groupID)
 		return
 	}
-
 	if subType != "ban" {
 		return
 	}
-
-	if durationSec, ok := utils.ParseInt64Value(event["duration"]); ok && durationSec > 0 {
-		c.setSelfMutedUntil(groupID, time.Now().Add(time.Duration(durationSec)*time.Second))
+	if seconds, ok := utils.ParseInt64Value(event["duration"]); ok && seconds > 0 {
+		c.setSelfMutedUntil(groupID, time.Now().Add(time.Duration(seconds)*time.Second))
 		return
 	}
-
-	// 如果没有时长或为 0，视为未禁言
 	c.clearSelfMuted(groupID)
 }
-
 func (c *Client) setSelfMutedUntil(groupID int64, until time.Time) {
 	c.mutedMu.Lock()
 	c.mutedUntil[groupID] = until
 	c.mutedMu.Unlock()
 }
-
 func (c *Client) clearSelfMuted(groupID int64) {
 	c.mutedMu.Lock()
 	delete(c.mutedUntil, groupID)
 	c.mutedMu.Unlock()
 }
-
-// IsSelfMuted 判断当前群内机器人是否处于禁言状态
 func (c *Client) IsSelfMuted(groupID int64) bool {
 	c.mutedMu.RLock()
 	until, ok := c.mutedUntil[groupID]
@@ -310,105 +287,55 @@ func (c *Client) IsSelfMuted(groupID int64) bool {
 	if !ok || until.IsZero() {
 		return false
 	}
-
 	if time.Now().After(until) {
 		c.clearSelfMuted(groupID)
 		return false
 	}
-
 	return true
 }
-
-// handleRequestEvent 处理请求事件（加群/加好友请求）
-func (c *Client) handleRequestEvent(event map[string]interface{}) {
-	requestType, _ := event["request_type"].(string)
-	zap.L().Debug("收到请求", zap.String("type", requestType))
-}
-
-// OnMessage 设置消息回调
-func (c *Client) OnMessage(handler func(*GroupMessage)) {
-	c.onMessage = handler
-}
-
-// GetSelfID 获取Bot的QQ号
-func (c *Client) GetSelfID() int64 {
-	return c.selfID
-}
-
-// IsConnected 返回当前 OneBot WebSocket 是否已连接。
+func (c *Client) OnMessage(handler func(*GroupMessage)) { c.onMessage = handler }
+func (c *Client) GetSelfID() int64                      { c.selfMu.RLock(); defer c.selfMu.RUnlock(); return c.selfID }
 func (c *Client) IsConnected() bool {
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
-	return c.conn != nil && !c.reconnecting
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.sdk != nil
 }
 
-// Close 关闭连接
 func (c *Client) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
-		if c.cancel != nil {
-			c.cancel()
+		// 先封死连接发布并终止拨号、重连和 SDK 事件流。
+		c.stopTransport()
+		c.connMu.Lock()
+		sdk := c.sdk
+		c.sdk = nil
+		c.connMu.Unlock()
+		if sdk != nil {
+			closeErr = sdk.Close()
 		}
+
+		// 事件入口完全退出后，队列不会再新增或写入，可以安全关闭并排空。
+		c.transportWG.Wait()
+		c.workersMu.Lock()
+		for groupID, queue := range c.workers {
+			close(queue)
+			delete(c.workers, groupID)
+		}
+		c.workersMu.Unlock()
+		c.workerWG.Wait()
+
 		if c.memberInfoCache != nil {
 			c.memberInfoCache.Stop()
-		}
-
-		c.connMu.Lock()
-		conn := c.conn
-		c.conn = nil
-		c.connMu.Unlock()
-
-		if conn != nil {
-			closeErr = conn.Close()
 		}
 	})
 	return closeErr
 }
 
-// handleDisconnect 处理断开连接
-func (c *Client) handleDisconnect(conn webSocketConnection) {
-	c.connMu.Lock()
-	if c.conn != conn || c.ctx.Err() != nil || c.reconnecting {
-		c.connMu.Unlock()
-		return
+func (c *Client) currentSDK() (*napcat.Client, error) {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	if c.sdk == nil {
+		return nil, errors.New("未连接到 OneBot 服务")
 	}
-	c.reconnecting = true
-	c.connMu.Unlock()
-
-	zap.L().Warn("连接断开，尝试重连...")
-
-	interval := c.reconnectInterval
-	if interval <= 0 {
-		interval = time.Duration(config.Get().OneBot.ReconnectInterval) * time.Second
-	}
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-timer.C:
-		}
-
-		c.connMu.Lock()
-		if c.conn != conn || c.ctx.Err() != nil || !c.reconnecting {
-			c.connMu.Unlock()
-			return
-		}
-		c.connMu.Unlock()
-		reconnect := c.reconnect
-		if reconnect == nil {
-			reconnect = c.reconnectFrom
-		}
-		err := reconnect(conn)
-		if err == nil {
-			zap.L().Info("重连成功")
-			return
-		}
-		if errors.Is(err, errReconnectSuperseded) {
-			return
-		}
-		zap.L().Warn("重连失败，继续尝试...")
-		timer.Reset(interval)
-	}
+	return c.sdk, nil
 }

@@ -42,10 +42,7 @@ type Manager struct {
 
 // NewMCPManager 创建 MCP 管理器
 func NewMCPManager() *Manager {
-	return &Manager{
-		clients: make([]*client.Client, 0),
-		tools:   make([]tool.BaseTool, 0),
-	}
+	return &Manager{}
 }
 
 // LoadFromConfig 从配置文件加载 MCP 服务器

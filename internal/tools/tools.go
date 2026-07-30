@@ -2,13 +2,12 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"mumu-bot/internal/config"
-	"mumu-bot/internal/jargon"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -36,6 +35,15 @@ type ToolContext struct {
 
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
+	acted         atomic.Bool
+}
+
+func (tc *ToolContext) MarkActed() {
+	tc.acted.Store(true)
+}
+
+func (tc *ToolContext) Acted() bool {
+	return tc.acted.Load()
 }
 
 // ctxKey 上下文键类型
@@ -77,28 +85,6 @@ func (tc *ToolContext) MarkToolCallSucceeded(toolName string, arguments string) 
 		tc.seenToolCalls = make(map[string]struct{}, 8)
 	}
 	tc.seenToolCalls[key] = struct{}{}
-}
-
-// LearningContext 学习任务上下文
-type LearningContext struct {
-	GroupID   int64
-	MemMgr    *memory.Manager
-	JargonMgr *jargon.Manager
-}
-
-const learningContextKey ctxKey = "learning_context"
-
-// WithLearningContext 注入学习上下文
-func WithLearningContext(ctx context.Context, lc *LearningContext) context.Context {
-	return context.WithValue(ctx, learningContextKey, lc)
-}
-
-// GetLearningContext 获取学习上下文
-func GetLearningContext(ctx context.Context) *LearningContext {
-	if lc, ok := ctx.Value(learningContextKey).(*LearningContext); ok {
-		return lc
-	}
-	return nil
 }
 
 func truncateToolLogString(raw string, max int) string {
@@ -225,14 +211,14 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 		limit = 40
 	}
 
-	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, limit, input.Offset)
+	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.MessageID, limit, input.Offset)
 	results := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
 		results = append(results, map[string]interface{}{
 			"user_id":      m.UserID,
 			"nickname":     m.Nickname,
-			"content":      m.Content,
-			"time":         m.CreatedAt.Format("15:04:05"),
+			"content":      m.DisplayContent,
+			"time":         m.MessageTime.Format("15:04:05"),
 			"is_mentioned": m.IsMentioned,
 		})
 	}
@@ -459,18 +445,17 @@ func getForwardMessageDetailFunc(ctx context.Context, input *GetForwardMessageDe
 		return &GetForwardMessageDetailOutput{Success: false, Message: "记忆管理器未初始化"}, nil
 	}
 
-	msgIDStr := fmt.Sprintf("%d", input.MessageID)
-	log, err := tc.MemoryMgr.GetMessageLogByID(msgIDStr)
+	log, err := tc.MemoryMgr.GetMessageLogByID(input.MessageID)
 	if err != nil {
 		return &GetForwardMessageDetailOutput{Success: false, Message: "未找到该消息的记录"}, nil
 	}
 
-	if log.Forwards == "" {
+	if log.ForwardPayload == nil {
 		return &GetForwardMessageDetailOutput{Success: false, Message: "该消息不包含合并转发内容"}, nil
 	}
 
 	var forwards []onebot.ForwardMessage
-	if err := sonic.UnmarshalString(log.Forwards, &forwards); err != nil {
+	if err := sonic.UnmarshalString(*log.ForwardPayload, &forwards); err != nil {
 		return &GetForwardMessageDetailOutput{Success: false, Message: "解析合并转发内容失败"}, nil
 	}
 

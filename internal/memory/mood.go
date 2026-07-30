@@ -1,17 +1,17 @@
 package memory
 
 import (
-	"errors"
 	"time"
 
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 // startMoodDecay 启动情绪衰减定时任务（每五分钟执行一次）
 func (m *Manager) startMoodDecay() {
 	ticker := time.NewTicker(5 * time.Minute)
+	m.background.Add(1)
 	go func() {
+		defer m.background.Done()
 		for {
 			select {
 			case <-ticker.C:
@@ -30,19 +30,7 @@ func (m *Manager) startMoodDecay() {
 // GetMoodState 获取当前情绪状态
 func (m *Manager) GetMoodState() (*MoodState, error) {
 	var mood MoodState
-	err := m.db.First(&mood).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		mood = MoodState{
-			Valence:     0.0,
-			Energy:      0.5,
-			Sociability: 0.5,
-		}
-		if err := m.db.Create(&mood).Error; err != nil {
-			return nil, err
-		}
-		return &mood, nil
-	}
-	if err != nil {
+	if err := m.db.First(&mood, 1).Error; err != nil {
 		return nil, err
 	}
 	return &mood, nil

@@ -1,7 +1,6 @@
 package onebot
 
 import (
-	"context"
 	"fmt"
 	"mumu-bot/internal/utils"
 	"strconv"
@@ -10,14 +9,11 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
-	"go.uber.org/zap"
 )
 
 // parseGroupMessage 解析群消息
 func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
-	msg := &GroupMessage{
-		MessageType: "group",
-	}
+	msg := &GroupMessage{}
 
 	// 消息时间
 	if t, ok := utils.ParseInt64Value(event["time"]); ok {
@@ -29,11 +25,6 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 	// 消息 ID
 	if msgID, ok := utils.ParseInt64Value(event["message_id"]); ok {
 		msg.MessageID = msgID
-		readCtx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
-		if err := c.MarkMsgAsRead(readCtx, msgID); err != nil {
-			zap.L().Error("标记消息已读失败", zap.Error(err))
-		}
-		cancel()
 	}
 
 	// 群ID
@@ -53,22 +44,18 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 			msg.GroupCard = card
 		}
 	}
-	msg.DisplayName = utils.FirstNonEmpty(msg.GroupCard, msg.Nickname)
-	if msg.GroupID > 0 && msg.UserID > 0 && (strings.TrimSpace(msg.GroupCard) != "" || strings.TrimSpace(msg.Nickname) != "") {
-		c.cacheGroupMemberInfo(&GroupMemberInfo{
-			GroupID:  msg.GroupID,
-			UserID:   msg.UserID,
-			Nickname: msg.Nickname,
-			Card:     msg.GroupCard,
-		})
+	if msg.UserID <= 0 {
+		return nil
 	}
+	msg.DisplayName = utils.FirstNonEmpty(msg.GroupCard, msg.Nickname)
 
 	// 解析消息段，提取各类信息
 	c.parseMessageSegments(event, msg)
 
 	// 检查是否@机器人
+	selfID := c.GetSelfID()
 	for _, atID := range msg.AtList {
-		if atID == c.selfID {
+		if atID == selfID {
 			msg.IsMentioned = true
 			break
 		}
@@ -191,12 +178,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 
 		case "forward": // 合并转发
 			if forwardID, ok := data["id"].(string); ok {
-				forwardCtx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
-				nodes, err := c.GetForwardMsg(forwardCtx, forwardID)
-				cancel()
-				if err == nil && len(nodes) > 0 {
-					msg.Forwards = nodes
-				}
+				msg.ForwardIDs = append(msg.ForwardIDs, forwardID)
 			}
 		}
 	}
@@ -307,26 +289,32 @@ func extractTextFromSegments(segments []interface{}) string {
 	return strings.Join(parts, "")
 }
 
-func parseForwardMessages(data map[string]interface{}) []ForwardMessage {
+func parseForwardMessages(data map[string]interface{}) ([]ForwardMessage, error) {
 	var rawMsgs []interface{}
 	if msgs, ok := data["messages"].([]interface{}); ok {
 		rawMsgs = msgs
 	} else if msgs, ok := data["message"].([]interface{}); ok {
 		rawMsgs = msgs
+	} else {
+		return nil, fmt.Errorf("get_forward_msg 返回的 messages 不是数组")
 	}
 	if len(rawMsgs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var result []ForwardMessage
-	for _, item := range rawMsgs {
+	for i, item := range rawMsgs {
 		msgMap, ok := item.(map[string]interface{})
 		if !ok {
-			continue
+			return nil, fmt.Errorf("get_forward_msg 的 messages 第 %d 项不是对象", i)
 		}
 		fm := ForwardMessage{}
 		if sender, ok := msgMap["sender"].(map[string]interface{}); ok {
-			if uid, ok := utils.ParseInt64Value(sender["user_id"]); ok {
+			if rawUserID, exists := sender["user_id"]; exists {
+				uid, ok := utils.ParseInt64Value(rawUserID)
+				if !ok || uid <= 0 {
+					return nil, fmt.Errorf("get_forward_msg 的 messages 第 %d 项包含无效 user_id", i)
+				}
 				fm.UserID = uid
 			}
 			if nick, ok := sender["nickname"].(string); ok {
@@ -346,7 +334,7 @@ func parseForwardMessages(data map[string]interface{}) []ForwardMessage {
 		}
 		result = append(result, fm)
 	}
-	return result
+	return result, nil
 }
 
 func parseAtSegmentForGroup(data map[string]interface{}) (int64, bool) {
@@ -413,13 +401,6 @@ func newGroupMemberInfoCache() *ttlcache.Cache[string, *GroupMemberInfo] {
 
 func groupMemberCacheKey(groupID, userID int64) string {
 	return fmt.Sprintf("%d:%d", groupID, userID)
-}
-
-func (c *Client) cacheGroupMemberInfo(info *GroupMemberInfo) {
-	if c == nil || c.memberInfoCache == nil || info == nil || info.GroupID <= 0 || info.UserID <= 0 {
-		return
-	}
-	c.memberInfoCache.Set(groupMemberCacheKey(info.GroupID, info.UserID), info, ttlcache.DefaultTTL)
 }
 
 func parseInt(v interface{}) (int, bool) {

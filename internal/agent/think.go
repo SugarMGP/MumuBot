@@ -43,20 +43,24 @@ func (a *Agent) thinkCycle() {
 			continue
 		}
 
-		lastMsg := msgs[len(msgs)-1]
-
-		a.processingMu.RLock()
-		lastTime := a.lastProcessedTime[gc.GroupID]
-		a.processingMu.RUnlock()
-		if !lastTime.IsZero() && lastMsg.Time.Before(lastTime) {
+		a.readMu.RLock()
+		lastReadID := a.lastReadMessageID[gc.GroupID]
+		a.readMu.RUnlock()
+		_, currentMessages := splitMessageSnapshot(msgs, lastReadID, selfID)
+		if len(currentMessages) == 0 {
 			continue
 		}
+		lastMsg := currentMessages[len(currentMessages)-1]
 
-		if lastMsg.UserID == selfID {
-			continue
+		strongInteraction := false
+		for _, msg := range currentMessages {
+			if msg != nil && (msg.IsMentioned || a.persona.IsMentioned(msg.Content)) {
+				strongInteraction = true
+				break
+			}
 		}
-
-		if a.persona.IsMentioned(lastMsg.Content) || lastMsg.IsMentioned {
+		if strongInteraction {
+			a.scheduleThink(gc.GroupID, true, true)
 			continue
 		}
 
@@ -207,33 +211,24 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	if a.bot.IsSelfMuted(groupID) {
 		return
 	}
-	a.processingMu.Lock()
-	if a.processing[groupID] {
-		a.processingMu.Unlock()
-		return
-	}
-	a.processing[groupID] = true
-	lastProcessedTime := a.lastProcessedTime[groupID]
-	a.lastProcessedTime[groupID] = time.Now()
-	a.processingMu.Unlock()
-
-	defer func() {
-		a.processingMu.Lock()
-		a.processing[groupID] = false
-		a.processingMu.Unlock()
-	}()
+	a.readMu.RLock()
+	lastReadMessageID := a.lastReadMessageID[groupID]
+	a.readMu.RUnlock()
 
 	cfg := config.Get()
+	selfID := a.bot.GetSelfID()
 
 	buffer := a.getBuffer(groupID)
+	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessageID, selfID)
 	latestMessageID := int64(0)
 	if len(buffer) > 0 && buffer[len(buffer)-1] != nil {
 		latestMessageID = buffer[len(buffer)-1].MessageID
 	}
 
 	ctx := a.buildToolContext(a.ctx, groupID, latestMessageID)
+	tc := tools.GetToolContext(ctx)
 
-	chatContext := a.buildChatContext(buffer, lastProcessedTime)
+	chatContext := renderChatContext(buffer, lastReadMessageID, selfID)
 	if chatContext == "" {
 		return
 	}
@@ -243,24 +238,45 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	}
 	promptCtx.GroupInfo = a.buildGroupContext(groupID)
 
-	classification, err := a.classifyContext(ctx, buffer)
-	if err != nil {
-		zap.L().Debug("上下文分类失败", zap.Int64("group_id", groupID), zap.Error(err))
-	}
-	topicQuery := ""
-	if classification != nil {
-		topicQuery = classification.TopicQuery
-	}
-
-	topicPromptCtx, err := a.topicMgr.BuildPromptContext(ctx, groupID, buffer, topicQuery)
-	if err != nil {
-		zap.L().Warn("构建话题工作记忆失败", zap.Int64("group_id", groupID), zap.Error(err))
+	semanticCurrent := collectTextContext(currentMessages) != ""
+	var classification *contextClassification
+	var err error
+	if !semanticCurrent {
+		var commit bool
+		classification, commit = emptyCurrentBatchDecision(isMention)
+		if commit {
+			a.commitReadSnapshot(groupID, latestMessageID)
+			return
+		}
 	} else {
-		promptCtx.TopicMemory = topicPromptCtx.Prompt
+		classification, err = a.classifyContext(ctx, readMessages, currentMessages)
+		if err != nil {
+			zap.L().Debug("上下文分类失败", zap.Int64("group_id", groupID), zap.Error(err))
+			if !isMention {
+				return
+			}
+			classification = &contextClassification{Participation: "engage"}
+		}
+	}
+	if !isMention && classification.Participation == "skip" {
+		a.commitReadSnapshot(groupID, latestMessageID)
+		return
 	}
 
-	if cfg.Agent.EnableActiveRetrieval {
-		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, topicPromptCtx.RetrievalQuery)
+	if semanticCurrent {
+		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(latestMessageID)
+		if snapshotErr != nil {
+			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", latestMessageID), zap.Error(snapshotErr))
+		} else {
+			topicPrompt, err := a.topicMgr.BuildPromptContext(ctx, groupID, classification.RetrievalQuery, snapshotLog.ID, replyMessageIDs(currentMessages))
+			if err != nil {
+				zap.L().Warn("构建话题工作记忆失败", zap.Int64("group_id", groupID), zap.Error(err))
+			} else {
+				promptCtx.TopicMemory = topicPrompt
+			}
+		}
+
+		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, classification.RetrievalQuery)
 	}
 
 	if mood, err := a.memory.GetMoodState(); err == nil {
@@ -271,10 +287,12 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		}
 	}
 
-	if a.jargonMgr != nil {
-		promptCtx.JargonMatches = a.jargonMgr.Match(collectTextContext(buffer))
+	if semanticCurrent && a.jargonMgr != nil {
+		promptCtx.JargonMatches = a.jargonMgr.Match(groupID, collectTextContext(currentMessages))
 	}
-	promptCtx.StyleHints = a.buildStyleHintContext(groupID, classification)
+	if semanticCurrent {
+		promptCtx.StyleHints = a.buildStyleHintContext(ctx, groupID, classification)
+	}
 
 	recentPeople := a.buildRecentPeopleContext(buffer, groupID)
 
@@ -317,11 +335,45 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		} else {
 			zap.L().Error("思考失败", zap.Int64("group_id", groupID), zap.Error(err))
 		}
+		if shouldCommitReadSnapshot(err, tc != nil && tc.Acted()) {
+			a.commitReadSnapshot(groupID, latestMessageID)
+		}
+		return
 	}
+	a.commitReadSnapshot(groupID, latestMessageID)
 
 	if cfg.Debug.ShowThinking && result != nil && result.Content != "" {
 		zap.L().Debug("Agent 输出", zap.Int64("group_id", groupID), zap.String("content", result.Content))
 	}
+}
+
+func replyMessageIDs(messages []*onebot.GroupMessage) []int64 {
+	seen := make(map[int64]struct{})
+	ids := make([]int64, 0, len(messages))
+	for _, message := range messages {
+		if message == nil || message.Reply == nil || message.Reply.MessageID == 0 {
+			continue
+		}
+		if _, ok := seen[message.Reply.MessageID]; ok {
+			continue
+		}
+		seen[message.Reply.MessageID] = struct{}{}
+		ids = append(ids, message.Reply.MessageID)
+	}
+	return ids
+}
+
+func shouldCommitReadSnapshot(generateErr error, acted bool) bool {
+	return generateErr == nil || acted
+}
+
+func (a *Agent) commitReadSnapshot(groupID, messageID int64) {
+	if messageID == 0 {
+		return
+	}
+	a.readMu.Lock()
+	a.lastReadMessageID[groupID] = messageID
+	a.readMu.Unlock()
 }
 
 func (a *Agent) buildToolContext(ctx context.Context, groupID, messageID int64) context.Context {
@@ -371,13 +423,12 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	}
 
 	msg := &onebot.GroupMessage{
-		MessageID:   msgID,
-		GroupID:     groupID,
-		UserID:      a.bot.GetSelfID(),
-		Nickname:    a.persona.GetName(),
-		Content:     content,
-		Time:        time.Now(),
-		MessageType: "group",
+		MessageID: msgID,
+		GroupID:   groupID,
+		UserID:    a.bot.GetSelfID(),
+		Nickname:  a.persona.GetName(),
+		Content:   content,
+		Time:      time.Now(),
 	}
 
 	if replyTo > 0 {
@@ -401,13 +452,12 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath strin
 	}
 
 	msg := &onebot.GroupMessage{
-		MessageID:   msgID,
-		GroupID:     groupID,
-		UserID:      a.bot.GetSelfID(),
-		Nickname:    a.persona.GetName(),
-		Content:     "",
-		Time:        time.Now(),
-		MessageType: "group",
+		MessageID: msgID,
+		GroupID:   groupID,
+		UserID:    a.bot.GetSelfID(),
+		Nickname:  a.persona.GetName(),
+		Content:   "",
+		Time:      time.Now(),
 		Images: []onebot.ImageInfo{
 			{
 				SubType: 1,
