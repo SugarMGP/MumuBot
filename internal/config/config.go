@@ -109,7 +109,7 @@ type LearningConfig struct {
 	MinMsgCount           int  `mapstructure:"min_msg_count"`           // 触发学习的最少消息数量
 }
 
-// ModelConfig 三档模型配置
+// ModelConfig 对话模型配置
 type ModelConfig struct {
 	APIKey      string                 `mapstructure:"api_key"`
 	BaseURL     string                 `mapstructure:"base_url"`
@@ -117,10 +117,9 @@ type ModelConfig struct {
 	ExtraFields map[string]interface{} `mapstructure:"extra_fields"` // 额外参数
 }
 
-// ModelTiersConfig 高 / 中 / 低三档模型配置
+// ModelTiersConfig 高 / 低两档模型配置
 type ModelTiersConfig struct {
 	High ModelConfig `mapstructure:"high"`
-	Mid  ModelConfig `mapstructure:"mid"`
 	Low  ModelConfig `mapstructure:"low"`
 }
 
@@ -202,27 +201,22 @@ func Load(path string) (*Config, error) {
 			return
 		}
 		loaded.Persona.PromptTemplate = prompt
-		// 从环境变量覆盖敏感配置
-		if apiKey := os.Getenv("MUMU_MODEL_HIGH_API_KEY"); apiKey != "" {
-			loaded.ModelTiers.High.APIKey = apiKey
-		}
-		if apiKey := os.Getenv("MUMU_MODEL_MID_API_KEY"); apiKey != "" {
-			loaded.ModelTiers.Mid.APIKey = apiKey
-		}
-		if apiKey := os.Getenv("MUMU_MODEL_LOW_API_KEY"); apiKey != "" {
-			loaded.ModelTiers.Low.APIKey = apiKey
-		}
-		if apiKey := os.Getenv("MUMU_EMBEDDING_API_KEY"); apiKey != "" {
-			loaded.Embedding.APIKey = apiKey
-		}
-		if apiKey := os.Getenv("MUMU_VISION_API_KEY"); apiKey != "" {
-			loaded.VisionLLM.APIKey = apiKey
-		}
+		// 从环境变量覆盖模型端点和敏感配置
+		overrideModelEndpoint("MUMU_MODEL_HIGH", &loaded.ModelTiers.High.APIKey, &loaded.ModelTiers.High.BaseURL, &loaded.ModelTiers.High.Model)
+		overrideModelEndpoint("MUMU_MODEL_LOW", &loaded.ModelTiers.Low.APIKey, &loaded.ModelTiers.Low.BaseURL, &loaded.ModelTiers.Low.Model)
+		overrideModelEndpoint("MUMU_EMBEDDING", &loaded.Embedding.APIKey, &loaded.Embedding.BaseURL, &loaded.Embedding.Model)
+		overrideModelEndpoint("MUMU_VISION", &loaded.VisionLLM.APIKey, &loaded.VisionLLM.BaseURL, &loaded.VisionLLM.Model)
 		if token := os.Getenv("MUMU_ONEBOT_TOKEN"); token != "" {
 			loaded.OneBot.AccessToken = token
 		}
+		if wsURL := os.Getenv("MUMU_ONEBOT_WS_URL"); wsURL != "" {
+			loaded.OneBot.WsURL = wsURL
+		}
 		if dsn := os.Getenv("MUMU_DATABASE_DSN"); dsn != "" {
 			loaded.Database.DSN = dsn
+		}
+		if adminKey := os.Getenv("MUMU_WEB_ADMIN_KEY"); adminKey != "" {
+			loaded.Web.AdminKey = adminKey
 		}
 
 		if err := validate(loaded); err != nil {
@@ -232,6 +226,18 @@ func Load(path string) (*Config, error) {
 		cfg = loaded
 	})
 	return cfg, loadErr
+}
+
+func overrideModelEndpoint(prefix string, apiKey, baseURL, modelName *string) {
+	if value := os.Getenv(prefix + "_API_KEY"); value != "" {
+		*apiKey = value
+	}
+	if value := os.Getenv(prefix + "_BASE_URL"); value != "" {
+		*baseURL = value
+	}
+	if value := os.Getenv(prefix + "_MODEL"); value != "" {
+		*modelName = value
+	}
 }
 
 func validate(c *Config) error {

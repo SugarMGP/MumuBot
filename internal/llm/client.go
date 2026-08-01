@@ -13,7 +13,6 @@ import (
 
 var (
 	highTierClientSlot = &tierClientSlot{}
-	midTierClientSlot  = &tierClientSlot{}
 	lowTierClientSlot  = &tierClientSlot{}
 )
 
@@ -21,7 +20,6 @@ type Tier string
 
 const (
 	TierHigh Tier = "high"
-	TierMid  Tier = "mid"
 	TierLow  Tier = "low"
 )
 
@@ -35,8 +33,6 @@ func TierDisplayName(tier Tier) string {
 	switch tier {
 	case TierHigh:
 		return "高档模型"
-	case TierMid:
-		return "中档模型"
 	case TierLow:
 		return "轻量模型"
 	default:
@@ -56,9 +52,6 @@ func NewClientForTier(tier Tier) (model.ToolCallingChatModel, error) {
 	case TierHigh:
 		modelCfg = cfg.ModelTiers.High
 		slot = highTierClientSlot
-	case TierMid:
-		modelCfg = cfg.ModelTiers.Mid
-		slot = midTierClientSlot
 	case TierLow:
 		modelCfg = cfg.ModelTiers.Low
 		slot = lowTierClientSlot

@@ -54,9 +54,23 @@
 |------|------|
 | Go 1.26.5+ | 编译运行 |
 | Node.js 22+ | 构建前端资源（仅从源码构建时需要） |
-| PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量，并启用 `pg_trgm` 扩展 |
+| PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量 |
 | NapCat | OneBot 11 协议实现 |
 | 大语言模型 API | 兼容 OpenAI 格式；需支持工具调用与结构化输出 |
+
+### Docker Compose
+
+Compose 会一并启动 MumuBot、PostgreSQL/pgvector 和 NapCat：
+
+```bash
+cp .env.example .env
+# 填写 .env 中的数据库、后台和模型配置
+docker compose up -d --build
+```
+
+首次启动时，容器会在配置目录中补齐缺失的 `config.yaml`、`persona.prompt` 和 `mcp.json`，已有文件不会被覆盖。
+
+编辑生成的配置文件后，重启服务使其生效。随后访问 `http://localhost:6099/webui` 进入 NapCat 管理后台登录 QQ 即可。
 
 ### 使用发布包
 
@@ -99,11 +113,10 @@ cp config/mcp.example.json config/mcp.json
 
 # 2. 编辑配置（填入模型、数据库、OneBot 等信息）
 # 也可通过环境变量配置敏感信息：
-#   MUMU_MODEL_HIGH_API_KEY             - 高档模型 API Key
-#   MUMU_MODEL_MID_API_KEY              - 中档模型 API Key
-#   MUMU_MODEL_LOW_API_KEY              - 轻量模型 API Key
-#   MUMU_EMBEDDING_API_KEY              - Embedding 模型 API Key
-#   MUMU_VISION_API_KEY                 - 视觉模型 API Key
+#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - 高档模型完整端点
+#   MUMU_MODEL_LOW_BASE_URL / API_KEY / MODEL  - 轻量模型完整端点
+#   MUMU_EMBEDDING_BASE_URL / API_KEY / MODEL  - Embedding 模型完整端点
+#   MUMU_VISION_BASE_URL / API_KEY / MODEL     - 视觉模型完整端点
 #   MUMU_ONEBOT_TOKEN                   - OneBot 访问令牌
 #   MUMU_DATABASE_DSN                   - PostgreSQL 连接串
 
@@ -114,14 +127,16 @@ cp config/mcp.example.json config/mcp.json
 ./mumu-bot
 ```
 
-数据库使用 PostgreSQL。部署时先由高权限账户在全新数据库安装扩展；运行账户必须拥有目标 schema 和应用数据表，或具备创建表、修改表、创建索引及外键等 DDL 所需权限，因为应用启动时会自动创建和校验数据结构。普通读写权限不足以启动。应用不会迁移旧 MySQL/Milvus 数据。
+数据库使用 PostgreSQL，且需要安装 [pgvector](https://github.com/pgvector/pgvector)。
+
+应用启动时会尝试执行下面两条语句启用扩展，再自动创建和校验数据结构。权限不足时可由管理员预先执行下面的语句。
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-默认情况下服务监听 `8080` 端口，可在配置中修改。
+默认情况下服务监听 `7468` 端口，可在配置中修改。
 
 访问服务的 `/admin` 路径进入管理后台。未设置后台密钥时，后台会保持关闭状态。
 

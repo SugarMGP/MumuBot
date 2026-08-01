@@ -17,6 +17,8 @@ type SaveMemoryInput struct {
 	Content string `json:"content" jsonschema:"description=要记住的内容，用自然语言描述清楚"`
 	// RelatedUserID 相关的用户ID（可选）
 	RelatedUserID int64 `json:"related_user_id,omitempty" jsonschema:"description=如果这条记忆与某个群友相关，填写其QQ号，否则填0"`
+	// EvidenceMessageID 作为事实来源的消息 ID（可选）
+	EvidenceMessageID int64 `json:"evidence_message_id,omitempty" jsonschema:"description=证据消息 ID，可从聊天中的 #消息ID 或工具结果获取；留空时使用本轮最后一条非机器人消息"`
 }
 
 // SaveMemoryOutput 保存记忆的输出
@@ -36,12 +38,16 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 		return &SaveMemoryOutput{Success: false, Message: "内容不能为空"}, nil
 	}
 
-	if tc.MessageID <= 0 {
+	evidenceMessageID := input.EvidenceMessageID
+	if evidenceMessageID == 0 {
+		evidenceMessageID = tc.EvidenceMessageID
+	}
+	if evidenceMessageID <= 0 {
 		return &SaveMemoryOutput{Success: false, Message: "当前消息来源缺失，暂时不能写入长期记忆"}, nil
 	}
-	source, err := tc.MemoryMgr.GetMessageLogByID(tc.MessageID)
-	if err != nil {
-		return &SaveMemoryOutput{Success: false, Message: "当前消息来源不存在，暂时不能写入长期记忆"}, nil
+	source, err := tc.MemoryMgr.GetMessageLogByID(evidenceMessageID)
+	if err != nil || source.GroupID != tc.GroupID {
+		return &SaveMemoryOutput{Success: false, Message: "证据消息不存在或不属于当前群，暂时不能写入长期记忆"}, nil
 	}
 
 	selfID := int64(0)
@@ -78,7 +84,7 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 func NewSaveMemoryTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"saveMemory",
-		`保存值得记住的信息，传入一条纯文字摘要即可。
+		`保存值得记住的信息。可传 evidence_message_id 指向聊天或工具结果中的具体消息，包括你刚刚说过的话；留空时使用本轮最后一条非机器人消息。
 适合保存的内容包括：稳定事实、长期偏好、群规边界、持续目标、值得追踪的经历。
 普通闲聊、短期待回复、临时口嗨不要保存。`,
 		saveMemoryFunc,

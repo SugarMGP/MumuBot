@@ -92,7 +92,7 @@ func New(mem *memory.Manager) (*Agent, error) {
 		return nil, fmt.Errorf("创建 LLM 客户端失败: %w", err)
 	}
 
-	topicModel, err := llm.NewClientForTier(llm.TierMid)
+	topicModel, err := llm.NewClientForTier(llm.TierLow)
 	if err != nil {
 		return nil, fmt.Errorf("创建话题摘要模型失败: %w", err)
 	}

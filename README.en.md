@@ -54,9 +54,23 @@ Core capabilities of this project:
 |------|------|
 | Go 1.26.5+ | Build and run |
 | Node.js 22+ | Build frontend assets (only needed for source builds) |
-| PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors with the `pg_trgm` extension enabled |
+| PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors |
 | NapCat | OneBot 11 protocol implementation |
 | LLM API | OpenAI-compatible; must support tool calling and structured output |
+
+### Docker Compose
+
+Compose starts MumuBot, PostgreSQL/pgvector, and NapCat together:
+
+```bash
+cp .env.example .env
+# Fill in database, admin, and model settings in .env
+docker compose up -d --build
+```
+
+On first start, the container creates any missing `config.yaml`, `persona.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
+
+Restart the service after editing the generated configuration files. Then visit `http://localhost:6099/webui` to open the NapCat admin panel and sign in to QQ.
 
 ### Using Release Packages
 
@@ -99,11 +113,10 @@ cp config/mcp.example.json config/mcp.json
 
 # 2. Edit config (fill in model, database, OneBot details, etc.)
 # Sensitive values can also be set via environment variables:
-#   MUMU_MODEL_HIGH_API_KEY             - High-tier model API key
-#   MUMU_MODEL_MID_API_KEY              - Mid-tier model API key
-#   MUMU_MODEL_LOW_API_KEY              - Low-tier model API key
-#   MUMU_EMBEDDING_API_KEY              - Embedding model API key
-#   MUMU_VISION_API_KEY                 - Vision model API key
+#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - Complete high-tier model endpoint
+#   MUMU_MODEL_LOW_BASE_URL / API_KEY / MODEL  - Complete low-tier model endpoint
+#   MUMU_EMBEDDING_BASE_URL / API_KEY / MODEL  - Complete embedding model endpoint
+#   MUMU_VISION_BASE_URL / API_KEY / MODEL     - Complete vision model endpoint
 #   MUMU_ONEBOT_TOKEN                   - OneBot access token
 #   MUMU_DATABASE_DSN                   - PostgreSQL connection string
 
@@ -114,14 +127,16 @@ cp config/mcp.example.json config/mcp.json
 ./mumu-bot
 ```
 
-Storage uses PostgreSQL. Install the extensions in a fresh database with a privileged account first. The runtime account must own the target schema and application tables, or otherwise have the DDL privileges needed to create and alter tables, indexes, and foreign keys, because MumuBot creates and verifies its schema at startup. Ordinary read/write grants are not sufficient. Old MySQL or Milvus data is not migrated.
+Storage uses PostgreSQL and requires [pgvector](https://github.com/pgvector/pgvector).
+
+At startup, MumuBot attempts to enable the extensions with the statements below before creating and verifying its schema. If the runtime account lacks permission, an administrator can run these statements in advance.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-The service listens on port `8080` by default (configurable).
+The service listens on port `7468` by default (configurable).
 
 Visit `/admin` to access the admin dashboard. The dashboard stays disabled until a secret key is configured.
 

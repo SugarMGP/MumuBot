@@ -220,12 +220,20 @@ func (a *Agent) think(groupID int64, isMention bool) {
 
 	buffer := a.getBuffer(groupID)
 	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessageID, selfID)
-	latestMessageID := int64(0)
+	snapshotMessageID := int64(0)
 	if len(buffer) > 0 && buffer[len(buffer)-1] != nil {
-		latestMessageID = buffer[len(buffer)-1].MessageID
+		snapshotMessageID = buffer[len(buffer)-1].MessageID
+	}
+	evidenceMessageID := int64(0)
+	for i := len(currentMessages) - 1; i >= 0; i-- {
+		msg := currentMessages[i]
+		if msg != nil && msg.UserID != selfID {
+			evidenceMessageID = msg.MessageID
+			break
+		}
 	}
 
-	ctx := a.buildToolContext(a.ctx, groupID, latestMessageID)
+	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID, evidenceMessageID)
 	tc := tools.GetToolContext(ctx)
 
 	chatContext := renderChatContext(buffer, lastReadMessageID, selfID)
@@ -245,7 +253,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		var commit bool
 		classification, commit = emptyCurrentBatchDecision(isMention)
 		if commit {
-			a.commitReadSnapshot(groupID, latestMessageID)
+			a.commitReadSnapshot(groupID, snapshotMessageID)
 			return
 		}
 	} else {
@@ -259,14 +267,14 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		}
 	}
 	if !isMention && classification.Participation == "skip" {
-		a.commitReadSnapshot(groupID, latestMessageID)
+		a.commitReadSnapshot(groupID, snapshotMessageID)
 		return
 	}
 
 	if semanticCurrent {
-		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(latestMessageID)
+		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(snapshotMessageID)
 		if snapshotErr != nil {
-			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", latestMessageID), zap.Error(snapshotErr))
+			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", snapshotMessageID), zap.Error(snapshotErr))
 		} else {
 			topicPrompt, err := a.topicMgr.BuildPromptContext(ctx, groupID, classification.RetrievalQuery, snapshotLog.ID, replyMessageIDs(currentMessages))
 			if err != nil {
@@ -336,11 +344,11 @@ func (a *Agent) think(groupID int64, isMention bool) {
 			zap.L().Error("思考失败", zap.Int64("group_id", groupID), zap.Error(err))
 		}
 		if shouldCommitReadSnapshot(err, tc != nil && tc.Acted()) {
-			a.commitReadSnapshot(groupID, latestMessageID)
+			a.commitReadSnapshot(groupID, snapshotMessageID)
 		}
 		return
 	}
-	a.commitReadSnapshot(groupID, latestMessageID)
+	a.commitReadSnapshot(groupID, snapshotMessageID)
 
 	if cfg.Debug.ShowThinking && result != nil && result.Content != "" {
 		zap.L().Debug("Agent 输出", zap.Int64("group_id", groupID), zap.String("content", result.Content))
@@ -376,12 +384,13 @@ func (a *Agent) commitReadSnapshot(groupID, messageID int64) {
 	a.readMu.Unlock()
 }
 
-func (a *Agent) buildToolContext(ctx context.Context, groupID, messageID int64) context.Context {
+func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID, evidenceMessageID int64) context.Context {
 	return tools.WithToolContext(ctx, &tools.ToolContext{
-		GroupID:   groupID,
-		MemoryMgr: a.memory,
-		Bot:       a.bot,
-		MessageID: messageID,
+		GroupID:           groupID,
+		MemoryMgr:         a.memory,
+		Bot:               a.bot,
+		SnapshotMessageID: snapshotMessageID,
+		EvidenceMessageID: evidenceMessageID,
 		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) (int64, error) {
 			return a.doSpeak(callCtx, gid, content, replyTo, mentions)
 		},

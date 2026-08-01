@@ -4,7 +4,7 @@
 
 ## 入口与职责
 
-- `manager.go`：数据库、扩展校验、最终表结构和后台清理任务初始化。
+- `manager.go`：数据库连接、扩展启用、最终表结构和后台清理任务初始化。
 - `claim_extractor.go`：长期记忆 claim（结构化事实候选）提取和允许类型校验。
 - `memory_ingest.go`、`merge_decider.go`：长期记忆合并决策、证据校验和写入。
 - `learning_write.go`：learner 双游标输入与群文化/成员特征事务写入。
@@ -25,6 +25,7 @@
 - 向量维度、证据来源和幂等约束必须在写入边界校验，不做兜底写库。
 - memories、style_patterns、jargons、member_traits 的证据关系和精确幂等由数据库约束保证，不只依赖应用层查重。
 - 当前 schema 面向全新 PostgreSQL 数据库，不维护旧数据兼容迁移、冗余字段或过渡表。
+- 启动时在表结构迁移前执行固定的 `CREATE EXTENSION IF NOT EXISTS` 启用 vector 和 pg_trgm；服务端扩展文件和数据库权限仍属于部署前提。
 - 检索只使用 pgvector 精确向量、pg_trgm 和 RRF；没有明确需求和测量依据时不增加近似索引或额外检索中间件。
 - rejected 黑话或风格模式只有获得新证据时才恢复为 candidate；已审核 active 内容不被自动学习覆盖。
 - 成员最近发言和群名片使用消息真实时间单调更新，延迟或乱序旧消息不能覆盖新状态。

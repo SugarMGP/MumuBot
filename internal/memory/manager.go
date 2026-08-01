@@ -80,7 +80,7 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 	if err != nil {
 		return nil, fmt.Errorf("连接 PostgreSQL 数据库失败: %w", err)
 	}
-	if err := verifyExtensions(db); err != nil {
+	if err := ensureExtensions(db); err != nil {
 		return nil, err
 	}
 	if err := migrateSchema(db, cfg.Embedding.Dimensions); err != nil {
@@ -92,15 +92,12 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 	return m, nil
 }
 
-func verifyExtensions(db *gorm.DB) error {
-	for _, name := range []string{"vector", "pg_trgm"} {
-		var count int64
-		if err := db.Raw("SELECT count(*) FROM pg_extension WHERE extname = ?", name).Scan(&count).Error; err != nil {
-			return fmt.Errorf("检查 PostgreSQL 扩展 %s: %w", name, err)
-		}
-		if count != 1 {
-			return fmt.Errorf("PostgreSQL 缺少扩展 %s，请由数据库管理员先安装", name)
-		}
+func ensureExtensions(db *gorm.DB) error {
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+		return fmt.Errorf("启用 PostgreSQL 扩展 vector 失败，请确认服务端已安装扩展且运行账户有创建权限: %w", err)
+	}
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
+		return fmt.Errorf("启用 PostgreSQL 扩展 pg_trgm 失败，请确认运行账户有创建权限: %w", err)
 	}
 	return nil
 }
@@ -350,9 +347,6 @@ func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMem
 		}
 		if prepared != nil {
 			preparedItems = append(preparedItems, *prepared)
-		}
-		if len(preparedItems) == 12 {
-			break
 		}
 	}
 	result := make([]Memory, 0, len(preparedItems))

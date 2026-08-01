@@ -3,9 +3,11 @@ package onebot
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"mumu-bot/internal/utils"
+	"os"
 	"strconv"
 	"time"
 
@@ -132,6 +134,11 @@ func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content st
 // filePath: 本地文件绝对路径
 // isSticker: true 时作为表情包发送 (sub_type=1)
 func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("读取待发送图片失败: %w", err)
+	}
+
 	subType := 0
 	if isSticker {
 		subType = 1
@@ -141,7 +148,7 @@ func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath s
 		{
 			"type": "image",
 			"data": map[string]interface{}{
-				"file":     "file:///" + filePath,
+				"file":     "base64://" + base64.StdEncoding.EncodeToString(data),
 				"sub_type": subType,
 			},
 		},

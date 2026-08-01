@@ -60,7 +60,7 @@ type cultureReviewDecision struct {
 }
 
 func New(memMgr *memory.Manager, jargonMgr *jargon.Manager) (*Learner, error) {
-	chatModel, err := llm.NewClientForTier(llm.TierMid)
+	chatModel, err := llm.NewClientForTier(llm.TierLow)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +102,7 @@ func (l *Learner) runLoop() {
 	if reviewEvery <= 0 {
 		reviewEvery = time.Hour
 	}
+	l.processAllGroups()
 	learnTicker := time.NewTicker(learnEvery)
 	reviewTicker := time.NewTicker(reviewEvery)
 	defer learnTicker.Stop()

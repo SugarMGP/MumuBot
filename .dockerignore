@@ -1,0 +1,15 @@
+*
+!.dockerignore
+!Dockerfile
+!docker-entrypoint.sh
+!go.mod
+!go.sum
+!main.go
+!package.json
+!package-lock.json
+!config/
+!config/config.example.yaml
+!config/mcp.example.json
+!config/persona.prompt
+!internal/
+!internal/**

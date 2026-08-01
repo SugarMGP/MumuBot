@@ -44,6 +44,7 @@ go vet ./...
 - 只改 Go 逻辑时，至少运行 `go build ./...`；涉及语法或逻辑变更时再运行 `go vet ./...`。
 - 修改 `.templ` 后运行 `templ generate ./internal/web/views`。
 - 修改 `internal/web/assets/src/` 后运行 `npm run build`。
+- 修改 `Dockerfile`、`docker-compose.yml` 或 `.env.example` 后运行 `docker-compose config --quiet`（或等价的 `docker compose config --quiet`）。
 - 文档类改动不需要为了形式重跑前端构建，但如果同时已有代码改动，交付时要说明本轮实际验证了什么。
 
 ## 产品与文案
@@ -121,6 +122,7 @@ go vet ./...
 ## 核心架构约束
 
 - 话题工作记忆是主路径能力，不按“可关闭功能”设计，也不要为核心链路补可选回退开关。
+- 对话模型只保留 high 和 low 两档：high 用于主 ReAct，话题、学习、分类和记忆等原中低档任务统一使用 low；不要恢复 mid 配置或兼容别名。
 - 回复决策保持单次 ReAct `Generate`，不拆 Planner/Replyer；`classifyContext` 只做轻量的参与判断、检索词和风格场景规划，不生成第二套聊天上下文。
 - 强提及、点名和回复机器人必须进入 ReAct；分类失败不能拦截强交互。每群保持单任务串行和必要的 rerun，普通触发继续使用既有概率门控。
 - `think` 必须基于固定消息快照，思考期间新到消息留给下一轮；`speak` 保持一至五条消息，每条可独立设置 `reply_to` 和 `mentions`。

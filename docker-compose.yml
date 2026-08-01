@@ -1,0 +1,82 @@
+services:
+  database:
+    image: pgvector/pgvector:0.8.2-pg18-trixie
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_DB: ${POSTGRES_DB:-mumu_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-mumu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    restart: unless-stopped
+    environment:
+      MODE: ws
+      NAPCAT_UID: 1000
+      NAPCAT_GID: 1000
+      TZ: Asia/Shanghai
+    ports:
+      - ${NAPCAT_WEBUI_PORT:-6099}:6099
+    volumes:
+      - napcat-config:/app/napcat/config
+      - napcat-qq:/app/.config/QQ
+
+  mumu-bot:
+    build: .
+    restart: unless-stopped
+    init: true
+    read_only: true
+    depends_on:
+      database:
+        condition: service_healthy
+      napcat:
+        condition: service_started
+    environment:
+      MUMU_DATABASE_DSN: postgres://${POSTGRES_USER:-mumu}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@database:5432/${POSTGRES_DB:-mumu_bot}?sslmode=disable
+      MUMU_ONEBOT_WS_URL: ${MUMU_ONEBOT_WS_URL:-ws://napcat:3001}
+      MUMU_ONEBOT_TOKEN: ${MUMU_ONEBOT_TOKEN:-}
+      MUMU_WEB_ADMIN_KEY: ${MUMU_WEB_ADMIN_KEY:?set MUMU_WEB_ADMIN_KEY in .env}
+      MUMU_MODEL_HIGH_BASE_URL: ${MUMU_MODEL_HIGH_BASE_URL:?set MUMU_MODEL_HIGH_BASE_URL in .env}
+      MUMU_MODEL_HIGH_API_KEY: ${MUMU_MODEL_HIGH_API_KEY:?set MUMU_MODEL_HIGH_API_KEY in .env}
+      MUMU_MODEL_HIGH_MODEL: ${MUMU_MODEL_HIGH_MODEL:?set MUMU_MODEL_HIGH_MODEL in .env}
+      MUMU_MODEL_LOW_BASE_URL: ${MUMU_MODEL_LOW_BASE_URL:?set MUMU_MODEL_LOW_BASE_URL in .env}
+      MUMU_MODEL_LOW_API_KEY: ${MUMU_MODEL_LOW_API_KEY:?set MUMU_MODEL_LOW_API_KEY in .env}
+      MUMU_MODEL_LOW_MODEL: ${MUMU_MODEL_LOW_MODEL:?set MUMU_MODEL_LOW_MODEL in .env}
+      MUMU_EMBEDDING_BASE_URL: ${MUMU_EMBEDDING_BASE_URL:?set MUMU_EMBEDDING_BASE_URL in .env}
+      MUMU_EMBEDDING_API_KEY: ${MUMU_EMBEDDING_API_KEY:?set MUMU_EMBEDDING_API_KEY in .env}
+      MUMU_EMBEDDING_MODEL: ${MUMU_EMBEDDING_MODEL:?set MUMU_EMBEDDING_MODEL in .env}
+      MUMU_VISION_BASE_URL: ${MUMU_VISION_BASE_URL:-}
+      MUMU_VISION_API_KEY: ${MUMU_VISION_API_KEY:-}
+      MUMU_VISION_MODEL: ${MUMU_VISION_MODEL:-}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - ${MUMU_WEB_PORT:-7468}:7468
+    volumes:
+      - type: bind
+        source: ${MUMU_CONFIG_DIR:-./config}
+        target: /app/config
+      - stickers:/app/stickers
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7468/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  napcat-config:
+  napcat-qq:
+  stickers:

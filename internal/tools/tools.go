@@ -29,7 +29,8 @@ type ToolContext struct {
 	GroupID             int64
 	MemoryMgr           *memory.Manager
 	Bot                 *onebot.Client
-	MessageID           int64
+	SnapshotMessageID   int64
+	EvidenceMessageID   int64
 	SpeakCallback       SpeakCallback       // 发言回调
 	SendStickerCallback SendStickerCallback // 发送表情包回调
 
@@ -211,10 +212,11 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 		limit = 40
 	}
 
-	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.MessageID, limit, input.Offset)
+	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
 	results := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
 		results = append(results, map[string]interface{}{
+			"message_id":   m.OneBotMessageID,
 			"user_id":      m.UserID,
 			"nickname":     m.Nickname,
 			"content":      m.DisplayContent,

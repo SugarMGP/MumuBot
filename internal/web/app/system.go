@@ -63,7 +63,6 @@ func (a *App) systemSections() []views.SystemSection {
 
 	modelFields := make([]views.SystemField, 0, 8)
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierHigh), cfg.ModelTiers.High.Model)
-	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierMid), cfg.ModelTiers.Mid.Model)
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierLow), cfg.ModelTiers.Low.Model)
 	modelFields = appendField(modelFields, "记忆检索", cfg.Embedding.Model)
 	if cfg.VisionLLM.Enabled {
