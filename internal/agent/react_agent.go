@@ -55,14 +55,13 @@ type Agent struct {
 	visionCache *ttlcache.Cache[string, string]
 	topicMgr    *topic.Manager
 
-	buffers   map[int64][]*onebot.GroupMessage
-	buffersMu sync.RWMutex
+	buffers         map[int64][]*onebot.GroupMessage
+	lastReadMessage map[int64]*onebot.GroupMessage
+	buffersMu       sync.RWMutex
 
 	pendingThinks map[int64]*pendingThink
 	pendingMu     sync.Mutex
 
-	lastReadMessage   map[int64]*onebot.GroupMessage
-	readMu            sync.RWMutex
 	startupMu         sync.Mutex
 	startupRecovering bool
 	startupQueue      []startupEvent
@@ -300,14 +299,14 @@ func (a *Agent) loadBuffersFromDB() {
 			continue
 		}
 
-		a.buffersMu.Lock()
 		messages := make([]*onebot.GroupMessage, 0, len(logs))
 		for _, log := range logs {
 			messages = append(messages, messageLogToBufferedGroupMessage(log))
 		}
+		a.buffersMu.Lock()
 		a.buffers[gc.GroupID] = messages
+		a.lastReadMessage[gc.GroupID] = messages[len(messages)-1]
 		a.buffersMu.Unlock()
-		a.commitReadSnapshot(gc.GroupID, messages[len(messages)-1])
 
 		zap.L().Info("已从数据库加载消息历史", zap.Int64("group_id", gc.GroupID), zap.Int("count", len(logs)))
 	}
@@ -323,9 +322,6 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 		FinalContent: log.DisplayContent,
 		IsMentioned:  log.IsMentioned,
 		Time:         log.MessageTime,
-	}
-	if log.RecalledAt != nil {
-		return recalledBufferedMessage(msg)
 	}
 	if log.ForwardPayload != nil {
 		_ = sonic.UnmarshalString(*log.ForwardPayload, &msg.Forwards)

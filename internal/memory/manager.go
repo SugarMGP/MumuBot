@@ -396,26 +396,34 @@ func (m *Manager) GetMessageLogByID(messageID int64) (*MessageLog, error) {
 	return &item, nil
 }
 
-func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (bool, error) {
+func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bool, error) {
 	if groupID <= 0 || messageID <= 0 {
-		return false, nil
+		return nil, false, nil
 	}
-	changed := false
+	var item MessageLog
 	err := m.db.Transaction(func(tx *gorm.DB) error {
-		item := MessageLog{}
-		result := tx.Model(&item).Clauses(clause.Returning{Columns: []clause.Column{{Name: "id"}}}).
+		result := tx.Model(&item).Clauses(clause.Returning{}).
 			Where("group_id = ? AND one_bot_message_id = ? AND recalled_at IS NULL", groupID, messageID).
-			Update("recalled_at", time.Now())
+			Updates(map[string]any{
+				"recalled_at":         time.Now(),
+				"text_content":        "",
+				"display_content":     "[该消息已撤回]\n",
+				"forward_payload":     nil,
+				"reply_to_message_id": nil,
+				"is_mentioned":        false,
+			})
 		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
 		}
-		changed = true
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error
 	})
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	return changed, nil
+	if item.ID == 0 {
+		return nil, false, nil
+	}
+	return &item, true, nil
 }
 
 func (m *Manager) Close() error {

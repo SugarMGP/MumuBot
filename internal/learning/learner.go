@@ -174,7 +174,7 @@ func (l *Learner) processCulture(groupID int64) {
 			jargons = append(jargons, memory.CultureJargonInput{Term: term, Meaning: meaning, MessageIDs: ids})
 		}
 	}
-	if err := l.memMgr.CommitCultureBatch(ctx, groupID, rows[len(rows)-1].ID, styles, jargons); err != nil {
+	if err := l.memMgr.CommitCultureBatch(ctx, groupID, rows[len(rows)-1].ID, learningMessageIDs(valid), styles, jargons); err != nil {
 		zap.L().Warn("提交群文化学习失败", zap.Int64("group_id", groupID), zap.Error(err))
 	}
 }
@@ -214,7 +214,7 @@ func (l *Learner) processMembers(groupID int64) {
 			traits = append(traits, memory.MemberTraitInput{UserID: item.UserID, Kind: item.Kind, Value: value, MessageIDs: ids})
 		}
 	}
-	if err := l.memMgr.CommitMemberProfileBatch(ctx, groupID, rows[len(rows)-1].ID, traits); err != nil {
+	if err := l.memMgr.CommitMemberProfileBatch(ctx, groupID, rows[len(rows)-1].ID, learningMessageIDs(valid), traits); err != nil {
 		zap.L().Warn("提交成员画像学习失败", zap.Int64("group_id", groupID), zap.Error(err))
 	}
 }
@@ -275,6 +275,14 @@ func learningMessageIndex(rows []memory.LearningMessage) map[uint]memory.Learnin
 	result := make(map[uint]memory.LearningMessage, len(rows))
 	for _, row := range rows {
 		result[row.ID] = row
+	}
+	return result
+}
+
+func learningMessageIDs(rows []memory.LearningMessage) []uint {
+	result := make([]uint, len(rows))
+	for i, row := range rows {
+		result[i] = row.ID
 	}
 	return result
 }
@@ -351,11 +359,26 @@ func (l *Learner) reviewGroup(groupID int64) {
 		return
 	}
 	styleIDs, jargonIDs, styleApproval, jargonApproval := cultureReviewUpdates(items, result)
-	if err := l.memMgr.ReviewCulture(styleIDs, jargonIDs, styleApproval, jargonApproval); err != nil {
+	if err := l.memMgr.ReviewCulture(groupID, cultureReviewMessageIDs(items), styleIDs, jargonIDs, styleApproval, jargonApproval); err != nil {
 		zap.L().Warn("提交群文化审核结果失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
 	l.jargonMgr.Reload()
+}
+
+func cultureReviewMessageIDs(items []memory.CultureReviewItem) []uint {
+	seen := make(map[uint]struct{})
+	var result []uint
+	for _, item := range items {
+		for _, evidence := range item.Evidence {
+			if _, ok := seen[evidence.MessageID]; ok {
+				continue
+			}
+			seen[evidence.MessageID] = struct{}{}
+			result = append(result, evidence.MessageID)
+		}
+	}
+	return result
 }
 
 func cultureReviewUpdates(items []memory.CultureReviewItem, result cultureReview) ([]uint, []uint, map[uint]bool, map[uint]bool) {

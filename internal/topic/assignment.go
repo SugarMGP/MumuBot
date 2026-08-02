@@ -17,11 +17,11 @@ type topicAssignmentDecision struct {
 }
 
 type topicAssignmentCandidate struct {
-	ID            uint
-	Summary       string
-	Tail          string
-	Participants  []string
-	LastMessageID uint
+	ID               uint
+	Summary          string
+	Tail             string
+	LastMessageID    uint
+	SourceMessageIDs []uint
 }
 
 func normalizeTopicAssignmentSubmission(raw *topicAssignmentSubmission) []topicAssignmentDecision {
@@ -56,9 +56,6 @@ func buildTopicAssignmentPrompt(groupID int64, messages []topicAssignJob, candid
 		}
 		if candidate.Tail != "" {
 			b.WriteString("最近原文：\n" + candidate.Tail + "\n")
-		}
-		if len(candidate.Participants) > 0 {
-			b.WriteString("参与者：" + strings.Join(candidate.Participants, "、") + "\n")
 		}
 	}
 	b.WriteString("\n待分配消息：\n")

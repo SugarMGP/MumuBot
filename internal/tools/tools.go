@@ -33,7 +33,7 @@ type ToolContext struct {
 	EvidenceMessageID       int64
 	SpeakCallback           SpeakCallback       // 发言回调
 	SendStickerCallback     SendStickerCallback // 发送表情包回调
-	MessageRecalledCallback func(groupID, messageID int64)
+	MessageRecalledCallback func(*memory.MessageLog)
 
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
@@ -216,19 +216,13 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
 	results := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
-		content := m.DisplayContent
-		mentioned := m.IsMentioned
-		if m.RecalledAt != nil {
-			content = "[该消息已撤回]"
-			mentioned = false
-		}
 		results = append(results, map[string]interface{}{
 			"message_id":   m.OneBotMessageID,
 			"user_id":      m.UserID,
 			"nickname":     m.Nickname,
-			"content":      content,
+			"content":      m.DisplayContent,
 			"time":         m.MessageTime.Format("15:04:05"),
-			"is_mentioned": mentioned,
+			"is_mentioned": m.IsMentioned,
 		})
 	}
 

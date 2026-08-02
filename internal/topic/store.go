@@ -2,7 +2,6 @@ package topic
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -59,7 +58,7 @@ func (s *DBStore) PersistMessageLog(ctx context.Context, item memory.MessageLog)
 }
 
 func (s *DBStore) UpdateMessagePresentation(ctx context.Context, messageLogID uint, displayContent string, forwardPayload *string, mentioned bool) error {
-	return s.db.WithContext(ctx).Model(&memory.MessageLog{}).Where("id = ?", messageLogID).Updates(map[string]any{
+	return s.db.WithContext(ctx).Model(&memory.MessageLog{}).Where("id = ? AND recalled_at IS NULL", messageLogID).Updates(map[string]any{
 		"display_content": displayContent,
 		"forward_payload": forwardPayload,
 		"is_mentioned":    mentioned,
@@ -75,30 +74,40 @@ func (s *DBStore) ListPendingTopicAssignmentMessages(ctx context.Context, groupI
 	return rows, err
 }
 
-func (s *DBStore) TopicForOneBotMessage(ctx context.Context, groupID, messageID int64) (uint, error) {
-	var topicID *uint
-	err := s.db.WithContext(ctx).Table("topic_assignments ta").Select("ta.topic_id").
-		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("ml.group_id = ? AND ml.one_bot_message_id = ? AND ml.recalled_at IS NULL", groupID, messageID).Scan(&topicID).Error
-	if err != nil || topicID == nil {
-		return 0, err
+func (s *DBStore) TopicRefForOneBotMessage(ctx context.Context, groupID, messageID int64) (topicID, messageLogID uint, err error) {
+	var row struct {
+		MessageLogID uint
+		TopicID      *uint
 	}
-	return *topicID, nil
+	err = s.db.WithContext(ctx).Table("topic_assignments ta").Select("ml.id message_log_id, ta.topic_id").
+		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
+		Where("ml.group_id = ? AND ml.one_bot_message_id = ? AND ml.recalled_at IS NULL", groupID, messageID).Scan(&row).Error
+	if err != nil || row.TopicID == nil {
+		return 0, row.MessageLogID, err
+	}
+	return *row.TopicID, row.MessageLogID, nil
 }
 
-func (s *DBStore) ApplyTopicAssignmentBatch(ctx context.Context, groupID int64, items []AssignmentBatchItem) ([]uint, error) {
+func (s *DBStore) ApplyTopicAssignmentBatch(ctx context.Context, groupID int64, sourceMessageIDs []uint, items []AssignmentBatchItem) ([]uint, error) {
 	var updatedTopicIDs []uint
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var validIDs []uint
+		if err := tx.Model(&memory.MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND id IN ? AND recalled_at IS NULL", groupID, sourceMessageIDs).
+			Order("id ASC").Pluck("id", &validIDs).Error; err != nil {
+			return err
+		}
+		if len(validIDs) != len(sourceMessageIDs) {
+			return fmt.Errorf("话题归属输入消息已变化")
+		}
+		valid := make(map[uint]struct{}, len(validIDs))
+		for _, id := range validIDs {
+			valid[id] = struct{}{}
+		}
 		newTopics := make(map[string]uint)
 		for _, item := range items {
-			var message memory.MessageLog
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
-				Where("id = ? AND group_id = ? AND recalled_at IS NULL", item.MessageLogID, groupID).Take(&message).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				continue
-			}
-			if err != nil {
-				return err
+			if _, ok := valid[item.MessageLogID]; !ok {
+				return fmt.Errorf("话题归属结果不属于当前输入")
 			}
 			var topicID *uint
 			switch item.Action {
@@ -263,7 +272,7 @@ func (s *DBStore) SaveTopicSummary(ctx context.Context, topicID, throughAssignme
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var validIDs []uint
 		if err := tx.Model(&memory.MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id IN ? AND recalled_at IS NULL", sourceMessageIDs).Pluck("id", &validIDs).Error; err != nil {
+			Where("id IN ? AND recalled_at IS NULL", sourceMessageIDs).Order("id ASC").Pluck("id", &validIDs).Error; err != nil {
 			return err
 		}
 		if len(validIDs) != len(sourceMessageIDs) {

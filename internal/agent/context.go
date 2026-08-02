@@ -446,14 +446,9 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	replyInfo := ""
 	if msg.Reply != nil {
 		replyDisplayName := a.resolveRenderedDisplayName(msg.GroupID, msg.Reply.SenderID, msg.Reply.GroupCard, msg.Reply.Display, msg.Reply.Nickname)
-		if msg.Reply.Content != "" {
-			replyContent := []rune(msg.Reply.Content)
-			if len(replyContent) > 50 {
-				replyContent = replyContent[:50]
-			}
-			replyInfo = fmt.Sprintf(" [回复 #%d %s:\"%s\"]", msg.Reply.MessageID, replyDisplayName, string(replyContent))
-		} else {
-			replyInfo = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
+		replyInfo = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
+		if replyDisplayName != "" {
+			replyInfo = fmt.Sprintf(" [回复 #%d %s]", msg.Reply.MessageID, replyDisplayName)
 		}
 	}
 

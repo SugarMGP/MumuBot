@@ -16,11 +16,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	recalledMessageText    = "[该消息已撤回]"
-	recalledMessageContent = recalledMessageText + "\n"
-)
-
 func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if msg == nil {
 		return
@@ -116,7 +111,7 @@ func (a *Agent) onRecall(groupID, messageID, operatorID int64) {
 	if groupID <= 0 || messageID <= 0 || !config.Get().IsGroupEnabled(groupID) {
 		return
 	}
-	changed, err := a.memory.MarkMessageRecalled(groupID, messageID)
+	log, changed, err := a.memory.MarkMessageRecalled(groupID, messageID)
 	if err != nil {
 		zap.L().Warn("标记群消息撤回失败", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID), zap.Error(err))
 		return
@@ -124,7 +119,7 @@ func (a *Agent) onRecall(groupID, messageID, operatorID int64) {
 	if !changed {
 		return
 	}
-	a.replaceRecalledMessage(groupID, messageID)
+	a.syncRecalledMessage(log)
 	zap.L().Info("群消息已撤回", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID))
 }
 
@@ -185,11 +180,6 @@ func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
 		return nil
 	}
 	if msg.Reply.Content != "" && msg.Reply.SenderID != 0 {
-		if log, err := a.memory.GetMessageLogByID(msg.Reply.MessageID); err == nil && log.RecalledAt != nil {
-			msg.Reply = replyInfoFromMessageLog(log)
-			a.replyCache.Set(msg.Reply.MessageID, *msg.Reply, ttlcache.DefaultTTL)
-			return nil
-		}
 		a.replyCache.Set(msg.Reply.MessageID, *msg.Reply, ttlcache.DefaultTTL)
 		return nil
 	}
@@ -282,43 +272,30 @@ func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
 	return slices.Clone(a.buffers[groupID])
 }
 
-func (a *Agent) replaceRecalledMessage(groupID, messageID int64) {
-	var old, replacement *onebot.GroupMessage
+func (a *Agent) getMessageSnapshot(groupID int64) ([]*onebot.GroupMessage, *onebot.GroupMessage) {
+	a.buffersMu.RLock()
+	defer a.buffersMu.RUnlock()
+	return slices.Clone(a.buffers[groupID]), a.lastReadMessage[groupID]
+}
+
+func (a *Agent) syncRecalledMessage(log *memory.MessageLog) {
+	if log == nil {
+		return
+	}
 	a.buffersMu.Lock()
-	for i, msg := range a.buffers[groupID] {
-		if msg == nil || msg.MessageID != messageID {
+	for i, msg := range a.buffers[log.GroupID] {
+		if msg == nil || msg.MessageID != log.OneBotMessageID {
 			continue
 		}
-		old = msg
-		replacement = recalledBufferedMessage(msg)
-		a.buffers[groupID][i] = replacement
+		replacement := messageLogToBufferedGroupMessage(*log)
+		a.buffers[log.GroupID][i] = replacement
+		if a.lastReadMessage[log.GroupID] == msg {
+			a.lastReadMessage[log.GroupID] = replacement
+		}
 		break
 	}
 	a.buffersMu.Unlock()
-	if replacement != nil {
-		a.readMu.Lock()
-		if a.lastReadMessage[groupID] == old {
-			a.lastReadMessage[groupID] = replacement
-		}
-		a.readMu.Unlock()
-	}
-	a.replyCache.Delete(messageID)
-}
-
-func recalledBufferedMessage(msg *onebot.GroupMessage) *onebot.GroupMessage {
-	if msg == nil {
-		return nil
-	}
-	return &onebot.GroupMessage{
-		MessageID:    msg.MessageID,
-		GroupID:      msg.GroupID,
-		UserID:       msg.UserID,
-		Nickname:     msg.Nickname,
-		GroupCard:    msg.GroupCard,
-		DisplayName:  msg.DisplayName,
-		Time:         msg.Time,
-		FinalContent: recalledMessageContent,
-	}
+	a.replyCache.Delete(log.OneBotMessageID)
 }
 
 func (a *Agent) updateMember(msg *onebot.GroupMessage) {
@@ -362,9 +339,6 @@ func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 	}
 
 	content := strings.TrimSpace(log.TextContent)
-	if log.RecalledAt != nil {
-		content = recalledMessageText
-	}
 	if content == "" {
 		content = strings.TrimSpace(log.DisplayContent)
 	}

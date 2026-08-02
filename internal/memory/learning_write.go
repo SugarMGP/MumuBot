@@ -71,7 +71,7 @@ func completedLearningPrefix(rows []LearningMessage) []LearningMessage {
 	return ready
 }
 
-func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, watermark uint, styles []CultureStyleInput, jargons []CultureJargonInput) error {
+func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, watermark uint, sourceMessageIDs []uint, styles []CultureStyleInput, jargons []CultureJargonInput) error {
 	type preparedStyle struct {
 		pattern StylePattern
 		ids     []uint
@@ -113,15 +113,15 @@ func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, waterma
 		prepared = append(prepared, preparedStyle{pattern: StylePattern{GroupID: groupID, Situation: situation, Expression: expression, Status: StylePatternStatusCandidate, Embedding: vector}, ids: input.MessageIDs})
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sourceIDs, err := lockUnrecalledMessageBatch(tx, groupID, sourceMessageIDs)
+		if err != nil {
+			return err
+		}
 		for _, item := range prepared {
-			ids, err := unrecalledMessageIDs(tx, item.ids)
-			if err != nil {
-				return err
+			if !messageIDsBelongTo(item.ids, sourceIDs) {
+				return fmt.Errorf("群文化证据不属于当前输入")
 			}
-			if len(ids) > 0 {
-				err = saveStylePattern(tx, &item.pattern, ids)
-			}
-			if err != nil {
+			if err := saveStylePattern(tx, &item.pattern, item.ids); err != nil {
 				return err
 			}
 		}
@@ -129,14 +129,10 @@ func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, waterma
 			term := strings.TrimSpace(input.Term)
 			meaning := strings.TrimSpace(input.Meaning)
 			item := Jargon{GroupID: groupID, Term: term, Meaning: meaning, Status: CultureStatusCandidate}
-			ids, err := unrecalledMessageIDs(tx, input.MessageIDs)
-			if err != nil {
-				return err
+			if !messageIDsBelongTo(input.MessageIDs, sourceIDs) {
+				return fmt.Errorf("黑话证据不属于当前输入")
 			}
-			if len(ids) > 0 {
-				err = m.SaveJargonCandidate(tx, &item, ids)
-			}
-			if err != nil {
+			if err := m.SaveJargonCandidate(tx, &item, input.MessageIDs); err != nil {
 				return err
 			}
 		}
@@ -144,18 +140,18 @@ func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, waterma
 	})
 }
 
-func (m *Manager) CommitMemberProfileBatch(ctx context.Context, groupID int64, watermark uint, traits []MemberTraitInput) error {
+func (m *Manager) CommitMemberProfileBatch(ctx context.Context, groupID int64, watermark uint, sourceMessageIDs []uint, traits []MemberTraitInput) error {
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sourceIDs, err := lockUnrecalledMessageBatch(tx, groupID, sourceMessageIDs)
+		if err != nil {
+			return err
+		}
 		for _, input := range traits {
 			trait := MemberTrait{UserID: input.UserID, Kind: input.Kind, Value: input.Value}
-			ids, err := unrecalledMessageIDs(tx, input.MessageIDs)
-			if err != nil {
-				return err
+			if !messageIDsBelongTo(input.MessageIDs, sourceIDs) {
+				return fmt.Errorf("成员画像证据不属于当前输入")
 			}
-			if len(ids) > 0 {
-				err = saveMemberTrait(tx, &trait, ids)
-			}
-			if err != nil {
+			if err := saveMemberTrait(tx, &trait, input.MessageIDs); err != nil {
 				return err
 			}
 		}
@@ -163,24 +159,50 @@ func (m *Manager) CommitMemberProfileBatch(ctx context.Context, groupID int64, w
 	})
 }
 
-func unrecalledMessageIDs(tx *gorm.DB, ids []uint) ([]uint, error) {
+func lockUnrecalledMessageBatch(tx *gorm.DB, groupID int64, ids []uint) (map[uint]struct{}, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("语义输入消息不能为空")
 	}
 	var valid []uint
 	err := tx.Model(&MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id IN ? AND recalled_at IS NULL", ids).Pluck("id", &valid).Error
-	return valid, err
+		Where("group_id = ? AND id IN ? AND recalled_at IS NULL", groupID, ids).
+		Order("id ASC").Pluck("id", &valid).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(valid) != len(ids) {
+		return nil, fmt.Errorf("语义输入消息已变化")
+	}
+	result := make(map[uint]struct{}, len(valid))
+	for _, id := range valid {
+		result[id] = struct{}{}
+	}
+	return result, nil
 }
 
-func (m *Manager) ReviewCulture(idsStyle, idsJargon []uint, approveStyle, approveJargon map[uint]bool) error {
+func messageIDsBelongTo(ids []uint, sourceIDs map[uint]struct{}) bool {
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		if _, ok := sourceIDs[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Manager) ReviewCulture(groupID int64, sourceMessageIDs, idsStyle, idsJargon []uint, approveStyle, approveJargon map[uint]bool) error {
 	return m.db.Transaction(func(tx *gorm.DB) error {
+		if _, err := lockUnrecalledMessageBatch(tx, groupID, sourceMessageIDs); err != nil {
+			return err
+		}
 		for _, id := range idsStyle {
 			status := StylePatternStatusRejected
 			if approveStyle[id] {
 				status = StylePatternStatusActive
 			}
-			if err := tx.Model(&StylePattern{}).Where("id = ? AND status = ?", id, StylePatternStatusCandidate).Update("status", status).Error; err != nil {
+			if err := tx.Model(&StylePattern{}).Where("id = ? AND group_id = ? AND status = ?", id, groupID, StylePatternStatusCandidate).Update("status", status).Error; err != nil {
 				return err
 			}
 		}
@@ -189,7 +211,7 @@ func (m *Manager) ReviewCulture(idsStyle, idsJargon []uint, approveStyle, approv
 			if approveJargon[id] {
 				status = CultureStatusActive
 			}
-			if err := tx.Model(&Jargon{}).Where("id = ? AND status = ?", id, CultureStatusCandidate).Update("status", status).Error; err != nil {
+			if err := tx.Model(&Jargon{}).Where("id = ? AND group_id = ? AND status = ?", id, groupID, CultureStatusCandidate).Update("status", status).Error; err != nil {
 				return err
 			}
 		}

@@ -20,16 +20,17 @@ type ConcurrencyManager struct {
 	mu             sync.Mutex
 	wg             sync.WaitGroup
 
-	handler func(groupID int64) // 执行函数
+	handler func(groupID int64, probabilityPassed bool) // 执行函数
 }
 
 // ThinkTask 思考任务
 type ThinkTask struct {
-	GroupID int64
+	GroupID           int64
+	ProbabilityPassed bool
 }
 
 // NewConcurrencyManager 创建并发管理器
-func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64)) *ConcurrencyManager {
+func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64, probabilityPassed bool)) *ConcurrencyManager {
 	ctx, cancel := context.WithCancel(parent)
 	return &ConcurrencyManager{
 		ctx:            ctx,
@@ -43,7 +44,7 @@ func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64
 }
 
 // Submit 提交任务
-func (m *ConcurrencyManager) Submit(groupID int64) {
+func (m *ConcurrencyManager) Submit(groupID int64, probabilityPassed bool) {
 	if err := m.ctx.Err(); err != nil {
 		return
 	}
@@ -54,21 +55,23 @@ func (m *ConcurrencyManager) Submit(groupID int64) {
 		return
 	}
 
-	if m.rerun[groupID] != nil {
+	if task := m.rerun[groupID]; task != nil {
+		task.ProbabilityPassed = task.ProbabilityPassed || probabilityPassed
 		return
 	}
 	if m.running[groupID] {
-		m.rerun[groupID] = &ThinkTask{GroupID: groupID}
+		m.rerun[groupID] = &ThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed}
 		return
 	}
-	if m.queued[groupID] != nil {
+	if task := m.queued[groupID]; task != nil {
+		task.ProbabilityPassed = task.ProbabilityPassed || probabilityPassed
 		zap.L().Debug("任务已在队列中，跳过", zap.Int64("group_id", groupID))
 		return
 	}
 
 	// 如果设置了最大并发数，且当前运行数已满，则入队
 	if m.maxConcurrency > 0 && m.currentRunning >= m.maxConcurrency {
-		task := &ThinkTask{GroupID: groupID}
+		task := &ThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed}
 		m.queue = append(m.queue, task)
 		m.queued[groupID] = task
 		zap.L().Debug("并发已满，任务进入队列",
@@ -81,17 +84,17 @@ func (m *ConcurrencyManager) Submit(groupID int64) {
 	m.currentRunning++
 	m.running[groupID] = true
 	m.wg.Add(1)
-	go m.execute(groupID)
+	go m.execute(&ThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed})
 }
 
 // execute 执行任务
-func (m *ConcurrencyManager) execute(groupID int64) {
+func (m *ConcurrencyManager) execute(task *ThinkTask) {
 	defer m.wg.Done()
-	defer m.finish(groupID)
+	defer m.finish(task.GroupID)
 	if err := m.ctx.Err(); err != nil {
 		return
 	}
-	m.handler(groupID)
+	m.handler(task.GroupID, task.ProbabilityPassed)
 }
 
 func (m *ConcurrencyManager) finish(groupID int64) {
@@ -118,7 +121,7 @@ func (m *ConcurrencyManager) finish(groupID int64) {
 		m.currentRunning++
 		m.running[task.GroupID] = true
 		m.wg.Add(1)
-		go m.execute(task.GroupID)
+		go m.execute(task)
 		zap.L().Debug("从队列调度任务执行", zap.Int64("group_id", task.GroupID))
 	}
 }

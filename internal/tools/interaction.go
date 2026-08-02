@@ -311,13 +311,13 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}
 	tc.MarkActed()
-	if tc.MessageRecalledCallback != nil {
-		tc.MessageRecalledCallback(log.GroupID, input.MessageID)
-	}
-	_, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, input.MessageID)
+	recalled, changed, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, input.MessageID)
 	if syncErr != nil {
 		zap.L().Error("主动撤回成功但同步本地状态失败", zap.Int64("group_id", log.GroupID), zap.Int64("message_id", input.MessageID), zap.Error(syncErr))
 		return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
+	}
+	if changed && tc.MessageRecalledCallback != nil {
+		tc.MessageRecalledCallback(recalled)
 	}
 
 	return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil

@@ -52,20 +52,3 @@ func renderTopicSummaryForAssignment(summary memory.TopicSummary) string {
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
-
-func participantNames(participants []memory.TopicParticipantRef) []string {
-	names := make([]string, 0, len(participants))
-	seen := make(map[string]struct{}, len(participants))
-	for _, participant := range participants {
-		name := strings.TrimSpace(participant.Nickname)
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	return names
-}

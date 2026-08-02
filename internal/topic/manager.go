@@ -3,6 +3,7 @@ package topic
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -167,7 +168,14 @@ func (m *Manager) assignGroup(groupID int64) {
 	if len(items) == 0 {
 		return
 	}
-	updatedTopicIDs, err := m.store.ApplyTopicAssignmentBatch(ctx, groupID, items)
+	sourceMessageIDs := make([]uint, 0, len(rows)+len(candidates)*4)
+	for _, row := range rows {
+		sourceMessageIDs = append(sourceMessageIDs, row.ID)
+	}
+	for _, candidate := range candidates {
+		sourceMessageIDs = append(sourceMessageIDs, candidate.SourceMessageIDs...)
+	}
+	updatedTopicIDs, err := m.store.ApplyTopicAssignmentBatch(ctx, groupID, sourceMessageIDs, items)
 	if err != nil {
 		zap.L().Warn("提交话题归属失败，保留待处理", zap.Int64("group_id", groupID), zap.Error(err))
 		return
@@ -218,10 +226,9 @@ func assignmentItems(jobs []topicAssignJob, decisions []topicAssignmentDecision,
 		}
 		items = append(items, item)
 	}
-	for _, job := range jobs {
-		if _, ok := seen[job.messageLogID]; !ok {
-			zap.L().Warn("话题模型遗漏输入消息", zap.Uint("message_log_id", job.messageLogID))
-		}
+	if len(items) != len(jobs) {
+		zap.L().Warn("话题模型未完整返回有效归属", zap.Int("expected", len(jobs)), zap.Int("accepted", len(items)))
+		return nil
 	}
 	return items
 }
@@ -230,16 +237,20 @@ func (m *Manager) assignmentCandidates(ctx context.Context, groupID int64, rows 
 	seen := make(map[uint]struct{})
 	ids := make([]uint, 0, 12)
 	replyTopics := make(map[uint]uint)
+	replySourceIDs := make(map[uint][]uint)
 	for _, row := range rows {
 		if row.ReplyToMessageID == nil {
 			continue
 		}
-		id, err := m.store.TopicForOneBotMessage(ctx, groupID, *row.ReplyToMessageID)
+		id, sourceMessageID, err := m.store.TopicRefForOneBotMessage(ctx, groupID, *row.ReplyToMessageID)
 		if err != nil {
 			return nil, nil, err
 		}
 		if id != 0 {
 			replyTopics[row.ID] = id
+			if sourceMessageID != 0 && !slices.Contains(replySourceIDs[id], sourceMessageID) {
+				replySourceIDs[id] = append(replySourceIDs[id], sourceMessageID)
+			}
 			if _, ok := seen[id]; !ok {
 				seen[id] = struct{}{}
 				ids = append(ids, id)
@@ -286,15 +297,23 @@ func (m *Manager) assignmentCandidates(ctx context.Context, groupID int64, rows 
 		if err != nil {
 			return nil, nil, err
 		}
-		participants, err := m.store.ListRecentTopicParticipants(ctx, id, 0, TailKeepMessages)
-		if err != nil {
-			return nil, nil, err
-		}
 		lastID := uint(0)
 		if len(tail) > 0 {
 			lastID = tail[len(tail)-1].ID
 		}
-		result = append(result, topicAssignmentCandidate{ID: id, Summary: renderTopicSummaryForAssignment(summary), Tail: renderMessageTail(tail, 4), Participants: participantNames(participants), LastMessageID: lastID})
+		sourceMessageIDs := make([]uint, len(tail))
+		for i, message := range tail {
+			sourceMessageIDs[i] = message.ID
+		}
+		for _, sourceMessageID := range replySourceIDs[id] {
+			if !slices.Contains(sourceMessageIDs, sourceMessageID) {
+				sourceMessageIDs = append(sourceMessageIDs, sourceMessageID)
+			}
+		}
+		result = append(result, topicAssignmentCandidate{
+			ID: id, Summary: renderTopicSummaryForAssignment(summary), Tail: renderMessageTail(tail, 4),
+			LastMessageID: lastID, SourceMessageIDs: sourceMessageIDs,
+		})
 	}
 	return result, replyTopics, nil
 }
@@ -447,7 +466,7 @@ func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query s
 	seen := make(map[uint]struct{})
 	topics := make([]memory.TopicThread, 0, len(replyMessageIDs)+10)
 	for _, messageID := range replyMessageIDs {
-		topicID, err := m.store.TopicForOneBotMessage(ctx, groupID, messageID)
+		topicID, _, err := m.store.TopicRefForOneBotMessage(ctx, groupID, messageID)
 		if err != nil {
 			return "", err
 		}

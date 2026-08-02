@@ -9,6 +9,7 @@ import (
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/compose"
@@ -38,14 +39,10 @@ func (a *Agent) thinkCycle() {
 		if !gc.Enabled {
 			continue
 		}
-		msgs := a.getBuffer(gc.GroupID)
+		msgs, lastRead := a.getMessageSnapshot(gc.GroupID)
 		if len(msgs) == 0 {
 			continue
 		}
-
-		a.readMu.RLock()
-		lastRead := a.lastReadMessage[gc.GroupID]
-		a.readMu.RUnlock()
 		_, currentMessages := splitMessageSnapshot(msgs, lastRead, selfID)
 		if len(currentMessages) == 0 {
 			continue
@@ -114,16 +111,7 @@ func (a *Agent) flushPendingThink(groupID int64, generation uint64) {
 	delete(a.pendingThinks, groupID)
 	a.pendingMu.Unlock()
 
-	if !pending.probabilityPassed {
-		a.readMu.RLock()
-		lastRead := a.lastReadMessage[groupID]
-		a.readMu.RUnlock()
-		_, currentMessages := splitMessageSnapshot(a.getBuffer(groupID), lastRead, a.bot.GetSelfID())
-		if !a.hasStrongInteraction(currentMessages) {
-			return
-		}
-	}
-	a.concurrencyMgr.Submit(groupID)
+	a.concurrencyMgr.Submit(groupID, pending.probabilityPassed)
 }
 
 func (a *Agent) clearPendingThinks() {
@@ -207,21 +195,17 @@ func (a *Agent) getSpeakProbability(groupID int64) float64 {
 	return baseProb
 }
 
-func (a *Agent) think(groupID int64) {
+func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	if err := a.ctx.Err(); err != nil {
 		return
 	}
 	if a.bot.IsSelfMuted(groupID) {
 		return
 	}
-	a.readMu.RLock()
-	lastReadMessage := a.lastReadMessage[groupID]
-	a.readMu.RUnlock()
-
 	cfg := config.Get()
 	selfID := a.bot.GetSelfID()
 
-	buffer := a.getBuffer(groupID)
+	buffer, lastReadMessage := a.getMessageSnapshot(groupID)
 	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage, selfID)
 	if len(currentMessages) == 0 {
 		return
@@ -231,6 +215,13 @@ func (a *Agent) think(groupID int64) {
 	if len(buffer) > 0 {
 		snapshotMessage = buffer[len(buffer)-1]
 	}
+	semanticCurrent := collectTextContext(currentMessages) != ""
+	if !isMention && !probabilityPassed {
+		if !semanticCurrent {
+			a.commitReadSnapshot(groupID, snapshotMessage)
+		}
+		return
+	}
 	snapshotMessageID := int64(0)
 	if message := latestPositiveMessage(buffer); message != nil {
 		snapshotMessageID = message.MessageID
@@ -238,7 +229,7 @@ func (a *Agent) think(groupID int64) {
 	evidenceMessageID := int64(0)
 	for i := len(currentMessages) - 1; i >= 0; i-- {
 		msg := currentMessages[i]
-		if msg != nil && msg.MessageID > 0 && msg.UserID != selfID && msg.FinalContent != recalledMessageContent {
+		if msg != nil && msg.MessageID > 0 && msg.UserID != selfID && strings.TrimSpace(msg.Content) != "" {
 			evidenceMessageID = msg.MessageID
 			break
 		}
@@ -257,7 +248,6 @@ func (a *Agent) think(groupID int64) {
 	}
 	promptCtx.GroupInfo = a.buildGroupContext(groupID)
 
-	semanticCurrent := collectTextContext(currentMessages) != ""
 	var classification *contextClassification
 	var err error
 	if !semanticCurrent {
@@ -370,7 +360,7 @@ func replyMessageIDs(messages []*onebot.GroupMessage) []int64 {
 	seen := make(map[int64]struct{})
 	ids := make([]int64, 0, len(messages))
 	for _, message := range messages {
-		if message == nil || message.Reply == nil || message.Reply.MessageID == 0 || message.Reply.Content == recalledMessageText {
+		if message == nil || message.Reply == nil || message.Reply.MessageID == 0 {
 			continue
 		}
 		if _, ok := seen[message.Reply.MessageID]; ok {
@@ -408,17 +398,17 @@ func (a *Agent) commitReadSnapshot(groupID int64, message *onebot.GroupMessage) 
 	if message == nil {
 		return
 	}
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
 	if message.MessageID > 0 {
-		for _, current := range a.getBuffer(groupID) {
+		for _, current := range a.buffers[groupID] {
 			if current != nil && current.MessageID == message.MessageID {
 				message = current
 				break
 			}
 		}
 	}
-	a.readMu.Lock()
 	a.lastReadMessage[groupID] = message
-	a.readMu.Unlock()
 }
 
 func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID, evidenceMessageID int64) context.Context {
@@ -434,7 +424,7 @@ func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID
 		SendStickerCallback: func(callCtx context.Context, gid int64, filePath string, description string) (int64, error) {
 			return a.doSendSticker(callCtx, gid, filePath, description)
 		},
-		MessageRecalledCallback: a.replaceRecalledMessage,
+		MessageRecalledCallback: a.syncRecalledMessage,
 	})
 }
 
