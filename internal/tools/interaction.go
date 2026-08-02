@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
+	"go.uber.org/zap"
 )
 
 // ==================== 发言工具 ====================
@@ -194,8 +195,26 @@ func NewPokeTool() (tool.InvokableTool, error) {
 type ReactToMessageInput struct {
 	// MessageID 要回应的消息ID
 	MessageID int64 `json:"message_id" jsonschema:"description=要回应的消息ID"`
-	// EmojiID 表情ID，例如：76(赞)、77(踩)、66(爱心)、78(握手)等
-	EmojiID int `json:"emoji_id" jsonschema:"description=表情ID。常用：76=赞、77=踩、66=爱心、78=握手、124=OK、179=doge"`
+	// Reaction 要使用的语义表情
+	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=surprised,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
+}
+
+var messageReactionEmojiIDs = map[string]int{
+	"thumbs_up": 76,
+	"heart":     66,
+	"clap":      99,
+	"laugh":     182,
+	"hug":       49,
+	"ok":        124,
+	"question":  32,
+	"no":        123,
+	"surprised": 180,
+	"cry":       5,
+	"facepalm":  264,
+	"cheer":     144,
+	"victory":   79,
+	"salute":    282,
+	"doge":      179,
 }
 
 // ReactToMessageOutput 对消息贴表情的输出
@@ -216,11 +235,12 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	if input.MessageID == 0 {
 		return &ReactToMessageOutput{Success: false, Message: "消息 ID 不能为空"}, nil
 	}
-	if input.EmojiID == 0 {
-		return &ReactToMessageOutput{Success: false, Message: "表情 ID 不能为空"}, nil
+	emojiID, ok := messageReactionEmojiIDs[input.Reaction]
+	if !ok {
+		return &ReactToMessageOutput{Success: false, Message: "不支持该表情回应"}, nil
 	}
 
-	if err := tc.Bot.SetMsgEmojiLike(ctx, input.MessageID, input.EmojiID); err != nil {
+	if err := tc.Bot.SetMsgEmojiLike(ctx, input.MessageID, emojiID); err != nil {
 		return &ReactToMessageOutput{Success: false, Message: err.Error()}, nil
 	}
 	tc.MarkActed()
@@ -243,8 +263,6 @@ func NewReactToMessageTool() (tool.InvokableTool, error) {
 type RecallMessageInput struct {
 	// MessageID 要撤回的消息ID
 	MessageID int64 `json:"message_id" jsonschema:"description=要撤回的消息ID"`
-	// Reason 撤回原因
-	Reason string `json:"reason,omitempty" jsonschema:"description=撤回原因"`
 }
 
 // RecallMessageOutput 撤回消息的输出
@@ -276,8 +294,14 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if log == nil {
 		return &RecallMessageOutput{Success: false, Message: "未找到该消息记录，无法确认是否还能撤回"}, nil
 	}
+	if log.GroupID != tc.GroupID {
+		return &RecallMessageOutput{Success: false, Message: "该消息不属于当前群"}, nil
+	}
 	if selfID := tc.Bot.GetSelfID(); selfID > 0 && log.UserID != 0 && log.UserID != selfID {
 		return &RecallMessageOutput{Success: false, Message: "只能撤回你自己发的消息"}, nil
+	}
+	if log.RecalledAt != nil {
+		return &RecallMessageOutput{Success: true, Message: "消息已撤回"}, nil
 	}
 	if time.Since(log.MessageTime) > 2*time.Minute {
 		return &RecallMessageOutput{Success: false, Message: "消息已超过两分钟，无法撤回"}, nil
@@ -287,6 +311,14 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}
 	tc.MarkActed()
+	if tc.MessageRecalledCallback != nil {
+		tc.MessageRecalledCallback(log.GroupID, input.MessageID)
+	}
+	_, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, input.MessageID)
+	if syncErr != nil {
+		zap.L().Error("主动撤回成功但同步本地状态失败", zap.Int64("group_id", log.GroupID), zap.Int64("message_id", input.MessageID), zap.Error(syncErr))
+		return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
+	}
 
 	return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
 }

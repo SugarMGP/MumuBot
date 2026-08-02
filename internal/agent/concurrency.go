@@ -20,17 +20,16 @@ type ConcurrencyManager struct {
 	mu             sync.Mutex
 	wg             sync.WaitGroup
 
-	handler func(groupID int64, isMention bool) // 执行函数
+	handler func(groupID int64) // 执行函数
 }
 
 // ThinkTask 思考任务
 type ThinkTask struct {
-	GroupID   int64
-	IsMention bool
+	GroupID int64
 }
 
 // NewConcurrencyManager 创建并发管理器
-func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64, isMention bool)) *ConcurrencyManager {
+func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64)) *ConcurrencyManager {
 	ctx, cancel := context.WithCancel(parent)
 	return &ConcurrencyManager{
 		ctx:            ctx,
@@ -44,7 +43,7 @@ func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64
 }
 
 // Submit 提交任务
-func (m *ConcurrencyManager) Submit(groupID int64, isMention bool) {
+func (m *ConcurrencyManager) Submit(groupID int64) {
 	if err := m.ctx.Err(); err != nil {
 		return
 	}
@@ -55,26 +54,21 @@ func (m *ConcurrencyManager) Submit(groupID int64, isMention bool) {
 		return
 	}
 
-	if task := m.rerun[groupID]; task != nil {
-		task.IsMention = task.IsMention || isMention
+	if m.rerun[groupID] != nil {
 		return
 	}
 	if m.running[groupID] {
-		m.rerun[groupID] = &ThinkTask{GroupID: groupID, IsMention: isMention}
+		m.rerun[groupID] = &ThinkTask{GroupID: groupID}
 		return
 	}
-	if task := m.queued[groupID]; task != nil {
-		task.IsMention = task.IsMention || isMention
+	if m.queued[groupID] != nil {
 		zap.L().Debug("任务已在队列中，跳过", zap.Int64("group_id", groupID))
 		return
 	}
 
 	// 如果设置了最大并发数，且当前运行数已满，则入队
 	if m.maxConcurrency > 0 && m.currentRunning >= m.maxConcurrency {
-		task := &ThinkTask{
-			GroupID:   groupID,
-			IsMention: isMention,
-		}
+		task := &ThinkTask{GroupID: groupID}
 		m.queue = append(m.queue, task)
 		m.queued[groupID] = task
 		zap.L().Debug("并发已满，任务进入队列",
@@ -87,17 +81,17 @@ func (m *ConcurrencyManager) Submit(groupID int64, isMention bool) {
 	m.currentRunning++
 	m.running[groupID] = true
 	m.wg.Add(1)
-	go m.execute(groupID, isMention)
+	go m.execute(groupID)
 }
 
 // execute 执行任务
-func (m *ConcurrencyManager) execute(groupID int64, isMention bool) {
+func (m *ConcurrencyManager) execute(groupID int64) {
 	defer m.wg.Done()
 	defer m.finish(groupID)
 	if err := m.ctx.Err(); err != nil {
 		return
 	}
-	m.handler(groupID, isMention)
+	m.handler(groupID)
 }
 
 func (m *ConcurrencyManager) finish(groupID int64) {
@@ -124,7 +118,7 @@ func (m *ConcurrencyManager) finish(groupID int64) {
 		m.currentRunning++
 		m.running[task.GroupID] = true
 		m.wg.Add(1)
-		go m.execute(task.GroupID, task.IsMention)
+		go m.execute(task.GroupID)
 		zap.L().Debug("从队列调度任务执行", zap.Int64("group_id", task.GroupID))
 	}
 }

@@ -61,19 +61,26 @@ type Agent struct {
 	pendingThinks map[int64]*pendingThink
 	pendingMu     sync.Mutex
 
-	lastReadMessageID map[int64]int64
+	lastReadMessage   map[int64]*onebot.GroupMessage
 	readMu            sync.RWMutex
 	startupMu         sync.Mutex
 	startupRecovering bool
-	startupQueue      []*onebot.GroupMessage
+	startupQueue      []startupEvent
 
 	wg sync.WaitGroup
 }
 
 type pendingThink struct {
-	timer      *time.Timer
-	isMention  bool
-	generation uint64
+	timer             *time.Timer
+	probabilityPassed bool
+	generation        uint64
+}
+
+type startupEvent struct {
+	message    *onebot.GroupMessage
+	groupID    int64
+	messageID  int64
+	operatorID int64
 }
 
 func New(mem *memory.Manager) (*Agent, error) {
@@ -111,18 +118,18 @@ func New(mem *memory.Manager) (*Agent, error) {
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
-		ctx:               rootCtx,
-		cancel:            cancel,
-		persona:           p,
-		memory:            mem,
-		model:             chatModel,
-		vision:            visionClient,
-		bot:               botClient,
-		buffers:           make(map[int64][]*onebot.GroupMessage),
-		pendingThinks:     make(map[int64]*pendingThink),
-		lastReadMessageID: make(map[int64]int64),
-		replyCache:        newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
-		visionCache:       newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
+		ctx:             rootCtx,
+		cancel:          cancel,
+		persona:         p,
+		memory:          mem,
+		model:           chatModel,
+		vision:          visionClient,
+		bot:             botClient,
+		buffers:         make(map[int64][]*onebot.GroupMessage),
+		pendingThinks:   make(map[int64]*pendingThink),
+		lastReadMessage: make(map[int64]*onebot.GroupMessage),
+		replyCache:      newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
+		visionCache:     newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
 	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem), topicModel)
 	constructed := false
@@ -257,6 +264,7 @@ func (a *Agent) Start() {
 	a.startupMu.Unlock()
 
 	a.bot.OnMessage(a.handleIncomingMessage)
+	a.bot.OnRecall(a.handleIncomingRecall)
 	if err := a.bot.Connect(); err != nil {
 		zap.L().Fatal("OneBot 连接失败", zap.Error(err))
 	}
@@ -269,7 +277,7 @@ func (a *Agent) Start() {
 		}
 	}
 	a.topicMgr.RecoverPendingAssignments(groupIDs)
-	a.drainStartupMessages()
+	a.drainStartupEvents()
 	a.wg.Add(1)
 	go a.thinkLoop()
 	zap.L().Info("Agent 已启动")
@@ -299,7 +307,7 @@ func (a *Agent) loadBuffersFromDB() {
 		}
 		a.buffers[gc.GroupID] = messages
 		a.buffersMu.Unlock()
-		a.commitReadSnapshot(gc.GroupID, logs[len(logs)-1].OneBotMessageID)
+		a.commitReadSnapshot(gc.GroupID, messages[len(messages)-1])
 
 		zap.L().Info("已从数据库加载消息历史", zap.Int64("group_id", gc.GroupID), zap.Int("count", len(logs)))
 	}
@@ -316,6 +324,9 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 		IsMentioned:  log.IsMentioned,
 		Time:         log.MessageTime,
 	}
+	if log.RecalledAt != nil {
+		return recalledBufferedMessage(msg)
+	}
 	if log.ForwardPayload != nil {
 		_ = sonic.UnmarshalString(*log.ForwardPayload, &msg.Forwards)
 	}
@@ -325,7 +336,7 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 func (a *Agent) handleIncomingMessage(msg *onebot.GroupMessage) {
 	a.startupMu.Lock()
 	if a.startupRecovering {
-		a.startupQueue = append(a.startupQueue, msg)
+		a.startupQueue = append(a.startupQueue, startupEvent{message: msg})
 		a.startupMu.Unlock()
 		return
 	}
@@ -334,7 +345,19 @@ func (a *Agent) handleIncomingMessage(msg *onebot.GroupMessage) {
 	a.onMessage(msg)
 }
 
-func (a *Agent) drainStartupMessages() {
+func (a *Agent) handleIncomingRecall(groupID, messageID, operatorID int64) {
+	a.startupMu.Lock()
+	if a.startupRecovering {
+		a.startupQueue = append(a.startupQueue, startupEvent{groupID: groupID, messageID: messageID, operatorID: operatorID})
+		a.startupMu.Unlock()
+		return
+	}
+	a.startupMu.Unlock()
+
+	a.onRecall(groupID, messageID, operatorID)
+}
+
+func (a *Agent) drainStartupEvents() {
 	for {
 		a.startupMu.Lock()
 		if len(a.startupQueue) == 0 {
@@ -346,8 +369,12 @@ func (a *Agent) drainStartupMessages() {
 		a.startupQueue = nil
 		a.startupMu.Unlock()
 
-		for _, msg := range pending {
-			a.onMessage(msg)
+		for _, event := range pending {
+			if event.message != nil {
+				a.onMessage(event.message)
+			} else {
+				a.onRecall(event.groupID, event.messageID, event.operatorID)
+			}
 		}
 	}
 }

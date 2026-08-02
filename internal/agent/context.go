@@ -214,10 +214,10 @@ func buildStyleHints(cards []memory.StylePattern) []string {
 	return hints
 }
 
-func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessageID, selfID int64) (readMessages, currentMessages []*onebot.GroupMessage) {
+func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage, selfID int64) (readMessages, currentMessages []*onebot.GroupMessage) {
 	cursor := -1
 	for i, msg := range buffer {
-		if msg != nil && msg.MessageID == lastReadMessageID {
+		if msg == lastReadMessage {
 			cursor = i
 			break
 		}
@@ -235,7 +235,7 @@ func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessageID, self
 	return readMessages, currentMessages
 }
 
-func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessageID, selfID int64) string {
+func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage, selfID int64) string {
 	if len(buffer) == 0 {
 		return ""
 	}
@@ -243,18 +243,18 @@ func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessageID, selfID 
 	var b strings.Builder
 	cursorPresent := false
 	for _, m := range buffer {
-		if m != nil && m.MessageID == lastReadMessageID {
+		if m == lastReadMessage {
 			cursorPresent = true
 			break
 		}
 	}
-	passedCursor := lastReadMessageID == 0 || !cursorPresent
+	passedCursor := lastReadMessage == nil || !cursorPresent
 	for _, m := range buffer {
 		if m == nil {
 			continue
 		}
 		old := !passedCursor || (selfID != 0 && m.UserID == selfID)
-		if m.MessageID == lastReadMessageID {
+		if m == lastReadMessage {
 			old = true
 			passedCursor = true
 		}

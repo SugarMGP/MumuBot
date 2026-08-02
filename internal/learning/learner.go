@@ -238,7 +238,7 @@ func (l *Learner) learningInput(groupID int64, kind memory.LearningKind) (*memor
 			break
 		}
 		for _, row := range page {
-			if row.UserID != selfID && strings.TrimSpace(row.TextContent) != "" {
+			if row.RecalledAt == nil && row.UserID != selfID && strings.TrimSpace(row.TextContent) != "" {
 				rows = append(rows, row)
 				valid = append(valid, row)
 				if len(valid) == cfg.Learning.MinMsgCount {
@@ -259,7 +259,7 @@ func (l *Learner) learningInput(groupID int64, kind memory.LearningKind) (*memor
 func (l *Learner) advanceLeadingSkipped(groupID int64, kind memory.LearningKind, watermark uint, rows []memory.LearningMessage) {
 	selfID := config.Get().Persona.QQ
 	for _, row := range rows {
-		if row.UserID != selfID && strings.TrimSpace(row.TextContent) != "" {
+		if row.RecalledAt == nil && row.UserID != selfID && strings.TrimSpace(row.TextContent) != "" {
 			break
 		}
 		watermark = row.ID

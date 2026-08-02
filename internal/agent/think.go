@@ -44,23 +44,18 @@ func (a *Agent) thinkCycle() {
 		}
 
 		a.readMu.RLock()
-		lastReadID := a.lastReadMessageID[gc.GroupID]
+		lastRead := a.lastReadMessage[gc.GroupID]
 		a.readMu.RUnlock()
-		_, currentMessages := splitMessageSnapshot(msgs, lastReadID, selfID)
+		_, currentMessages := splitMessageSnapshot(msgs, lastRead, selfID)
 		if len(currentMessages) == 0 {
 			continue
 		}
-		lastMsg := currentMessages[len(currentMessages)-1]
-
-		strongInteraction := false
-		for _, msg := range currentMessages {
-			if msg != nil && (msg.IsMentioned || a.persona.IsMentioned(msg.Content)) {
-				strongInteraction = true
-				break
-			}
+		if a.hasStrongInteraction(currentMessages) {
+			a.scheduleThink(gc.GroupID, true, false)
+			continue
 		}
-		if strongInteraction {
-			a.scheduleThink(gc.GroupID, true, true)
+		lastMsg := latestPositiveMessage(currentMessages)
+		if lastMsg == nil {
 			continue
 		}
 
@@ -75,13 +70,13 @@ func (a *Agent) thinkCycle() {
 	}
 }
 
-func (a *Agent) scheduleThink(groupID int64, isMention bool, fromLoop bool) {
+func (a *Agent) scheduleThink(groupID int64, isMention, probabilityPassed bool) {
 	debounce := time.Duration(config.Get().Agent.ThinkDebounceMS) * time.Millisecond
 
 	a.pendingMu.Lock()
 	defer a.pendingMu.Unlock()
 	if pending, ok := a.pendingThinks[groupID]; ok {
-		pending.isMention = pending.isMention || isMention
+		pending.probabilityPassed = pending.probabilityPassed || probabilityPassed
 		pending.generation++
 		gen := pending.generation
 		if pending.timer != nil {
@@ -93,13 +88,13 @@ func (a *Agent) scheduleThink(groupID int64, isMention bool, fromLoop bool) {
 		return
 	}
 
-	if !fromLoop && !isMention {
+	if !probabilityPassed && !isMention {
 		return
 	}
 
 	pending := &pendingThink{
-		isMention:  isMention,
-		generation: 1,
+		probabilityPassed: probabilityPassed,
+		generation:        1,
 	}
 	gen := pending.generation
 	pending.timer = time.AfterFunc(debounce, func() {
@@ -116,11 +111,19 @@ func (a *Agent) flushPendingThink(groupID int64, generation uint64) {
 		return
 	}
 
-	isMention := pending.isMention
 	delete(a.pendingThinks, groupID)
 	a.pendingMu.Unlock()
 
-	a.concurrencyMgr.Submit(groupID, isMention)
+	if !pending.probabilityPassed {
+		a.readMu.RLock()
+		lastRead := a.lastReadMessage[groupID]
+		a.readMu.RUnlock()
+		_, currentMessages := splitMessageSnapshot(a.getBuffer(groupID), lastRead, a.bot.GetSelfID())
+		if !a.hasStrongInteraction(currentMessages) {
+			return
+		}
+	}
+	a.concurrencyMgr.Submit(groupID)
 }
 
 func (a *Agent) clearPendingThinks() {
@@ -204,7 +207,7 @@ func (a *Agent) getSpeakProbability(groupID int64) float64 {
 	return baseProb
 }
 
-func (a *Agent) think(groupID int64, isMention bool) {
+func (a *Agent) think(groupID int64) {
 	if err := a.ctx.Err(); err != nil {
 		return
 	}
@@ -212,22 +215,30 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		return
 	}
 	a.readMu.RLock()
-	lastReadMessageID := a.lastReadMessageID[groupID]
+	lastReadMessage := a.lastReadMessage[groupID]
 	a.readMu.RUnlock()
 
 	cfg := config.Get()
 	selfID := a.bot.GetSelfID()
 
 	buffer := a.getBuffer(groupID)
-	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessageID, selfID)
+	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage, selfID)
+	if len(currentMessages) == 0 {
+		return
+	}
+	isMention := a.hasStrongInteraction(currentMessages)
+	var snapshotMessage *onebot.GroupMessage
+	if len(buffer) > 0 {
+		snapshotMessage = buffer[len(buffer)-1]
+	}
 	snapshotMessageID := int64(0)
-	if len(buffer) > 0 && buffer[len(buffer)-1] != nil {
-		snapshotMessageID = buffer[len(buffer)-1].MessageID
+	if message := latestPositiveMessage(buffer); message != nil {
+		snapshotMessageID = message.MessageID
 	}
 	evidenceMessageID := int64(0)
 	for i := len(currentMessages) - 1; i >= 0; i-- {
 		msg := currentMessages[i]
-		if msg != nil && msg.UserID != selfID {
+		if msg != nil && msg.MessageID > 0 && msg.UserID != selfID && msg.FinalContent != recalledMessageContent {
 			evidenceMessageID = msg.MessageID
 			break
 		}
@@ -236,7 +247,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID, evidenceMessageID)
 	tc := tools.GetToolContext(ctx)
 
-	chatContext := renderChatContext(buffer, lastReadMessageID, selfID)
+	chatContext := renderChatContext(buffer, lastReadMessage, selfID)
 	if chatContext == "" {
 		return
 	}
@@ -253,7 +264,7 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		var commit bool
 		classification, commit = emptyCurrentBatchDecision(isMention)
 		if commit {
-			a.commitReadSnapshot(groupID, snapshotMessageID)
+			a.commitReadSnapshot(groupID, snapshotMessage)
 			return
 		}
 	} else {
@@ -267,11 +278,11 @@ func (a *Agent) think(groupID int64, isMention bool) {
 		}
 	}
 	if !isMention && classification.Participation == "skip" {
-		a.commitReadSnapshot(groupID, snapshotMessageID)
+		a.commitReadSnapshot(groupID, snapshotMessage)
 		return
 	}
 
-	if semanticCurrent {
+	if semanticCurrent && snapshotMessageID > 0 {
 		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(snapshotMessageID)
 		if snapshotErr != nil {
 			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", snapshotMessageID), zap.Error(snapshotErr))
@@ -344,11 +355,11 @@ func (a *Agent) think(groupID int64, isMention bool) {
 			zap.L().Error("思考失败", zap.Int64("group_id", groupID), zap.Error(err))
 		}
 		if shouldCommitReadSnapshot(err, tc != nil && tc.Acted()) {
-			a.commitReadSnapshot(groupID, snapshotMessageID)
+			a.commitReadSnapshot(groupID, snapshotMessage)
 		}
 		return
 	}
-	a.commitReadSnapshot(groupID, snapshotMessageID)
+	a.commitReadSnapshot(groupID, snapshotMessage)
 
 	if cfg.Debug.ShowThinking && result != nil && result.Content != "" {
 		zap.L().Debug("Agent 输出", zap.Int64("group_id", groupID), zap.String("content", result.Content))
@@ -359,7 +370,7 @@ func replyMessageIDs(messages []*onebot.GroupMessage) []int64 {
 	seen := make(map[int64]struct{})
 	ids := make([]int64, 0, len(messages))
 	for _, message := range messages {
-		if message == nil || message.Reply == nil || message.Reply.MessageID == 0 {
+		if message == nil || message.Reply == nil || message.Reply.MessageID == 0 || message.Reply.Content == recalledMessageText {
 			continue
 		}
 		if _, ok := seen[message.Reply.MessageID]; ok {
@@ -375,12 +386,38 @@ func shouldCommitReadSnapshot(generateErr error, acted bool) bool {
 	return generateErr == nil || acted
 }
 
-func (a *Agent) commitReadSnapshot(groupID, messageID int64) {
-	if messageID == 0 {
+func (a *Agent) hasStrongInteraction(messages []*onebot.GroupMessage) bool {
+	for _, message := range messages {
+		if message != nil && (message.IsMentioned || a.persona.IsMentioned(message.Content)) {
+			return true
+		}
+	}
+	return false
+}
+
+func latestPositiveMessage(messages []*onebot.GroupMessage) *onebot.GroupMessage {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i] != nil && messages[i].MessageID > 0 {
+			return messages[i]
+		}
+	}
+	return nil
+}
+
+func (a *Agent) commitReadSnapshot(groupID int64, message *onebot.GroupMessage) {
+	if message == nil {
 		return
 	}
+	if message.MessageID > 0 {
+		for _, current := range a.getBuffer(groupID) {
+			if current != nil && current.MessageID == message.MessageID {
+				message = current
+				break
+			}
+		}
+	}
 	a.readMu.Lock()
-	a.lastReadMessageID[groupID] = messageID
+	a.lastReadMessage[groupID] = message
 	a.readMu.Unlock()
 }
 
@@ -397,6 +434,7 @@ func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID
 		SendStickerCallback: func(callCtx context.Context, gid int64, filePath string, description string) (int64, error) {
 			return a.doSendSticker(callCtx, gid, filePath, description)
 		},
+		MessageRecalledCallback: a.replaceRecalledMessage,
 	})
 }
 

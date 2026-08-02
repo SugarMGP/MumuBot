@@ -396,6 +396,28 @@ func (m *Manager) GetMessageLogByID(messageID int64) (*MessageLog, error) {
 	return &item, nil
 }
 
+func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (bool, error) {
+	if groupID <= 0 || messageID <= 0 {
+		return false, nil
+	}
+	changed := false
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		item := MessageLog{}
+		result := tx.Model(&item).Clauses(clause.Returning{Columns: []clause.Column{{Name: "id"}}}).
+			Where("group_id = ? AND one_bot_message_id = ? AND recalled_at IS NULL", groupID, messageID).
+			Update("recalled_at", time.Now())
+		if result.Error != nil || result.RowsAffected == 0 {
+			return result.Error
+		}
+		changed = true
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
 func (m *Manager) Close() error {
 	m.stopOnce.Do(func() { close(m.cleanupStop) })
 	m.background.Wait()

@@ -23,6 +23,13 @@ func (m *Manager) IngestMemory(ctx context.Context, input MemoryIngestInput) (*M
 	var result *Memory
 	var action string
 	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if input.MessageLogID != nil {
+			var source MessageLog
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+				Where("id = ? AND recalled_at IS NULL", *input.MessageLogID).Take(&source).Error; err != nil {
+				return err
+			}
+		}
 		var applyErr error
 		result, action, applyErr = applyPreparedMemory(tx, input, *prepared)
 		return applyErr

@@ -46,7 +46,7 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 		return &SaveMemoryOutput{Success: false, Message: "当前消息来源缺失，暂时不能写入长期记忆"}, nil
 	}
 	source, err := tc.MemoryMgr.GetMessageLogByID(evidenceMessageID)
-	if err != nil || source.GroupID != tc.GroupID {
+	if err != nil || source.GroupID != tc.GroupID || source.RecalledAt != nil {
 		return &SaveMemoryOutput{Success: false, Message: "证据消息不存在或不属于当前群，暂时不能写入长期记忆"}, nil
 	}
 

@@ -2,6 +2,7 @@ package topic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -69,7 +70,7 @@ func (s *DBStore) ListPendingTopicAssignmentMessages(ctx context.Context, groupI
 	var rows []memory.MessageLog
 	err := s.db.WithContext(ctx).Table("message_logs ml").Select("ml.*").
 		Joins("LEFT JOIN topic_assignments ta ON ta.message_log_id = ml.id").
-		Where("ml.group_id = ? AND ta.id IS NULL AND btrim(ml.text_content) <> ''", groupID).
+		Where("ml.group_id = ? AND ml.recalled_at IS NULL AND ta.id IS NULL AND btrim(ml.text_content) <> ''", groupID).
 		Order("ml.id ASC").Limit(limit).Scan(&rows).Error
 	return rows, err
 }
@@ -78,7 +79,7 @@ func (s *DBStore) TopicForOneBotMessage(ctx context.Context, groupID, messageID 
 	var topicID *uint
 	err := s.db.WithContext(ctx).Table("topic_assignments ta").Select("ta.topic_id").
 		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("ml.group_id = ? AND ml.one_bot_message_id = ?", groupID, messageID).Scan(&topicID).Error
+		Where("ml.group_id = ? AND ml.one_bot_message_id = ? AND ml.recalled_at IS NULL", groupID, messageID).Scan(&topicID).Error
 	if err != nil || topicID == nil {
 		return 0, err
 	}
@@ -90,12 +91,14 @@ func (s *DBStore) ApplyTopicAssignmentBatch(ctx context.Context, groupID int64, 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		newTopics := make(map[string]uint)
 		for _, item := range items {
-			var count int64
-			if err := tx.Model(&memory.MessageLog{}).Where("id = ? AND group_id = ?", item.MessageLogID, groupID).Count(&count).Error; err != nil {
-				return err
-			}
-			if count != 1 {
+			var message memory.MessageLog
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+				Where("id = ? AND group_id = ? AND recalled_at IS NULL", item.MessageLogID, groupID).Take(&message).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				continue
+			}
+			if err != nil {
+				return err
 			}
 			var topicID *uint
 			switch item.Action {
@@ -104,6 +107,7 @@ func (s *DBStore) ApplyTopicAssignmentBatch(ctx context.Context, groupID int64, 
 				if item.TopicID == 0 {
 					continue
 				}
+				var count int64
 				if err := tx.Model(&memory.TopicThread{}).Where("id = ? AND group_id = ?", item.TopicID, groupID).Count(&count).Error; err != nil {
 					return err
 				}
@@ -151,7 +155,7 @@ func (s *DBStore) ListRecentTopicThreads(ctx context.Context, groupID int64, thr
 	query := s.db.WithContext(ctx).Table("topic_threads tt").Select("tt.*").
 		Joins("JOIN topic_assignments ta ON ta.topic_id = tt.id").
 		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("tt.group_id = ?", groupID)
+		Where("tt.group_id = ? AND ml.recalled_at IS NULL", groupID)
 	if throughMessageLogID > 0 {
 		query = query.Where("ml.id <= ?", throughMessageLogID)
 	}
@@ -182,7 +186,7 @@ func (s *DBStore) LatestTopicSummary(ctx context.Context, topicID, throughMessag
 func (s *DBStore) ListRecentTopicMessages(ctx context.Context, topicID, throughMessageLogID uint, limit int) ([]memory.MessageLog, error) {
 	var rows []memory.MessageLog
 	q := s.db.WithContext(ctx).Table("message_logs ml").Select("ml.*").
-		Joins("JOIN topic_assignments ta ON ta.message_log_id = ml.id").Where("ta.topic_id = ?", topicID).
+		Joins("JOIN topic_assignments ta ON ta.message_log_id = ml.id").Where("ta.topic_id = ? AND ml.recalled_at IS NULL", topicID).
 		Order("ml.message_time DESC, ml.id DESC").Limit(limit)
 	if throughMessageLogID > 0 {
 		q = q.Where("ml.id <= ?", throughMessageLogID)
@@ -201,7 +205,7 @@ func (s *DBStore) ListRecentTopicParticipants(ctx context.Context, topicID, thro
 	err := s.db.WithContext(ctx).Raw(`SELECT user_id, nickname FROM (
 		SELECT DISTINCT ON (ml.user_id) ml.user_id, ml.nickname, ml.message_time, ml.id
 		FROM message_logs ml JOIN topic_assignments ta ON ta.message_log_id = ml.id
-		WHERE ta.topic_id = ? AND (? = 0 OR ta.id <= ?)
+		WHERE ta.topic_id = ? AND ml.recalled_at IS NULL AND (? = 0 OR ta.id <= ?)
 		ORDER BY ml.user_id, ml.message_time DESC, ml.id DESC
 	) latest ORDER BY message_time DESC, id DESC LIMIT ?`, topicID, throughAssignmentID, throughAssignmentID, limit).Scan(&rows).Error
 	return rows, err
@@ -219,8 +223,9 @@ func (s *DBStore) MessagesAfterSummary(ctx context.Context, topicID uint, limit 
 	}
 	var rows []batchRow
 	err := s.db.WithContext(ctx).Raw(`WITH batch AS (
-		SELECT id assignment_id, message_log_id FROM topic_assignments
-		WHERE topic_id = ? AND id > ? ORDER BY id ASC LIMIT ?
+		SELECT ta.id assignment_id, ta.message_log_id FROM topic_assignments ta
+		JOIN message_logs ml ON ml.id = ta.message_log_id
+		WHERE ta.topic_id = ? AND ta.id > ? AND ml.recalled_at IS NULL ORDER BY ta.id ASC LIMIT ?
 	)
 	SELECT ml.*, batch.assignment_id FROM batch JOIN message_logs ml ON ml.id = batch.message_log_id
 	ORDER BY ml.message_time ASC, ml.id ASC`, topicID, watermark, limit).Scan(&rows).Error
@@ -238,8 +243,8 @@ func (s *DBStore) MessagesAfterSummary(ctx context.Context, topicID uint, limit 
 	return messages, throughID, nil
 }
 
-func (s *DBStore) SaveTopicSummary(ctx context.Context, topicID, throughAssignmentID uint, summary memory.TopicSummary) (*memory.TopicSummaryRecord, error) {
-	if topicID == 0 || throughAssignmentID == 0 {
+func (s *DBStore) SaveTopicSummary(ctx context.Context, topicID, throughAssignmentID uint, sourceMessageIDs []uint, summary memory.TopicSummary) (*memory.TopicSummaryRecord, error) {
+	if topicID == 0 || throughAssignmentID == 0 || len(sourceMessageIDs) == 0 {
 		return nil, nil
 	}
 	jsonText, err := MarshalSummary(summary)
@@ -255,7 +260,18 @@ func (s *DBStore) SaveTopicSummary(ctx context.Context, topicID, throughAssignme
 		return nil, err
 	}
 	record := memory.TopicSummaryRecord{ThroughTopicAssignmentID: throughAssignmentID, SummaryJSON: jsonText, Embedding: vector}
-	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&record).Error; err != nil {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var validIDs []uint
+		if err := tx.Model(&memory.MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id IN ? AND recalled_at IS NULL", sourceMessageIDs).Pluck("id", &validIDs).Error; err != nil {
+			return err
+		}
+		if len(validIDs) != len(sourceMessageIDs) {
+			return fmt.Errorf("话题摘要来源消息已变化")
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&record).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	if record.ID == 0 {
@@ -362,7 +378,7 @@ func (s *DBStore) ListTopicsNeedingSummary(ctx context.Context, minMessages int,
 		JOIN message_logs ml ON ml.id = ta.message_log_id
 		LEFT JOIN (SELECT ta2.topic_id, max(ts.through_topic_assignment_id) watermark
 			FROM topic_summaries ts JOIN topic_assignments ta2 ON ta2.id = ts.through_topic_assignment_id GROUP BY ta2.topic_id) s ON s.topic_id = ta.topic_id
-		WHERE ta.topic_id IS NOT NULL AND ta.id > COALESCE(s.watermark, 0)
+		WHERE ta.topic_id IS NOT NULL AND ta.id > COALESCE(s.watermark, 0) AND ml.recalled_at IS NULL
 		GROUP BY ta.topic_id HAVING count(*) >= ? OR max(ml.message_time) < ?
 		ORDER BY min(ta.id) LIMIT ?`, minMessages, coldBefore, limit).Scan(&ids).Error
 	return ids, err

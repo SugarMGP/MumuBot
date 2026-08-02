@@ -288,6 +288,7 @@ func (c *Client) SetMsgEmojiLike(ctx context.Context, messageID int64, emojiID i
 	_, err := c.callAPI(ctx, "set_msg_emoji_like", map[string]interface{}{
 		"message_id": oneBotID(messageID),
 		"emoji_id":   emojiID,
+		"set":        true,
 	})
 	return err
 }

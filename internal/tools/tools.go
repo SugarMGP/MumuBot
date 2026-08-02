@@ -26,13 +26,14 @@ type SendStickerCallback func(ctx context.Context, groupID int64, filePath strin
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	GroupID             int64
-	MemoryMgr           *memory.Manager
-	Bot                 *onebot.Client
-	SnapshotMessageID   int64
-	EvidenceMessageID   int64
-	SpeakCallback       SpeakCallback       // 发言回调
-	SendStickerCallback SendStickerCallback // 发送表情包回调
+	GroupID                 int64
+	MemoryMgr               *memory.Manager
+	Bot                     *onebot.Client
+	SnapshotMessageID       int64
+	EvidenceMessageID       int64
+	SpeakCallback           SpeakCallback       // 发言回调
+	SendStickerCallback     SendStickerCallback // 发送表情包回调
+	MessageRecalledCallback func(groupID, messageID int64)
 
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
@@ -215,13 +216,19 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
 	results := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
+		content := m.DisplayContent
+		mentioned := m.IsMentioned
+		if m.RecalledAt != nil {
+			content = "[该消息已撤回]"
+			mentioned = false
+		}
 		results = append(results, map[string]interface{}{
 			"message_id":   m.OneBotMessageID,
 			"user_id":      m.UserID,
 			"nickname":     m.Nickname,
-			"content":      m.DisplayContent,
+			"content":      content,
 			"time":         m.MessageTime.Format("15:04:05"),
-			"is_mentioned": m.IsMentioned,
+			"is_mentioned": mentioned,
 		})
 	}
 

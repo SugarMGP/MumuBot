@@ -368,7 +368,11 @@ func (m *Manager) summarizeTopic(topicID uint) error {
 	if strings.TrimSpace(summaryVectorText(next)) == "" {
 		return fmt.Errorf("话题摘要为空")
 	}
-	_, err = m.store.SaveTopicSummary(ctx, topicID, throughID, next)
+	sourceMessageIDs := make([]uint, len(messages))
+	for i, message := range messages {
+		sourceMessageIDs[i] = message.ID
+	}
+	_, err = m.store.SaveTopicSummary(ctx, topicID, throughID, sourceMessageIDs, next)
 	return err
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
@@ -15,6 +16,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	recalledMessageText    = "[该消息已撤回]"
+	recalledMessageContent = recalledMessageText + "\n"
+)
+
 func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if msg == nil {
 		return
@@ -24,6 +30,10 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	}
 	cfg := config.Get()
 	if !cfg.IsGroupEnabled(msg.GroupID) {
+		return
+	}
+	if msg.MessageID == 0 {
+		a.onInteractionMessage(msg)
 		return
 	}
 
@@ -86,6 +96,38 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	a.scheduleThink(msg.GroupID, isMentioned, false)
 }
 
+func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) {
+	if len(msg.AtList) == 0 || msg.AtList[0] <= 0 {
+		return
+	}
+	targetID := msg.AtList[0]
+	actorName := a.resolveRenderedDisplayName(msg.GroupID, msg.UserID, msg.GroupCard, msg.DisplayName, msg.Nickname)
+	if actorName == "" {
+		actorName = fmt.Sprintf("%d", msg.UserID)
+	}
+	targetName := a.resolveRenderedDisplayName(msg.GroupID, targetID, "", "", fmt.Sprintf("%d", targetID))
+	msg.Content = ""
+	msg.FinalContent = fmt.Sprintf("[%s] %s(%d) 戳了戳 %s(%d)\n", msg.Time.Format("15:04:05"), actorName, msg.UserID, targetName, targetID)
+	a.addBuffer(msg)
+	a.scheduleThink(msg.GroupID, msg.IsMentioned && msg.UserID != a.bot.GetSelfID(), false)
+}
+
+func (a *Agent) onRecall(groupID, messageID, operatorID int64) {
+	if groupID <= 0 || messageID <= 0 || !config.Get().IsGroupEnabled(groupID) {
+		return
+	}
+	changed, err := a.memory.MarkMessageRecalled(groupID, messageID)
+	if err != nil {
+		zap.L().Warn("标记群消息撤回失败", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID), zap.Error(err))
+		return
+	}
+	if !changed {
+		return
+	}
+	a.replaceRecalledMessage(groupID, messageID)
+	zap.L().Info("群消息已撤回", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID))
+}
+
 func initialMessageContent(msg *onebot.GroupMessage) string {
 	if msg == nil {
 		return ""
@@ -143,6 +185,11 @@ func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
 		return nil
 	}
 	if msg.Reply.Content != "" && msg.Reply.SenderID != 0 {
+		if log, err := a.memory.GetMessageLogByID(msg.Reply.MessageID); err == nil && log.RecalledAt != nil {
+			msg.Reply = replyInfoFromMessageLog(log)
+			a.replyCache.Set(msg.Reply.MessageID, *msg.Reply, ttlcache.DefaultTTL)
+			return nil
+		}
 		a.replyCache.Set(msg.Reply.MessageID, *msg.Reply, ttlcache.DefaultTTL)
 		return nil
 	}
@@ -235,6 +282,45 @@ func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
 	return slices.Clone(a.buffers[groupID])
 }
 
+func (a *Agent) replaceRecalledMessage(groupID, messageID int64) {
+	var old, replacement *onebot.GroupMessage
+	a.buffersMu.Lock()
+	for i, msg := range a.buffers[groupID] {
+		if msg == nil || msg.MessageID != messageID {
+			continue
+		}
+		old = msg
+		replacement = recalledBufferedMessage(msg)
+		a.buffers[groupID][i] = replacement
+		break
+	}
+	a.buffersMu.Unlock()
+	if replacement != nil {
+		a.readMu.Lock()
+		if a.lastReadMessage[groupID] == old {
+			a.lastReadMessage[groupID] = replacement
+		}
+		a.readMu.Unlock()
+	}
+	a.replyCache.Delete(messageID)
+}
+
+func recalledBufferedMessage(msg *onebot.GroupMessage) *onebot.GroupMessage {
+	if msg == nil {
+		return nil
+	}
+	return &onebot.GroupMessage{
+		MessageID:    msg.MessageID,
+		GroupID:      msg.GroupID,
+		UserID:       msg.UserID,
+		Nickname:     msg.Nickname,
+		GroupCard:    msg.GroupCard,
+		DisplayName:  msg.DisplayName,
+		Time:         msg.Time,
+		FinalContent: recalledMessageContent,
+	}
+}
+
 func (a *Agent) updateMember(msg *onebot.GroupMessage) {
 	_, err := a.memory.GetOrCreateMemberProfile(msg.UserID, msg.Nickname, msg.Time)
 	if err != nil {
@@ -276,6 +362,9 @@ func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 	}
 
 	content := strings.TrimSpace(log.TextContent)
+	if log.RecalledAt != nil {
+		content = recalledMessageText
+	}
 	if content == "" {
 		content = strings.TrimSpace(log.DisplayContent)
 	}

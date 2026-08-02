@@ -34,6 +34,7 @@ type Client struct {
 
 	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
 	onMessage       func(*GroupMessage)
+	onRecall        func(groupID, messageID, operatorID int64)
 	workersMu       sync.Mutex
 	workers         map[int64]chan []byte
 	workerWG        sync.WaitGroup
@@ -134,8 +135,15 @@ func (c *Client) enqueueEvent(raw []byte) {
 		c.handleMetaEvent(event)
 		return
 	case "notice":
-		c.handleNoticeEvent(event)
-		return
+		notice, _ := event["notice_type"].(string)
+		sub, _ := event["sub_type"].(string)
+		if notice == "group_ban" {
+			c.handleNoticeEvent(event)
+			return
+		}
+		if notice != "group_recall" && (notice != "notify" || sub != "poke") {
+			return
+		}
 	case "request":
 		c.handleRequestEvent(event)
 		return
@@ -147,11 +155,21 @@ func (c *Client) enqueueEvent(raw []byte) {
 		return
 	}
 	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
-	messageID, messageOK := utils.ParseInt64Value(event["message_id"])
-	if !groupOK || groupID <= 0 || !messageOK || messageID <= 0 {
-		zap.L().Warn("忽略缺少有效编号的群消息")
+	if !groupOK || groupID <= 0 {
+		zap.L().Warn("忽略缺少有效群号的群事件")
 		return
 	}
+	if postType == "message" {
+		messageID, messageOK := utils.ParseInt64Value(event["message_id"])
+		if !messageOK || messageID <= 0 {
+			zap.L().Warn("忽略缺少有效编号的群消息")
+			return
+		}
+	}
+	c.enqueueGroupEvent(groupID, raw)
+}
+
+func (c *Client) enqueueGroupEvent(groupID int64, raw []byte) {
 	c.workersMu.Lock()
 	queue := c.workers[groupID]
 	if queue == nil {
@@ -167,7 +185,7 @@ func (c *Client) enqueueEvent(raw []byte) {
 func (c *Client) runEventWorker(queue <-chan []byte) {
 	defer c.workerWG.Done()
 	for raw := range queue {
-		c.handleMessage(raw)
+		c.handleGroupEvent(raw)
 	}
 }
 
@@ -208,7 +226,7 @@ func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) 
 	}
 }
 
-func (c *Client) handleMessage(data []byte) {
+func (c *Client) handleGroupEvent(data []byte) {
 	var event map[string]interface{}
 	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -216,7 +234,12 @@ func (c *Client) handleMessage(data []byte) {
 		zap.L().Error("解析消息失败", zap.Error(err))
 		return
 	}
-	c.handleMessageEvent(event)
+	switch event["post_type"] {
+	case "message":
+		c.handleMessageEvent(event)
+	case "notice":
+		c.handleNoticeEvent(event)
+	}
 }
 
 func (c *Client) handleMetaEvent(event map[string]interface{}) {
@@ -239,8 +262,43 @@ func (c *Client) handleMessageEvent(event map[string]interface{}) {
 func (c *Client) handleNoticeEvent(event map[string]interface{}) {
 	notice, _ := event["notice_type"].(string)
 	sub, _ := event["sub_type"].(string)
-	if notice == "group_ban" {
+	switch {
+	case notice == "group_ban":
 		c.handleGroupBanNotice(event, sub)
+	case notice == "notify" && sub == "poke":
+		c.handleGroupPokeNotice(event)
+	case notice == "group_recall":
+		c.handleGroupRecallNotice(event)
+	}
+}
+
+func (c *Client) handleGroupPokeNotice(event map[string]interface{}) {
+	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
+	userID, userOK := utils.ParseInt64Value(event["user_id"])
+	targetID, targetOK := utils.ParseInt64Value(event["target_id"])
+	if !groupOK || groupID <= 0 || !userOK || userID <= 0 || !targetOK || targetID <= 0 || c.onMessage == nil {
+		return
+	}
+	eventTime := time.Now()
+	if seconds, ok := utils.ParseInt64Value(event["time"]); ok && seconds > 0 {
+		eventTime = time.Unix(seconds, 0)
+	}
+	selfID := c.GetSelfID()
+	c.onMessage(&GroupMessage{
+		GroupID:     groupID,
+		UserID:      userID,
+		AtList:      []int64{targetID},
+		IsMentioned: targetID == selfID && userID != selfID,
+		Time:        eventTime,
+	})
+}
+
+func (c *Client) handleGroupRecallNotice(event map[string]interface{}) {
+	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
+	messageID, messageOK := utils.ParseInt64Value(event["message_id"])
+	operatorID, _ := utils.ParseInt64Value(event["operator_id"])
+	if groupOK && groupID > 0 && messageOK && messageID > 0 && c.onRecall != nil {
+		c.onRecall(groupID, messageID, operatorID)
 	}
 }
 func (c *Client) handleRequestEvent(event map[string]interface{}) {
@@ -294,7 +352,10 @@ func (c *Client) IsSelfMuted(groupID int64) bool {
 	return true
 }
 func (c *Client) OnMessage(handler func(*GroupMessage)) { c.onMessage = handler }
-func (c *Client) GetSelfID() int64                      { c.selfMu.RLock(); defer c.selfMu.RUnlock(); return c.selfID }
+func (c *Client) OnRecall(handler func(groupID, messageID, operatorID int64)) {
+	c.onRecall = handler
+}
+func (c *Client) GetSelfID() int64 { c.selfMu.RLock(); defer c.selfMu.RUnlock(); return c.selfID }
 func (c *Client) IsConnected() bool {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()

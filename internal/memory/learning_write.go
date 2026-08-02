@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CultureReviewEvidence struct {
@@ -113,7 +114,14 @@ func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, waterma
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, item := range prepared {
-			if err := saveStylePattern(tx, &item.pattern, item.ids); err != nil {
+			ids, err := unrecalledMessageIDs(tx, item.ids)
+			if err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				err = saveStylePattern(tx, &item.pattern, ids)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -121,7 +129,14 @@ func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, waterma
 			term := strings.TrimSpace(input.Term)
 			meaning := strings.TrimSpace(input.Meaning)
 			item := Jargon{GroupID: groupID, Term: term, Meaning: meaning, Status: CultureStatusCandidate}
-			if err := m.SaveJargonCandidate(tx, &item, input.MessageIDs); err != nil {
+			ids, err := unrecalledMessageIDs(tx, input.MessageIDs)
+			if err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				err = m.SaveJargonCandidate(tx, &item, ids)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -133,12 +148,29 @@ func (m *Manager) CommitMemberProfileBatch(ctx context.Context, groupID int64, w
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, input := range traits {
 			trait := MemberTrait{UserID: input.UserID, Kind: input.Kind, Value: input.Value}
-			if err := saveMemberTrait(tx, &trait, input.MessageIDs); err != nil {
+			ids, err := unrecalledMessageIDs(tx, input.MessageIDs)
+			if err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				err = saveMemberTrait(tx, &trait, ids)
+			}
+			if err != nil {
 				return err
 			}
 		}
 		return updateLearningState(tx, groupID, LearningKindMemberProfile, watermark)
 	})
+}
+
+func unrecalledMessageIDs(tx *gorm.DB, ids []uint) ([]uint, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var valid []uint
+	err := tx.Model(&MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id IN ? AND recalled_at IS NULL", ids).Pluck("id", &valid).Error
+	return valid, err
 }
 
 func (m *Manager) ReviewCulture(idsStyle, idsJargon []uint, approveStyle, approveJargon map[uint]bool) error {
@@ -178,24 +210,27 @@ func (m *Manager) ListCultureReviewItems(groupID int64, limit int) ([]CultureRev
 		TextContent string
 	}
 	var rows []row
-	err := m.db.Raw(`WITH candidates AS (
+	err := m.db.Raw(`WITH evidence AS (
+		SELECT 'style' kind, e.style_pattern_id id, ml.id message_id, ml.text_content
+		FROM style_pattern_evidence e JOIN message_logs ml ON ml.id = e.message_log_id
+		WHERE ml.recalled_at IS NULL AND btrim(ml.text_content) <> ''
+		UNION ALL
+		SELECT 'jargon' kind, e.jargon_id id, ml.id message_id, ml.text_content
+		FROM jargon_evidence e JOIN message_logs ml ON ml.id = e.message_log_id
+		WHERE ml.recalled_at IS NULL AND btrim(ml.text_content) <> ''
+	), candidates AS (
 		SELECT 'style' kind, sp.id, sp.situation label, sp.expression value, sp.created_at
 		FROM style_patterns sp WHERE sp.group_id = ? AND sp.status = 'candidate'
-		AND (SELECT count(*) FROM style_pattern_evidence e WHERE e.style_pattern_id = sp.id) >= 2
+		AND (SELECT count(*) FROM evidence e WHERE e.kind = 'style' AND e.id = sp.id) >= 2
 		UNION ALL
 		SELECT 'jargon' kind, j.id, j.term label, j.meaning value, j.created_at
 		FROM jargons j WHERE j.group_id = ? AND j.status = 'candidate'
-		AND (SELECT count(*) FROM jargon_evidence e WHERE e.jargon_id = j.id) >= 2
+		AND (SELECT count(*) FROM evidence e WHERE e.kind = 'jargon' AND e.id = j.id) >= 2
 		ORDER BY created_at ASC LIMIT ?
-	), evidence AS (
-		SELECT 'style' kind, e.style_pattern_id id, e.message_log_id FROM style_pattern_evidence e
-		UNION ALL
-		SELECT 'jargon' kind, e.jargon_id id, e.message_log_id FROM jargon_evidence e
 	)
-	SELECT c.kind, c.id, c.label, c.value, ml.id message_id, ml.text_content
+	SELECT c.kind, c.id, c.label, c.value, e.message_id, e.text_content
 	FROM candidates c JOIN evidence e ON e.kind = c.kind AND e.id = c.id
-	JOIN message_logs ml ON ml.id = e.message_log_id
-	WHERE btrim(ml.text_content) <> '' ORDER BY c.created_at, c.kind, c.id, ml.id`, groupID, groupID, limit).Scan(&rows).Error
+	ORDER BY c.created_at, c.kind, c.id, e.message_id`, groupID, groupID, limit).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,7 @@ type GroupMessage struct {
 	Images       []ImageInfo      `json:"images,omitempty"`        // 图片列表
 	Videos       []VideoInfo      `json:"videos,omitempty"`        // 视频列表
 	Faces        []FaceInfo       `json:"faces,omitempty"`         // 表情列表
-	AtList       []int64          `json:"at_list,omitempty"`       // @的用户列表
+	AtList       []int64          `json:"at_list,omitempty"`       // 消息指向的用户；普通消息为 @ 目标，互动消息为互动目标
 	Reply        *ReplyInfo       `json:"reply,omitempty"`         // 回复信息
 	ForwardIDs   []string         `json:"-"`                       // 待延迟展开的合并转发 ID
 	Forwards     []ForwardMessage `json:"forwards,omitempty"`      // 合并转发内容
