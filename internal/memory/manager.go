@@ -245,41 +245,11 @@ func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupI
 	if text == "" || limit <= 0 {
 		return nil, nil
 	}
-	embedding, err := m.embedding.Embed(ctx, text)
+	query, err := m.PrepareHybridQuery(ctx, []string{text})
 	if err != nil {
 		return nil, err
 	}
-	base := "status = 'active'"
-	args := []any{}
-	if groupID != 0 {
-		base += " AND group_id = ?"
-		args = append(args, groupID)
-	}
-	if scope != "" {
-		base += " AND scope = ?"
-		args = append(args, scope)
-	}
-	var vectorRows []rankedIDRow
-	vectorSQL := "SELECT id FROM memories WHERE " + base + " AND 1 - (embedding <=> ?) >= ? ORDER BY embedding <=> ? LIMIT 20"
-	vector, err := EmbeddingVector(embedding)
-	if err != nil {
-		return nil, err
-	}
-	vectorArgs := append(append([]any{}, args...), vector, vectorThreshold, vector)
-	if err := m.db.WithContext(ctx).Raw(vectorSQL, vectorArgs...).Scan(&vectorRows).Error; err != nil {
-		return nil, err
-	}
-	var textRows []rankedIDRow
-	textSQL := "SELECT id FROM memories WHERE " + base + " AND similarity(content, ?) >= 0.1 ORDER BY similarity(content, ?) DESC LIMIT 20"
-	textArgs := append(append([]any{}, args...), text, text)
-	if err := m.db.WithContext(ctx).Raw(textSQL, textArgs...).Scan(&textRows).Error; err != nil {
-		return nil, err
-	}
-	ids := fuseRRF(rankRows(vectorRows), rankRows(textRows))
-	if len(ids) > limit {
-		ids = ids[:limit]
-	}
-	return m.loadMemoriesInOrder(ctx, ids)
+	return m.searchPreparedMemories(ctx, query, groupID, 0, scope, limit, vectorThreshold)
 }
 
 func (m *Manager) loadMemoriesInOrder(ctx context.Context, ids []uint) ([]Memory, error) {

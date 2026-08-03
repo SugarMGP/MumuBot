@@ -27,13 +27,20 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if !cfg.IsGroupEnabled(msg.GroupID) {
 		return
 	}
+	if msg.ReceivedAt.IsZero() {
+		msg.ReceivedAt = time.Now()
+	}
 	if msg.MessageID == 0 {
 		a.onInteractionMessage(msg)
 		return
 	}
 
 	selfID := a.bot.GetSelfID()
+	a.resolveBufferedReplyInfo(msg)
 	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content)
+	if msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID {
+		isMentioned = true
+	}
 	msg.IsMentioned = isMentioned
 	msg.FinalContent = initialMessageContent(msg)
 
@@ -46,14 +53,40 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		return
 	}
 
+	a.addBuffer(msg)
+
+	if msg.UserID == selfID {
+		return
+	}
+
+	if err := a.ctx.Err(); err != nil {
+		return
+	}
+	a.scheduleThink(msg.GroupID, isMentioned, false, msg.ReceivedAt)
+
+	completed := cloneMessageForCompletion(msg)
+	a.wg.Add(1)
+	go func(messageLogID uint, source, completion *onebot.GroupMessage, initiallyMentioned bool) {
+		defer a.wg.Done()
+		a.completeMessage(messageLogID, source, completion, initiallyMentioned)
+	}(item.ID, msg, completed, isMentioned)
+}
+
+func (a *Agent) completeMessage(messageLogID uint, source, msg *onebot.GroupMessage, initiallyMentioned bool) {
+	if err := a.ctx.Err(); err != nil {
+		return
+	}
 	if err := a.markMessageRead(msg.MessageID); err != nil {
 		zap.L().Error("标记消息已读失败", zap.Int64("message_id", msg.MessageID), zap.Error(err))
+	}
+	if err := a.ctx.Err(); err != nil {
+		return
 	}
 	if err := a.resolveReplyInfo(msg); err != nil {
 		zap.L().Debug("解析回复消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
+	selfID := a.bot.GetSelfID()
 	if msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID {
-		isMentioned = true
 		msg.IsMentioned = true
 	}
 	a.resolveForwardMessages(msg)
@@ -69,29 +102,37 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 			forwardsJSON = &b
 		}
 	}
-	current, err := a.topicMgr.UpdateMessagePresentation(a.ctx, item.ID, msg.FinalContent, forwardsJSON, isMentioned)
+	current, err := a.topicMgr.UpdateMessagePresentation(a.ctx, messageLogID, msg.FinalContent, forwardsJSON, msg.IsMentioned)
 	if err != nil {
 		zap.L().Error("更新消息展示内容失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-	} else if !current {
+	} else {
+		if !current {
+			return
+		}
+		if a.replaceBufferedMessage(msg.MessageID, source, msg) && !initiallyMentioned && msg.IsMentioned {
+			a.scheduleThink(msg.GroupID, true, false, msg.ReceivedAt)
+		}
+	}
+	a.updateMember(msg)
+}
+
+func cloneMessageForCompletion(msg *onebot.GroupMessage) *onebot.GroupMessage {
+	clone := *msg
+	clone.Forwards = slices.Clone(msg.Forwards)
+	if msg.Reply != nil {
+		reply := *msg.Reply
+		clone.Reply = &reply
+	}
+	return &clone
+}
+
+func (a *Agent) resolveBufferedReplyInfo(msg *onebot.GroupMessage) {
+	if msg == nil || msg.Reply == nil || msg.Reply.MessageID == 0 || msg.Reply.SenderID != 0 {
 		return
 	}
-
-	a.addBuffer(msg)
-
-	if msg.UserID == selfID {
-		return
+	if reply := findReplyInfoInMessages(a.getBuffer(msg.GroupID), msg.Reply.MessageID); reply != nil {
+		msg.Reply = reply
 	}
-
-	if err := a.ctx.Err(); err != nil {
-		return
-	}
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		a.updateMember(msg)
-	}()
-
-	a.scheduleThink(msg.GroupID, isMentioned, false)
 }
 
 func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) {
@@ -99,15 +140,12 @@ func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) {
 		return
 	}
 	targetID := msg.AtList[0]
-	actorName := a.resolveRenderedDisplayName(msg.GroupID, msg.UserID, msg.GroupCard, msg.DisplayName, msg.Nickname)
-	if actorName == "" {
-		actorName = fmt.Sprintf("%d", msg.UserID)
-	}
-	targetName := a.resolveRenderedDisplayName(msg.GroupID, targetID, "", "", fmt.Sprintf("%d", targetID))
+	actorName := utils.FirstNonEmpty(msg.GroupCard, msg.DisplayName, msg.Nickname, fmt.Sprintf("%d", msg.UserID))
+	targetName := fmt.Sprintf("%d", targetID)
 	msg.Content = ""
 	msg.FinalContent = fmt.Sprintf("[%s] %s(%d) 戳了戳 %s(%d)\n", msg.Time.Format("15:04:05"), actorName, msg.UserID, targetName, targetID)
 	a.addBuffer(msg)
-	a.scheduleThink(msg.GroupID, msg.IsMentioned && msg.UserID != a.bot.GetSelfID(), false)
+	a.scheduleThink(msg.GroupID, msg.IsMentioned && msg.UserID != a.bot.GetSelfID(), false, msg.ReceivedAt)
 }
 
 func (a *Agent) onRecall(groupID, messageID, operatorID int64) {
@@ -130,27 +168,65 @@ func initialMessageContent(msg *onebot.GroupMessage) string {
 	if msg == nil {
 		return ""
 	}
+	parts := make([]string, 0, 8)
 	if content := strings.TrimSpace(msg.Content); content != "" {
-		return content
+		parts = append(parts, content)
 	}
-	switch {
-	case len(msg.Images) > 0:
-		return "[图片]"
-	case len(msg.Videos) > 0:
-		return "[视频]"
-	case len(msg.Faces) > 0:
-		return "[表情]"
-	case msg.HasRecord:
-		return "[语音]"
-	case len(msg.FileNames) > 0:
-		return "[文件]"
-	case len(msg.Cards) > 0:
-		return "[卡片]"
-	case len(msg.ForwardIDs) > 0:
-		return "[合并转发]"
-	default:
-		return ""
+	for _, userID := range msg.AtList {
+		if userID == onebot.AtAllUserID {
+			parts = append(parts, "@全体成员")
+		} else if userID > 0 {
+			parts = append(parts, fmt.Sprintf("@%d", userID))
+		}
 	}
+	for _, face := range msg.Faces {
+		if face.Name != "" {
+			parts = append(parts, fmt.Sprintf("[表情:%s]", face.Name))
+		} else if face.ID > 0 {
+			parts = append(parts, fmt.Sprintf("[表情:%d]", face.ID))
+		} else {
+			parts = append(parts, "[表情]")
+		}
+	}
+	for _, image := range msg.Images {
+		if image.SubType == 1 {
+			if image.Desc != "" {
+				parts = append(parts, fmt.Sprintf("[表情包:%s]", image.Desc))
+			} else {
+				parts = append(parts, "[表情包]")
+			}
+		} else if image.Desc != "" {
+			parts = append(parts, fmt.Sprintf("[图片:%s]", image.Desc))
+		} else {
+			parts = append(parts, "[图片]")
+		}
+	}
+	for range msg.Videos {
+		parts = append(parts, "[视频]")
+	}
+	if msg.HasRecord {
+		parts = append(parts, "[语音]")
+	}
+	for _, name := range msg.FileNames {
+		if name = strings.TrimSpace(name); name != "" {
+			parts = append(parts, fmt.Sprintf("[文件:%s]", name))
+		} else {
+			parts = append(parts, "[文件]")
+		}
+	}
+	for i := range msg.Cards {
+		parts = append(parts, msg.Cards[i].Format())
+	}
+	for range msg.ForwardIDs {
+		parts = append(parts, "[合并转发]")
+	}
+	reply := ""
+	if msg.Reply != nil && msg.Reply.MessageID > 0 {
+		reply = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
+	}
+	displayName := utils.FirstNonEmpty(msg.GroupCard, msg.DisplayName, msg.Nickname, fmt.Sprintf("%d", msg.UserID))
+	return fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
+		msg.Time.Format("15:04:05"), msg.MessageID, displayName, msg.UserID, reply, strings.Join(parts, " "))
 }
 
 func (a *Agent) markMessageRead(messageID int64) error {
@@ -267,6 +343,28 @@ func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 		messages = slices.Delete(messages, 0, len(messages)-bufSize)
 	}
 	a.buffers[msg.GroupID] = messages
+}
+
+func (a *Agent) replaceBufferedMessage(messageID int64, source, replacement *onebot.GroupMessage) bool {
+	if messageID == 0 || source == nil || replacement == nil {
+		return false
+	}
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	for i, current := range a.buffers[source.GroupID] {
+		if current == nil || current.MessageID != messageID {
+			continue
+		}
+		if current != source {
+			return false
+		}
+		a.buffers[source.GroupID][i] = replacement
+		if a.lastReadMessage[source.GroupID] == current {
+			a.lastReadMessage[source.GroupID] = replacement
+		}
+		return true
+	}
+	return false
 }
 
 func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {

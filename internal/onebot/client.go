@@ -18,6 +18,11 @@ import (
 
 const groupEventQueueSize = 256
 
+type groupEvent struct {
+	event      map[string]interface{}
+	receivedAt time.Time
+}
+
 type Client struct {
 	transportCtx  context.Context
 	stopTransport context.CancelFunc
@@ -36,7 +41,7 @@ type Client struct {
 	onMessage       func(*GroupMessage)
 	onRecall        func(groupID, messageID, operatorID int64)
 	workersMu       sync.Mutex
-	workers         map[int64]chan []byte
+	workers         map[int64]chan groupEvent
 	workerWG        sync.WaitGroup
 	transportWG     sync.WaitGroup
 }
@@ -49,18 +54,14 @@ func NewClient() *Client {
 		stopTransport:   stopTransport,
 		mutedUntil:      make(map[int64]time.Time),
 		memberInfoCache: cache,
-		workers:         make(map[int64]chan []byte),
+		workers:         make(map[int64]chan groupEvent),
 	}
 	go cache.Start()
 	return c
 }
 
-func (c *Client) Connect() error {
-	if err := c.connect(); err != nil {
-		return err
-	}
-	zap.L().Info("已连接到 OneBot", zap.String("url", config.Get().OneBot.WsURL))
-	return nil
+func (c *Client) Connect() {
+	c.startConnectLoop(0)
 }
 
 func (c *Client) connect() error {
@@ -122,6 +123,7 @@ func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
 }
 
 func (c *Client) enqueueEvent(raw []byte) {
+	receivedAt := time.Now()
 	var event map[string]interface{}
 	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -138,7 +140,7 @@ func (c *Client) enqueueEvent(raw []byte) {
 		notice, _ := event["notice_type"].(string)
 		sub, _ := event["sub_type"].(string)
 		if notice == "group_ban" {
-			c.handleNoticeEvent(event)
+			c.handleNoticeEvent(event, receivedAt)
 			return
 		}
 		if notice != "group_recall" && (notice != "notify" || sub != "poke") {
@@ -166,29 +168,29 @@ func (c *Client) enqueueEvent(raw []byte) {
 			return
 		}
 	}
-	c.enqueueGroupEvent(groupID, raw)
+	c.enqueueGroupEvent(groupID, groupEvent{event: event, receivedAt: receivedAt})
 }
 
-func (c *Client) enqueueGroupEvent(groupID int64, raw []byte) {
+func (c *Client) enqueueGroupEvent(groupID int64, event groupEvent) {
 	c.workersMu.Lock()
 	queue := c.workers[groupID]
 	if queue == nil {
-		queue = make(chan []byte, groupEventQueueSize)
+		queue = make(chan groupEvent, groupEventQueueSize)
 		c.workers[groupID] = queue
 		c.workerWG.Add(1)
 		go c.runEventWorker(queue)
 	}
 	c.workersMu.Unlock()
 	select {
-	case queue <- raw:
+	case queue <- event:
 	case <-c.transportCtx.Done():
 	}
 }
 
-func (c *Client) runEventWorker(queue <-chan []byte) {
+func (c *Client) runEventWorker(queue <-chan groupEvent) {
 	defer c.workerWG.Done()
-	for raw := range queue {
-		c.handleGroupEvent(raw)
+	for event := range queue {
+		c.handleGroupEvent(event)
 	}
 }
 
@@ -201,12 +203,45 @@ func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) 
 	c.sdk = nil
 	c.connMu.Unlock()
 	_ = disconnected.Close()
-	zap.L().Warn("连接断开，尝试重连")
+	c.startConnectLoop(generation)
+}
+
+func (c *Client) startConnectLoop(generation uint64) {
+	c.transportWG.Add(1)
+	go func() {
+		defer c.transportWG.Done()
+		c.connectLoop(generation)
+	}()
+}
+
+func (c *Client) connectLoop(generation uint64) {
 	interval := time.Duration(config.Get().OneBot.ReconnectInterval) * time.Second
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+	firstAttempt := true
 	for {
+		c.connMu.RLock()
+		valid := c.sdk == nil && c.generation == generation
+		c.connMu.RUnlock()
+		if !valid {
+			return
+		}
+		err := c.connect()
+		if err == nil {
+			zap.L().Info("已连接到 OneBot", zap.String("url", config.Get().OneBot.WsURL))
+			return
+		}
+		if c.transportCtx.Err() != nil {
+			return
+		}
+		if firstAttempt {
+			zap.L().Warn("OneBot 连接失败，将在后台重试", zap.Error(err))
+		} else {
+			zap.L().Debug("OneBot 重连失败", zap.Error(err))
+		}
+		firstAttempt = false
+
 		timer := time.NewTimer(interval)
 		select {
 		case <-c.transportCtx.Done():
@@ -214,34 +249,15 @@ func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) 
 			return
 		case <-timer.C:
 		}
-		c.connMu.RLock()
-		valid := c.sdk == nil && c.generation == generation
-		c.connMu.RUnlock()
-		if !valid {
-			return
-		}
-		if err := c.connect(); err == nil {
-			zap.L().Info("重连成功")
-			return
-		} else {
-			zap.L().Warn("重连失败", zap.Error(err))
-		}
 	}
 }
 
-func (c *Client) handleGroupEvent(data []byte) {
-	var event map[string]interface{}
-	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&event); err != nil {
-		zap.L().Error("解析消息失败", zap.Error(err))
-		return
-	}
-	switch event["post_type"] {
+func (c *Client) handleGroupEvent(queued groupEvent) {
+	switch queued.event["post_type"] {
 	case "message":
-		c.handleMessageEvent(event)
+		c.handleMessageEvent(queued.event, queued.receivedAt)
 	case "notice":
-		c.handleNoticeEvent(event)
+		c.handleNoticeEvent(queued.event, queued.receivedAt)
 	}
 }
 
@@ -254,28 +270,29 @@ func (c *Client) handleMetaEvent(event map[string]interface{}) {
 		}
 	}
 }
-func (c *Client) handleMessageEvent(event map[string]interface{}) {
+func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time) {
 	if event["message_type"] != "group" {
 		return
 	}
 	if msg := c.parseGroupMessage(event); msg != nil && c.onMessage != nil {
+		msg.ReceivedAt = receivedAt
 		c.onMessage(msg)
 	}
 }
-func (c *Client) handleNoticeEvent(event map[string]interface{}) {
+func (c *Client) handleNoticeEvent(event map[string]interface{}, receivedAt time.Time) {
 	notice, _ := event["notice_type"].(string)
 	sub, _ := event["sub_type"].(string)
 	switch {
 	case notice == "group_ban":
 		c.handleGroupBanNotice(event, sub)
 	case notice == "notify" && sub == "poke":
-		c.handleGroupPokeNotice(event)
+		c.handleGroupPokeNotice(event, receivedAt)
 	case notice == "group_recall":
 		c.handleGroupRecallNotice(event)
 	}
 }
 
-func (c *Client) handleGroupPokeNotice(event map[string]interface{}) {
+func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt time.Time) {
 	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
 	userID, userOK := utils.ParseInt64Value(event["user_id"])
 	targetID, targetOK := utils.ParseInt64Value(event["target_id"])
@@ -293,6 +310,7 @@ func (c *Client) handleGroupPokeNotice(event map[string]interface{}) {
 		AtList:      []int64{targetID},
 		IsMentioned: targetID == selfID && userID != selfID,
 		Time:        eventTime,
+		ReceivedAt:  receivedAt,
 	})
 }
 

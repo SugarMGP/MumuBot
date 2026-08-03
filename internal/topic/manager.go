@@ -273,7 +273,11 @@ func (m *Manager) assignmentCandidates(ctx context.Context, groupID int64, rows 
 			queryParts = append(queryParts, row.TextContent)
 		}
 	}
-	hits, err := m.store.SearchTopicHits(ctx, strings.Join(queryParts, "\n"), groupID, 0, 6)
+	query, err := m.store.memory.PrepareHybridQuery(ctx, queryParts)
+	if err != nil {
+		return nil, nil, err
+	}
+	hits, err := m.store.SearchTopicHits(ctx, query, groupID, 0, 6)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -462,7 +466,7 @@ func (m *Manager) memoryRecoveryLoop() {
 	}
 }
 
-func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query string, throughMessageLogID uint, replyMessageIDs []int64) (string, error) {
+func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query memory.HybridQuery, throughMessageLogID uint, replyMessageIDs []int64) (string, error) {
 	seen := make(map[uint]struct{})
 	topics := make([]memory.TopicThread, 0, len(replyMessageIDs)+10)
 	for _, messageID := range replyMessageIDs {
@@ -488,7 +492,7 @@ func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query s
 			topics = append(topics, topic)
 		}
 	}
-	if strings.TrimSpace(query) != "" {
+	if !query.Empty() {
 		hits, err := m.store.SearchTopicHits(ctx, query, groupID, throughMessageLogID, 6)
 		if err != nil {
 			return "", err

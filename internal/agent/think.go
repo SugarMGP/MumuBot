@@ -47,8 +47,9 @@ func (a *Agent) thinkCycle() {
 		if len(currentMessages) == 0 {
 			continue
 		}
+		receivedAt := currentMessages[len(currentMessages)-1].ReceivedAt
 		if a.hasStrongInteraction(currentMessages) {
-			a.scheduleThink(gc.GroupID, true, false)
+			a.scheduleThink(gc.GroupID, true, false, receivedAt)
 			continue
 		}
 		lastMsg := latestPositiveMessage(currentMessages)
@@ -63,12 +64,17 @@ func (a *Agent) thinkCycle() {
 		if rand.Float64() > speakProb {
 			continue
 		}
-		a.scheduleThink(gc.GroupID, false, true)
+		a.scheduleThink(gc.GroupID, false, true, receivedAt)
 	}
 }
 
-func (a *Agent) scheduleThink(groupID int64, isMention, probabilityPassed bool) {
+func (a *Agent) scheduleThink(groupID int64, isMention, probabilityPassed bool, receivedAt time.Time) {
+	if a.concurrencyMgr.IsRunning(groupID) {
+		zap.L().Debug("群思考正在执行，忽略新触发", zap.Int64("group_id", groupID))
+		return
+	}
 	debounce := time.Duration(config.Get().Agent.ThinkDebounceMS) * time.Millisecond
+	delay := remainingDebounce(receivedAt, time.Now(), debounce)
 
 	a.pendingMu.Lock()
 	defer a.pendingMu.Unlock()
@@ -79,7 +85,7 @@ func (a *Agent) scheduleThink(groupID int64, isMention, probabilityPassed bool) 
 		if pending.timer != nil {
 			pending.timer.Stop()
 		}
-		pending.timer = time.AfterFunc(debounce, func() {
+		pending.timer = time.AfterFunc(delay, func() {
 			a.flushPendingThink(groupID, gen)
 		})
 		return
@@ -94,10 +100,21 @@ func (a *Agent) scheduleThink(groupID int64, isMention, probabilityPassed bool) 
 		generation:        1,
 	}
 	gen := pending.generation
-	pending.timer = time.AfterFunc(debounce, func() {
+	pending.timer = time.AfterFunc(delay, func() {
 		a.flushPendingThink(groupID, gen)
 	})
 	a.pendingThinks[groupID] = pending
+}
+
+func remainingDebounce(receivedAt, now time.Time, debounce time.Duration) time.Duration {
+	if receivedAt.IsZero() {
+		return debounce
+	}
+	delay := receivedAt.Add(debounce).Sub(now)
+	if delay < 0 {
+		return 0
+	}
+	return delay
 }
 
 func (a *Agent) flushPendingThink(groupID int64, generation uint64) {
@@ -249,35 +266,23 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	}
 	promptCtx.GroupInfo = a.buildGroupContext(groupID)
 
-	var classification *contextClassification
-	var err error
 	if !semanticCurrent {
 		if !hasCurrentContext {
 			a.commitReadSnapshot(groupID, snapshotMessage)
 			return
 		}
-		classification = &contextClassification{Participation: "engage"}
-	} else {
-		classification, err = a.classifyContext(ctx, readMessages, currentMessages)
-		if err != nil {
-			zap.L().Debug("上下文分类失败", zap.Int64("group_id", groupID), zap.Error(err))
-			if !isMention {
-				return
-			}
-			classification = &contextClassification{Participation: "engage"}
-		}
-	}
-	if !isMention && classification.Participation == "skip" {
-		a.commitReadSnapshot(groupID, snapshotMessage)
-		return
 	}
 
 	if semanticCurrent && snapshotMessageID > 0 {
+		retrievalQuery, retrievalErr := a.memory.PrepareHybridQuery(ctx, collectRetrievalTextFragments(readMessages, currentMessages, cfg.Agent.MessageBufferSize))
+		if retrievalErr != nil {
+			zap.L().Warn("构建原始上下文检索查询失败", zap.Int64("group_id", groupID), zap.Error(retrievalErr))
+		}
 		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(snapshotMessageID)
 		if snapshotErr != nil {
 			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", snapshotMessageID), zap.Error(snapshotErr))
 		} else {
-			topicPrompt, err := a.topicMgr.BuildPromptContext(ctx, groupID, classification.RetrievalQuery, snapshotLog.ID, replyMessageIDs(currentMessages))
+			topicPrompt, err := a.topicMgr.BuildPromptContext(ctx, groupID, retrievalQuery, snapshotLog.ID, replyMessageIDs(currentMessages))
 			if err != nil {
 				zap.L().Warn("构建话题工作记忆失败", zap.Int64("group_id", groupID), zap.Error(err))
 			} else {
@@ -285,7 +290,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 			}
 		}
 
-		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, classification.RetrievalQuery)
+		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, retrievalQuery)
 	}
 
 	if mood, err := a.memory.GetMoodState(); err == nil {
@@ -299,10 +304,6 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	if semanticCurrent && a.jargonMgr != nil {
 		promptCtx.JargonMatches = a.jargonMgr.Match(groupID, collectTextContext(currentMessages))
 	}
-	if semanticCurrent {
-		promptCtx.StyleHints = a.buildStyleHintContext(ctx, groupID, classification)
-	}
-
 	recentPeople := a.buildRecentPeopleContext(buffer, groupID)
 
 	systemPrompt := a.persona.GetSystemPrompt()

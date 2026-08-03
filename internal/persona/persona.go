@@ -31,7 +31,6 @@ type PromptContext struct {
 	TopicMemory           string
 	RelatedMemories       []memory.Memory // 当前群相关记忆
 	CrossGroupExperiences []memory.Memory // 跨群自我经历
-	StyleHints            []string
 }
 
 // Persona 人格定义
@@ -133,14 +132,6 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 		}
 	}
 
-	if ctx != nil && len(ctx.StyleHints) > 0 {
-		b.WriteString("\n## 可参考的群聊表达习惯\n")
-		b.WriteString("下面这些内容只用于聊天语气和节奏参考，符合当前语境时才使用，不合适就忽略；不要照抄原句。\n")
-		for _, hint := range ctx.StyleHints {
-			b.WriteString(fmt.Sprintf("- %s\n", hint))
-		}
-	}
-
 	if recentPeople != "" {
 		b.WriteString(fmt.Sprintf("\n## 最近在场的人\n%s\n", recentPeople))
 	}
@@ -148,7 +139,8 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 	b.WriteString(`
 ## 行动指引
 - 先读懂聊天记录，把握当前话题、情绪氛围、互动对象和聊天节奏；不要把每条消息都当成在问你，也不要在所有场景套用同一种句式或语气。
-- 参考相关记忆、成员信息和群聊表达习惯时视情况而定，不用完全遵守，更不要为了用上参考信息而生硬提起。
+- 参考相关记忆和成员信息时视情况而定，不用完全遵守，更不要为了用上参考信息而生硬提起。
+- 需要接梗、吐槽、起哄或贴合本群说法时，可以先用 searchExpressions 查询表达方式；普通事实回答不需要查询。
 - 发言前确认你没有刚说过类似内容，并判断这次发言能否提供新的信息、态度或推进；需要回复时，组织日常且口语化的表达。
 - 如果只是群友之间的交流、你没有新信息、或继续说会打断群友聊天节奏，就调用 stayQuiet 保持沉默。
 - 一次 speak 调用可按顺序发送一至五条消息，通常不超过三条。

@@ -16,7 +16,6 @@ type ConcurrencyManager struct {
 	queue          []*ThinkTask
 	queued         map[int64]*ThinkTask
 	running        map[int64]bool
-	rerun          map[int64]*ThinkTask
 	mu             sync.Mutex
 	wg             sync.WaitGroup
 
@@ -38,9 +37,14 @@ func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64
 		maxConcurrency: max,
 		queued:         make(map[int64]*ThinkTask),
 		running:        make(map[int64]bool),
-		rerun:          make(map[int64]*ThinkTask),
 		handler:        h,
 	}
+}
+
+func (m *ConcurrencyManager) IsRunning(groupID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running[groupID]
 }
 
 // Submit 提交任务
@@ -55,12 +59,8 @@ func (m *ConcurrencyManager) Submit(groupID int64, probabilityPassed bool) {
 		return
 	}
 
-	if task := m.rerun[groupID]; task != nil {
-		task.ProbabilityPassed = task.ProbabilityPassed || probabilityPassed
-		return
-	}
 	if m.running[groupID] {
-		m.rerun[groupID] = &ThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed}
+		zap.L().Debug("任务正在执行，忽略新触发", zap.Int64("group_id", groupID))
 		return
 	}
 	if task := m.queued[groupID]; task != nil {
@@ -107,12 +107,6 @@ func (m *ConcurrencyManager) finish(groupID int64) {
 		m.currentRunning = 0
 	}
 
-	if task := m.rerun[groupID]; task != nil && m.ctx.Err() == nil {
-		delete(m.rerun, groupID)
-		m.queue = append(m.queue, task)
-		m.queued[groupID] = task
-	}
-
 	for len(m.queue) > 0 && m.ctx.Err() == nil && (m.maxConcurrency <= 0 || m.currentRunning < m.maxConcurrency) {
 		task := m.queue[0]
 		m.queue = m.queue[1:]
@@ -135,7 +129,6 @@ func (m *ConcurrencyManager) Close() {
 	m.mu.Lock()
 	m.queue = nil
 	m.queued = make(map[int64]*ThinkTask)
-	m.rerun = make(map[int64]*ThinkTask)
 	m.mu.Unlock()
 
 	m.wg.Wait()

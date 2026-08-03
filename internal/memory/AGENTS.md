@@ -27,7 +27,9 @@
 - 当前 schema 面向全新 PostgreSQL 数据库，不维护旧数据兼容迁移、冗余字段或过渡表。
 - 启动时在表结构迁移前执行固定的 `CREATE EXTENSION IF NOT EXISTS` 启用 vector 和 pg_trgm；服务端扩展文件和数据库权限仍属于部署前提。
 - 检索只使用 pgvector 精确向量、pg_trgm 和 RRF；没有明确需求和测量依据时不增加近似索引或额外检索中间件。
+- 固定快照原文先规范成一份混合查询：拼接文本只生成一次 embedding，原始消息片段分别参与 pg_trgm 召回；话题和主动长期记忆共用该查询，不重复调用 embedding。
 - rejected 黑话或风格模式只有获得新证据时才恢复为 candidate；已审核 active 内容不被自动学习覆盖。
+- 表达方式的原始示例通过 `style_pattern_evidence` 关联 `message_logs.text_content` 动态读取；不增加 JSON 示例字段，查询必须限制当前群、未撤回消息和工具快照上界。
 - 成员最近发言和群名片使用消息真实时间单调更新，延迟或乱序旧消息不能覆盖新状态。
 - 清理旧消息时不能删除已分配话题的消息，也不能删除 learner 尚未处理的消息。
 - 迁移、清理、衰减这类后台任务要可重复执行，不依赖一次性内存状态。

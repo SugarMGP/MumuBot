@@ -307,17 +307,9 @@ func (s *DBStore) topicGroupID(ctx context.Context, topicID uint) (int64, error)
 	return groupID, nil
 }
 
-func (s *DBStore) SearchTopicHits(ctx context.Context, query string, groupID int64, throughMessageLogID uint, limit int) ([]memory.TopicThread, error) {
-	if query == "" || limit <= 0 {
+func (s *DBStore) SearchTopicHits(ctx context.Context, query memory.HybridQuery, groupID int64, throughMessageLogID uint, limit int) ([]memory.TopicThread, error) {
+	if query.Empty() || limit <= 0 {
 		return nil, nil
-	}
-	embedding, err := s.embedding.Embed(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	vector, err := memory.EmbeddingVector(embedding)
-	if err != nil {
-		return nil, err
 	}
 	latest := `SELECT DISTINCT ON (ta.topic_id) ts.id, ta.topic_id, ts.summary_json, ts.embedding
 		FROM topic_summaries ts JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id
@@ -335,15 +327,22 @@ func (s *DBStore) SearchTopicHits(ctx context.Context, query string, groupID int
 	}
 	latest += ` ORDER BY ta.topic_id, ts.through_topic_assignment_id DESC`
 	var vectorRows []struct{ TopicID uint }
-	vectorArgs := append(append([]any(nil), latestArgs...), vector, vector)
+	vectorArgs := append(append([]any(nil), latestArgs...), query.Vector(), query.Vector())
 	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (`+latest+`) latest
 		WHERE 1 - (embedding <=> ?) >= 0.3 ORDER BY embedding <=> ? LIMIT 20`, vectorArgs...).Scan(&vectorRows).Error; err != nil {
 		return nil, err
 	}
 	var textRows []struct{ TopicID uint }
-	textArgs := append(append([]any(nil), latestArgs...), query, query)
-	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (`+latest+`) latest
-		WHERE similarity(summary_json::text, ?) >= 0.1 ORDER BY similarity(summary_json::text, ?) DESC LIMIT 20`, textArgs...).Scan(&textRows).Error; err != nil {
+	textArgs := append([]any{query.Fragments()}, latestArgs...)
+	textArgs = append(textArgs, 0.1)
+	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (
+		SELECT topic_id, (SELECT max(greatest(
+			word_similarity(fragment, latest.summary_json::text),
+			word_similarity(latest.summary_json::text, fragment)
+		))
+			FROM unnest(?::text[]) AS fragments(fragment)) score
+		FROM (`+latest+`) latest
+	) ranked WHERE score >= ? ORDER BY score DESC LIMIT 20`, textArgs...).Scan(&textRows).Error; err != nil {
 		return nil, err
 	}
 	vectorIDs := make([]uint, len(vectorRows))

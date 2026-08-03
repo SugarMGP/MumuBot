@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
@@ -37,29 +38,56 @@ func saveStylePattern(tx *gorm.DB, pattern *StylePattern, messageIDs []uint) err
 	return nil
 }
 
-func (m *Manager) SearchStylePatterns(ctx context.Context, groupID int64, situation string, limit int) ([]StylePattern, error) {
-	situation = strings.TrimSpace(situation)
-	if groupID == 0 || situation == "" || limit <= 0 {
+type ExpressionMatch struct {
+	Situation  string
+	Expression string
+	Examples   []string
+}
+
+func (m *Manager) SearchExpressions(ctx context.Context, groupID int64, query string, throughOneBotMessageID int64, limit int) ([]ExpressionMatch, error) {
+	query = strings.TrimSpace(query)
+	if groupID == 0 || query == "" || throughOneBotMessageID <= 0 || limit <= 0 {
 		return nil, nil
 	}
-	embedding, err := m.embedding.Embed(ctx, situation)
-	if err != nil {
+	var upperBound uint
+	if err := m.db.WithContext(ctx).Model(&MessageLog{}).Select("id").
+		Where("group_id = ? AND one_bot_message_id = ?", groupID, throughOneBotMessageID).
+		Scan(&upperBound).Error; err != nil {
 		return nil, err
 	}
-	vector, err := EmbeddingVector(embedding)
+	if upperBound == 0 {
+		return nil, fmt.Errorf("表达方式查询缺少有效消息快照")
+	}
+
+	prepared, err := m.PrepareHybridQuery(ctx, []string{query})
 	if err != nil {
 		return nil, err
 	}
 	var vectors []rankedIDRow
-	if err := m.db.WithContext(ctx).Raw(`SELECT id FROM style_patterns
-		WHERE group_id = ? AND status = 'active' AND 1 - (embedding <=> ?) >= 0.3
-		ORDER BY embedding <=> ? LIMIT 20`, groupID, vector, vector).Scan(&vectors).Error; err != nil {
+	if err := m.db.WithContext(ctx).Raw(`SELECT sp.id FROM style_patterns sp
+		WHERE sp.group_id = ? AND sp.status = 'active' AND 1 - (sp.embedding <=> ?) >= 0.3
+		AND EXISTS (
+			SELECT 1 FROM style_pattern_evidence e JOIN message_logs ml ON ml.id = e.message_log_id
+			WHERE e.style_pattern_id = sp.id AND ml.recalled_at IS NULL
+				AND btrim(ml.text_content) <> '' AND ml.id <= ?
+		)
+		ORDER BY sp.embedding <=> ? LIMIT 20`, groupID, prepared.embedding, upperBound, prepared.embedding).Scan(&vectors).Error; err != nil {
 		return nil, err
 	}
 	var texts []rankedIDRow
-	if err := m.db.WithContext(ctx).Raw(`SELECT id FROM style_patterns
-		WHERE group_id = ? AND status = 'active' AND similarity(situation, ?) >= 0.1
-		ORDER BY similarity(situation, ?) DESC LIMIT 20`, groupID, situation, situation).Scan(&texts).Error; err != nil {
+	if err := m.db.WithContext(ctx).Raw(`SELECT id FROM (
+		SELECT sp.id, greatest(
+			max(greatest(word_similarity(?, sp.situation), word_similarity(sp.situation, ?))),
+			max(greatest(word_similarity(?, sp.expression), word_similarity(sp.expression, ?))),
+			max(greatest(word_similarity(?, ml.text_content), word_similarity(ml.text_content, ?)))
+		) score
+		FROM style_patterns sp
+		JOIN style_pattern_evidence e ON e.style_pattern_id = sp.id
+		JOIN message_logs ml ON ml.id = e.message_log_id
+		WHERE sp.group_id = ? AND sp.status = 'active' AND ml.recalled_at IS NULL
+			AND btrim(ml.text_content) <> '' AND ml.id <= ?
+		GROUP BY sp.id
+	) ranked WHERE score >= 0.1 ORDER BY score DESC LIMIT 20`, query, query, query, query, query, query, groupID, upperBound).Scan(&texts).Error; err != nil {
 		return nil, err
 	}
 	ids := fuseRRF(rankRows(vectors), rankRows(texts))
@@ -69,18 +97,37 @@ func (m *Manager) SearchStylePatterns(ctx context.Context, groupID int64, situat
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	var rows []StylePattern
-	if err := m.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+	type expressionRow struct {
+		ID          uint
+		Situation   string
+		Expression  string
+		TextContent string
+	}
+	var rows []expressionRow
+	if err := m.db.WithContext(ctx).Raw(`SELECT id, situation, expression, text_content FROM (
+		SELECT sp.id, sp.situation, sp.expression, ml.text_content,
+			row_number() OVER (PARTITION BY sp.id ORDER BY ml.id DESC) example_rank
+		FROM style_patterns sp
+		JOIN style_pattern_evidence e ON e.style_pattern_id = sp.id
+		JOIN message_logs ml ON ml.id = e.message_log_id
+		WHERE sp.id IN ? AND sp.group_id = ? AND sp.status = 'active'
+			AND ml.recalled_at IS NULL AND btrim(ml.text_content) <> '' AND ml.id <= ?
+	) examples WHERE example_rank <= 3 ORDER BY id, example_rank`, ids, groupID, upperBound).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	byID := make(map[uint]StylePattern, len(rows))
+	byID := make(map[uint]*ExpressionMatch, len(ids))
 	for _, row := range rows {
-		byID[row.ID] = row
+		item := byID[row.ID]
+		if item == nil {
+			item = &ExpressionMatch{Situation: row.Situation, Expression: row.Expression}
+			byID[row.ID] = item
+		}
+		item.Examples = append(item.Examples, row.TextContent)
 	}
-	result := make([]StylePattern, 0, len(rows))
+	result := make([]ExpressionMatch, 0, len(ids))
 	for _, id := range ids {
-		if row, ok := byID[id]; ok {
-			result = append(result, row)
+		if item := byID[id]; item != nil && len(item.Examples) > 0 {
+			result = append(result, *item)
 		}
 	}
 	return result, nil

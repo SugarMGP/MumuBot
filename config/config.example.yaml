@@ -39,10 +39,10 @@ groups:
 
 # Agent 决策配置
 agent:
-  observe_window: 45            # 观察窗口时间（秒）
-  think_interval: 15            # 决策间隔（秒）
+  observe_window: 60            # 观察窗口时间（秒）
+  think_interval: 12            # 决策间隔（秒）
   think_debounce_ms: 4800       # 思考聚合窗口（毫秒）
-  message_buffer_size: 20       # 消息缓冲区大小
+  message_buffer_size: 40       # 消息缓冲区大小
   max_step: 12                  # ReAct 最大步数
   max_coroutine: 3              # 最大并发思考进程数（0表示不限制）
 
@@ -72,31 +72,36 @@ learning:
   batch_size: 100               # 每次学习的消息数量限制，必须不小于 min_msg_count
   min_msg_count: 5              # 触发学习的最少消息数量
 
-# 两档模型配置（需为 OpenAI 兼容 ChatModel，并支持工具调用和结构化输出）
+# 两档模型配置（需为 OpenAI 兼容 ChatModel；high 需支持工具调用，low 需支持结构化输出）
 # 高档模型：用于沐沐实时思考与回复，推荐使用 GLM-4.7、Mimo v2.5 Pro 等旗舰模型
-# 轻量模型：用于话题、学习、上下文分类、长期记忆和群风格判定，推荐使用支持结构化输出的轻量模型
+# 轻量模型：用于话题、学习和长期记忆提取，推荐使用支持结构化输出的轻量模型
 model_tiers:
   high:
     api_key: ""        # 留空则使用 MUMU_MODEL_HIGH_API_KEY 环境变量
     base_url: ""       # 留空则使用 MUMU_MODEL_HIGH_BASE_URL 环境变量
     model: ""          # 留空则使用 MUMU_MODEL_HIGH_MODEL 环境变量
     extra_fields: {    # 额外参数（可选）
-      "enable_thinking": false,
-      "temperature": 0.7,
-      "frequency_penalty": 0.15
+      "thinking": {
+        "type": "enabled"
+      }
     }
   low:
     api_key: ""        # 留空则使用 MUMU_MODEL_LOW_API_KEY 环境变量
     base_url: ""       # 留空则使用 MUMU_MODEL_LOW_BASE_URL 环境变量
     model: ""          # 留空则使用 MUMU_MODEL_LOW_MODEL 环境变量
-    extra_fields: {}
+    extra_fields: {
+      "thinking": {
+        "type": "disabled"
+      },
+      "temperature": 0.7
+    }
 
 # Embedding模型配置（用于记忆检索，强制项）
 embedding:
   api_key: ""        # 留空则使用 MUMU_EMBEDDING_API_KEY 环境变量
   base_url: ""       # 留空则使用 MUMU_EMBEDDING_BASE_URL 环境变量
   model: ""          # 留空则使用 MUMU_EMBEDDING_MODEL 环境变量
-  dimensions: 1024
+  dimensions: 1536
 
 # 多模态视觉模型配置（用于理解图片和表情包）
 vision_llm:

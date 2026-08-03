@@ -26,8 +26,9 @@
 ## 修改注意
 
 - 修改消息类型或解析结果字段时，检查 `internal/topic`、`internal/agent`、`internal/learning` 是否把该字段当语义输入。
-- SDK event loop 只做事件分流：`meta_event`、`notice`、`request` 在 Adapter 入口同步处理，只有群消息进入每群有界保序 worker。
-- Adapter 解析阶段不执行远程 API；消息回调先落库，再在群 worker 的业务回调中完成标已读、回复补充、转发展开和视觉识别等慢路径。
+- SDK event loop 只做一次事件信封解析和分流：`meta_event`、无顺序要求的 `notice`、`request` 在 Adapter 入口同步处理，群消息、撤回和戳一戳进入每群有界保序 worker。
+- 每群 worker 只同步完成消息结构解析，并由业务回调完成去重、原文入库、撤回更新和缓冲顺序更新；标已读、回复补充、转发展开、视觉识别和成员画像等慢路径必须在回调核心阶段完成后异步执行。
+- 群事件进入 Adapter 时记录 `ReceivedAt`，供上层从 OneBot 接收时刻计算防抖；后台补全不能修改该时间或重新排列事件。
 - Adapter 继续负责自动重连、主动关闭、notice 原始解析、禁言状态、成员缓存和动态返回体校验，不把这些职责下沉到业务层。
 - 每群队列使用阻塞背压，不静默丢弃；关闭顺序必须先停止 SDK 事件流，再关闭群队列并等待 worker 排空。
 - 当前不增加 PostgreSQL 事件 inbox，也不承诺上游断线后的 exactly-once；没有明确需求时不要为此新增表、配置或中间件。

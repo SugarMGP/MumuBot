@@ -18,6 +18,7 @@ type GroupMessage struct {
 	Content      string           `json:"content"`                 // 纯文本内容
 	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
 	Time         time.Time        `json:"time"`                    // 消息时间
+	ReceivedAt   time.Time        `json:"-"`                       // 当前进程从 OneBot 收到事件的时间
 	Images       []ImageInfo      `json:"images,omitempty"`        // 图片列表
 	Videos       []VideoInfo      `json:"videos,omitempty"`        // 视频列表
 	Faces        []FaceInfo       `json:"faces,omitempty"`         // 表情列表

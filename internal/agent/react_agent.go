@@ -26,27 +26,25 @@ import (
 )
 
 const (
-	agentThinkTimeout            = 60 * time.Second
-	contextClassificationTimeout = 30 * time.Second
-	replyCacheTTL                = 30 * time.Minute
-	replyCacheCapacity           = 1024
-	visionCacheTTL               = 6 * time.Hour
-	visionCacheCapacity          = 512
+	agentThinkTimeout   = 60 * time.Second
+	replyCacheTTL       = 30 * time.Minute
+	replyCacheCapacity  = 1024
+	visionCacheTTL      = 6 * time.Hour
+	visionCacheCapacity = 512
 )
 
 type Agent struct {
-	ctx               context.Context
-	cancel            context.CancelFunc
-	persona           *persona.Persona
-	memory            *memory.Manager
-	model             model.ToolCallingChatModel
-	vision            *llm.VisionClient
-	bot               *onebot.Client
-	react             *react.Agent
-	contextClassifier model.BaseChatModel
-	tools             []tool.BaseTool
-	mcpMgr            *mcp.Manager
-	concurrencyMgr    *ConcurrencyManager
+	ctx            context.Context
+	cancel         context.CancelFunc
+	persona        *persona.Persona
+	memory         *memory.Manager
+	model          model.ToolCallingChatModel
+	vision         *llm.VisionClient
+	bot            *onebot.Client
+	react          *react.Agent
+	tools          []tool.BaseTool
+	mcpMgr         *mcp.Manager
+	concurrencyMgr *ConcurrencyManager
 
 	jargonMgr *jargon.Manager
 	learner   *learning.Learner
@@ -165,9 +163,6 @@ func New(mem *memory.Manager) (*Agent, error) {
 	if err := a.initReact(); err != nil {
 		return nil, err
 	}
-	if err := a.initContextClassifier(); err != nil {
-		return nil, err
-	}
 	go a.replyCache.Start()
 	go a.visionCache.Start()
 	constructed = true
@@ -179,6 +174,7 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewQueryMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchJargonTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchExpressionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -239,18 +235,6 @@ func (a *Agent) initReact() error {
 	return nil
 }
 
-func (a *Agent) initContextClassifier() error {
-	classifier, err := llm.NewClientForTier(llm.TierLow)
-	if err != nil {
-		return err
-	}
-	if classifier == nil {
-		return fmt.Errorf("分类模型未初始化")
-	}
-	a.contextClassifier = classifier
-	return nil
-}
-
 func (a *Agent) Start() {
 	cfg := config.Get()
 	if cfg.Learning.Enabled && a.learner != nil {
@@ -264,9 +248,7 @@ func (a *Agent) Start() {
 
 	a.bot.OnMessage(a.handleIncomingMessage)
 	a.bot.OnRecall(a.handleIncomingRecall)
-	if err := a.bot.Connect(); err != nil {
-		zap.L().Fatal("OneBot 连接失败", zap.Error(err))
-	}
+	a.bot.Connect()
 
 	a.loadBuffersFromDB()
 	groupIDs := make([]int64, 0, len(cfg.Groups))
@@ -377,7 +359,6 @@ func (a *Agent) drainStartupEvents() {
 
 func (a *Agent) Stop() {
 	a.shutdown()
-	a.wg.Wait()
 	zap.L().Info("Agent 已停止")
 }
 
@@ -389,12 +370,13 @@ func (a *Agent) shutdown() {
 	}
 	a.cancel()
 	a.clearPendingThinks()
+	if a.concurrencyMgr != nil {
+		a.concurrencyMgr.Close()
+	}
+	a.wg.Wait()
 	a.stopCaches()
 	if a.learner != nil {
 		a.learner.Stop()
-	}
-	if a.concurrencyMgr != nil {
-		a.concurrencyMgr.Close()
 	}
 	if a.topicMgr != nil {
 		a.topicMgr.Close()
