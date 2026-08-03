@@ -40,9 +40,6 @@ func (a *App) systemSections() []views.SystemSection {
 
 	personaFields := make([]views.SystemField, 0, 5)
 	personaFields = appendField(personaFields, "名称", views.EmptyDash(cfg.Persona.Name))
-	if cfg.Persona.QQ > 0 {
-		personaFields = append(personaFields, views.SystemField{Label: "QQ", Value: fmt.Sprintf("%d", cfg.Persona.QQ)})
-	}
 	personaFields = appendField(personaFields, "别名", joinOrDash(cfg.Persona.AliasNames))
 
 	groupFields := []views.SystemField{

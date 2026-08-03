@@ -45,7 +45,6 @@ type AppConfig struct {
 // PersonaConfig 人格配置
 type PersonaConfig struct {
 	Name           string   `mapstructure:"name"`
-	QQ             int64    `mapstructure:"qq"`          // 沐沐的QQ号
 	AliasNames     []string `mapstructure:"alias_names"` // 别名，都可以触发@检测
 	Interests      []string `mapstructure:"interests"`
 	PromptTemplate string   `mapstructure:"-"`

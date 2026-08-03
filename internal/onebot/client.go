@@ -5,14 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/utils"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	napcat "github.com/zjutjh/napcat-sdk"
+	"github.com/zjutjh/napcat-sdk/api"
 	"go.uber.org/zap"
 )
 
@@ -34,12 +37,12 @@ type Client struct {
 
 	mutedMu    sync.RWMutex
 	mutedUntil map[int64]time.Time
-	selfMu     sync.RWMutex
-	selfID     int64
+	selfID     atomic.Int64
 
 	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
 	onMessage       func(*GroupMessage)
 	onRecall        func(groupID, messageID, operatorID int64)
+	onConnected     func()
 	workersMu       sync.Mutex
 	workers         map[int64]chan groupEvent
 	workerWG        sync.WaitGroup
@@ -73,12 +76,23 @@ func (c *Client) connect() error {
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
+	login, err := sdk.API().GetLoginInfo(c.transportCtx, api.GetLoginInfoRequest{})
+	if err != nil {
+		_ = sdk.Close()
+		return fmt.Errorf("获取OneBot登录账号失败: %w", err)
+	}
+	if login == nil || login.UserID <= 0 || login.UserID > 1<<53-1 || math.Trunc(login.UserID) != login.UserID {
+		_ = sdk.Close()
+		return fmt.Errorf("OneBot返回无效的登录账号")
+	}
+	selfID := int64(login.UserID)
 	c.connMu.Lock()
 	if c.transportCtx.Err() != nil {
 		c.connMu.Unlock()
 		_ = sdk.Close()
 		return context.Canceled
 	}
+	c.selfID.Store(selfID)
 	old := c.sdk
 	c.sdk = sdk
 	c.generation++
@@ -87,6 +101,9 @@ func (c *Client) connect() error {
 	c.connMu.Unlock()
 	if old != nil {
 		_ = old.Close()
+	}
+	if c.onConnected != nil {
+		c.onConnected()
 	}
 	go func() {
 		defer c.transportWG.Done()
@@ -97,12 +114,6 @@ func (c *Client) connect() error {
 
 func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
 	for ev := range sdk.Events() {
-		selfID := ev.SelfID()
-		if selfID > 0 {
-			c.selfMu.Lock()
-			c.selfID = selfID
-			c.selfMu.Unlock()
-		}
 		c.enqueueEvent(ev.Raw())
 	}
 	err := sdk.Err()
@@ -134,7 +145,6 @@ func (c *Client) enqueueEvent(raw []byte) {
 	postType, _ := event["post_type"].(string)
 	switch postType {
 	case "meta_event":
-		c.handleMetaEvent(event)
 		return
 	case "notice":
 		notice, _ := event["notice_type"].(string)
@@ -201,6 +211,7 @@ func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) 
 		return
 	}
 	c.sdk = nil
+	c.selfID.Store(0)
 	c.connMu.Unlock()
 	_ = disconnected.Close()
 	c.startConnectLoop(generation)
@@ -229,7 +240,7 @@ func (c *Client) connectLoop(generation uint64) {
 		}
 		err := c.connect()
 		if err == nil {
-			zap.L().Info("已连接到 OneBot", zap.String("url", config.Get().OneBot.WsURL))
+			zap.L().Info("已连接到 OneBot", zap.String("url", config.Get().OneBot.WsURL), zap.Int64("self_id", c.GetSelfID()))
 			return
 		}
 		if c.transportCtx.Err() != nil {
@@ -261,15 +272,6 @@ func (c *Client) handleGroupEvent(queued groupEvent) {
 	}
 }
 
-func (c *Client) handleMetaEvent(event map[string]interface{}) {
-	if event["meta_event_type"] == "lifecycle" && event["sub_type"] == "connect" {
-		if id, ok := utils.ParseInt64Value(event["self_id"]); ok {
-			c.selfMu.Lock()
-			c.selfID = id
-			c.selfMu.Unlock()
-		}
-	}
-}
 func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time) {
 	if event["message_type"] != "group" {
 		return
@@ -376,7 +378,8 @@ func (c *Client) OnMessage(handler func(*GroupMessage)) { c.onMessage = handler 
 func (c *Client) OnRecall(handler func(groupID, messageID, operatorID int64)) {
 	c.onRecall = handler
 }
-func (c *Client) GetSelfID() int64 { c.selfMu.RLock(); defer c.selfMu.RUnlock(); return c.selfID }
+func (c *Client) OnConnected(handler func()) { c.onConnected = handler }
+func (c *Client) GetSelfID() int64           { return c.selfID.Load() }
 func (c *Client) IsConnected() bool {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()
@@ -391,6 +394,7 @@ func (c *Client) Close() error {
 		c.connMu.Lock()
 		sdk := c.sdk
 		c.sdk = nil
+		c.selfID.Store(0)
 		c.connMu.Unlock()
 		if sdk != nil {
 			closeErr = sdk.Close()

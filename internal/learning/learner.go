@@ -20,6 +20,7 @@ type Learner struct {
 	memMgr    *memory.Manager
 	jargonMgr *jargon.Manager
 	model     model.BaseChatModel
+	selfID    func() int64
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -59,12 +60,12 @@ type cultureReviewDecision struct {
 	Decision string `json:"decision" jsonschema:"enum=approve,enum=reject,enum=keep"`
 }
 
-func New(memMgr *memory.Manager, jargonMgr *jargon.Manager) (*Learner, error) {
+func New(memMgr *memory.Manager, jargonMgr *jargon.Manager, selfID func() int64) (*Learner, error) {
 	chatModel, err := llm.NewClientForTier(llm.TierLow)
 	if err != nil {
 		return nil, err
 	}
-	return &Learner{memMgr: memMgr, jargonMgr: jargonMgr, model: chatModel}, nil
+	return &Learner{memMgr: memMgr, jargonMgr: jargonMgr, model: chatModel, selfID: selfID}, nil
 }
 
 func (l *Learner) Start(parent context.Context) {
@@ -120,6 +121,9 @@ func (l *Learner) runLoop() {
 }
 
 func (l *Learner) processAllGroups() {
+	if l.selfID() <= 0 {
+		return
+	}
 	for _, group := range config.Get().Groups {
 		if !group.Enabled {
 			continue
@@ -225,7 +229,10 @@ func (l *Learner) learningInput(groupID int64, kind memory.LearningKind) (*memor
 		return nil, nil, nil, err
 	}
 	cfg := config.Get()
-	selfID := cfg.Persona.QQ
+	selfID := l.selfID()
+	if selfID <= 0 {
+		return nil, nil, nil, fmt.Errorf("OneBot机器人账号尚未就绪")
+	}
 	rows := make([]memory.LearningMessage, 0, cfg.Learning.MinMsgCount+1)
 	valid := make([]memory.LearningMessage, 0, cfg.Learning.MinMsgCount)
 	cursor := state.LastMessageLogID
@@ -257,7 +264,10 @@ func (l *Learner) learningInput(groupID int64, kind memory.LearningKind) (*memor
 }
 
 func (l *Learner) advanceLeadingSkipped(groupID int64, kind memory.LearningKind, watermark uint, rows []memory.LearningMessage) {
-	selfID := config.Get().Persona.QQ
+	selfID := l.selfID()
+	if selfID <= 0 {
+		return
+	}
 	for _, row := range rows {
 		if row.RecalledAt == nil && row.UserID != selfID && strings.TrimSpace(row.TextContent) != "" {
 			break

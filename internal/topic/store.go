@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/utils"
 
@@ -19,10 +18,11 @@ type DBStore struct {
 	db        *gorm.DB
 	embedding memory.EmbeddingProvider
 	memory    *memory.Manager
+	selfID    func() int64
 }
 
-func NewDBStore(db *gorm.DB, embedding memory.EmbeddingProvider, memoryManager *memory.Manager) *DBStore {
-	return &DBStore{db: db, embedding: embedding, memory: memoryManager}
+func NewDBStore(db *gorm.DB, embedding memory.EmbeddingProvider, memoryManager *memory.Manager, selfID func() int64) *DBStore {
+	return &DBStore{db: db, embedding: embedding, memory: memoryManager, selfID: selfID}
 }
 
 func (s *DBStore) PersistMessageLog(ctx context.Context, item memory.MessageLog) (*memory.MessageLog, bool, error) {
@@ -403,6 +403,10 @@ func (s *DBStore) ListUnprocessedSummaries(ctx context.Context, limit int) ([]me
 }
 
 func (s *DBStore) ProcessTopicSummaryMemory(ctx context.Context, record memory.TopicSummaryRecord) error {
+	selfID := s.selfID()
+	if selfID <= 0 {
+		return fmt.Errorf("OneBot机器人账号尚未就绪")
+	}
 	topicID, err := s.TopicIDForSummary(ctx, record)
 	if err != nil {
 		return err
@@ -424,7 +428,7 @@ func (s *DBStore) ProcessTopicSummaryMemory(ctx context.Context, record memory.T
 		claims = append(claims, memory.TopicMemoryClaimInput{Content: claim, AllowedKinds: []memory.MemoryKind{memory.MemoryKindGoal}})
 	}
 	_, err = s.memory.UpsertTopicMemoryCandidate(ctx, memory.TopicMemoryCandidateInput{
-		GroupID: groupID, TopicSummaryID: record.ID, SelfID: config.Get().Persona.QQ, Claims: claims, Participants: participants,
+		GroupID: groupID, TopicSummaryID: record.ID, SelfID: selfID, Claims: claims, Participants: participants,
 	})
 	return err
 }

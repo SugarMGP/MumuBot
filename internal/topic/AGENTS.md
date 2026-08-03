@@ -29,6 +29,7 @@
 - 摘要按当前话题 `topic_assignments.id` 的完成顺序推进；其他话题的 pending 不能阻塞当前话题。
 - `topic_summaries` 只保存 `through_topic_assignment_id` 作为水位，话题关系通过 assignment 推导，不重复保存 `topic_id`。
 - assignment 恢复、摘要刷新和摘要下沉长期记忆分别运行，长模型调用不能阻塞其他恢复链路。
+- 话题摘要下沉长期记忆时使用 OneBot Adapter 的运行时 `self_id` 识别机器人自身；账号尚未就绪时摘要保持待处理。
 - Agent 上下文优先加入固定快照中被回复消息所属的话题，再追加最近话题和 RRF 召回，并保持总长度上限。
 - Agent 话题召回与话题归属候选统一使用原始消息混合查询，不再依赖回复前模型生成检索词或额外关键词提取器。
 - 消息清理不能删除已分配话题的消息。

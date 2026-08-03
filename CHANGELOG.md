@@ -6,8 +6,12 @@
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-08-03
+
 ### 变更
 
+- **机器人账号改由 OneBot 自动识别（破坏性变更）**：每次连接会通过 `get_login_info` 获取当前 QQ，并统一用于消息渲染、群文化学习和话题记忆；人格配置与静态提示词不再保存 QQ，升级已有配置时必须删除 `persona.qq`。
+- **默认人格会先理解对方真实表达再接话**：补充语境与情绪理解约束，减少只抓表面关键词或在信息不足时强行参与的回复。
 - **思考期间的新消息改为延后处理**：同群已有 ReAct 正在运行时会忽略新的思考触发，不再自动追加 rerun；消息仍会保留，并在后续正常触发的固定快照中统一处理，避免连续发起模型请求。
 - **同群消息不再被展示补全阻塞**：消息解析、去重入库、撤回和缓冲顺序继续串行保证一致性，标已读、回复与转发补全、视觉识别和成员画像改为后台处理；思考防抖从 OneBot 接收事件时开始计算，慢补全不会推迟后续消息聚合或改变既有顺序。
 - **回复决策收敛为单次 ReAct**：移除主 ReAct 前的轻量模型分类调用，强交互继续直接进入思考，普通消息保留概率和频率门控，最终统一由 ReAct 发言、行动或保持沉默。
@@ -277,7 +281,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/SugarMGP/MumuBot/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/SugarMGP/MumuBot/compare/v1.3.10...v2.0.0
 [1.3.10]: https://github.com/SugarMGP/MumuBot/compare/v1.3.9...v1.3.10
 [1.3.9]: https://github.com/SugarMGP/MumuBot/compare/v1.3.8...v1.3.9

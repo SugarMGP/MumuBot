@@ -122,7 +122,8 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_DATABASE_DSN                   - PostgreSQL 连接串
 
 # 静态人格提示词模板位于 config/persona.prompt
-# persona.name、persona.qq、persona.alias_names、persona.interests 仍在 config/config.yaml 中配置
+# persona.name、persona.alias_names、persona.interests 仍在 config/config.yaml 中配置
+# 机器人 QQ 会在连接 OneBot 后自动识别；interests 只作为人格背景，不改变消息触发概率
 
 # 3. 启动
 ./mumu-bot

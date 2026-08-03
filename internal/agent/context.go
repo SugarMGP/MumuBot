@@ -450,7 +450,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	}
 
 	var qid string
-	if msg.UserID == cfg.Persona.QQ {
+	if msg.UserID == a.bot.GetSelfID() {
 		qid = "你"
 	} else {
 		qid = fmt.Sprintf("%d", msg.UserID)

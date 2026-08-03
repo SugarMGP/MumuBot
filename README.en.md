@@ -122,7 +122,8 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_DATABASE_DSN                   - PostgreSQL connection string
 
 # The static persona prompt template is at config/persona.prompt
-# persona.name, persona.qq, persona.alias_names, persona.interests are still set in config/config.yaml
+# persona.name, persona.alias_names, and persona.interests are still set in config/config.yaml
+# The bot QQ is detected from OneBot; interests only shape persona context and do not change trigger probability
 
 # 3. Launch
 ./mumu-bot

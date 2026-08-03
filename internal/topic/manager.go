@@ -452,6 +452,9 @@ func (m *Manager) memoryRecoveryLoop() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
+			if m.store.selfID() <= 0 {
+				continue
+			}
 			summaries, err := m.store.ListUnprocessedSummaries(m.ctx, 20)
 			if err != nil {
 				zap.L().Warn("读取待处理话题摘要失败", zap.Error(err))

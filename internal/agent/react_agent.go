@@ -128,7 +128,7 @@ func New(mem *memory.Manager) (*Agent, error) {
 		replyCache:      newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
 		visionCache:     newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
-	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem), topicModel)
+	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem, botClient.GetSelfID), topicModel)
 	constructed := false
 	defer func() {
 		if constructed {
@@ -144,7 +144,7 @@ func New(mem *memory.Manager) (*Agent, error) {
 	a.jargonMgr = jargon.New(mem)
 
 	if cfg.Learning.Enabled {
-		learner, err := learning.New(mem, a.jargonMgr)
+		learner, err := learning.New(mem, a.jargonMgr, botClient.GetSelfID)
 		if err != nil {
 			zap.L().Error("初始化后台学习系统失败", zap.Error(err))
 		} else {
@@ -237,9 +237,6 @@ func (a *Agent) initReact() error {
 
 func (a *Agent) Start() {
 	cfg := config.Get()
-	if cfg.Learning.Enabled && a.learner != nil {
-		a.learner.Start(a.ctx)
-	}
 
 	a.startupMu.Lock()
 	a.startupRecovering = true
@@ -248,6 +245,9 @@ func (a *Agent) Start() {
 
 	a.bot.OnMessage(a.handleIncomingMessage)
 	a.bot.OnRecall(a.handleIncomingRecall)
+	if a.learner != nil {
+		a.bot.OnConnected(func() { a.learner.Start(a.ctx) })
+	}
 	a.bot.Connect()
 
 	a.loadBuffersFromDB()

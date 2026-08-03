@@ -11,7 +11,6 @@ import (
 
 type systemPromptData struct {
 	Name      string
-	QQ        int64
 	Interests string
 }
 
@@ -60,7 +59,6 @@ func (p *Persona) GetSystemPrompt() string {
 func newSystemPromptData(cfg *config.PersonaConfig) systemPromptData {
 	return systemPromptData{
 		Name:      cfg.Name,
-		QQ:        cfg.QQ,
 		Interests: strings.Join(cfg.Interests, "、"),
 	}
 }
