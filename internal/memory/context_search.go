@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	pgvector "github.com/pgvector/pgvector-go"
 )
 
@@ -22,8 +23,12 @@ func (q HybridQuery) Empty() bool {
 	return len(q.fragments) == 0
 }
 
-func (q HybridQuery) Fragments() []string {
-	return q.fragments
+func (q HybridQuery) FragmentArray() pgtype.Array[string] {
+	return pgtype.Array[string]{
+		Elements: q.fragments,
+		Dims:     []pgtype.ArrayDimension{{Length: int32(len(q.fragments)), LowerBound: 1}},
+		Valid:    true,
+	}
 }
 
 func (q HybridQuery) Vector() pgvector.Vector {
@@ -131,7 +136,7 @@ func (m *Manager) searchPreparedMemories(ctx context.Context, query HybridQuery,
 		)) FROM unnest(?::text[]) AS fragments(fragment)) score
 		FROM memories WHERE ` + base + `
 	) ranked WHERE score >= ? ORDER BY score DESC LIMIT 20`
-	textArgs := append([]any{query.fragments}, baseArgs...)
+	textArgs := append([]any{query.FragmentArray()}, baseArgs...)
 	textArgs = append(textArgs, contextTextThreshold)
 	if err := m.db.WithContext(ctx).Raw(textSQL, textArgs...).Scan(&textRows).Error; err != nil {
 		return nil, err

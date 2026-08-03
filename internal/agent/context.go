@@ -266,6 +266,24 @@ func (a *Agent) resolveRenderedDisplayName(groupID, userID int64, groupCard, run
 	return utils.FirstNonEmpty(runtimeName, qq)
 }
 
+func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.GroupMessage, userID int64) string {
+	selfID := a.bot.GetSelfID()
+	if selfID > 0 && userID == selfID {
+		return botMentionDisplayName(a.persona.GetName())
+	}
+	if displayName := strings.TrimSpace(msg.AtNames[userID]); displayName != "" {
+		return displayName
+	}
+	if info, err := a.bot.GetGroupMemberInfo(ctx, msg.GroupID, userID, false); err == nil {
+		if displayName := utils.FirstNonEmpty(info.Card, info.Nickname); displayName != "" {
+			return displayName
+		}
+	} else {
+		zap.L().Debug("补全提及成员显示名失败", zap.Int64("group_id", msg.GroupID), zap.Int64("user_id", userID), zap.Error(err))
+	}
+	return a.resolveRenderedDisplayName(msg.GroupID, userID, "", "", fmt.Sprintf("%d", userID))
+}
+
 func visionCacheKey(kind string, remoteURL string, file string) string {
 	key := strings.TrimSpace(remoteURL)
 	if key == "" {
@@ -341,7 +359,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 			if userID <= 0 {
 				continue
 			}
-			displayName := a.resolveRenderedDisplayName(msg.GroupID, userID, "", "", fmt.Sprintf("%d", userID))
+			displayName := a.resolveMentionDisplayName(ctx, msg, userID)
 			mentions = append(mentions, "@"+displayName)
 		}
 		if len(mentions) > 0 {

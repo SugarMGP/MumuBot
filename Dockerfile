@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-alpine AS assets
+FROM --platform=$BUILDPLATFORM node:22-alpine AS assets
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -8,15 +8,17 @@ COPY internal/web/assets/src/ internal/web/assets/src/
 COPY internal/web/views/ internal/web/views/
 RUN npm run build
 
-FROM golang:1.26.5-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
 WORKDIR /src
 RUN go install github.com/a-h/templ/cmd/templ@v0.3.1020
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=assets /src/internal/web/assets/dist/ internal/web/assets/dist/
-RUN templ generate ./internal/web/views && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mumu-bot .
+RUN templ generate ./internal/web/views
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/mumu-bot .
 
 FROM alpine:3.23
 ENV TZ=Asia/Shanghai

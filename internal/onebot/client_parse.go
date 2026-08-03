@@ -129,6 +129,14 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			qqID, ok := parseAtSegmentForGroup(data)
 			if ok {
 				msg.AtList = append(msg.AtList, qqID)
+				if qqID > 0 {
+					if displayName := atDisplayName(data); displayName != "" {
+						if msg.AtNames == nil {
+							msg.AtNames = make(map[int64]string)
+						}
+						msg.AtNames[qqID] = displayName
+					}
+				}
 			}
 
 		case "reply":

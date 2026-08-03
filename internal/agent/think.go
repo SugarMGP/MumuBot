@@ -475,6 +475,12 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 
 	if len(mentions) > 0 {
 		msg.AtList = mentions
+		msg.AtNames = make(map[int64]string, len(mentions))
+		for _, userID := range mentions {
+			if userID > 0 {
+				msg.AtNames[userID] = a.resolveMentionDisplayName(ctx, msg, userID)
+			}
+		}
 	}
 
 	a.onMessage(msg)

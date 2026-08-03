@@ -1,11 +1,8 @@
-name: Build and Release
+name: Release
 
 on:
   push:
-    branches: [ "main" ]
     tags: [ "v*" ]
-  pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -18,7 +15,6 @@ jobs:
   build:
     name: Build
     needs: prepare-release
-    if: ${{ !cancelled() && (!startsWith(github.ref, 'refs/tags/v') || needs.prepare-release.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -99,15 +95,7 @@ jobs:
           tar -czvf ../${{ matrix.asset_name }}${{ matrix.archive_ext }} .
         fi
 
-    - name: Upload Artifact
-      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-      uses: actions/upload-artifact@v6
-      with:
-        name: ${{ matrix.asset_name }}
-        path: ${{ matrix.asset_name }}${{ matrix.archive_ext }}
-
     - name: Upload Release Asset
-      if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v3
       with:
         files: ${{ matrix.asset_name }}${{ matrix.archive_ext }}
@@ -116,7 +104,6 @@ jobs:
 
   container:
     name: Publish Container Image
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -164,7 +151,6 @@ jobs:
   prepare-release:
     name: Prepare Release
     needs: container
-    if: startsWith(github.ref, 'refs/tags/v') && success()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -233,7 +219,6 @@ jobs:
   release:
     name: Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') && success()
     runs-on: ubuntu-latest
     permissions:
       contents: write

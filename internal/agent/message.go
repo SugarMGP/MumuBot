@@ -42,7 +42,7 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 		isMentioned = true
 	}
 	msg.IsMentioned = isMentioned
-	msg.FinalContent = initialMessageContent(msg)
+	msg.FinalContent = initialMessageContent(msg, selfID, a.persona.GetName())
 
 	item, created, persistErr := a.topicMgr.PersistMessage(a.ctx, msg, isMentioned)
 	if persistErr != nil {
@@ -164,7 +164,7 @@ func (a *Agent) onRecall(groupID, messageID, operatorID int64) {
 	zap.L().Info("群消息已撤回", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID))
 }
 
-func initialMessageContent(msg *onebot.GroupMessage) string {
+func initialMessageContent(msg *onebot.GroupMessage, selfID int64, botName string) string {
 	if msg == nil {
 		return ""
 	}
@@ -175,8 +175,11 @@ func initialMessageContent(msg *onebot.GroupMessage) string {
 	for _, userID := range msg.AtList {
 		if userID == onebot.AtAllUserID {
 			parts = append(parts, "@全体成员")
+		} else if selfID > 0 && userID == selfID {
+			parts = append(parts, "@"+botMentionDisplayName(botName))
 		} else if userID > 0 {
-			parts = append(parts, fmt.Sprintf("@%d", userID))
+			displayName := utils.FirstNonEmpty(msg.AtNames[userID], fmt.Sprintf("%d", userID))
+			parts = append(parts, "@"+displayName)
 		}
 	}
 	for _, face := range msg.Faces {
@@ -227,6 +230,13 @@ func initialMessageContent(msg *onebot.GroupMessage) string {
 	displayName := utils.FirstNonEmpty(msg.GroupCard, msg.DisplayName, msg.Nickname, fmt.Sprintf("%d", msg.UserID))
 	return fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
 		msg.Time.Format("15:04:05"), msg.MessageID, displayName, msg.UserID, reply, strings.Join(parts, " "))
+}
+
+func botMentionDisplayName(botName string) string {
+	if botName = strings.TrimSpace(botName); botName != "" {
+		return botName + "(你)"
+	}
+	return "机器人(你)"
 }
 
 func (a *Agent) markMessageRead(messageID int64) error {

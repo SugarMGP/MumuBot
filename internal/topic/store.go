@@ -333,7 +333,7 @@ func (s *DBStore) SearchTopicHits(ctx context.Context, query memory.HybridQuery,
 		return nil, err
 	}
 	var textRows []struct{ TopicID uint }
-	textArgs := append([]any{query.Fragments()}, latestArgs...)
+	textArgs := append([]any{query.FragmentArray()}, latestArgs...)
 	textArgs = append(textArgs, 0.1)
 	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (
 		SELECT topic_id, (SELECT max(greatest(
