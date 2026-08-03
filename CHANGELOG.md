@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-08-04
+
+### 变更
+
+- **后台恢复扫描不再占用实时思考节拍**：话题摘要和长期记忆下沉改用独立的 `learning.recovery_interval` 配置，默认每 180 秒扫描一次，避免失败任务按聊天思考频率重复请求模型。
+- **话题摘要输出约束更明确**：摘要提示明确要求始终返回非空的标题和概述，空结果继续保留待处理状态。
+
+### 修复
+
+- **预期的数据库未命中不再刷 GORM 错误日志**：初始化数据库连接时忽略 `record not found` 的默认日志输出，同时保留业务层对真实错误的处理。
+- **人格与结构化输出提示保持最新约束**：调整默认人格表达和 JSON 输出说明，减少机械回复与不符合格式的模型响应。
+
 ## [2.0.2] - 2026-08-03
 
 ### 变更
@@ -292,7 +304,9 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.2...HEAD
+[2.0.3]: https://github.com/SugarMGP/MumuBot/compare/v2.0.2...v2.0.3
+[2.0.2]: https://github.com/SugarMGP/MumuBot/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/SugarMGP/MumuBot/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/SugarMGP/MumuBot/compare/v1.3.10...v2.0.0
 [1.3.10]: https://github.com/SugarMGP/MumuBot/compare/v1.3.9...v1.3.10

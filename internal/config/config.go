@@ -104,6 +104,7 @@ type LearningConfig struct {
 	Enabled               bool `mapstructure:"enabled"`                 // 是否启用
 	IntervalMinutes       int  `mapstructure:"interval_minutes"`        // 学习任务间隔（分钟）
 	ReviewIntervalMinutes int  `mapstructure:"review_interval_minutes"` // 审核任务间隔（分钟）
+	RecoveryInterval      int  `mapstructure:"recovery_interval"`       // 后台恢复扫描间隔（秒）
 	BatchSize             int  `mapstructure:"batch_size"`              // 每次学习的消息数量限制
 	MinMsgCount           int  `mapstructure:"min_msg_count"`           // 触发学习的最少消息数量
 }
@@ -263,6 +264,12 @@ func validate(c *Config) error {
 	}
 	if c.Agent.ThinkInterval <= 0 {
 		return fmt.Errorf("agent.think_interval 必须大于 0")
+	}
+	if c.Learning.RecoveryInterval == 0 {
+		c.Learning.RecoveryInterval = 180
+	}
+	if c.Learning.RecoveryInterval < 0 {
+		return fmt.Errorf("learning.recovery_interval 不能小于 0")
 	}
 	if c.Agent.MaxCoroutine < 0 {
 		return fmt.Errorf("agent.max_coroutine 不能小于 0")

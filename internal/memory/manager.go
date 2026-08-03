@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type EmbeddingProvider interface {
@@ -76,7 +79,13 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 		return nil, fmt.Errorf("claimModel 未初始化")
 	}
 	cfg := config.Get()
-	db, err := gorm.Open(postgres.Open(cfg.Database.DSN))
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
+		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			IgnoreRecordNotFoundError: true,
+			LogLevel:                  gormlogger.Warn,
+		}),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("连接 PostgreSQL 数据库失败: %w", err)
 	}

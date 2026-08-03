@@ -38,7 +38,7 @@ func GenerateStructuredJSONObject[T any](ctx context.Context, chatModel model.Ba
 		return zero, fmt.Errorf("序列化结构化输出 schema 失败: %w", err)
 	}
 
-	systemPrompt := strings.TrimSpace(`你必须只输出一个 JSON object，不要输出任何额外文本、解释、Markdown、代码块或前后缀。
+	systemPrompt := strings.TrimSpace(`请你按照要求输出一个 JSON object，不要输出任何额外文本、解释、Markdown、代码块或前后缀。
 输出字段、字段名、required 约束、枚举值、数组/对象层级都必须严格符合下面的 JSON Schema，不要补充 schema 未声明的字段。
 
 JSON Schema:
