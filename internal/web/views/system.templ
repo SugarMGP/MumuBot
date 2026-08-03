@@ -2,7 +2,7 @@ package views
 
 templ SystemPage(data SystemPageData, currentPath string) {
 	@Layout(LayoutData{
-		Title:       "系统",
+		Title:       "系统状态",
 		CurrentPath: currentPath,
 		NavItems:    NavItems(),
 		Flash:       data.Flash,
@@ -11,25 +11,27 @@ templ SystemPage(data SystemPageData, currentPath string) {
 
 templ SystemBody(data SystemPageData) {
 	<div class="space-y-6">
-		@PageHeader("系统", "查看人格、群聊、模型和运行信息。", "系统信息")
-		<div class="grid gap-4 xl:grid-cols-2">
+		@PageHeader("系统状态", "查看机器人连接、模型和运行环境的当前状态。", "运行信息")
+		<div class="grid grid-cols-2 gap-5">
 			for _, section := range data.Sections {
-				<div class="rounded-[1.8rem] border border-white/70 bg-white/82 p-5 shadow-[0_26px_70px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-6">
-					<div class="flex items-center gap-3 text-lg font-extrabold tracking-[-0.03em] text-slate-950 sm:text-[1.2rem]">
-						<span class="inline-flex size-9 items-center justify-center rounded-2xl bg-slate-50 text-slate-500 ring-1 ring-slate-200/80">
-							@AdminIcon(systemSectionIconName(section.Title), "size-5", "system-section")
-						</span>
-						<span>{ section.Title }</span>
+				<section class="card border border-base-300 bg-base-100">
+					<div class="card-body gap-5 p-5">
+						<div class="flex items-center gap-3">
+							<span class="flex size-9 items-center justify-center rounded-box bg-base-200 text-base-content/60">
+								@AdminIcon(systemSectionIconName(section.Title), "size-5", "system-section")
+							</span>
+							<h2 class="text-lg font-semibold">{ section.Title }</h2>
+						</div>
+						<div class="grid grid-cols-2 gap-3">
+							for _, field := range section.Fields {
+								<div class={ systemFieldCardClass(field) }>
+									<div class="text-xs text-base-content/50">{ field.Label }</div>
+									<div class={ systemFieldValueClass(field) }>{ field.Value }</div>
+								</div>
+							}
+						</div>
 					</div>
-					<div class="mt-5 grid gap-3 sm:grid-cols-2">
-						for _, field := range section.Fields {
-							<div class={ systemFieldCardClass(field) }>
-								<strong class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">{ field.Label }</strong>
-								<div class={ systemFieldValueClass(field) }>{ field.Value }</div>
-							</div>
-						}
-					</div>
-				</div>
+				</section>
 			}
 		</div>
 	</div>

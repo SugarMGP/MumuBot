@@ -1,324 +1,210 @@
 package views
 
-import "fmt"
+import (
+	"fmt"
+	"mumu-bot/internal/web/services"
+)
 
 templ TopicListPage(data TopicListPageData, currentPath string) {
-	@Layout(LayoutData{
-		Title:       "话题",
-		CurrentPath: currentPath,
-		NavItems:    NavItems(),
-		Flash:       data.Flash,
-	}, TopicListBody(data))
+	@Layout(LayoutData{Title: "话题管理", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, TopicListBody(data))
 }
 
 templ TopicListBody(data TopicListPageData) {
 	<div class="space-y-6">
-		@PageHeader("话题", "查看每个群的话题摘要，快速回看脉络和未完事项。", "话题工作记忆")
-		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("topic-filters", "筛选条件", "按群号或关键词查找话题。", EmptyComponent(), true, TopicFilterForm(data))
-			@SortToolbar(data.Sort)
-			<div class="grid gap-4 xl:grid-cols-2">
-				if len(data.Items) == 0 {
-					<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500 xl:col-span-2">暂无话题记录</div>
-				}
+		@PageHeader("话题管理", "查看群聊话题、摘要与未完事项。", "")
+		@FilterPanel("topic-filters", "筛选条件", "按群号或关键词查找话题。", EmptyComponent(), false, TopicFilterForm(data))
+		@SortToolbar(data.Sort)
+		if len(data.Items) == 0 {
+			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无话题</div></div>
+		}
+		if len(data.Items) > 0 {
+			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<a href={ fmt.Sprintf("/admin/topics/%d", item.ID) } class="group rounded-[1.5rem] border border-slate-200/75 bg-white/80 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)] transition duration-200 ease-out hover:-translate-y-0.5 hover:border-cyan-200 hover:shadow-[0_20px_50px_rgba(14,31,53,0.08)] motion-safe:animate-[admin-fade-up_220ms_ease-out]">
-						<div class="flex flex-wrap items-start justify-between gap-3">
-							<div class="min-w-0">
-								<div class="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) }</div>
-								<h2 class="mt-2 text-[1.12rem] font-extrabold tracking-[-0.04em] text-slate-950">{ topicTitle(item) }</h2>
-							</div>
-							<div class="flex flex-wrap items-center gap-2">
+					<a href={ fmt.Sprintf("/admin/topics/%d", item.ID) } class="admin-record-card card border border-base-300 bg-base-100 transition-colors hover:border-primary/35" data-tone={ topicTone(item) }>
+						<div class="card-body gap-4 p-5 pl-6">
+							<div class="flex items-start justify-between gap-4">
+								<div><h2 class="text-lg font-semibold leading-6">{ topicTitle(item) }</h2><p class="admin-number mt-1 text-xs text-base-content/48">群 { fmt.Sprintf("%d", item.GroupID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p></div>
 								<span class={ topicSummaryProgressClass(item) }>{ topicSummaryProgressText(item) }</span>
 							</div>
-						</div>
-						<p class="mt-4 text-sm leading-7 text-slate-600">{ topicGist(item) }</p>
-						<div class="mt-5 grid gap-3 sm:grid-cols-2">
-							<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
-								<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">摘要覆盖</div>
-								<div class="mt-1 text-sm font-semibold text-slate-900">#{ fmt.Sprintf("%d", topicSummaryThroughID(item)) }</div>
-							</div>
-							<div class="rounded-[1.1rem] bg-slate-50/90 px-3 py-3 ring-1 ring-slate-200/80">
-								<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最近更新</div>
-								<div class="mt-1 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
-							</div>
-						</div>
-						if len(topicKeywords(item)) > 0 {
-							<div class="mt-4 flex flex-wrap gap-2">
+							<p class="admin-quote rounded-xl p-4 text-sm leading-7 text-base-content/70">{ topicGist(item) }</p>
+							<div class="flex flex-wrap gap-2">
 								for _, keyword := range topicKeywords(item) {
-									<span class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-[11px] font-semibold text-cyan-700 ring-1 ring-cyan-200/80">{ keyword }</span>
+									<span class="badge badge-primary badge-soft badge-sm">{ keyword }</span>
 								}
 							</div>
-						}
-						if topicParticipantSummary(item) != "" {
-							<div class="mt-4 rounded-[1.15rem] bg-slate-50/90 px-4 py-3 text-sm leading-6 text-slate-600 ring-1 ring-slate-200/80">
-								<span class="font-semibold text-slate-800">话题里的角色关系：</span>{ topicParticipantSummary(item) }
+							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/48">
+								<span>摘要覆盖至 #{ fmt.Sprintf("%d", topicSummaryThroughID(item)) }</span>
+								<span class="flex items-center gap-1 font-medium text-primary">查看详情<svg class="size-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7.5 5 5 5-5 5"></path></svg></span>
 							</div>
-						}
-						<div class="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-cyan-700">
-							<span>查看详情</span>
-							<svg class="size-4 transition duration-200 ease-out group-hover:translate-x-0.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-								<path d="M6 10h8"></path>
-								<path d="m11 5 5 5-5 5"></path>
-							</svg>
 						</div>
 					</a>
 				}
 			</div>
-			@ListFooter(data.Meta)
-		</div>
+		}
+		@ListFooter(data.Meta)
 	</div>
 }
 
 templ TopicFilterForm(data TopicListPageData) {
-	<form id="topic-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="change from:input[form='topic-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-			<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
-			<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-			<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
-			<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="关键词、标题或摘要"/>
-			<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
+	<form id="topic-filter-form" class="grid grid-cols-[180px_minmax(280px,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
+		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词"/>
+		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
 
 templ TopicDetailPage(data TopicDetailPageData, currentPath string) {
-	@Layout(LayoutData{
-		Title:       topicTitle(data.Thread),
-		CurrentPath: currentPath,
-		NavItems:    NavItems(),
-		Flash:       data.Flash,
-	}, TopicDetailBody(data))
+	@Layout(LayoutData{Title: topicTitle(data.Thread), CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, TopicDetailBody(data))
 }
 
 templ TopicDetailBody(data TopicDetailPageData) {
-	<div class="space-y-6">
-		<div class="flex flex-wrap items-start justify-between gap-4">
-			@PageHeader(topicTitle(data.Thread), "回看这个话题当前的概括、最近变化和关联消息。", "话题详情")
-			<a href="/admin/topics" class="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-3 text-sm font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white">返回话题列表</a>
-		</div>
-		<div class="grid gap-4 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-start">
+	<div class="space-y-5">
+		<header class="flex items-center justify-between gap-6">
+			<div class="flex min-w-0 items-center gap-3">
+				<a class="btn btn-ghost btn-circle btn-sm" href="/admin/topics" aria-label="返回话题列表"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m12.5 5-5 5 5 5"></path></svg></a>
+				<div class="flex min-w-0 items-center gap-2"><h1 class="truncate text-lg font-semibold">{ topicTitle(data.Thread) }</h1><span class="badge badge-ghost badge-sm">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span><span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span></div>
+			</div>
+			<span class="text-xs text-base-content/45">更新于 { formatTime(data.Thread.UpdatedAt) }</span>
+		</header>
+		<div class="grid grid-cols-[minmax(0,1fr)_300px] items-start gap-4">
 			<div class="space-y-4">
-				<section class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-5 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out]">
-					<div class="flex flex-wrap items-center gap-2">
-						<span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span>
-						<span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span>
-					</div>
-					<div class="rounded-[1.35rem] bg-slate-50/90 p-5 ring-1 ring-slate-200/80">
-						<div class="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">当前概括</div>
-						<div class="mt-3 text-[1.02rem] font-bold tracking-[-0.03em] text-slate-950">{ topicGist(data.Thread) }</div>
-						if len(topicSummary(data.Thread).Facts) > 0 {
-							<div class="mt-4 text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">已确认的信息</div>
-							<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-								for _, fact := range topicSummary(data.Thread).Facts {
-									<li class="flex gap-2">
-										<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-cyan-500"></span>
-										<span>{ fact }</span>
-									</li>
-								}
-							</ul>
+				@TopicCurrentSummary(data.Thread)
+				<section class="card border border-base-300 bg-base-100">
+					<div class="card-body p-5">
+						<div><h2 class="font-semibold">话题消息溯源</h2><p class="mt-1 text-xs text-base-content/48">按时间顺序展示最近关联消息</p></div>
+						if len(data.Messages) == 0 {
+							<div class="py-10 text-center text-sm text-base-content/40">暂无关联消息</div>
 						}
-						if len(topicSummary(data.Thread).OpenLoops) > 0 {
-							<div class="mt-4 text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">还没聊完的点</div>
-							<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-								for _, loop := range topicSummary(data.Thread).OpenLoops {
-									<li class="flex gap-2">
-										<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-amber-500"></span>
-										<span>{ loop }</span>
-									</li>
+						if len(data.Messages) > 0 {
+							<div class="mt-2 space-y-3">
+								for _, item := range data.Messages {
+									<article class="flex gap-3">
+										<div class="avatar placeholder"><div class="w-9 rounded-full bg-primary/10 text-primary"><span class="text-xs">{ avatarText(item.Nickname) }</span></div></div>
+										<div class="min-w-0 flex-1 rounded-xl border border-base-300 bg-base-200/45 p-3"><div class="flex items-center justify-between"><span class="text-xs font-medium">{ item.Nickname }</span><time class="text-[11px] text-base-content/42" datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time></div><p class="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-base-content/70">{ topicMessageText(item) }</p></div>
+									</article>
 								}
-							</ul>
+							</div>
 						}
 					</div>
-					if topicParticipantSummary(data.Thread) != "" {
-						<div class="rounded-[1.25rem] bg-white/82 p-4 ring-1 ring-slate-200/80">
-							<div class="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">参与者视角</div>
-							<div class="mt-2 text-sm leading-7 text-slate-700">{ topicParticipantSummary(data.Thread) }</div>
-						</div>
-					}
-					if len(topicKeywords(data.Thread)) > 0 {
-						<div class="flex flex-wrap gap-2">
-							for _, keyword := range topicKeywords(data.Thread) {
-								<span class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-[11px] font-semibold text-cyan-700 ring-1 ring-cyan-200/80">{ keyword }</span>
-							}
-						</div>
-					}
-				</section>
-				<section class="space-y-4 rounded-[1.3rem] bg-white/72 p-4 ring-1 ring-slate-200/75">
-					<div class="flex items-center justify-between gap-4">
-						<div>
-							<div class="text-sm font-extrabold tracking-[-0.02em] text-slate-900">关联消息</div>
-							<div class="mt-1 text-sm leading-6 text-slate-500">最近 80 条与这个话题相关的消息，按时间顺序展示。</div>
-						</div>
-					</div>
-					if len(data.Messages) == 0 {
-						<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500">暂无关联消息</div>
-					} else {
-						<div class="space-y-3">
-							for _, item := range data.Messages {
-								<article class="rounded-[1.25rem] border border-slate-200/75 bg-white/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)]">
-									<div class="flex flex-wrap items-center justify-between gap-3">
-										<div class="text-sm font-semibold text-slate-900">{ item.Nickname }</div>
-										<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500"><time datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time> · #{ fmt.Sprintf("%d", item.ID) }</div>
-									</div>
-									<div class="mt-3 text-sm leading-7 text-slate-700 whitespace-pre-wrap break-words">{ topicMessageText(item) }</div>
-								</article>
-							}
-						</div>
-					}
 				</section>
 			</div>
-			<section class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-5 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out]">
-				<div class="grid gap-3 sm:grid-cols-2">
-					<div class="rounded-[1.15rem] bg-slate-50/90 px-4 py-4 ring-1 ring-slate-200/80">
-						<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">摘要覆盖到</div>
-						<div class="mt-2 text-sm font-semibold text-slate-900">#{ fmt.Sprintf("%d", topicSummaryThroughID(data.Thread)) }</div>
-					</div>
-					<div class="rounded-[1.15rem] bg-slate-50/90 px-4 py-4 ring-1 ring-slate-200/80">
-						<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">创建时间</div>
-						<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(data.Thread.CreatedAt) }>{ formatTime(data.Thread.CreatedAt) }</time></div>
-					</div>
-					<div class="rounded-[1.15rem] bg-slate-50/90 px-4 py-4 ring-1 ring-slate-200/80">
-						<div class="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500">最近更新</div>
-						<div class="mt-2 text-sm font-semibold text-slate-900"><time datetime={ formatTimeAttr(data.Thread.UpdatedAt) }>{ formatTime(data.Thread.UpdatedAt) }</time></div>
+			<aside class="card border border-base-300 bg-base-100">
+				<div class="card-body gap-3 p-4">
+					<div><h2 class="font-semibold">摘要生成历史</h2><p class="mt-1 text-xs text-base-content/45">{ topicSummaryChangeCountLabel(data.Thread, data.SummaryChanges) }</p></div>
+					if len(data.SummaryChanges) == 0 {
+						<div class="py-8 text-center text-sm text-base-content/40">还没有摘要快照</div>
+					}
+					<div class="admin-topic-summary-timeline">
+						for _, change := range data.SummaryChanges {
+							@TopicSummaryChangeCard(change)
+						}
 					</div>
 				</div>
-				<div class="rounded-[1.3rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-					<div class="flex flex-wrap items-start justify-between gap-3">
-						<div>
-							<div class="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-500">最近摘要变化</div>
-							<div class="mt-1 text-sm leading-6 text-slate-500">{ topicSummaryChangeCountLabel(data.Thread, data.SummaryChanges) }</div>
-						</div>
-					</div>
-					if len(topicSummaryHistory(data.Thread)) == 0 {
-						<div class="mt-3 text-sm text-slate-500">还没有摘要快照。</div>
-					} else {
-						<div class="mt-4 admin-topic-summary-timeline">
-							for _, change := range data.SummaryChanges {
-								<details class="admin-topic-change-card group" if change.InitiallyOpen { open }>
-									<summary class="admin-topic-change-card__summary">
-										<span class="admin-topic-change-card__rail" aria-hidden="true"></span>
-										<div class="min-w-0 flex-1">
-											<div class="flex flex-wrap items-start justify-between gap-3">
-												<div class="min-w-0">
-													<time class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
-													<div class="mt-2 text-sm font-semibold leading-6 text-slate-900">{ change.Headline }</div>
-												</div>
-												<div class="flex shrink-0 items-center gap-2">
-													for _, badge := range change.Badges {
-														<span class={ topicChangeBadgeClass(badge.Tone) }>{ badge.Label }</span>
-													}
-													<span class="admin-topic-change-card__chevron" aria-hidden="true">
-														<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-															<path d="m6 8 4 4 4-4"></path>
-														</svg>
-													</span>
-												</div>
-											</div>
-										</div>
-									</summary>
-									<div class="admin-topic-change-card__body">
-										if change.TitleChanged {
-											<div class="space-y-2">
-												<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">标题变化</div>
-												<div class="admin-topic-inline-diff admin-topic-inline-diff--flow" role="group" aria-label="标题变化">
-													if len(change.TitleDiff.InlineSegments) == 0 {
-														<div class="admin-topic-inline-diff__placeholder">{ change.TitleDiff.CurrentPlaceholder }</div>
-													} else {
-														for _, segment := range change.TitleDiff.InlineSegments {
-															<span class={ topicInlineDiffClass(segment.Kind) }>{ segment.Text }</span>
-														}
-													}
-												</div>
-											</div>
-										}
-										if change.GistChanged {
-											<div class="space-y-2">
-												<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">概括变化</div>
-												<div class="admin-topic-inline-diff admin-topic-inline-diff--flow" role="group" aria-label="概括变化">
-													if len(change.GistDiff.InlineSegments) == 0 {
-														<div class="admin-topic-inline-diff__placeholder">{ change.GistDiff.CurrentPlaceholder }</div>
-													} else {
-														for _, segment := range change.GistDiff.InlineSegments {
-															<span class={ topicInlineDiffClass(segment.Kind) }>{ segment.Text }</span>
-														}
-													}
-												</div>
-											</div>
-										}
-										if change.Changed {
-											<div class="space-y-4">
-												if len(change.AddedOpenLoops) > 0 || len(change.RemovedOpenLoops) > 0 {
-													<div class="space-y-3 rounded-[1.1rem] bg-amber-50/45 p-3 ring-1 ring-amber-200/65">
-														<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-amber-700">未完事项调整</div>
-														if len(change.AddedOpenLoops) > 0 {
-															<div>
-																<div class="text-[11px] font-bold uppercase tracking-[0.08em] text-amber-700">新增</div>
-																<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-																	for _, item := range topicDiffList(change.AddedOpenLoops) {
-																		<li class="flex gap-2">
-																			<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-amber-500"></span>
-																			<span>{ item }</span>
-																		</li>
-																	}
-																</ul>
-															</div>
-														}
-														if len(change.RemovedOpenLoops) > 0 {
-															<div>
-																<div class="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-500">移除</div>
-																<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-																	for _, item := range topicDiffList(change.RemovedOpenLoops) {
-																		<li class="flex gap-2">
-																			<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-slate-400"></span>
-																			<span>{ item }</span>
-																		</li>
-																	}
-																</ul>
-															</div>
-														}
-													</div>
-												}
-												if len(change.AddedFacts) > 0 || len(change.RemovedFacts) > 0 {
-													<div class="space-y-3 rounded-[1.1rem] bg-sky-50/45 p-3 ring-1 ring-sky-200/65">
-														<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-sky-700">已确认事项调整</div>
-														if len(change.AddedFacts) > 0 {
-															<div>
-																<div class="text-[11px] font-bold uppercase tracking-[0.08em] text-sky-700">新增</div>
-																<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-																	for _, item := range topicDiffList(change.AddedFacts) {
-																		<li class="flex gap-2">
-																			<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-sky-500"></span>
-																			<span>{ item }</span>
-																		</li>
-																	}
-																</ul>
-															</div>
-														}
-														if len(change.RemovedFacts) > 0 {
-															<div>
-																<div class="text-[11px] font-bold uppercase tracking-[0.08em] text-rose-600">移除</div>
-																<ul class="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-																	for _, item := range topicDiffList(change.RemovedFacts) {
-																		<li class="flex gap-2">
-																			<span class="mt-[0.38rem] inline-flex size-1.5 shrink-0 rounded-full bg-rose-500"></span>
-																			<span>{ item }</span>
-																		</li>
-																	}
-																</ul>
-															</div>
-														}
-													</div>
-												}
-											</div>
-										} else {
-											<div class="rounded-[1rem] bg-white/78 px-3 py-2 text-sm leading-6 text-slate-600 ring-1 ring-slate-200/80">本次仅刷新时间，摘要内容没有变化。</div>
-										}
-									</div>
-								</details>
-							}
-						</div>
+			</aside>
+		</div>
+	</div>
+}
+
+templ TopicCurrentSummary(topic services.TopicThreadView) {
+	<section class="card border border-base-300 bg-base-100">
+		<div class="card-body gap-4 p-5">
+			<div class="flex items-center gap-2 text-primary">@AdminIcon("memories", "size-5", "topic-summary")<h2 class="font-semibold text-base-content">当前摘要</h2></div>
+			<p class="text-sm leading-7 text-base-content/72">{ topicGist(topic) }</p>
+			<div class="divider my-0"></div>
+			<div>
+				<h3 class="text-xs font-semibold text-base-content/52">关键数据</h3>
+				<div class="mt-3 flex flex-wrap gap-2">
+					<span class="badge badge-info badge-soft">消息 #{ fmt.Sprintf("%d", topicSummaryThroughID(topic)) }</span>
+					for _, keyword := range topicKeywords(topic) {
+						<span class="badge badge-primary badge-soft">{ keyword }</span>
 					}
 				</div>
-			</section>
+			</div>
+			if len(topicSummary(topic).OpenLoops) > 0 {
+				<div>
+					<h3 class="text-xs font-semibold text-base-content/52">待确认事项</h3>
+					<ul class="mt-2 space-y-2">
+						for _, item := range topicSummary(topic).OpenLoops {
+							<li class="flex items-start gap-2 text-sm"><span class="mt-2 size-1.5 shrink-0 rounded-full bg-warning"></span><span class="text-base-content/70">{ item }</span></li>
+						}
+					</ul>
+				</div>
+			}
+			if len(topicSummary(topic).Facts) > 0 {
+				<div>
+					<h3 class="text-xs font-semibold text-base-content/52">已确认事项</h3>
+					<ul class="mt-2 space-y-2">
+						for _, item := range topicSummary(topic).Facts {
+							<li class="flex items-start gap-2 text-sm"><span class="mt-2 size-1.5 shrink-0 rounded-full bg-success"></span><span class="text-base-content/70">{ item }</span></li>
+						}
+					</ul>
+				</div>
+			}
+		</div>
+	</section>
+}
+
+templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
+	<details class="admin-topic-change-card" open?={ change.InitiallyOpen }>
+		<summary class="admin-topic-change-card__summary">
+			<span class="admin-topic-change-card__rail" aria-hidden="true"></span>
+			<div class="min-w-0 flex-1">
+				<time class="text-[11px] text-base-content/45" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
+				<p class="mt-1 text-sm font-medium leading-5">{ change.Headline }</p>
+				<div class="mt-2 flex flex-wrap gap-1">
+					for _, badge := range change.Badges {
+						<span class={ topicChangeBadgeClass(badge.Tone) }>{ badge.Label }</span>
+					}
+				</div>
+			</div>
+			<svg class="admin-topic-change-card__chevron size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 8 4 4 4-4"></path></svg>
+		</summary>
+		<div class="admin-topic-change-card__body">
+			if change.TitleChanged {
+				@TopicInlineDiff("标题变化", change.TitleDiff)
+			}
+			if change.GistChanged {
+				@TopicInlineDiff("概括变化", change.GistDiff)
+			}
+			if len(change.AddedFacts) > 0 {
+				<div>
+					<h4 class="text-xs font-medium text-success">新增事实</h4>
+					<ul class="mt-1 space-y-1">
+						for _, item := range change.AddedFacts {
+							<li class="text-xs leading-5 text-base-content/65">+ { item }</li>
+						}
+					</ul>
+				</div>
+			}
+			if len(change.AddedOpenLoops) > 0 {
+				<div>
+					<h4 class="text-xs font-medium text-warning">新增待办</h4>
+					<ul class="mt-1 space-y-1">
+						for _, item := range change.AddedOpenLoops {
+							<li class="text-xs leading-5 text-base-content/65">+ { item }</li>
+						}
+					</ul>
+				</div>
+			}
+			if !change.Changed {
+				<p class="text-xs text-base-content/45">本次摘要内容没有变化。</p>
+			}
+		</div>
+	</details>
+}
+
+templ TopicInlineDiff(label string, diff TopicTextDiffView) {
+	<div>
+		<h4 class="mb-2 text-xs font-medium text-base-content/50">{ label }</h4>
+		<div class="admin-topic-inline-diff">
+			if len(diff.InlineSegments) == 0 {
+				<span class="admin-topic-inline-diff__placeholder">{ diff.CurrentPlaceholder }</span>
+			}
+			for _, segment := range diff.InlineSegments {
+				<span class={ topicInlineDiffClass(segment.Kind) }>{ segment.Text }</span>
+			}
 		</div>
 	</div>
 }

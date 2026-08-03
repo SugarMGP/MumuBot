@@ -1,5 +1,7 @@
 package views
 
+import "fmt"
+
 templ AdminHead(title string, flash *FlashMessage) {
 	<head>
 		<meta charset="utf-8"/>
@@ -7,8 +9,6 @@ templ AdminHead(title string, flash *FlashMessage) {
 		<meta name="color-scheme" content="light"/>
 		<title>{ title } - MumuBot</title>
 		<link rel="icon" type="image/svg+xml" href="/favicon.ico"/>
-		<link rel="preconnect" href="https://fonts.font.im"/>
-		<link href="https://fonts.font.im/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 		if flash != nil {
 			<meta id="admin-flash-payload" name="admin-flash" content={ flashJSON(flash) }/>
 		}
@@ -25,50 +25,35 @@ templ EmptyComponent() {
 }
 
 templ PageContent(content templ.Component) {
-	<div id="admin-page-body">
+	<div id="admin-page-body" class="admin-page-enter">
 		@content
 	</div>
 }
 
 templ LayoutWithOverlay(data LayoutData, content templ.Component, overlay templ.Component) {
 	<!doctype html>
-	<html lang="zh-CN">
+	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead(data.Title, data.Flash)
-		<body class="min-h-screen font-sans text-slate-800 antialiased selection:bg-cyan-200/60">
-			<div class="min-h-screen">
-				<header class="sticky top-0 z-30 border-b border-white/70 bg-white/70 backdrop-blur-xl lg:hidden">
-					<div class="flex items-center gap-3 px-4 py-3">
-						<button
-							type="button"
-							class="inline-flex size-11 items-center justify-center rounded-2xl border border-slate-200/80 bg-white/82 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-							data-hs-overlay="#admin-sidebar-overlay"
-							aria-controls="admin-sidebar-overlay"
-							aria-haspopup="dialog"
-							aria-label="打开导航">
-							<span class="sr-only">打开导航</span>
-							<svg class="size-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-								<path d="M4 5.5h12"></path>
-								<path d="M4 10h12"></path>
-								<path d="M4 14.5h12"></path>
-							</svg>
-						</button>
-						<div class="min-w-0">
-							<div class="text-sm font-bold tracking-[-0.02em] text-slate-900">{ data.Title }</div>
+		<body class="font-sans antialiased selection:bg-primary/20">
+			<div class="admin-shell">
+				<aside class="admin-sidebar">
+					@SidebarPanel(data)
+				</aside>
+				<div class="min-w-0">
+					<header class="admin-topbar">
+						<div class="flex items-center gap-3">
+							<span class="text-base font-semibold text-base-content">MumuBot 管理后台</span>
+							<span class="h-4 w-px bg-base-300"></span>
+							<span class="text-sm text-base-content/55">{ data.Title }</span>
 						</div>
-					</div>
-				</header>
-				<div class="relative mx-auto min-h-screen w-full max-w-[1512px] px-3 sm:px-4 lg:px-4 xl:px-5">
-					<aside
-						id="admin-sidebar-overlay"
-						class="hs-overlay hidden fixed inset-y-0 start-0 z-[90] w-[min(15.5rem,calc(100vw-2rem))] -translate-x-full transform transition-transform duration-300 ease-out hs-overlay-open:translate-x-0 lg:absolute lg:inset-y-0 lg:start-0 lg:z-20 lg:block lg:w-64 lg:translate-x-0 [--auto-close:lg] [--opened:lg] [--body-scroll:true] lg:[--body-scroll:false]"
-						data-hs-overlay-options='{"backdropClasses":"hs-overlay-backdrop transition duration-300 fixed inset-0 bg-slate-950/28"}'
-						tabindex="-1"
-						aria-labelledby="admin-sidebar-title">
-						<div class="h-full px-3 py-3 lg:sticky lg:top-0 lg:h-screen lg:px-0 lg:py-6">
-							@SidebarPanel(data)
+						<div class="flex items-center gap-3">
+							<span class="badge badge-success badge-soft badge-sm">服务在线</span>
+							<div class="avatar placeholder" aria-hidden="true">
+								<div class="w-9 rounded-full border border-primary/15 bg-primary/10 text-primary"><span class="text-xs font-semibold">M</span></div>
+							</div>
 						</div>
-					</aside>
-					<main class="min-w-0 pb-8 pt-5 lg:pb-12 lg:pe-1 lg:ps-[calc(16rem+1rem)] lg:pt-8">
+					</header>
+					<main class="admin-page">
 						@PageContent(content)
 					</main>
 				</div>
@@ -80,166 +65,118 @@ templ LayoutWithOverlay(data LayoutData, content templ.Component, overlay templ.
 }
 
 templ AdminActionDialog() {
-	<div id="admin-action-dialog" class="hs-overlay hidden fixed inset-0 z-[100] overflow-y-auto bg-transparent px-4 py-6 opacity-0 transition-opacity duration-200 ease-out hs-overlay-open:opacity-100 sm:px-6 sm:py-8 [--overlay-backdrop:false]" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="admin-action-dialog-title" data-admin-overlay="dialog">
-		<div class="flex min-h-[calc(100dvh-3rem)] items-center justify-center sm:min-h-[calc(100dvh-4rem)]">
-			<div class="hs-overlay-animation-target relative my-auto max-h-[calc(100dvh-3rem)] w-full max-w-[calc(100vw-2rem)] translate-y-3 scale-[0.985] overflow-y-auto rounded-[2rem] border border-white/80 bg-white/98 p-6 opacity-0 shadow-[0_34px_110px_rgba(8,17,31,0.2),0_14px_36px_rgba(8,17,31,0.1)] transition duration-200 ease-out hs-overlay-open:translate-y-0 hs-overlay-open:scale-100 hs-overlay-open:opacity-100 sm:max-h-[calc(100dvh-4rem)] sm:max-w-xl sm:p-7">
-				<div id="admin-action-dialog-content">
-					@DialogLoadingPlaceholder("确认操作", "正在载入操作内容。")
-				</div>
+	<dialog id="admin-action-dialog" class="modal" aria-labelledby="admin-action-dialog-title">
+		<div class="modal-box max-h-[86vh] max-w-xl border border-base-300 p-6">
+			<div id="admin-action-dialog-content">
+				@DialogLoadingPlaceholder("确认操作", "正在载入操作内容。")
 			</div>
 		</div>
-	</div>
+		<form method="dialog" class="modal-backdrop"><button aria-label="关闭确认弹层">关闭</button></form>
+	</dialog>
 }
 
 templ SidebarPanel(data LayoutData) {
-	<div class="relative flex h-[calc(100vh-1.5rem)] w-full flex-col overflow-hidden rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl lg:h-full">
-		<div class="mb-3 flex justify-start">
-			<button
-				type="button"
-				class="inline-flex size-10 items-center justify-center rounded-2xl border border-slate-200/80 bg-white/82 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white lg:hidden"
-				data-hs-overlay="#admin-sidebar-overlay"
-				aria-controls="admin-sidebar-overlay"
-				aria-label="关闭导航">
-				<span class="sr-only">关闭导航</span>
-				<svg class="size-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-					<path d="m6 6 8 8"></path>
-					<path d="m14 6-8 8"></path>
-				</svg>
-			</button>
-		</div>
-		<div class="rounded-[1.45rem] border border-white/80 bg-white/72 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-			<div class="flex items-start gap-3">
-				<div class="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-r from-teal-100 to-cyan-100 text-sm font-extrabold uppercase tracking-[0.12em] text-teal-700">M</div>
-				<div class="min-w-0">
-					<div class="inline-flex items-center rounded-full bg-gradient-to-r from-teal-100 to-cyan-100 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.12em] text-teal-700">导航</div>
-					<h1 id="admin-sidebar-title" class="mt-3 text-[1.2rem] font-extrabold leading-none tracking-[-0.04em] text-slate-950">页面切换</h1>
-				</div>
+	<div class="flex h-full flex-col px-3 py-5">
+		<div class="flex items-center gap-3 px-3 pb-5">
+			<div class="avatar placeholder">
+				<div class="w-10 rounded-full bg-primary text-primary-content"><span class="text-sm font-semibold">M</span></div>
+			</div>
+			<div>
+				<div id="admin-sidebar-title" class="text-lg font-semibold leading-5 text-base-content">MumuBot</div>
+				<div class="mt-1 text-xs text-base-content/55">管理后台</div>
 			</div>
 		</div>
-		<nav class="mt-4 grid gap-1.5">
-			for _, item := range data.NavItems {
-				<a href={ item.Href } title={ item.Label } class={ navClass(data.CurrentPath, item.Href) }>
-					<span class="inline-flex size-8 shrink-0 items-center justify-center rounded-2xl bg-white/14 text-current ring-1 ring-current/8">
-						@AdminIcon(navIconName(item.Href), "size-4", "nav-"+navIconName(item.Href))
-					</span>
-					<span>{ item.Label }</span>
-				</a>
-			}
+		<nav class="min-h-0 flex-1 overflow-y-auto" aria-label="后台导航">
+			<ul class="menu w-full gap-1 p-0">
+				for _, item := range data.NavItems {
+					<li>
+						<a href={ item.Href } title={ item.Label } class={ navClass(data.CurrentPath, item.Href) }>
+							@AdminIcon(navIconName(item.Href), "size-[18px]", "nav-"+navIconName(item.Href))
+							<span>{ item.Label }</span>
+						</a>
+					</li>
+				}
+			</ul>
 		</nav>
-		<div class="mt-5 border-t border-slate-200/70 pt-4">
-			<form method="post" action="/logout">
-				<button title="退出登录" class="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70" type="submit" data-loading-label="退出中">
-					<span class="inline-flex size-5 shrink-0 items-center justify-center">
-						<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-							<path d="M7 4.75H5.75A1.75 1.75 0 0 0 4 6.5v7a1.75 1.75 0 0 0 1.75 1.75H7"></path>
-							<path d="M11 6.5 14.5 10 11 13.5"></path>
-							<path d="M8 10h6.5"></path>
-						</svg>
-					</span>
-					<span>退出登录</span>
-				</button>
-			</form>
-		</div>
+		<form class="mt-4 border-t border-base-300 pt-4" method="post" action="/logout">
+			<button class="btn btn-ghost w-full justify-start text-base-content/65" type="submit" data-loading-label="退出中">
+				<svg class="size-[18px]" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+					<path d="M7 4.75H5.75A1.75 1.75 0 0 0 4 6.5v7a1.75 1.75 0 0 0 1.75 1.75H7"></path>
+					<path d="M11 6.5 14.5 10 11 13.5M8 10h6.5"></path>
+				</svg>
+				<span>退出登录</span>
+			</button>
+		</form>
 	</div>
 }
 
 templ PageHeader(title string, subtitle string, tag string) {
-	<div class="space-y-2 motion-safe:animate-[admin-fade-up_220ms_ease-out]">
-		if tag != "" {
-			<div class="inline-flex items-center rounded-full border border-white/80 bg-white/78 px-3 py-1 text-[10px] font-extrabold tracking-[0.08em] text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">{ tag }</div>
-		}
-		<div class="space-y-2">
-			<h1 class="max-w-4xl text-balance text-[1.95rem] font-extrabold leading-none tracking-[-0.05em] text-slate-950 sm:text-[2.35rem]">{ title }</h1>
-			if subtitle != "" {
-				<p class="max-w-3xl text-sm leading-6 text-slate-600">{ subtitle }</p>
+	<div>
+		<div class="flex items-center gap-3">
+			<h1 class="text-[2.15rem] font-semibold leading-tight text-base-content">{ title }</h1>
+			if tag != "" {
+				<span class="badge badge-primary badge-soft">{ tag }</span>
 			}
 		</div>
+		if subtitle != "" {
+			<p class="mt-1.5 max-w-3xl text-sm leading-6 text-base-content/58">{ subtitle }</p>
+		}
 	</div>
 }
 
 templ SortToolbar(data SortToolbarData) {
 	if len(data.Options) > 0 || len(data.OrderOptions) > 0 {
-		<div class="rounded-[1.4rem] border border-slate-200/80 bg-white/78 px-4 py-3.5 shadow-[0_18px_45px_rgba(14,31,53,0.05)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out]">
-			<div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-				<div class="min-w-0">
-					<div class="flex items-center gap-2 text-sm font-extrabold tracking-[-0.02em] text-slate-900">
-						<span class="inline-flex size-7 items-center justify-center rounded-full bg-slate-950/5 text-slate-500">
-							@AdminIcon("sort", "size-3.5", "sort-toolbar")
-						</span>
-						<span>排序方式</span>
+		<div class="flex items-center justify-between gap-4 border-t border-base-300 pt-4">
+			<div class="text-sm text-base-content/55">{ data.Summary }</div>
+			<div class="flex items-center gap-2">
+				if len(data.Options) > 0 {
+					<div class="join">
+						for _, option := range data.Options {
+							<a class={ joinClasses(sortToolbarLinkClass(option.Active), "join-item") } href={ option.Href } hx-get={ option.Href } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">{ option.Label }</a>
+						}
 					</div>
-					if data.Summary != "" {
-						<div class="mt-1 text-sm leading-6 text-slate-500">{ data.Summary }</div>
-					}
-				</div>
-				<div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-					if len(data.Options) > 0 {
-						<div class="flex flex-wrap gap-2">
-							for _, option := range data.Options {
-								<a
-									class={ sortToolbarLinkClass(option.Active) }
-									href={ option.Href }
-									hx-get={ option.Href }
-									hx-target="#admin-page-body"
-									hx-swap="outerHTML"
-									hx-push-url="true">{ option.Label }</a>
-							}
-						</div>
-					}
-					if len(data.OrderOptions) > 0 {
-						<div class="flex flex-wrap gap-2">
-							for _, option := range data.OrderOptions {
-								<a
-									class={ joinClasses(sortToolbarLinkClass(option.Active), "px-3") }
-									href={ option.Href }
-									hx-get={ option.Href }
-									hx-target="#admin-page-body"
-									hx-swap="outerHTML"
-									hx-push-url="true"
-									aria-label={ sortOrderAriaLabel(option.Label) }
-									title={ sortOrderAriaLabel(option.Label) }>
-									<span class="inline-flex items-center justify-center">
-										@AdminIcon(sortOrderIconName(option.Label), "size-4", sortOrderIconName(option.Label))
-									</span>
-									<span class="sr-only">{ option.Label }</span>
-								</a>
-							}
-						</div>
-					}
-				</div>
+				}
+				if len(data.OrderOptions) > 0 {
+					<div class="join">
+						for _, option := range data.OrderOptions {
+							<a class={ joinClasses(sortToolbarLinkClass(option.Active), "join-item btn-square") } href={ option.Href } hx-get={ option.Href } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label={ sortOrderAriaLabel(option.Label) } title={ sortOrderAriaLabel(option.Label) }>
+								@AdminIcon(sortOrderIconName(option.Label), "size-4", sortOrderIconName(option.Label))
+							</a>
+						}
+					</div>
+				}
 			</div>
 		</div>
 	}
 }
 
 templ ListFooter(meta ListMeta) {
-	<div class="mt-6 flex flex-col gap-3 border-t border-slate-200/70 pt-4 text-sm text-slate-500 motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:flex-row sm:items-center sm:justify-between">
+	<div class="mt-6 flex items-center justify-between border-t border-base-300 pt-4 text-sm text-base-content/55">
 		<div>{ metaSummary(meta) }</div>
-		if meta.PrevURL != "" || meta.NextURL != "" {
-			<div class="flex flex-wrap gap-2">
-				if meta.PrevURL != "" {
-					<a class="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-2 text-sm font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">上一页</a>
-				}
-				if meta.NextURL != "" {
-					<a class="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-2 text-sm font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">下一页</a>
-				}
-			</div>
-		}
+		<div class="join">
+			if meta.PrevURL != "" {
+				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="上一页"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m12.5 5-5 5 5 5"></path></svg></a>
+			}
+			<button class="btn btn-primary btn-sm join-item" type="button" aria-current="page">{ fmt.Sprintf("%d", meta.Page) }</button>
+			if meta.NextURL != "" {
+				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7.5 5 5 5-5 5"></path></svg></a>
+			}
+		</div>
 	</div>
 }
 
 templ ChoiceFilterGroup(name string, current string, options []FilterChoice) {
-	@ChoiceFilterGroupForFormAligned("", name, current, options, "sm:justify-end")
+	@ChoiceFilterGroupForFormAligned("", name, current, options, "")
 }
 
 templ ChoiceFilterGroupForForm(formID string, name string, current string, options []FilterChoice) {
-	@ChoiceFilterGroupForFormAligned(formID, name, current, options, "sm:justify-end")
+	@ChoiceFilterGroupForFormAligned(formID, name, current, options, "")
 }
 
 templ ChoiceFilterGroupForFormAligned(formID string, name string, current string, options []FilterChoice, alignClass string) {
-	<div data-admin-choice-group={ name } class={ joinClasses("flex flex-wrap items-center gap-2", alignClass) }>
+	<div data-admin-choice-group={ name } class={ joinClasses("join", alignClass) }>
 		for _, option := range options {
-			<label class={ filterChoiceClass(equalTrimmed(option.Value, current)) }>
+			<label class={ joinClasses(filterChoiceClass(equalTrimmed(option.Value, current)), "join-item") }>
 				if formID != "" {
 					<input class="sr-only" type="radio" name={ name } value={ option.Value } form={ formID } checked?={ equalTrimmed(option.Value, current) }/>
 				} else {
@@ -252,58 +189,32 @@ templ ChoiceFilterGroupForFormAligned(formID string, name string, current string
 }
 
 templ FilterPanel(id string, title string, summary string, controls templ.Component, hasControls bool, content templ.Component) {
-	<div id={ id } class="overflow-hidden rounded-[1.45rem] border border-slate-200/80 bg-white/78 shadow-[0_18px_45px_rgba(14,31,53,0.05)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out]">
-		<div class={ joinClasses("flex flex-col gap-4 px-4 pt-4 sm:px-5 sm:pt-5", ternaryString(hasControls, "lg:flex-row lg:items-start lg:justify-between", "")) }>
-			<div class="min-w-0">
-				<div class="flex items-center gap-2 text-sm font-extrabold tracking-[-0.02em] text-slate-900">
-					<span class="inline-flex size-8 items-center justify-center rounded-full bg-slate-950/5 text-slate-500">
-						@AdminIcon("filter", "size-4", "filter-panel")
-					</span>
-					<span>{ title }</span>
+	<section id={ id } class="card border border-base-300 bg-base-100">
+		<div class="card-body gap-4 p-4">
+			<div class="flex items-center justify-between gap-6">
+				<div class="min-w-0">
+					<h2 class="text-sm font-semibold text-base-content">{ title }</h2>
+					if summary != "" {
+						<p class="mt-1 text-xs text-base-content/50">{ summary }</p>
+					}
 				</div>
-				if summary != "" {
-					<div class="mt-1 text-sm leading-6 text-slate-500">{ summary }</div>
+				if hasControls {
+					<div class="shrink-0">@controls</div>
 				}
 			</div>
-			if hasControls {
-				<div class="min-w-0 lg:max-w-[48rem] lg:shrink-0 lg:pl-6">
-					@controls
-				</div>
-			}
-		</div>
-		<div class="px-4 pb-4 pt-3 sm:px-5 sm:pb-5 sm:pt-4">
 			@content
 		</div>
-	</div>
+	</section>
 }
 
 templ DialogLoadingPlaceholder(title string, summary string) {
 	<div class="space-y-5">
 		<div class="flex items-start justify-between gap-4">
-			<div class="min-w-0">
-				<h3 id="admin-action-dialog-title" class="text-xl font-extrabold tracking-[-0.03em] text-slate-950">{ title }</h3>
-				if summary != "" {
-					<div class="mt-2 text-sm leading-7 text-slate-600">{ summary }</div>
-				}
-			</div>
-			<button
-				type="button"
-				class="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-white/82 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-				data-hs-overlay="#admin-action-dialog"
-				aria-label="关闭弹层">
-				<span class="sr-only">关闭弹层</span>
-				<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-					<path d="m6 6 8 8"></path>
-					<path d="m14 6-8 8"></path>
-				</svg>
+			<div><h3 id="admin-action-dialog-title" class="text-xl font-semibold">{ title }</h3><p class="mt-2 text-sm text-base-content/60">{ summary }</p></div>
+			<button type="button" class="btn btn-ghost btn-circle btn-sm" data-admin-dialog-close="#admin-action-dialog" aria-label="关闭弹层">
+				<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8"></path></svg>
 			</button>
 		</div>
-		<div class="grid gap-3">
-			<div class="h-24 rounded-[1.4rem] bg-slate-100/80"></div>
-			<div class="grid gap-3 sm:grid-cols-2">
-				<div class="h-24 rounded-[1.25rem] bg-slate-100/75"></div>
-				<div class="h-24 rounded-[1.25rem] bg-slate-100/75"></div>
-			</div>
-		</div>
+		<div class="space-y-3"><div class="skeleton h-24 w-full"></div><div class="grid grid-cols-2 gap-3"><div class="skeleton h-20"></div><div class="skeleton h-20"></div></div></div>
 	</div>
 }

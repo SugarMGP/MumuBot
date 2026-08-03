@@ -10,14 +10,14 @@ import (
 
 func NavItems() []NavItem {
 	return []NavItem{
-		{Label: "总览", Href: "/admin"},
-		{Label: "风格卡片", Href: "/admin/style-cards"},
-		{Label: "黑话", Href: "/admin/jargons"},
+		{Label: "首页", Href: "/admin"},
+		{Label: "黑话词典", Href: "/admin/jargons"},
 		{Label: "表情包", Href: "/admin/stickers"},
-		{Label: "话题", Href: "/admin/topics"},
-		{Label: "记忆", Href: "/admin/memories"},
-		{Label: "成员", Href: "/admin/members"},
-		{Label: "系统", Href: "/admin/system"},
+		{Label: "话题管理", Href: "/admin/topics"},
+		{Label: "长期记忆", Href: "/admin/memories"},
+		{Label: "成员画像", Href: "/admin/members"},
+		{Label: "系统状态", Href: "/admin/system"},
+		{Label: "风格卡片", Href: "/admin/style-cards"},
 	}
 }
 
@@ -34,15 +34,15 @@ func joinClasses(parts ...string) string {
 }
 
 func navClass(currentPath string, href string) string {
-	base := "group inline-flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition duration-300 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+	base := "group relative flex h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
 	active := currentPath == href
 	if !active && href != "" && href != "/admin" && strings.HasPrefix(currentPath, href+"/") {
 		active = true
 	}
 	if active {
-		return joinClasses(base, "bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] text-white shadow-[0_20px_36px_rgba(15,23,42,0.18)]")
+		return joinClasses(base, "bg-primary/12 text-primary before:absolute before:-left-3 before:h-7 before:w-1 before:rounded-r-full before:bg-primary")
 	}
-	return joinClasses(base, "text-slate-600 hover:bg-white/90 hover:text-slate-900")
+	return joinClasses(base, "text-base-content/68 hover:bg-base-200 hover:text-base-content")
 }
 
 func boolText(v bool) string {
@@ -116,7 +116,7 @@ func systemSectionIconName(title string) string {
 }
 
 func systemFieldCardClass(field SystemField) string {
-	base := "rounded-[1.15rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80"
+	base := "rounded-xl border border-base-300 bg-base-200/55 p-4"
 	if systemFieldNeedsWide(field) {
 		return joinClasses(base, "sm:col-span-2")
 	}
@@ -124,7 +124,7 @@ func systemFieldCardClass(field SystemField) string {
 }
 
 func systemFieldValueClass(field SystemField) string {
-	base := "mt-2 break-words whitespace-pre-line text-sm leading-6 text-slate-700"
+	base := "mt-2 break-words whitespace-pre-line text-sm leading-6 text-base-content/75"
 	if systemFieldNeedsWide(field) {
 		return joinClasses(base, "font-normal")
 	}
@@ -172,12 +172,22 @@ func styleCardStatusText(status memory.StylePatternStatus) string {
 func styleCardStatusClass(status memory.StylePatternStatus) string {
 	switch status {
 	case memory.StylePatternStatusActive:
-		return "inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200"
+		return "badge badge-success badge-soft badge-sm"
 	case memory.StylePatternStatusRejected:
-		return "inline-flex items-center rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700 ring-1 ring-rose-200"
+		return "badge badge-error badge-soft badge-sm"
 	default:
-		return "inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-200"
+		return "badge badge-warning badge-soft badge-sm"
 	}
+}
+
+func styleCardTone(status memory.StylePatternStatus) string {
+	if status == memory.StylePatternStatusActive {
+		return "success"
+	}
+	if status == memory.StylePatternStatusRejected {
+		return "neutral"
+	}
+	return "primary"
 }
 
 func jargonStatusText(item memory.Jargon) string {
@@ -198,12 +208,22 @@ func jargonStatusValue(item memory.Jargon) string {
 func jargonStatusClass(item memory.Jargon) string {
 	switch jargonStatusValue(item) {
 	case string(memory.CultureStatusActive):
-		return "inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200"
+		return "badge badge-success badge-soft badge-sm"
 	case "rejected":
-		return "inline-flex items-center rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700 ring-1 ring-rose-200"
+		return "badge badge-error badge-soft badge-sm"
 	default:
-		return "inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-200"
+		return "badge badge-warning badge-soft badge-sm"
 	}
+}
+
+func jargonTone(item memory.Jargon) string {
+	if item.Status == memory.CultureStatusActive {
+		return "success"
+	}
+	if item.Status == memory.CultureStatusRejected {
+		return "neutral"
+	}
+	return "primary"
 }
 
 func formatTime(ts time.Time) string {

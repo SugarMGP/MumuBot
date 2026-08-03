@@ -3,174 +3,129 @@ package views
 import "fmt"
 
 templ StyleCardListPage(data StyleCardListPageData, currentPath string) {
-	@Layout(LayoutData{
-		Title:       "风格卡片",
-		CurrentPath: currentPath,
-		NavItems:    NavItems(),
-		Flash:       data.Flash,
-	}, StyleCardListBody(data))
+	@Layout(LayoutData{Title: "风格卡片", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, StyleCardListBody(data))
 }
 
 templ StyleCardListBody(data StyleCardListPageData) {
 	<div class="space-y-6">
-		@PageHeader("风格卡片", "查看场景和表达方式，处理不合适的风格卡片。", "风格审核")
-		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("style-card-filters", "筛选条件", "先按群号或关键词缩小范围，再处理需要调整的风格卡片。", StyleCardFilterControls(data), true, StyleCardFilterForm(data))
-			@SortToolbar(data.Sort)
-			<div class="space-y-4">
-				if len(data.Items) == 0 {
-					<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500">暂无风格卡片</div>
-				}
+		@PageHeader("风格卡片", "审核群聊中学习到的表达风格。", "")
+		@FilterPanel("style-card-filters", "筛选条件", "按群号、关键词和状态查找风格卡片。", StyleCardFilterControls(data), true, StyleCardFilterForm(data))
+		@SortToolbar(data.Sort)
+		if len(data.Items) == 0 {
+			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无风格卡片</div></div>
+		}
+		if len(data.Items) > 0 {
+			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<article class="grid gap-4 rounded-[1.45rem] border border-slate-200/70 bg-white/76 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)] motion-safe:animate-[admin-fade-up_220ms_ease-out] xl:grid-cols-[minmax(0,1fr)_8.75rem]">
-						<div class="space-y-3.5">
-							<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-								<div class="min-w-0">
-									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 最近更新 <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
+					<article class="admin-record-card card border border-base-300 bg-base-100" data-tone={ styleCardTone(item.Status) }>
+						<div class="card-body gap-4 p-5 pl-6">
+							<div class="flex items-start justify-between gap-4">
+								<div>
+									<div class="flex items-center gap-2">
+										<h2 class="text-xl font-semibold">{ item.Situation }</h2>
+										<span class={ styleCardStatusClass(item.Status) }>{ styleCardStatusText(item.Status) }</span>
+									</div>
+									<p class="mt-1 text-xs text-base-content/50">群号：{ fmt.Sprintf("%d", item.GroupID) } <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></p>
 								</div>
-								<span class={ styleCardStatusClass(item.Status) }>{ styleCardStatusText(item.Status) }</span>
-							</div>
-							<div class="admin-example-spotlight rounded-[1.3rem] p-4 text-white shadow-[0_16px_34px_rgba(15,23,42,0.14)] ring-1 ring-white/10">
-								<blockquote class="text-balance text-[1.18rem] font-extrabold leading-7 tracking-[-0.04em] text-white sm:text-[1.35rem]">“{ item.Expression }”</blockquote>
-							</div>
-							<div class="rounded-[1.1rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-								<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">使用场景</div>
-								<p class="mt-2 text-sm leading-6 text-slate-700">{ item.Situation }</p>
-							</div>
-							<div class="rounded-[1.1rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-								<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">消息证据 · { fmt.Sprintf("%d", len(item.Evidence)) } 条</div>
-								<div class="mt-2 space-y-2">
-									for i, evidence := range item.Evidence {
-										if i < 3 {
-											<p class="text-sm leading-6 text-slate-700"><span class="font-semibold text-slate-900">{ evidence.Nickname }</span> · <time datetime={ formatTimeAttr(evidence.MessageTime) }>{ formatTime(evidence.MessageTime) }</time>：{ evidence.TextContent }</p>
-										}
+								<div class="flex shrink-0 gap-2">
+									for _, action := range styleCardActions(item.Status) {
+										<button class={ rowActionClass(action) } type="button" data-admin-dialog="#admin-action-dialog" hx-get={ styleCardActionDialogHref(item.ID, action.Value) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">{ action.Label }</button>
 									}
 								</div>
 							</div>
-						</div>
-						<aside class="border-t border-dashed border-slate-200 pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
-							<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">操作</div>
-							<div class="mt-3 grid gap-2">
-								for _, action := range styleCardActions(item.Status) {
-									<button
-										class={ rowActionClass(action) }
-										type="button"
-										data-hs-overlay="#admin-action-dialog"
-										hx-get={ styleCardActionDialogHref(item.ID, action.Value) }
-										hx-target="#admin-action-dialog-content"
-										hx-swap="innerHTML">{ action.Label }</button>
+							<blockquote class="admin-quote rounded-xl p-4 text-base italic leading-7 text-base-content">“{ item.Expression }”</blockquote>
+							<div><h3 class="text-xs font-semibold text-base-content/60">消息证据</h3><div class="mt-2 space-y-2 border-l-2 border-base-300 pl-4">
+								if len(item.Evidence) == 0 {
+									<p class="text-sm text-base-content/45">暂无关联消息</p>
 								}
-							</div>
-						</aside>
+								for i, evidence := range item.Evidence {
+									if i < 3 {
+										<p class="text-sm leading-6 text-base-content/72"><span class="font-medium text-info">{ "@" + evidence.Nickname }</span>：{ evidence.TextContent }</p>
+									}
+								}
+							</div></div>
+						</div>
 					</article>
 				}
 			</div>
-			@ListFooter(data.Meta)
-		</div>
+		}
+		@ListFooter(data.Meta)
 	</div>
 }
 
 templ StyleCardFilterControls(data StyleCardListPageData) {
-	<div class="grid gap-2.5 lg:justify-items-end">
-		@ChoiceFilterGroupForForm("style-card-filter-form", "status", data.Status, []FilterChoice{
-			{Label: "全部状态", Value: ""},
-			{Label: "候选", Value: "candidate"},
-			{Label: "已启用", Value: "active"},
-			{Label: "已拒绝", Value: "rejected"},
-		})
-	</div>
+	@ChoiceFilterGroupForForm("style-card-filter-form", "status", data.Status, []FilterChoice{{Label: "全部", Value: ""}, {Label: "待审核", Value: "candidate"}, {Label: "已启用", Value: "active"}, {Label: "已拒绝", Value: "rejected"}})
 }
 
 templ StyleCardFilterForm(data StyleCardListPageData) {
-	<form id="style-card-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/style-cards" hx-get="/admin/style-cards" hx-trigger="change from:input[form='style-card-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
-		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
-		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="场景或表达"/>
-		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
+	<form id="style-card-filter-form" class="grid grid-cols-[180px_minmax(220px,1fr)_auto] items-center gap-3" method="get" action="/admin/style-cards" hx-get="/admin/style-cards" hx-trigger="change from:input[form='style-card-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="关键词"/>
+		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">@AdminIcon("filter", "size-4", "style-filter")<span>筛选</span></button>
 	</form>
 }
 
 templ JargonListPage(data JargonListPageData, currentPath string) {
-	@Layout(LayoutData{
-		Title:       "黑话",
-		CurrentPath: currentPath,
-		NavItems:    NavItems(),
-		Flash:       data.Flash,
-	}, JargonListBody(data))
+	@Layout(LayoutData{Title: "黑话词典", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, JargonListBody(data))
 }
 
 templ JargonListBody(data JargonListPageData) {
 	<div class="space-y-6">
-		@PageHeader("黑话", "筛选、查看并更新术语状态。", "黑话审核")
-		<div class="space-y-4 rounded-[1.7rem] border border-white/70 bg-white/82 p-4 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-5">
-			@FilterPanel("jargon-filters", "筛选条件", "先按群号或关键词缩小范围，再处理需要关注的术语。", JargonFilterControls(data), true, JargonFilterForm(data))
-			@SortToolbar(data.Sort)
-			<div class="space-y-4">
-				if len(data.Items) == 0 {
-					<div class="rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/55 p-6 text-center text-sm font-medium text-slate-500">暂无黑话记录</div>
-				}
+		@PageHeader("黑话词典", "审核群聊中学习到的词语和含义。", "")
+		@FilterPanel("jargon-filters", "筛选条件", "按群号、关键词和状态查找词条。", JargonFilterControls(data), true, JargonFilterForm(data))
+		@SortToolbar(data.Sort)
+		if len(data.Items) == 0 {
+			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无黑话记录</div></div>
+		}
+		if len(data.Items) > 0 {
+			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<article class="grid gap-4 rounded-[1.45rem] border border-slate-200/70 bg-white/76 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)] motion-safe:animate-[admin-fade-up_220ms_ease-out] xl:grid-cols-[minmax(0,1fr)_8.75rem]">
-						<div class="space-y-3.5">
-							<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-								<div class="min-w-0">
-									<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">群 { fmt.Sprintf("%d", item.GroupID) } · 最近更新 <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
-									<h2 class="mt-2 text-[1.5rem] font-extrabold tracking-[-0.05em] text-slate-950 sm:text-[1.75rem]">{ item.Term }</h2>
+					<article class="admin-record-card card border border-base-300 bg-base-100" data-tone={ jargonTone(item.Jargon) }>
+						<div class="card-body gap-4 p-5 pl-6">
+							<div class="flex items-start justify-between gap-4">
+								<div>
+									<div class="flex items-center gap-2">
+										<h2 class="text-xl font-semibold">{ item.Term }</h2>
+										<span class={ jargonStatusClass(item.Jargon) }>{ jargonStatusText(item.Jargon) }</span>
+									</div>
+									<p class="mt-1 text-xs text-base-content/50">群 { fmt.Sprintf("%d", item.GroupID) } <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></p>
 								</div>
-								<span class={ jargonStatusClass(item.Jargon) }>{ jargonStatusText(item.Jargon) }</span>
-							</div>
-							<p class="text-sm leading-7 text-slate-700 sm:text-[15px]">{ item.Meaning }</p>
-							<div class="rounded-[1.1rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-								<div class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">消息证据 · { fmt.Sprintf("%d", len(item.Evidence)) } 条</div>
-								<div class="mt-2 space-y-2">
-									for i, evidence := range item.Evidence {
-										if i < 3 {
-											<p class="text-sm leading-6 text-slate-700"><span class="font-semibold text-slate-900">{ evidence.Nickname }</span> · <time datetime={ formatTimeAttr(evidence.MessageTime) }>{ formatTime(evidence.MessageTime) }</time>：{ evidence.TextContent }</p>
-										}
+								<div class="flex shrink-0 gap-2">
+									for _, action := range jargonActions(jargonStatusValue(item.Jargon)) {
+										<button class={ rowActionClass(action) } type="button" data-admin-dialog="#admin-action-dialog" hx-get={ jargonActionDialogHref(item.ID, action.Value) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">{ action.Label }</button>
 									}
 								</div>
 							</div>
-						</div>
-						<aside class="border-t border-dashed border-slate-200 pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
-							<div class="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">操作</div>
-							<div class="mt-3 grid gap-2">
-								for _, action := range jargonActions(jargonStatusValue(item.Jargon)) {
-									<button
-										class={ rowActionClass(action) }
-										type="button"
-										data-hs-overlay="#admin-action-dialog"
-										hx-get={ jargonActionDialogHref(item.ID, action.Value) }
-										hx-target="#admin-action-dialog-content"
-										hx-swap="innerHTML">{ action.Label }</button>
+							<div class="admin-quote rounded-xl p-4"><span class="font-medium">释义：</span><span class="text-sm leading-7 text-base-content/72">{ item.Meaning }</span></div>
+							<div><h3 class="text-xs font-semibold text-base-content/60">学习来源（上下文）</h3><div class="mt-2 space-y-2 border-l-2 border-base-300 pl-4">
+								if len(item.Evidence) == 0 {
+									<p class="text-sm text-base-content/45">暂无关联消息</p>
 								}
-							</div>
-						</aside>
+								for i, evidence := range item.Evidence {
+									if i < 3 {
+										<p class="text-sm leading-6 text-base-content/72"><span class="font-medium">{ evidence.Nickname }</span>：{ evidence.TextContent }</p>
+									}
+								}
+							</div></div>
+						</div>
 					</article>
 				}
 			</div>
-			@ListFooter(data.Meta)
-		</div>
+		}
+		@ListFooter(data.Meta)
 	</div>
 }
 
 templ JargonFilterControls(data JargonListPageData) {
-	<div class="grid gap-2.5 lg:justify-items-end">
-		@ChoiceFilterGroupForForm("jargon-filter-form", "status", data.Status, []FilterChoice{
-			{Label: "全部状态", Value: ""},
-			{Label: "待审核", Value: "candidate"},
-			{Label: "已通过", Value: "active"},
-			{Label: "已拒绝", Value: "rejected"},
-		})
-	</div>
+	@ChoiceFilterGroupForForm("jargon-filter-form", "status", data.Status, []FilterChoice{{Label: "全部", Value: ""}, {Label: "待审核", Value: "candidate"}, {Label: "已启用", Value: "active"}, {Label: "已拒绝", Value: "rejected"}})
 }
 
 templ JargonFilterForm(data JargonListPageData) {
-	<form id="jargon-filter-form" class="grid gap-2.5 lg:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto] lg:items-center" method="get" action="/admin/jargons" hx-get="/admin/jargons" hx-trigger="change from:input[form='jargon-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
-		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
-		<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-2.5 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" type="text" name="keyword" value={ data.Keyword } placeholder="术语或释义"/>
-		<button class="inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70 lg:min-w-28" type="submit" data-loading-label="筛选中">筛选</button>
+	<form id="jargon-filter-form" class="grid grid-cols-[180px_minmax(220px,1fr)_auto] items-center gap-3" method="get" action="/admin/jargons" hx-get="/admin/jargons" hx-trigger="change from:input[form='jargon-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="关键词"/>
+		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">@AdminIcon("filter", "size-4", "jargon-filter")<span>筛选</span></button>
 	</form>
 }

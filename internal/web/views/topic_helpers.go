@@ -244,18 +244,18 @@ func topicSummaryChangeBadges(change TopicSummaryChangeView) []TopicSummaryChang
 }
 
 func topicChangeBadgeClass(tone string) string {
-	base := "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1"
+	base := "badge badge-sm badge-soft"
 	switch strings.TrimSpace(tone) {
 	case "cyan":
-		return joinClasses(base, "bg-cyan-50 text-cyan-700 ring-cyan-200/80")
+		return joinClasses(base, "badge-info")
 	case "teal":
-		return joinClasses(base, "bg-teal-50 text-teal-700 ring-teal-200/80")
+		return joinClasses(base, "badge-success")
 	case "amber":
-		return joinClasses(base, "bg-amber-50 text-amber-700 ring-amber-200/80")
+		return joinClasses(base, "badge-warning")
 	case "emerald":
-		return joinClasses(base, "bg-emerald-50 text-emerald-700 ring-emerald-200/80")
+		return joinClasses(base, "badge-success")
 	default:
-		return joinClasses(base, "bg-slate-100 text-slate-600 ring-slate-200/80")
+		return joinClasses(base, "badge-ghost")
 	}
 }
 
@@ -389,9 +389,17 @@ func topicSummaryProgressText(topic services.TopicThreadView) string {
 func topicSummaryProgressClass(topic services.TopicThreadView) string {
 	latest := topic.LatestSummary()
 	if latest != nil && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
-		return "inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200"
+		return "badge badge-success badge-soft badge-sm"
 	}
-	return "inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-200"
+	return "badge badge-warning badge-soft badge-sm"
+}
+
+func topicTone(topic services.TopicThreadView) string {
+	latest := topic.LatestSummary()
+	if latest != nil && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
+		return "success"
+	}
+	return "primary"
 }
 
 func topicSummaryThroughID(topic services.TopicThreadView) uint {

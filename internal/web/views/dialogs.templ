@@ -1,30 +1,26 @@
 package views
 
+templ DialogCloseButton(selector string) {
+	<button type="button" class="btn btn-ghost btn-circle btn-sm" data-admin-dialog-close={ selector } aria-label="关闭弹层">
+		<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+			<path d="m6 6 8 8M14 6l-8 8"></path>
+		</svg>
+	</button>
+}
+
 templ AdminActionDialogContent(data AdminActionDialogContentData) {
 	<div class="space-y-5">
 		<div class="flex items-start justify-between gap-4">
 			<div class="min-w-0">
-				<h3 id="admin-action-dialog-title" class="text-xl font-extrabold tracking-[-0.03em] text-slate-950">{ data.Title }</h3>
+				<h3 id="admin-action-dialog-title" class="text-xl font-semibold text-base-content">{ data.Title }</h3>
 				if data.Body != "" {
-					<div class="mt-2 text-sm leading-7 text-slate-600">{ data.Body }</div>
+					<p class="mt-2 text-sm leading-6 text-base-content/60">{ data.Body }</p>
 				}
 			</div>
-			<button
-				type="button"
-				class="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-white/82 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-				data-hs-overlay="#admin-action-dialog"
-				aria-label="关闭弹层">
-				<span class="sr-only">关闭弹层</span>
-				<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-					<path d="m6 6 8 8"></path>
-					<path d="m14 6-8 8"></path>
-				</svg>
-			</button>
+			@DialogCloseButton("#admin-action-dialog")
 		</div>
 		if data.Spotlight != "" {
-			<div class="admin-example-spotlight rounded-[1.5rem] p-4 text-white shadow-[0_18px_40px_rgba(15,23,42,0.16)] ring-1 ring-white/10">
-				<div class="text-xl font-extrabold leading-9 tracking-[-0.04em]">{ data.Spotlight }</div>
-			</div>
+			<div class="admin-quote text-base font-medium leading-7">{ data.Spotlight }</div>
 		}
 		if len(data.Chips) > 0 {
 			<div class="flex flex-wrap gap-2">
@@ -34,22 +30,22 @@ templ AdminActionDialogContent(data AdminActionDialogContentData) {
 			</div>
 		}
 		if len(data.Fields) > 0 {
-			<div class="grid gap-3 sm:grid-cols-2">
+			<div class="grid grid-cols-2 gap-3">
 				for _, field := range data.Fields {
-					<div class="rounded-[1.25rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-						<strong class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">{ field.Label }</strong>
-						<div class="mt-2 whitespace-pre-line break-words text-sm leading-7 text-slate-700">{ field.Value }</div>
+					<div class="rounded-box bg-base-200 p-4">
+						<strong class="text-xs font-medium text-base-content/50">{ field.Label }</strong>
+						<div class="mt-2 whitespace-pre-line break-words text-sm leading-6 text-base-content/75">{ field.Value }</div>
 					</div>
 				}
 			</div>
 		}
-		<form class="mt-5" method="post" action="/admin/actions" hx-post="/admin/actions" hx-target="#admin-page-body" hx-swap="outerHTML" data-admin-action-dialog-form>
+		<form method="post" action="/admin/actions" hx-post="/admin/actions" hx-target="#admin-page-body" hx-swap="outerHTML" data-admin-action-dialog-form>
 			<input type="hidden" name="return_to" value={ data.ReturnTo }/>
 			for _, field := range data.Hidden {
 				<input type="hidden" name={ field.Name } value={ field.Value }/>
 			}
-			<div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-				<button type="button" class="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-3 text-sm font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70" data-hs-overlay="#admin-action-dialog">取消</button>
+			<div class="modal-action">
+				<button type="button" class="btn btn-ghost" data-admin-dialog-close="#admin-action-dialog">取消</button>
 				<button class={ data.SubmitClass } type="submit" data-loading-label={ data.BusyLabel }>{ data.SubmitLabel }</button>
 			</div>
 		</form>
@@ -59,46 +55,24 @@ templ AdminActionDialogContent(data AdminActionDialogContentData) {
 templ StickerPreviewDialog(data StickerPreviewDialogData) {
 	<div class="space-y-5">
 		<div class="flex items-start justify-between gap-4">
-			<div class="min-w-0">
-				<h3 id="admin-sticker-preview-dialog-title" class="text-xl font-extrabold tracking-[-0.03em] text-slate-950">表情包预览</h3>
-				<div class="mt-2 text-sm leading-7 text-slate-600">查看图片、文件名和哈希信息。</div>
+			<div>
+				<h3 id="admin-sticker-preview-dialog-title" class="text-xl font-semibold">表情包预览</h3>
+				<p class="mt-2 text-sm text-base-content/60">查看图片和文件信息。</p>
 			</div>
-			<button
-				type="button"
-				class="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-white/82 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-				data-hs-overlay="#admin-sticker-preview-dialog"
-				aria-label="关闭弹层">
-				<span class="sr-only">关闭弹层</span>
-				<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-					<path d="m6 6 8 8"></path>
-					<path d="m14 6-8 8"></path>
-				</svg>
-			</button>
+			@DialogCloseButton("#admin-sticker-preview-dialog")
 		</div>
-		<div class="flex min-h-80 items-center justify-center rounded-[1.75rem] bg-[radial-gradient(circle_at_top,rgba(96,165,250,0.24),transparent_55%),linear-gradient(135deg,rgba(16,26,50,0.98),rgba(14,116,144,0.9))] p-5">
+		<div class="flex min-h-80 items-center justify-center rounded-box bg-base-200 p-5">
 			<img class="block max-h-[32rem] max-w-full object-contain" src={ data.FileURL } alt={ data.Description } loading="lazy"/>
 		</div>
-		<div class="grid gap-3 sm:grid-cols-2">
-			<div class="rounded-[1.25rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-				<strong class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">描述</strong>
-				<div class="mt-2 text-sm leading-7 text-slate-700">{ data.Description }</div>
-			</div>
-			<div class="rounded-[1.25rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-				<strong class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">文件名</strong>
-				<div class="mt-2 break-all text-sm leading-7 text-slate-700">{ data.FileName }</div>
-			</div>
-			<div class="rounded-[1.25rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-				<strong class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">哈希</strong>
-				<div class="mt-2 break-all text-sm leading-7 text-slate-700">{ data.FileHash }</div>
-			</div>
-			<div class="rounded-[1.25rem] bg-slate-50/90 p-4 ring-1 ring-slate-200/80">
-				<strong class="text-xs font-extrabold uppercase tracking-[0.1em] text-slate-500">统计</strong>
-				<div class="mt-2 text-sm leading-7 text-slate-700">{ data.Meta }</div>
-			</div>
+		<div class="grid grid-cols-2 gap-3">
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">描述</strong><div class="mt-2 text-sm">{ data.Description }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">文件名</strong><div class="mt-2 break-all text-sm">{ data.FileName }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">哈希</strong><div class="mt-2 break-all text-sm">{ data.FileHash }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">统计</strong><div class="mt-2 text-sm">{ data.Meta }</div></div>
 		</div>
-		<div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-			<a class="inline-flex items-center justify-center gap-2 rounded-2xl bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-700 ring-1 ring-teal-200/80 transition duration-200 ease-out hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white" href={ data.FileURL } target="_blank" rel="noreferrer">新窗口打开</a>
-			<button type="button" class="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-3 text-sm font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70" data-hs-overlay="#admin-sticker-preview-dialog">关闭</button>
+		<div class="modal-action">
+			<a class="btn btn-success btn-soft" href={ data.FileURL } target="_blank" rel="noreferrer">新窗口打开</a>
+			<button type="button" class="btn btn-ghost" data-admin-dialog-close="#admin-sticker-preview-dialog">关闭</button>
 		</div>
 	</div>
 }
@@ -106,22 +80,9 @@ templ StickerPreviewDialog(data StickerPreviewDialogData) {
 templ DialogErrorContent(overlayID string, title string, body string) {
 	<div class="space-y-5">
 		<div class="flex items-start justify-between gap-4">
-			<div class="min-w-0">
-				<h3 class="text-xl font-extrabold tracking-[-0.03em] text-slate-950">{ title }</h3>
-				<div class="mt-2 text-sm leading-7 text-slate-600">{ body }</div>
-			</div>
-			<button
-				type="button"
-				class="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-white/82 text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-				data-hs-overlay={ "#" + overlayID }
-				aria-label="关闭弹层">
-				<span class="sr-only">关闭弹层</span>
-				<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-					<path d="m6 6 8 8"></path>
-					<path d="m14 6-8 8"></path>
-				</svg>
-			</button>
+			<div><h3 class="text-xl font-semibold">{ title }</h3><p class="mt-2 text-sm leading-6 text-base-content/60">{ body }</p></div>
+			@DialogCloseButton("#" + overlayID)
 		</div>
-		<div class="rounded-[1.25rem] bg-slate-50/90 p-4 text-sm leading-7 text-slate-700 ring-1 ring-slate-200/80">{ body }</div>
+		<div class="alert alert-error alert-soft text-sm">{ body }</div>
 	</div>
 }

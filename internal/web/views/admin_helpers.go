@@ -11,7 +11,7 @@ import (
 )
 
 func FaviconSVG() string {
-	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f766e"/><stop offset="100%" stop-color="#0f172a"/></linearGradient></defs><rect width="64" height="64" rx="18" fill="url(#g)"/><path d="M18 46V18h8l6 10 6-10h8v28h-7V30l-5 8h-4l-5-8v16z" fill="white"/></svg>`
+	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#fff3f5"/><path d="M32 48c-5-8-15-10-15-20 0-5 4-9 9-9 3 0 5 1 6 4 1-3 3-4 6-4 5 0 9 4 9 9 0 10-10 12-15 20Z" fill="#e85d75"/><circle cx="32" cy="29" r="4" fill="#ffffff"/><path d="M32 15v6M21 20l4 4M43 20l-4 4" stroke="#159a8c" stroke-width="3" stroke-linecap="round"/></svg>`
 }
 
 func metaSummary(meta ListMeta) string {
@@ -87,11 +87,11 @@ func memoryStatusText(status memory.MemoryStatus) string {
 func memoryStatusClass(status memory.MemoryStatus) string {
 	switch status {
 	case memory.MemoryStatusCandidate:
-		return "inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-200"
+		return "badge badge-warning badge-soft badge-sm"
 	case memory.MemoryStatusArchived:
-		return "inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200"
+		return "badge badge-ghost badge-sm"
 	default:
-		return "inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200"
+		return "badge badge-success badge-soft badge-sm"
 	}
 }
 
@@ -156,11 +156,11 @@ func memberTraitText(profile services.MemberProfileView, kind string) string {
 func rowActionClass(action RowAction) string {
 	switch action.Kind {
 	case "danger":
-		return "inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-rose-50 px-3.5 py-2.5 text-[13px] font-semibold text-rose-700 ring-1 ring-rose-200/80 transition duration-200 ease-out hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
+		return "btn btn-error btn-soft btn-sm"
 	case "ghost":
-		return "inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-3.5 py-2.5 text-[13px] font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
+		return "btn btn-ghost btn-sm border-base-300"
 	default:
-		return "inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-teal-50 px-3.5 py-2.5 text-[13px] font-semibold text-teal-700 ring-1 ring-teal-200/80 transition duration-200 ease-out hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
+		return "btn btn-success btn-sm"
 	}
 }
 
@@ -209,38 +209,38 @@ func stickerPreviewDialogHref(id uint) string {
 func modalActionClass(action RowAction) string {
 	switch action.Kind {
 	case "danger":
-		return "inline-flex items-center justify-center gap-2 rounded-2xl bg-rose-50 px-4 py-2.5 text-[13px] font-semibold text-rose-700 ring-1 ring-rose-200/80 transition duration-200 ease-out hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
+		return "btn btn-error"
 	case "ghost":
-		return "inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-2.5 text-[13px] font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
+		return "btn btn-ghost border-base-300"
 	default:
-		return "inline-flex items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70"
+		return "btn btn-primary"
 	}
 }
 
 func sortToolbarLinkClass(active bool) string {
-	base := "inline-flex items-center justify-center rounded-full px-3 py-1.5 text-sm font-semibold transition duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+	base := "btn btn-sm"
 	if active {
-		return joinClasses(base, "bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] text-white shadow-[0_12px_24px_rgba(15,23,42,0.14)]")
+		return joinClasses(base, "btn-primary")
 	}
-	return joinClasses(base, "border border-slate-200/80 bg-white/88 text-slate-600 hover:bg-white hover:text-slate-900")
+	return joinClasses(base, "btn-ghost border-base-300")
 }
 
 func filterChoiceClass(active bool) string {
-	base := "inline-flex cursor-pointer items-center justify-center rounded-full px-3 py-1.5 text-sm font-semibold transition duration-200 ease-out focus-within:outline-none focus-within:ring-2 focus-within:ring-cyan-300 focus-within:ring-offset-2 focus-within:ring-offset-white"
+	base := "btn btn-sm"
 	if active {
-		return joinClasses(base, "bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] text-white shadow-[0_12px_24px_rgba(15,23,42,0.14)]")
+		return joinClasses(base, "btn-primary")
 	}
-	return joinClasses(base, "border border-slate-200/80 bg-white/88 text-slate-600 hover:bg-white hover:text-slate-900")
+	return joinClasses(base, "btn-ghost border-transparent")
 }
 
 func dialogChipClass(kind string) string {
 	switch strings.TrimSpace(kind) {
 	case "cyan":
-		return "inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-[11px] font-semibold text-cyan-700 ring-1 ring-cyan-200/80"
+		return "badge badge-info badge-soft badge-sm"
 	case "teal":
-		return "inline-flex items-center rounded-full bg-teal-50 px-3 py-1 text-[11px] font-semibold text-teal-700 ring-1 ring-teal-200/80"
+		return "badge badge-success badge-soft badge-sm"
 	default:
-		return "inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200/80"
+		return "badge badge-ghost badge-sm"
 	}
 }
 

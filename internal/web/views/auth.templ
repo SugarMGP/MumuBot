@@ -2,51 +2,56 @@ package views
 
 templ LoginPage(data LoginPageData) {
 	<!doctype html>
-	<html lang="zh-CN">
+	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead("后台登录", nil)
-		<body class="min-h-screen font-sans text-slate-800 antialiased selection:bg-cyan-200/60">
-			<div class="mx-auto flex min-h-screen w-full max-w-7xl items-center justify-center px-4 py-10 sm:px-6">
-				<div class="w-full max-w-xl rounded-[2rem] border border-white/70 bg-white/82 p-8 shadow-[0_26px_70px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-10">
-					<div class="inline-flex items-center rounded-full bg-gradient-to-r from-teal-100 to-cyan-100 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.12em] text-teal-700">管理后台</div>
-					<h1 class="mt-5 text-balance text-4xl font-extrabold leading-none tracking-[-0.06em] text-slate-950 sm:text-5xl">输入管理密钥</h1>
-					<p class="mt-3 text-sm leading-7 text-slate-600 sm:text-base">请输入管理密钥后登录后台。</p>
-					if data.Error != "" {
-						<div class="mt-5 rounded-[1.5rem] border border-rose-200/80 bg-rose-50/90 px-4 py-3 text-sm font-semibold text-rose-700" role="alert" aria-live="assertive">{ data.Error }</div>
-					}
-					if data.Enabled {
-						<form class="mt-6 space-y-4" method="post" action="/login" x-data="{ showKey: false }">
-							<label class="sr-only" for="login-username">用户名</label>
-							<input id="login-username" class="sr-only" type="text" name="login_username" value="admin" autocomplete="username" tabindex="-1"/>
-							<div class="flex gap-3">
-								<input class="block w-full min-w-0 rounded-2xl border-slate-200/80 bg-white/90 px-4 py-3 text-sm text-slate-800 shadow-none placeholder:text-slate-400 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100" x-bind:type="showKey ? 'text' : 'password'" type="password" name="admin_key" placeholder="管理密钥" autocomplete="current-password"/>
-								<button class="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white/82 px-4 py-3 text-sm font-semibold text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 ease-out hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white" type="button" @click="showKey = !showKey" x-bind:aria-pressed="showKey.toString()">
-									<span x-text="showKey ? '隐藏' : '显示'">显示</span>
-								</button>
-							</div>
-							<div class="text-sm leading-6 text-slate-500">仅限管理员使用，请妥善保管管理密钥。</div>
-							<button class="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#101a32_0%,#1e2c4f_58%,#0b7285_120%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_32px_rgba(15,23,42,0.16)] transition duration-200 ease-out hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-wait disabled:opacity-70" type="submit">登录</button>
-						</form>
-					} else {
-						<div class="mt-5 rounded-[1.5rem] border border-amber-200/80 bg-amber-50/90 px-4 py-3 text-sm font-semibold text-amber-800" role="alert" aria-live="assertive">管理后台当前暂不可用，请稍后再试。</div>
-					}
-				</div>
-			</div>
+		<body class="font-sans antialiased">
+			<main class="relative flex min-h-screen items-center justify-center bg-base-200 px-8 py-12">
+				<section class="card w-[368px] border border-base-300 bg-base-100">
+					<div class="card-body items-center p-8 text-center">
+						<div class="avatar placeholder">
+							<div class="w-12 rounded-full bg-primary/12 text-primary"><span class="text-base font-semibold">M</span></div>
+						</div>
+						<div>
+							<h1 class="text-xl font-semibold text-base-content">MumuBot</h1>
+							<p class="mt-1 text-xs text-base-content/52">管理后台</p>
+						</div>
+						<div class="mt-4 w-full">
+							<h2 class="text-lg font-semibold text-base-content">欢迎回来</h2>
+							<p class="mt-1.5 text-sm text-base-content/55">验证访问密钥后进入管理后台</p>
+						</div>
+						if data.Error != "" {
+							<div class="alert alert-error alert-soft mt-4 w-full py-3 text-left text-sm" role="alert" aria-live="assertive">{ data.Error }</div>
+						}
+						if data.Enabled {
+							<form class="mt-4 w-full space-y-4" method="post" action="/login">
+								<label class="sr-only" for="login-username">用户名</label>
+								<input id="login-username" class="sr-only" type="text" name="login_username" value="admin" autocomplete="username" tabindex="-1"/>
+								<label class="input w-full border-base-300 bg-base-100 focus-within:border-primary">
+									<svg class="size-4 text-base-content/45" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6.5 9V7a3.5 3.5 0 0 1 7 0v2"></path><rect x="4.5" y="9" width="11" height="7" rx="2"></rect></svg>
+									<input id="admin-key" class="grow" type="password" name="admin_key" placeholder="输入访问密钥" autocomplete="current-password"/>
+									<button class="btn btn-ghost btn-xs" type="button" data-password-target="#admin-key" aria-pressed="false"><span data-password-label>显示</span></button>
+								</label>
+								<button class="btn btn-primary w-full" type="submit" data-loading-label="登录中">登录</button>
+							</form>
+						} else {
+							<div class="alert alert-warning alert-soft mt-4 w-full text-left text-sm" role="alert">管理后台当前暂不可用，请稍后再试。</div>
+						}
+						<p class="mt-3 flex items-center gap-2 text-xs text-base-content/45"><span class="size-1.5 rounded-full bg-base-content/35"></span>仅系统管理员可访问</p>
+					</div>
+				</section>
+			</main>
 		</body>
 	</html>
 }
 
 templ DisabledPage() {
 	<!doctype html>
-	<html lang="zh-CN">
+	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead("后台未启用", nil)
-		<body class="min-h-screen font-sans text-slate-800 antialiased selection:bg-cyan-200/60">
-			<div class="mx-auto flex min-h-screen w-full max-w-7xl items-center justify-center px-4 py-10 sm:px-6">
-				<div class="w-full max-w-2xl rounded-[2rem] border border-white/70 bg-white/82 p-8 shadow-[0_26px_70px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-10">
-					<div class="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-cyan-100 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-600">后台离线</div>
-					<h1 class="mt-5 text-balance text-4xl font-extrabold leading-none tracking-[-0.06em] text-slate-950 sm:text-5xl">管理后台暂不可用</h1>
-					<p class="mt-4 text-base leading-8 text-slate-600">当前暂时无法进入后台，请稍后再试。</p>
-				</div>
-			</div>
+		<body class="font-sans antialiased">
+			<main class="flex min-h-screen items-center justify-center bg-base-200 px-8">
+				<section class="card w-[440px] border border-base-300 bg-base-100"><div class="card-body items-center text-center"><div class="avatar placeholder"><div class="w-12 rounded-full bg-primary/10 text-primary"><span>M</span></div></div><h1 class="mt-2 text-2xl font-semibold">管理后台暂不可用</h1><p class="text-sm text-base-content/55">当前暂时无法进入后台，请稍后再试。</p></div></section>
+			</main>
 		</body>
 	</html>
 }

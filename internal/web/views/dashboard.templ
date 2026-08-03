@@ -3,145 +3,54 @@ package views
 import "fmt"
 
 templ DashboardPage(data DashboardPageData, currentPath string) {
-	@Layout(LayoutData{
-		Title:       "统计看板",
-		CurrentPath: currentPath,
-		NavItems:    NavItems(),
-		Flash:       data.Flash,
-	}, DashboardBody(data))
+	@Layout(LayoutData{Title: "首页", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, DashboardBody(data))
+}
+
+templ DashboardMetric(icon string, label string, value string, tone string) {
+	<div class={ joinClasses("card border border-base-300 bg-base-100", tone) }>
+		<div class="card-body flex-row items-center gap-3 p-4">
+			<span class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-base-200 text-base-content/65">@AdminIcon(icon, "size-5", "dashboard-"+icon)</span>
+			<div><div class="text-xs text-base-content/50">{ label }</div><div class="admin-number mt-1 text-xl font-semibold text-base-content">{ value }</div></div>
+		</div>
+	</div>
 }
 
 templ DashboardBody(data DashboardPageData) {
 	<div class="space-y-6">
-		@PageHeader("统计看板", "查看运行状态、核心数据和系统概况。", "运行总览")
-		<section class="rounded-[1.8rem] border border-white/70 bg-white/82 p-5 shadow-[0_22px_60px_rgba(14,31,53,0.08)] backdrop-blur-xl motion-safe:animate-[admin-fade-up_220ms_ease-out] sm:p-6">
-			<div class="flex flex-wrap items-center gap-2">
-				<div class="inline-flex items-center rounded-full bg-slate-950/5 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">MumuBot / 数据摘要</div>
-				<div class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-[11px] font-bold tracking-[0.08em] text-cyan-700 ring-1 ring-cyan-200/80">已启用 { fmt.Sprintf("%d", data.EnabledGroupCount) } 个群</div>
-			</div>
-			<div class="mt-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-				<div class="space-y-3">
-					<h2 class="text-balance text-[2.1rem] font-extrabold leading-none tracking-[-0.05em] text-slate-950 sm:text-[2.45rem]">{ data.BotName }</h2>
-					<p class="max-w-2xl text-sm leading-6 text-slate-600">查看连接状态、启用群数和核心数据变化。</p>
-				</div>
-				<div class="rounded-[1.25rem] bg-slate-50/90 px-4 py-3 ring-1 ring-slate-200/80">
-					<div class="text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">机器人 QQ</div>
-					<div class="mt-1 text-lg font-bold tracking-[-0.03em] text-slate-950">{ fmt.Sprintf("%d", data.SelfID) }</div>
-				</div>
-			</div>
-			<div class="mt-6 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] xl:items-start">
-				<section class="rounded-[1.45rem] border border-slate-200/80 bg-white/84 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-					<div class="flex items-center gap-2 text-sm font-extrabold tracking-[-0.02em] text-slate-900">
-						<span class="inline-flex size-8 items-center justify-center rounded-full bg-slate-950/5 text-slate-500">
-							@AdminIcon("runtime-summary", "size-4", "dashboard-runtime-summary")
-						</span>
-						<span>运行状态</span>
-					</div>
-					<div class="mt-4 grid gap-3 sm:grid-cols-2">
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("connection", "size-3.5", "dashboard-connection")
-								<span>连接状态</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ ConnectionText(data.OneBotConnected) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("learning", "size-3.5", "dashboard-learning")
-								<span>学习状态</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ boolText(data.LearningEnabled) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("groups", "size-3.5", "dashboard-groups")
-								<span>启用群数</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d 个", data.EnabledGroupCount) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("tools", "size-3.5", "dashboard-tools")
-								<span>扩展工具</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d 个", data.MCPToolCount) }</div>
-						</div>
-					</div>
-				</section>
-				<section class="rounded-[1.45rem] border border-slate-200/80 bg-white/84 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-					<div class="flex items-center gap-2 text-sm font-extrabold tracking-[-0.02em] text-slate-900">
-						<span class="inline-flex size-8 items-center justify-center rounded-full bg-slate-950/5 text-slate-500">
-							@AdminIcon("overview", "size-4", "dashboard-data-summary")
-						</span>
-						<span>核心数据</span>
-					</div>
-					<div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("memories", "size-3.5", "dashboard-memory-count")
-								<span>记忆数</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d", data.MemoryCount) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("members", "size-3.5", "dashboard-member-count")
-								<span>成员数</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d", data.MemberCount) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("jargons", "size-3.5", "dashboard-jargon-count")
-								<span>黑话数</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d", data.JargonCount) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("style-cards", "size-3.5", "dashboard-style-card-count")
-								<span>风格卡片数</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d", data.StyleCardCount) }</div>
-						</div>
-						<div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3.5 ring-1 ring-slate-200/80">
-							<div class="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-								@AdminIcon("stickers", "size-3.5", "dashboard-sticker-count")
-								<span>表情包数</span>
-							</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%d", data.StickerCount) }</div>
-						</div>
-					</div>
-				</section>
-			</div>
-			if data.CurrentMood != nil {
-				<section class="mt-4 rounded-[1.45rem] border border-cyan-100 bg-cyan-50/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
-					<div class="flex items-center gap-2 text-sm font-extrabold tracking-[-0.02em] text-cyan-800">
-						<span class="inline-flex size-8 items-center justify-center rounded-full bg-white/60 text-cyan-700 ring-1 ring-cyan-100/90">
-							@AdminIcon("mood", "size-4", "dashboard-mood")
-						</span>
-						<span>当前情绪</span>
-					</div>
-					<div class="mt-4 grid gap-3 lg:grid-cols-[repeat(3,minmax(0,1fr))_minmax(0,1.4fr)]">
-						<div class="rounded-[1.15rem] bg-white/72 px-4 py-3.5 ring-1 ring-cyan-100/90">
-							<div class="text-[11px] font-extrabold uppercase tracking-[0.14em] text-cyan-700/80">心情</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%.2f", data.CurrentMood.Valence) }</div>
-						</div>
-						<div class="rounded-[1.15rem] bg-white/72 px-4 py-3.5 ring-1 ring-cyan-100/90">
-							<div class="text-[11px] font-extrabold uppercase tracking-[0.14em] text-cyan-700/80">精力</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%.2f", data.CurrentMood.Energy) }</div>
-						</div>
-						<div class="rounded-[1.15rem] bg-white/72 px-4 py-3.5 ring-1 ring-cyan-100/90">
-							<div class="text-[11px] font-extrabold uppercase tracking-[0.14em] text-cyan-700/80">社交意愿</div>
-							<div class="mt-2 text-base font-semibold text-slate-900">{ fmt.Sprintf("%.2f", data.CurrentMood.Sociability) }</div>
-						</div>
-						<div class="rounded-[1.15rem] bg-white/72 px-4 py-3.5 ring-1 ring-cyan-100/90">
-							<div class="text-[11px] font-extrabold uppercase tracking-[0.14em] text-cyan-700/80">最近原因</div>
-							<div class="mt-2 text-sm leading-6 text-slate-700">{ EmptyDash(data.CurrentMood.LastReason) }</div>
-						</div>
-					</div>
-				</section>
-			}
+		@PageHeader("首页", "查看机器人运行状态与学习概况。", "")
+		<section class="grid grid-cols-6 gap-3">
+			@DashboardMetric("groups", "启用群聊", fmt.Sprintf("%d", data.EnabledGroupCount), "bg-[#eef5ff]")
+			@DashboardMetric("memories", "长期记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
+			@DashboardMetric("members", "成员画像", fmt.Sprintf("%d", data.MemberCount), "bg-[#fff5ee]")
+			@DashboardMetric("jargons", "黑话词典", fmt.Sprintf("%d", data.JargonCount), "bg-[#eff9f4]")
+			@DashboardMetric("style-cards", "风格卡片", fmt.Sprintf("%d", data.StyleCardCount), "bg-[#f5f0ff]")
+			@DashboardMetric("stickers", "表情包", fmt.Sprintf("%d", data.StickerCount), "bg-[#fff8e8]")
 		</section>
+		<div class="grid grid-cols-[minmax(0,2fr)_minmax(280px,0.8fr)] gap-4">
+			<section class="card border border-base-300 bg-base-100">
+				<div class="card-body p-5">
+					<div class="flex items-center justify-between"><div><h2 class="font-semibold">当前心情</h2><p class="mt-1 text-xs text-base-content/50">机器人此刻的情绪与交流意愿</p></div><span class="badge badge-primary badge-soft">实时</span></div>
+					if data.CurrentMood != nil {
+						<div class="admin-mood-chart" data-admin-mood-chart data-valence={ fmt.Sprintf("%.4f", data.CurrentMood.Valence) } data-energy={ fmt.Sprintf("%.4f", data.CurrentMood.Energy) } data-sociability={ fmt.Sprintf("%.4f", data.CurrentMood.Sociability) }></div>
+					} else {
+						<div class="flex h-[220px] items-center justify-center text-sm text-base-content/45">暂无心情数据</div>
+					}
+				</div>
+			</section>
+			<section class="card border border-base-300 bg-base-100">
+				<div class="card-body p-5">
+					<div class="flex items-center justify-between"><h2 class="font-semibold">运行状态</h2>@AdminIcon("connection", "size-5 text-success", "runtime")</div>
+					<div class="mt-2 divide-y divide-base-300 text-sm">
+						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">OneBot 连接</span><span class={ ternaryString(data.OneBotConnected, "badge badge-success badge-soft badge-sm", "badge badge-error badge-soft badge-sm") }>{ ConnectionText(data.OneBotConnected) }</span></div>
+						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">机器人账号</span><code class="text-xs">{ fmt.Sprintf("%d", data.SelfID) }</code></div>
+						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">扩展工具</span><span>{ fmt.Sprintf("%d", data.MCPToolCount) }</span></div>
+						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">学习状态</span><span class="badge badge-success badge-soft badge-sm">{ boolText(data.LearningEnabled) }</span></div>
+					</div>
+				</div>
+			</section>
+		</div>
+		if data.CurrentMood != nil {
+			<section class="card border border-base-300 bg-base-100"><div class="card-body flex-row items-center gap-4 p-4"><span class="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">@AdminIcon("mood", "size-5", "mood-reason")</span><div><h2 class="text-sm font-semibold">当前状态摘要</h2><p class="mt-1 text-sm text-base-content/58">{ EmptyDash(data.CurrentMood.LastReason) }</p></div></div></section>
+		}
 	</div>
 }
