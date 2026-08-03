@@ -28,7 +28,7 @@ templ LoginPage(data LoginPageData) {
 								<input id="login-username" class="sr-only" type="text" name="login_username" value="admin" autocomplete="username" tabindex="-1"/>
 								<label class="input w-full border-base-300 bg-base-100 focus-within:border-primary">
 									<svg class="size-4 text-base-content/45" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6.5 9V7a3.5 3.5 0 0 1 7 0v2"></path><rect x="4.5" y="9" width="11" height="7" rx="2"></rect></svg>
-									<input id="admin-key" class="grow" type="password" name="admin_key" placeholder="输入访问密钥" autocomplete="current-password"/>
+									<input id="admin-key" class="grow" type="password" name="admin_key" placeholder="输入访问密钥" autocomplete="current-password" aria-label="访问密钥"/>
 									<button class="btn btn-ghost btn-xs" type="button" data-password-target="#admin-key" aria-pressed="false"><span data-password-label>显示</span></button>
 								</label>
 								<button class="btn btn-primary w-full" type="submit" data-loading-label="登录中">登录</button>

@@ -399,10 +399,14 @@ func cultureReviewUpdates(items []memory.CultureReviewItem, result cultureReview
 		}
 		switch item.Kind {
 		case "style":
-			styleIDs = append(styleIDs, item.ID)
+			if _, exists := styleApproval[item.ID]; !exists {
+				styleIDs = append(styleIDs, item.ID)
+			}
 			styleApproval[item.ID] = item.Decision == "approve"
 		case "jargon":
-			jargonIDs = append(jargonIDs, item.ID)
+			if _, exists := jargonApproval[item.ID]; !exists {
+				jargonIDs = append(jargonIDs, item.ID)
+			}
 			jargonApproval[item.ID] = item.Decision == "approve"
 		}
 	}

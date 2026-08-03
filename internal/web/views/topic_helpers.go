@@ -5,7 +5,6 @@ import (
 	"mumu-bot/internal/memory"
 	topicpkg "mumu-bot/internal/topic"
 	"mumu-bot/internal/web/services"
-	"sort"
 	"strings"
 	"time"
 )
@@ -287,15 +286,6 @@ func topicSummaryChangeCountLabel(topic services.TopicThreadView, changes []Topi
 	return fmt.Sprintf("共 %d 次内容变化", changed)
 }
 
-func topicDiffList(items []string) []string {
-	if len(items) == 0 {
-		return nil
-	}
-	cloned := append([]string(nil), items...)
-	sort.Strings(cloned)
-	return cloned
-}
-
 func diffStringSet(before []string, after []string) ([]string, []string) {
 	beforeItems := normalizedTopicSummaryItems(before)
 	afterItems := normalizedTopicSummaryItems(after)
@@ -365,17 +355,6 @@ func topicGist(topic services.TopicThreadView) string {
 
 func topicKeywords(topic services.TopicThreadView) []string {
 	return topicSummary(topic).Keywords
-}
-
-func topicParticipantSummary(topic services.TopicThreadView) string {
-	parts := make([]string, 0, len(topicSummary(topic).Participants))
-	for _, participant := range topicSummary(topic).Participants {
-		if strings.TrimSpace(participant.Nickname) == "" || strings.TrimSpace(participant.Position) == "" {
-			continue
-		}
-		parts = append(parts, participant.Nickname+"："+participant.Position)
-	}
-	return strings.Join(parts, "；")
 }
 
 func topicSummaryProgressText(topic services.TopicThreadView) string {

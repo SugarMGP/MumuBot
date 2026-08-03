@@ -216,8 +216,9 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		snapshotMessage = buffer[len(buffer)-1]
 	}
 	semanticCurrent := collectTextContext(currentMessages) != ""
+	hasCurrentContext := semanticCurrent || strings.TrimSpace(renderChatContext(currentMessages, nil, selfID)) != ""
 	if !isMention && !probabilityPassed {
-		if !semanticCurrent {
+		if !hasCurrentContext {
 			a.commitReadSnapshot(groupID, snapshotMessage)
 		}
 		return
@@ -251,12 +252,11 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	var classification *contextClassification
 	var err error
 	if !semanticCurrent {
-		var commit bool
-		classification, commit = emptyCurrentBatchDecision(isMention)
-		if commit {
+		if !hasCurrentContext {
 			a.commitReadSnapshot(groupID, snapshotMessage)
 			return
 		}
+		classification = &contextClassification{Participation: "engage"}
 	} else {
 		classification, err = a.classifyContext(ctx, readMessages, currentMessages)
 		if err != nil {

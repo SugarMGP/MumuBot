@@ -179,7 +179,10 @@ func (c *Client) enqueueGroupEvent(groupID int64, raw []byte) {
 		go c.runEventWorker(queue)
 	}
 	c.workersMu.Unlock()
-	queue <- raw
+	select {
+	case queue <- raw:
+	case <-c.transportCtx.Done():
+	}
 }
 
 func (c *Client) runEventWorker(queue <-chan []byte) {

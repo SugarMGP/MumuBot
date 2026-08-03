@@ -92,7 +92,7 @@ func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, 
 	return item, created, nil
 }
 
-func (m *Manager) UpdateMessagePresentation(ctx context.Context, messageLogID uint, displayContent string, forwardPayload *string, mentioned bool) error {
+func (m *Manager) UpdateMessagePresentation(ctx context.Context, messageLogID uint, displayContent string, forwardPayload *string, mentioned bool) (bool, error) {
 	return m.store.UpdateMessagePresentation(ctx, messageLogID, displayContent, forwardPayload, mentioned)
 }
 

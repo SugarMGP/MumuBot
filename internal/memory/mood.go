@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // startMoodDecay 启动情绪衰减定时任务（每五分钟执行一次）
@@ -38,32 +40,33 @@ func (m *Manager) GetMoodState() (*MoodState, error) {
 
 // UpdateMoodState 更新情绪状态（增量更新）
 func (m *Manager) UpdateMoodState(valenceDelta, energyDelta, sociabilityDelta float64, reason string) (*MoodState, error) {
-	mood, err := m.GetMoodState()
+	var mood MoodState
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&mood, 1).Error; err != nil {
+			return err
+		}
+		mood.Valence = min(max(mood.Valence+valenceDelta, -1.0), 1.0)
+		mood.Energy = min(max(mood.Energy+energyDelta, 0.0), 1.0)
+		mood.Sociability = min(max(mood.Sociability+sociabilityDelta, 0.0), 1.0)
+		mood.LastReason = reason
+		return tx.Save(&mood).Error
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	mood.Valence = min(max(mood.Valence+valenceDelta, -1.0), 1.0)
-	mood.Energy = min(max(mood.Energy+energyDelta, 0.0), 1.0)
-	mood.Sociability = min(max(mood.Sociability+sociabilityDelta, 0.0), 1.0)
-	mood.LastReason = reason
-
-	if err := m.db.Save(mood).Error; err != nil {
-		return nil, err
-	}
-	return mood, nil
+	return &mood, nil
 }
 
 // ApplyMoodDecay 应用情绪自然衰减
 func (m *Manager) ApplyMoodDecay() error {
-	mood, err := m.GetMoodState()
-	if err != nil {
-		return err
-	}
-
-	mood.Valence *= 0.95
-	mood.Energy += (0.5 - mood.Energy) * 0.05
-	mood.Sociability += (0.5 - mood.Sociability) * 0.05
-
-	return m.db.Save(mood).Error
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		var mood MoodState
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&mood, 1).Error; err != nil {
+			return err
+		}
+		mood.Valence *= 0.95
+		mood.Energy += (0.5 - mood.Energy) * 0.05
+		mood.Sociability += (0.5 - mood.Sociability) * 0.05
+		return tx.Save(&mood).Error
+	})
 }

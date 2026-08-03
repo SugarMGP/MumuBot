@@ -202,7 +202,7 @@ func (m *Manager) ReviewCulture(groupID int64, sourceMessageIDs, idsStyle, idsJa
 			if approveStyle[id] {
 				status = StylePatternStatusActive
 			}
-			if err := tx.Model(&StylePattern{}).Where("id = ? AND group_id = ? AND status = ?", id, groupID, StylePatternStatusCandidate).Update("status", status).Error; err != nil {
+			if err := requireAffected(tx.Model(&StylePattern{}).Where("id = ? AND group_id = ? AND status = ?", id, groupID, StylePatternStatusCandidate).Update("status", status)); err != nil {
 				return err
 			}
 		}
@@ -211,7 +211,7 @@ func (m *Manager) ReviewCulture(groupID int64, sourceMessageIDs, idsStyle, idsJa
 			if approveJargon[id] {
 				status = CultureStatusActive
 			}
-			if err := tx.Model(&Jargon{}).Where("id = ? AND group_id = ? AND status = ?", id, groupID, CultureStatusCandidate).Update("status", status).Error; err != nil {
+			if err := requireAffected(tx.Model(&Jargon{}).Where("id = ? AND group_id = ? AND status = ?", id, groupID, CultureStatusCandidate).Update("status", status)); err != nil {
 				return err
 			}
 		}

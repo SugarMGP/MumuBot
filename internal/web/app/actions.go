@@ -30,42 +30,42 @@ func (a *App) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 
 	switch strings.TrimSpace(r.FormValue("action_kind")) {
 	case "style-card-status":
-		if err := a.admin.UpdateStyleCardStatus(id, r.FormValue("status")); err != nil {
+		if err := a.admin.UpdateStyleCardStatus(r.Context(), id, r.FormValue("status")); err != nil {
 			a.respondActionError(w, r, http.StatusBadRequest, &views.FlashMessage{Kind: "error", Title: "风格卡片状态更新失败", Body: styleCardActionErrorText(err)})
 			return
 		}
 		fallback = "/admin/style-cards"
 		flash = &views.FlashMessage{Kind: "success", Title: "风格卡片状态已更新"}
 	case "jargon-status":
-		if err := a.admin.UpdateJargonStatus(id, r.FormValue("status")); err != nil {
+		if err := a.admin.UpdateJargonStatus(r.Context(), id, r.FormValue("status")); err != nil {
 			a.respondActionError(w, r, http.StatusBadRequest, &views.FlashMessage{Kind: "error", Title: "黑话状态更新失败", Body: jargonActionErrorText(err)})
 			return
 		}
 		fallback = "/admin/jargons"
 		flash = &views.FlashMessage{Kind: "success", Title: "黑话状态已更新"}
 	case "sticker-delete":
-		if err := a.admin.DeleteSticker(id); err != nil {
+		if err := a.admin.DeleteSticker(r.Context(), id); err != nil {
 			a.respondActionError(w, r, http.StatusInternalServerError, &views.FlashMessage{Kind: "error", Title: "表情包删除失败", Body: deleteActionErrorText(err)})
 			return
 		}
 		fallback = "/admin/stickers"
 		flash = &views.FlashMessage{Kind: "success", Title: "表情包已删除"}
 	case "memory-delete":
-		if err := a.admin.DeleteMemory(id); err != nil {
+		if err := a.admin.DeleteMemory(r.Context(), id); err != nil {
 			a.respondActionError(w, r, http.StatusInternalServerError, &views.FlashMessage{Kind: "error", Title: "记忆删除失败", Body: deleteActionErrorText(err)})
 			return
 		}
 		fallback = "/admin/memories"
 		flash = &views.FlashMessage{Kind: "success", Title: "记忆已删除"}
 	case "memory-archive":
-		if err := a.admin.ArchiveMemory(id); err != nil {
+		if err := a.admin.ArchiveMemory(r.Context(), id); err != nil {
 			a.respondActionError(w, r, http.StatusInternalServerError, &views.FlashMessage{Kind: "error", Title: "记忆归档失败", Body: deleteActionErrorText(err)})
 			return
 		}
 		fallback = "/admin/memories"
 		flash = &views.FlashMessage{Kind: "success", Title: "记忆已归档"}
 	case "memory-restore":
-		if err := a.admin.RestoreMemoryToCandidate(id); err != nil {
+		if err := a.admin.RestoreMemoryToCandidate(r.Context(), id); err != nil {
 			a.respondActionError(w, r, http.StatusInternalServerError, &views.FlashMessage{Kind: "error", Title: "记忆恢复失败", Body: deleteActionErrorText(err)})
 			return
 		}

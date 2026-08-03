@@ -311,15 +311,33 @@ func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, 
 }
 
 func (m *Manager) DeleteMemory(ctx context.Context, id uint) error {
-	return m.db.WithContext(ctx).Delete(&Memory{}, id).Error
+	return requireAffected(m.db.WithContext(ctx).Delete(&Memory{}, id))
 }
 
 func (m *Manager) ArchiveMemory(ctx context.Context, id uint) error {
-	return m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusArchived).Error
+	return requireAffected(m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusArchived))
 }
 
 func (m *Manager) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	return m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusCandidate).Error
+	return requireAffected(m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusCandidate))
+}
+
+func (m *Manager) UpdateStylePatternStatus(ctx context.Context, id uint, status StylePatternStatus) error {
+	return requireAffected(m.db.WithContext(ctx).Model(&StylePattern{}).Where("id = ?", id).Update("status", status))
+}
+
+func (m *Manager) UpdateJargonStatus(ctx context.Context, id uint, status CultureStatus) error {
+	return requireAffected(m.db.WithContext(ctx).Model(&Jargon{}).Where("id = ?", id).Update("status", status))
+}
+
+func requireAffected(result *gorm.DB) error {
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error) {

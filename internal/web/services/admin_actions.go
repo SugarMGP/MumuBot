@@ -9,23 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gorm.io/gorm"
+	"go.uber.org/zap"
 )
 
-func (s *AdminService) UpdateStyleCardStatus(id uint, raw string) error {
+func (s *AdminService) UpdateStyleCardStatus(ctx context.Context, id uint, raw string) error {
 	status := strings.TrimSpace(raw)
 	if err := s.validateStatus(status, string(memory.StylePatternStatusCandidate), string(memory.StylePatternStatusActive), string(memory.StylePatternStatusRejected)); err != nil {
 		return err
 	}
-	return s.db.Model(&memory.StylePattern{}).Where("id = ?", id).Update("status", status).Error
+	return s.memory.UpdateStylePatternStatus(ctx, id, memory.StylePatternStatus(status))
 }
 
-func (s *AdminService) UpdateJargonStatus(id uint, raw string) error {
+func (s *AdminService) UpdateJargonStatus(ctx context.Context, id uint, raw string) error {
 	status := strings.TrimSpace(raw)
 	if err := s.validateStatus(status, string(memory.CultureStatusCandidate), string(memory.CultureStatusActive), string(memory.CultureStatusRejected)); err != nil {
 		return err
 	}
-	if err := s.db.Model(&memory.Jargon{}).Where("id = ?", id).Update("status", status).Error; err != nil {
+	if err := s.memory.UpdateJargonStatus(ctx, id, memory.CultureStatus(status)); err != nil {
 		return err
 	}
 	if s.reloadJargons != nil {
@@ -34,34 +34,30 @@ func (s *AdminService) UpdateJargonStatus(id uint, raw string) error {
 	return nil
 }
 
-func (s *AdminService) DeleteMemory(id uint) error {
-	return s.memory.DeleteMemory(context.Background(), id)
+func (s *AdminService) DeleteMemory(ctx context.Context, id uint) error {
+	return s.memory.DeleteMemory(ctx, id)
 }
-func (s *AdminService) ArchiveMemory(id uint) error {
-	return s.memory.ArchiveMemory(context.Background(), id)
+func (s *AdminService) ArchiveMemory(ctx context.Context, id uint) error {
+	return s.memory.ArchiveMemory(ctx, id)
 }
-func (s *AdminService) RestoreMemoryToCandidate(id uint) error {
-	return s.memory.RestoreMemoryToCandidate(context.Background(), id)
+func (s *AdminService) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
+	return s.memory.RestoreMemoryToCandidate(ctx, id)
 }
 
-func (s *AdminService) DeleteSticker(id uint) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var item memory.Sticker
-		if err := tx.First(&item, id).Error; err != nil {
-			return err
-		}
-		filePath, err := s.stickerFilePath(item.FileName)
-		if err != nil {
-			return err
-		}
-		if err := tx.Delete(&item).Error; err != nil {
-			return err
-		}
-		if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+func (s *AdminService) DeleteSticker(ctx context.Context, id uint) error {
+	item, err := s.memory.DeleteSticker(ctx, id)
+	if err != nil {
+		return err
+	}
+	filePath, err := s.stickerFilePath(item.FileName)
+	if err != nil {
+		zap.L().Warn("表情包记录已删除，但文件路径无效", zap.String("file_name", item.FileName), zap.Error(err))
 		return nil
-	})
+	}
+	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		zap.L().Warn("清理已删除表情包文件失败", zap.String("path", filePath), zap.Error(err))
+	}
+	return nil
 }
 
 func (s *AdminService) stickerFilePath(name string) (string, error) {

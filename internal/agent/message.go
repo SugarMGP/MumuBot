@@ -69,8 +69,11 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 			forwardsJSON = &b
 		}
 	}
-	if err := a.topicMgr.UpdateMessagePresentation(a.ctx, item.ID, msg.FinalContent, forwardsJSON, isMentioned); err != nil {
+	current, err := a.topicMgr.UpdateMessagePresentation(a.ctx, item.ID, msg.FinalContent, forwardsJSON, isMentioned)
+	if err != nil {
 		zap.L().Error("更新消息展示内容失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+	} else if !current {
+		return
 	}
 
 	a.addBuffer(msg)

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -28,6 +29,20 @@ func (m *Manager) SaveSticker(sticker *Sticker) (bool, error) {
 func (m *Manager) GetStickerByID(id uint) (*Sticker, error) {
 	var sticker Sticker
 	err := m.db.First(&sticker, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &sticker, nil
+}
+
+func (m *Manager) DeleteSticker(ctx context.Context, id uint) (*Sticker, error) {
+	var sticker Sticker
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&sticker, id).Error; err != nil {
+			return err
+		}
+		return requireAffected(tx.Delete(&sticker))
+	})
 	if err != nil {
 		return nil, err
 	}

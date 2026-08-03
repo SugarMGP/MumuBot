@@ -124,13 +124,6 @@ type contextClassification struct {
 	StyleSituation string `json:"style_situation"`
 }
 
-func emptyCurrentBatchDecision(isMention bool) (*contextClassification, bool) {
-	if isMention {
-		return &contextClassification{Participation: "engage"}, false
-	}
-	return nil, true
-}
-
 func (a *Agent) buildStyleHintContext(ctx context.Context, groupID int64, classification *contextClassification) []string {
 	if classification == nil {
 		return nil

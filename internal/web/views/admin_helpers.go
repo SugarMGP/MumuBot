@@ -145,14 +145,6 @@ func memberTraits(profile services.MemberProfileView, kind string, limit int) []
 	return items
 }
 
-func memberLearnedAliases(profile services.MemberProfileView, limit int) []string {
-	return memberTraits(profile, "alias", limit)
-}
-
-func memberTraitText(profile services.MemberProfileView, kind string) string {
-	return strings.Join(memberTraits(profile, kind, 0), "；")
-}
-
 func rowActionClass(action RowAction) string {
 	switch action.Kind {
 	case "danger":
