@@ -31,7 +31,8 @@ services:
       - napcat-qq:/app/.config/QQ
 
   mumu-bot:
-    build: .
+    image: ghcr.io/sugarmgp/mumubot:latest
+    pull_policy: always
     restart: unless-stopped
     init: true
     read_only: true

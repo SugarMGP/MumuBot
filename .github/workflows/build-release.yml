@@ -17,7 +17,11 @@ env:
 jobs:
   build:
     name: Build
+    needs: prepare-release
+    if: ${{ !cancelled() && (!startsWith(github.ref, 'refs/tags/v') || needs.prepare-release.result == 'success') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -96,14 +100,22 @@ jobs:
         fi
 
     - name: Upload Artifact
+      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       uses: actions/upload-artifact@v6
       with:
         name: ${{ matrix.asset_name }}
         path: ${{ matrix.asset_name }}${{ matrix.archive_ext }}
 
+    - name: Upload Release Asset
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v3
+      with:
+        files: ${{ matrix.asset_name }}${{ matrix.archive_ext }}
+        draft: true
+        fail_on_unmatched_files: true
+
   container:
     name: Publish Container Image
-    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -149,25 +161,16 @@ jobs:
           cache-from: type=gha,scope=container
           cache-to: type=gha,mode=max,scope=container
 
-  release:
-    name: Release
-    needs: [build, container]
-    if: startsWith(github.ref, 'refs/tags/v')
+  prepare-release:
+    name: Prepare Release
+    needs: container
+    if: startsWith(github.ref, 'refs/tags/v') && success()
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      - name: Download Artifacts
-        uses: actions/download-artifact@v7
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Display structure of downloaded files
-        run: ls -R artifacts
 
       - name: Build release notes from CHANGELOG.md
         shell: bash
@@ -220,10 +223,22 @@ jobs:
 
           printf '%s\n' "$release_notes" > release-notes.md
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Create draft Release
+        uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/*
           body_path: release-notes.md
-          draft: false
+          draft: true
           prerelease: false
+
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish Release
+        uses: softprops/action-gh-release@v3
+        with:
+          make_latest: true

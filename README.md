@@ -66,10 +66,10 @@ Compose 会一并启动 MumuBot、PostgreSQL/pgvector 和 NapCat：
 ```bash
 cp .env.example .env
 # 填写 .env 中的数据库、后台和模型配置
-docker compose up -d --build
+docker compose up -d
 ```
 
-首次启动时，容器会在配置目录中补齐缺失的 `config.yaml`、`persona.prompt` 和 `mcp.json`，已有文件不会被覆盖。
+Compose 会直接拉取 GHCR 上的 `latest` 镜像。首次启动时，容器会在配置目录中补齐缺失的 `config.yaml`、`persona.prompt` 和 `mcp.json`，已有文件不会被覆盖。
 
 编辑生成的配置文件后，重启服务使其生效。随后访问 `http://localhost:6099/webui` 进入 NapCat 管理后台登录 QQ 即可。
 

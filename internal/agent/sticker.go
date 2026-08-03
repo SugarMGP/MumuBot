@@ -24,9 +24,6 @@ func (a *Agent) autoSaveSticker(ctx context.Context, url string, description str
 
 	cfg := config.Get()
 	storagePath := cfg.Sticker.StoragePath
-	if storagePath == "" {
-		storagePath = "./stickers"
-	}
 	maxSizeMB := cfg.Sticker.MaxSizeMB
 	if maxSizeMB <= 0 {
 		maxSizeMB = 2

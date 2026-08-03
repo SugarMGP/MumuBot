@@ -20,12 +20,6 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snapshot := a.runtimeSnapshot()
-	if snapshot.EnabledGroups == 0 {
-		snapshot.EnabledGroups = countEnabledGroups(a.cfg.Groups)
-	}
-	if !snapshot.LearningOn {
-		snapshot.LearningOn = a.cfg.Learning.Enabled
-	}
 	flash := a.flashFromRequest(r)
 
 	a.render(w, views.DashboardPage(views.DashboardPageData{

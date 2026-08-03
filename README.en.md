@@ -66,10 +66,10 @@ Compose starts MumuBot, PostgreSQL/pgvector, and NapCat together:
 ```bash
 cp .env.example .env
 # Fill in database, admin, and model settings in .env
-docker compose up -d --build
+docker compose up -d
 ```
 
-On first start, the container creates any missing `config.yaml`, `persona.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
+Compose pulls the `latest` image directly from GHCR. On first start, the container creates any missing `config.yaml`, `persona.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
 
 Restart the service after editing the generated configuration files. Then visit `http://localhost:6099/webui` to open the NapCat admin panel and sign in to QQ.
 

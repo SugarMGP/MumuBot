@@ -158,7 +158,7 @@ type MessageLogCleanupConfig struct {
 // StickerConfig 表情包配置
 type StickerConfig struct {
 	AutoSave    bool   `mapstructure:"auto_save"`    // 是否自动保存收到的表情包，默认 true
-	StoragePath string `mapstructure:"storage_path"` // 表情包存储目录，默认 "data/stickers"
+	StoragePath string `mapstructure:"storage_path"` // 表情包存储目录，默认 "./stickers"
 	MaxSizeMB   int    `mapstructure:"max_size_mb"`  // 单个文件最大大小(MB)，默认 5
 }
 
@@ -241,6 +241,9 @@ func overrideModelEndpoint(prefix string, apiKey, baseURL, modelName *string) {
 }
 
 func validate(c *Config) error {
+	if strings.TrimSpace(c.Sticker.StoragePath) == "" {
+		c.Sticker.StoragePath = "./stickers"
+	}
 	if c.Learning.BatchSize == 0 {
 		c.Learning.BatchSize = 100
 	}

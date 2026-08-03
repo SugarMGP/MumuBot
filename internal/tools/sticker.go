@@ -102,9 +102,6 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	// 构建文件路径
 	cfg := config.Get()
 	storagePath := cfg.Sticker.StoragePath
-	if storagePath == "" {
-		storagePath = "data/stickers"
-	}
 	filePath, err := filepath.Abs(filepath.Join(storagePath, sticker.FileName))
 	if err != nil {
 		return &SendStickerOutput{Success: false, Message: "获取文件路径失败"}, nil

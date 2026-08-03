@@ -322,8 +322,8 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 			currentGroupName, _ = a.memory.LatestMemberGroupCard(userID, groupID)
 		}
 		displayName = currentGroupName
+		traits, _ := a.memory.ListMemberTraits(userID)
 		if displayName == "" {
-			traits, _ := a.memory.ListMemberTraits(userID)
 			for _, trait := range traits {
 				if trait.Kind == "alias" {
 					displayName = trait.Value
@@ -346,7 +346,6 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 		if originalNickname != "" && originalNickname != displayName {
 			details = append(details, "原昵称: "+originalNickname)
 		}
-		traits, _ := a.memory.ListMemberTraits(userID)
 		for _, trait := range traits {
 			if trait.Kind != "alias" {
 				details = append(details, trait.Kind+": "+trait.Value)
