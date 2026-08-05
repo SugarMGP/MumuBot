@@ -19,11 +19,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const groupEventQueueSize = 256
-
 type groupEvent struct {
 	event      map[string]interface{}
 	receivedAt time.Time
+	arrivalSeq uint64
 }
 
 type Client struct {
@@ -41,12 +40,12 @@ type Client struct {
 
 	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
 	onMessage       func(*GroupMessage)
-	onRecall        func(groupID, messageID, operatorID int64)
+	onRecall        func(groupID, messageID, operatorID int64, arrivalSeq uint64)
 	onConnected     func()
-	workersMu       sync.Mutex
-	workers         map[int64]chan groupEvent
-	workerWG        sync.WaitGroup
 	transportWG     sync.WaitGroup
+	eventWG         sync.WaitGroup
+	seqMu           sync.Mutex
+	groupSeq        map[int64]uint64
 }
 
 func NewClient() *Client {
@@ -57,7 +56,7 @@ func NewClient() *Client {
 		stopTransport:   stopTransport,
 		mutedUntil:      make(map[int64]time.Time),
 		memberInfoCache: cache,
-		workers:         make(map[int64]chan groupEvent),
+		groupSeq:        make(map[int64]uint64),
 	}
 	go cache.Start()
 	return c
@@ -150,10 +149,19 @@ func (c *Client) enqueueEvent(raw []byte) {
 		notice, _ := event["notice_type"].(string)
 		sub, _ := event["sub_type"].(string)
 		if notice == "group_ban" {
-			c.handleNoticeEvent(event, receivedAt)
+			c.handleNoticeEvent(event, receivedAt, 0)
 			return
 		}
 		if notice != "group_recall" && (notice != "notify" || sub != "poke") {
+			return
+		}
+		// 按事件类型确认对应业务回调已就绪，未就绪则直接丢弃且不分配序号，
+		// 保证每个已分配序号的事件最终都能进入业务回调消费。
+		if notice == "group_recall" {
+			if c.onRecall == nil {
+				return
+			}
+		} else if c.onMessage == nil {
 			return
 		}
 	case "request":
@@ -161,6 +169,9 @@ func (c *Client) enqueueEvent(raw []byte) {
 		return
 	case "message":
 		if event["message_type"] != "group" {
+			return
+		}
+		if c.onMessage == nil {
 			return
 		}
 	default:
@@ -178,30 +189,26 @@ func (c *Client) enqueueEvent(raw []byte) {
 			return
 		}
 	}
-	c.enqueueGroupEvent(groupID, groupEvent{event: event, receivedAt: receivedAt})
+	c.dispatchEvent(groupID, groupEvent{event: event, receivedAt: receivedAt})
 }
 
-func (c *Client) enqueueGroupEvent(groupID int64, event groupEvent) {
-	c.workersMu.Lock()
-	queue := c.workers[groupID]
-	if queue == nil {
-		queue = make(chan groupEvent, groupEventQueueSize)
-		c.workers[groupID] = queue
-		c.workerWG.Add(1)
-		go c.runEventWorker(queue)
-	}
-	c.workersMu.Unlock()
-	select {
-	case queue <- event:
-	case <-c.transportCtx.Done():
-	}
+// nextArrivalSeq 为该群分配递增到达序号，事件入口单线程调用，序号即推送顺序。
+func (c *Client) nextArrivalSeq(groupID int64) uint64 {
+	c.seqMu.Lock()
+	defer c.seqMu.Unlock()
+	c.groupSeq[groupID]++
+	return c.groupSeq[groupID]
 }
 
-func (c *Client) runEventWorker(queue <-chan groupEvent) {
-	defer c.workerWG.Done()
-	for event := range queue {
+// dispatchEvent 每条事件直接并发处理，不做按群串行或并发上限。
+// 事件入口已确认对应业务回调就绪，分发后该事件必然进入业务回调消费序号。
+func (c *Client) dispatchEvent(groupID int64, event groupEvent) {
+	event.arrivalSeq = c.nextArrivalSeq(groupID)
+	c.eventWG.Add(1)
+	go func() {
+		defer c.eventWG.Done()
 		c.handleGroupEvent(event)
-	}
+	}()
 }
 
 func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) {
@@ -211,7 +218,6 @@ func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) 
 		return
 	}
 	c.sdk = nil
-	c.selfID.Store(0)
 	c.connMu.Unlock()
 	_ = disconnected.Close()
 	c.startConnectLoop(generation)
@@ -266,41 +272,43 @@ func (c *Client) connectLoop(generation uint64) {
 func (c *Client) handleGroupEvent(queued groupEvent) {
 	switch queued.event["post_type"] {
 	case "message":
-		c.handleMessageEvent(queued.event, queued.receivedAt)
+		c.handleMessageEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
 	case "notice":
-		c.handleNoticeEvent(queued.event, queued.receivedAt)
+		c.handleNoticeEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
 	}
 }
 
-func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time) {
-	if event["message_type"] != "group" {
-		return
+func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
+	msg := c.parseGroupMessage(event)
+	if msg == nil {
+		// 解析失败：记录现场并构造占位消息消费到达序号，避免上层提交重排器死等。
+		groupID, _ := utils.ParseInt64Value(event["group_id"])
+		messageID, _ := utils.ParseInt64Value(event["message_id"])
+		zap.L().Warn("群消息段解析失败，已构造占位消息", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Any("post_type", event["post_type"]))
+		msg = &GroupMessage{GroupID: groupID, ParseFailed: true}
 	}
-	if msg := c.parseGroupMessage(event); msg != nil && c.onMessage != nil {
-		msg.ReceivedAt = receivedAt
-		c.onMessage(msg)
-	}
+	msg.ReceivedAt = receivedAt
+	msg.ArrivalSeq = arrivalSeq
+	c.onMessage(msg)
 }
-func (c *Client) handleNoticeEvent(event map[string]interface{}, receivedAt time.Time) {
+func (c *Client) handleNoticeEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
 	notice, _ := event["notice_type"].(string)
 	sub, _ := event["sub_type"].(string)
 	switch {
 	case notice == "group_ban":
 		c.handleGroupBanNotice(event, sub)
 	case notice == "notify" && sub == "poke":
-		c.handleGroupPokeNotice(event, receivedAt)
+		c.handleGroupPokeNotice(event, receivedAt, arrivalSeq)
 	case notice == "group_recall":
-		c.handleGroupRecallNotice(event)
+		c.handleGroupRecallNotice(event, arrivalSeq)
 	}
 }
 
-func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt time.Time) {
-	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
-	userID, userOK := utils.ParseInt64Value(event["user_id"])
-	targetID, targetOK := utils.ParseInt64Value(event["target_id"])
-	if !groupOK || groupID <= 0 || !userOK || userID <= 0 || !targetOK || targetID <= 0 || c.onMessage == nil {
-		return
-	}
+func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
+	// 有效性由业务层校验：无效戳一戳也会通过占位路径消费序号，不在此处提前返回。
+	groupID, _ := utils.ParseInt64Value(event["group_id"])
+	userID, _ := utils.ParseInt64Value(event["user_id"])
+	targetID, _ := utils.ParseInt64Value(event["target_id"])
 	eventTime := time.Now()
 	if seconds, ok := utils.ParseInt64Value(event["time"]); ok && seconds > 0 {
 		eventTime = time.Unix(seconds, 0)
@@ -313,16 +321,16 @@ func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt 
 		IsMentioned: targetID == selfID && userID != selfID,
 		Time:        eventTime,
 		ReceivedAt:  receivedAt,
+		ArrivalSeq:  arrivalSeq,
 	})
 }
 
-func (c *Client) handleGroupRecallNotice(event map[string]interface{}) {
-	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
-	messageID, messageOK := utils.ParseInt64Value(event["message_id"])
+func (c *Client) handleGroupRecallNotice(event map[string]interface{}, arrivalSeq uint64) {
+	// 有效性由业务层校验（无效撤回会消费序号后跳过）。
+	groupID, _ := utils.ParseInt64Value(event["group_id"])
+	messageID, _ := utils.ParseInt64Value(event["message_id"])
 	operatorID, _ := utils.ParseInt64Value(event["operator_id"])
-	if groupOK && groupID > 0 && messageOK && messageID > 0 && c.onRecall != nil {
-		c.onRecall(groupID, messageID, operatorID)
-	}
+	c.onRecall(groupID, messageID, operatorID, arrivalSeq)
 }
 func (c *Client) handleRequestEvent(event map[string]interface{}) {
 	request, _ := event["request_type"].(string)
@@ -375,7 +383,7 @@ func (c *Client) IsSelfMuted(groupID int64) bool {
 	return true
 }
 func (c *Client) OnMessage(handler func(*GroupMessage)) { c.onMessage = handler }
-func (c *Client) OnRecall(handler func(groupID, messageID, operatorID int64)) {
+func (c *Client) OnRecall(handler func(groupID, messageID, operatorID int64, arrivalSeq uint64)) {
 	c.onRecall = handler
 }
 func (c *Client) OnConnected(handler func()) { c.onConnected = handler }
@@ -394,21 +402,16 @@ func (c *Client) Close() error {
 		c.connMu.Lock()
 		sdk := c.sdk
 		c.sdk = nil
-		c.selfID.Store(0)
 		c.connMu.Unlock()
 		if sdk != nil {
 			closeErr = sdk.Close()
 		}
 
-		// 事件入口完全退出后，队列不会再新增或写入，可以安全关闭并排空。
+		// 事件入口完全退出后，等待所有已分发的并发事件处理完成。
+		// 注意：不清零 selfID——Agent 停机排空提交队列时仍需用真实账号
+		// 区分机器人自身消息；账号未就绪的语义由断线重连路径负责。
 		c.transportWG.Wait()
-		c.workersMu.Lock()
-		for groupID, queue := range c.workers {
-			close(queue)
-			delete(c.workers, groupID)
-		}
-		c.workersMu.Unlock()
-		c.workerWG.Wait()
+		c.eventWG.Wait()
 
 		if c.memberInfoCache != nil {
 			c.memberInfoCache.Stop()

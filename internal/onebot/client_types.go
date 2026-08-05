@@ -19,6 +19,8 @@ type GroupMessage struct {
 	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
 	Time         time.Time        `json:"time"`                    // 消息时间
 	ReceivedAt   time.Time        `json:"-"`                       // 当前进程从 OneBot 收到事件的时间
+	ArrivalSeq   uint64           `json:"-"`                       // 该群到达顺序序号，Agent 按此提交
+	ParseFailed  bool             `json:"-"`                       // 消息段解析失败占位，仅用于消费序号
 	Images       []ImageInfo      `json:"images,omitempty"`        // 图片列表
 	Videos       []VideoInfo      `json:"videos,omitempty"`        // 视频列表
 	Faces        []FaceInfo       `json:"faces,omitempty"`         // 表情列表

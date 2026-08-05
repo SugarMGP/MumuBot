@@ -11,10 +11,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 )
+
+const (
+	commitQueueSize   = 256
+	pendingCommitSize = 256
+	recallPendingTTL  = 5 * time.Minute
+)
+
+type recallCommit struct {
+	groupID    int64
+	messageID  int64
+	operatorID int64
+}
+
+// commitItem 提交队列项：消息、戳一戳、撤回统一按群内到达序号重排提交；
+// skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用群），避免重排器死等。
+type commitItem struct {
+	groupID     int64
+	seq         uint64
+	skip        bool
+	recall      *recallCommit
+	msg         *onebot.GroupMessage
+	isMentioned bool
+}
 
 func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if msg == nil {
@@ -23,107 +45,272 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	if err := a.ctx.Err(); err != nil {
 		return
 	}
+	if msg.ParseFailed {
+		a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
+		return
+	}
 	cfg := config.Get()
 	if !cfg.IsGroupEnabled(msg.GroupID) {
+		a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
 		return
 	}
 	if msg.ReceivedAt.IsZero() {
 		msg.ReceivedAt = time.Now()
 	}
 	if msg.MessageID == 0 {
-		a.onInteractionMessage(msg)
+		if !a.onInteractionMessage(msg) {
+			a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
+			return
+		}
+		a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg, isMentioned: msg.IsMentioned && msg.UserID != a.bot.GetSelfID()})
 		return
 	}
 
 	selfID := a.bot.GetSelfID()
 	a.resolveBufferedReplyInfo(msg)
+	if err := a.resolveReplyInfo(msg); err != nil {
+		zap.L().Debug("解析回复消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+	}
 	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content)
 	if msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID {
 		isMentioned = true
 	}
 	msg.IsMentioned = isMentioned
-	msg.FinalContent = initialMessageContent(msg, selfID, a.persona.GetName())
 
-	item, created, persistErr := a.topicMgr.PersistMessage(a.ctx, msg, isMentioned)
-	if persistErr != nil {
-		zap.L().Error("写入话题工作记忆失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(persistErr))
-		return
-	}
-	if item == nil || !created {
-		return
-	}
-
-	a.addBuffer(msg)
-
-	if msg.UserID == selfID {
-		return
-	}
-
-	if err := a.ctx.Err(); err != nil {
-		return
-	}
-	a.scheduleThink(msg.GroupID, isMentioned, false, msg.ReceivedAt)
-
-	completed := cloneMessageForCompletion(msg)
-	a.wg.Add(1)
-	go func(messageLogID uint, source, completion *onebot.GroupMessage, initiallyMentioned bool) {
-		defer a.wg.Done()
-		a.completeMessage(messageLogID, source, completion, initiallyMentioned)
-	}(item.ID, msg, completed, isMentioned)
-}
-
-func (a *Agent) completeMessage(messageLogID uint, source, msg *onebot.GroupMessage, initiallyMentioned bool) {
-	if err := a.ctx.Err(); err != nil {
-		return
-	}
-	if err := a.markMessageRead(msg.MessageID); err != nil {
-		zap.L().Error("标记消息已读失败", zap.Int64("message_id", msg.MessageID), zap.Error(err))
-	}
-	if err := a.ctx.Err(); err != nil {
-		return
-	}
-	if err := a.resolveReplyInfo(msg); err != nil {
-		zap.L().Debug("解析回复消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-	}
-	selfID := a.bot.GetSelfID()
-	if msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID {
-		msg.IsMentioned = true
-	}
 	a.resolveForwardMessages(msg)
 	parsedContent := a.parseMessageContent(msg)
 	for _, t := range a.tools {
-		info, _ := t.Info(a.ctx)
+		info, err := t.Info(a.ctx)
+		if err != nil || strings.TrimSpace(info.Name) == "" {
+			continue
+		}
 		parsedContent = strings.ReplaceAll(parsedContent, info.Name, "\"危险指令，已屏蔽\"")
 	}
 	msg.FinalContent = parsedContent
-	var forwardsJSON *string
-	if len(msg.Forwards) > 0 {
-		if b, err := sonic.MarshalString(msg.Forwards); err == nil {
-			forwardsJSON = &b
-		}
-	}
-	current, err := a.topicMgr.UpdateMessagePresentation(a.ctx, messageLogID, msg.FinalContent, forwardsJSON, msg.IsMentioned)
-	if err != nil {
-		zap.L().Error("更新消息展示内容失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-	} else {
-		if !current {
-			return
-		}
-		if a.replaceBufferedMessage(msg.MessageID, source, msg) && !initiallyMentioned && msg.IsMentioned {
-			a.scheduleThink(msg.GroupID, true, false, msg.ReceivedAt)
-		}
-	}
-	a.updateMember(msg)
+
+	a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg, isMentioned: isMentioned})
 }
 
-func cloneMessageForCompletion(msg *onebot.GroupMessage) *onebot.GroupMessage {
-	clone := *msg
-	clone.Forwards = slices.Clone(msg.Forwards)
-	if msg.Reply != nil {
-		reply := *msg.Reply
-		clone.Reply = &reply
+// enqueueCommit 把解析完成的消息、撤回或跳过项投入该群提交队列。
+// 序号为 0 的项（Agent 内部消息，如本地发言）不参与重排，直接提交。
+// 提交队列满时背压等待，不静默丢弃；关闭后由 ctx 退出。
+func (a *Agent) enqueueCommit(item commitItem) {
+	if item.seq == 0 {
+		a.commitOne(item)
+		return
 	}
-	return &clone
+	a.commitMu.Lock()
+	queue := a.commitQueues[item.groupID]
+	if queue == nil {
+		queue = make(chan commitItem, commitQueueSize)
+		a.commitQueues[item.groupID] = queue
+		a.commitWG.Add(1)
+		go a.commitWorker(queue)
+	}
+	a.commitMu.Unlock()
+
+	select {
+	case queue <- item:
+	case <-a.ctx.Done():
+	}
+}
+
+// enqueueCommitSkip 消费一个不会产生实际处理的到达序号。
+func (a *Agent) enqueueCommitSkip(groupID int64, seq uint64) {
+	a.enqueueCommit(commitItem{groupID: groupID, seq: seq, skip: true})
+}
+
+// commitWorker 每群一个提交协程：解析乱序完成后，按到达序号重排提交，
+// 保证落库、撤回、入缓冲和思考调度的顺序与事件到达顺序一致。
+// 视觉等慢解析已在提交前并行完成，提交阶段只做快操作。
+// 乱序窗口（pending）有上限：超限时丢弃等待队列中最接近水位的项并把水位推进越过它，
+// 被越过的序号（含仍在解析中的）到达时自然被跳过，不记录、不留下永久缺口，内存有界。
+func (a *Agent) commitWorker(queue <-chan commitItem) {
+	defer a.commitWG.Done()
+	next := uint64(1)
+	pending := make(map[uint64]commitItem)
+	for item := range queue {
+		switch {
+		case item.seq > next:
+			if len(pending) >= pendingCommitSize {
+				minSeq := item.seq
+				for seq := range pending {
+					if seq < minSeq {
+						minSeq = seq
+					}
+				}
+				delete(pending, minSeq)
+				next = minSeq + 1
+				zap.L().Error("提交重排等待队列超限，丢弃最旧等待项并推进水位", zap.Int64("group_id", item.groupID), zap.Uint64("dropped_seq", minSeq), zap.Uint64("watermark", next), zap.Int("pending", len(pending)))
+				if item.seq > next {
+					pending[item.seq] = item
+				}
+			} else {
+				pending[item.seq] = item
+			}
+		case item.seq == next:
+			a.commitOne(item)
+			next++
+		}
+		for {
+			queued, ok := pending[next]
+			if !ok {
+				break
+			}
+			delete(pending, next)
+			a.commitOne(queued)
+			next++
+		}
+	}
+	if len(pending) > 0 {
+		zap.L().Warn("停机排空结束，乱序等待项未提交", zap.Int("pending", len(pending)))
+	}
+}
+
+func (a *Agent) commitOne(item commitItem) {
+	switch {
+	case item.skip:
+	case item.recall != nil:
+		a.commitRecall(item.recall)
+	default:
+		a.commitMessage(item)
+	}
+}
+
+// commitRecall 按到达顺序执行撤回：正常事件顺序下，同群序号更小的消息已落库并入缓冲，
+// 撤回总能命中数据库记录并在缓冲中找到对应消息。若原消息尚未落库（重连窗口、上游丢失或
+// 事件乱序），登记待补偿记录，待消息落库后补记撤回。
+func (a *Agent) commitRecall(recall *recallCommit) {
+	log, changed, err := a.memory.MarkMessageRecalled(recall.groupID, recall.messageID)
+	if err != nil {
+		zap.L().Warn("标记群消息撤回失败", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID), zap.Int64("operator_id", recall.operatorID), zap.Error(err))
+		return
+	}
+	if !changed {
+		// 原消息尚未落库（重连窗口、上游丢失或事件乱序），登记待补偿。
+		zap.L().Debug("撤回时原消息未落库，登记待补偿", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID))
+		a.recallMu.Lock()
+		if a.pendingRecalls[recall.groupID] == nil {
+			a.pendingRecalls[recall.groupID] = make(map[int64]time.Time)
+		}
+		a.pendingRecalls[recall.groupID][recall.messageID] = time.Now().Add(recallPendingTTL)
+		a.recallMu.Unlock()
+		return
+	}
+	a.syncRecalledMessage(log)
+	zap.L().Info("群消息已撤回", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID), zap.Int64("operator_id", recall.operatorID))
+}
+
+// applyPendingRecall 消息落库后检查待补偿撤回记录，命中则补记撤回并同步缓冲展示。
+func (a *Agent) applyPendingRecall(msg *onebot.GroupMessage) {
+	a.recallMu.Lock()
+	groupRecalls := a.pendingRecalls[msg.GroupID]
+	deadline, ok := groupRecalls[msg.MessageID]
+	if ok {
+		delete(groupRecalls, msg.MessageID)
+		if len(groupRecalls) == 0 {
+			delete(a.pendingRecalls, msg.GroupID)
+		}
+	}
+	a.recallMu.Unlock()
+	if !ok || time.Now().After(deadline) {
+		return
+	}
+
+	log, changed, err := a.memory.MarkMessageRecalled(msg.GroupID, msg.MessageID)
+	if err != nil {
+		zap.L().Warn("补记消息撤回失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+		return
+	}
+	if !changed {
+		return
+	}
+	msg.FinalContent = log.DisplayContent
+	a.syncRecalledMessage(log)
+}
+
+// recallPruneLoop 定期清理过期的待补偿撤回记录，防止永不落库的消息 ID 持续积累。
+func (a *Agent) recallPruneLoop() {
+	defer a.wg.Done()
+	ticker := time.NewTicker(recallPendingTTL / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			a.prunePendingRecalls()
+		}
+	}
+}
+
+func (a *Agent) prunePendingRecalls() {
+	now := time.Now()
+	a.recallMu.Lock()
+	defer a.recallMu.Unlock()
+	for groupID, recalls := range a.pendingRecalls {
+		for messageID, deadline := range recalls {
+			if now.After(deadline) {
+				delete(recalls, messageID)
+			}
+		}
+		if len(recalls) == 0 {
+			delete(a.pendingRecalls, groupID)
+		}
+	}
+}
+
+// onRecall 撤回事件入口：带到达序号进入提交队列，与同群消息保持顺序。
+func (a *Agent) onRecall(groupID, messageID, operatorID int64, arrivalSeq uint64) {
+	if groupID <= 0 || messageID <= 0 || !config.Get().IsGroupEnabled(groupID) {
+		a.enqueueCommitSkip(groupID, arrivalSeq)
+		return
+	}
+	a.enqueueCommit(commitItem{groupID: groupID, seq: arrivalSeq, recall: &recallCommit{groupID: groupID, messageID: messageID, operatorID: operatorID}})
+}
+
+func (a *Agent) commitMessage(item commitItem) {
+	msg := item.msg
+	selfID := a.bot.GetSelfID()
+	if msg.MessageID != 0 {
+		ctx := a.ctx
+		if ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		log, created, err := a.topicMgr.PersistMessage(ctx, msg, item.isMentioned)
+		if err != nil {
+			zap.L().Error("写入话题工作记忆失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+			return
+		}
+		if log == nil || !created {
+			return
+		}
+		a.addBuffer(msg)
+		a.applyPendingRecall(msg)
+
+		if msg.UserID == selfID {
+			return
+		}
+		if a.ctx.Err() != nil {
+			// 停机排空阶段：OneBot 已关闭，不再执行标已读和画像更新。
+			return
+		}
+		// 只有确实落库成功且非机器人自身的消息，才执行标已读和画像更新。
+		a.wg.Add(1)
+		go func(messageID int64) {
+			defer a.wg.Done()
+			if err := a.markMessageRead(messageID); err != nil {
+				zap.L().Error("标记消息已读失败", zap.Int64("message_id", messageID), zap.Error(err))
+			}
+			a.updateMember(msg)
+		}(msg.MessageID)
+	} else {
+		a.addBuffer(msg)
+	}
+	if a.ctx.Err() != nil {
+		return
+	}
+	a.scheduleThink(msg.GroupID, item.isMentioned, false, msg.ReceivedAt)
 }
 
 func (a *Agent) resolveBufferedReplyInfo(msg *onebot.GroupMessage) {
@@ -135,101 +322,17 @@ func (a *Agent) resolveBufferedReplyInfo(msg *onebot.GroupMessage) {
 	}
 }
 
-func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) {
-	if len(msg.AtList) == 0 || msg.AtList[0] <= 0 {
-		return
+// onInteractionMessage 只构造戳一戳的展示内容，返回是否有效；缓冲和思考调度由提交队列统一处理。
+func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) bool {
+	if msg.UserID <= 0 || len(msg.AtList) == 0 || msg.AtList[0] <= 0 {
+		return false
 	}
 	targetID := msg.AtList[0]
 	actorName := utils.FirstNonEmpty(msg.GroupCard, msg.DisplayName, msg.Nickname, fmt.Sprintf("%d", msg.UserID))
 	targetName := fmt.Sprintf("%d", targetID)
 	msg.Content = ""
 	msg.FinalContent = fmt.Sprintf("[%s] %s(%d) 戳了戳 %s(%d)\n", msg.Time.Format("15:04:05"), actorName, msg.UserID, targetName, targetID)
-	a.addBuffer(msg)
-	a.scheduleThink(msg.GroupID, msg.IsMentioned && msg.UserID != a.bot.GetSelfID(), false, msg.ReceivedAt)
-}
-
-func (a *Agent) onRecall(groupID, messageID, operatorID int64) {
-	if groupID <= 0 || messageID <= 0 || !config.Get().IsGroupEnabled(groupID) {
-		return
-	}
-	log, changed, err := a.memory.MarkMessageRecalled(groupID, messageID)
-	if err != nil {
-		zap.L().Warn("标记群消息撤回失败", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID), zap.Error(err))
-		return
-	}
-	if !changed {
-		return
-	}
-	a.syncRecalledMessage(log)
-	zap.L().Info("群消息已撤回", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Int64("operator_id", operatorID))
-}
-
-func initialMessageContent(msg *onebot.GroupMessage, selfID int64, botName string) string {
-	if msg == nil {
-		return ""
-	}
-	parts := make([]string, 0, 8)
-	if content := strings.TrimSpace(msg.Content); content != "" {
-		parts = append(parts, content)
-	}
-	for _, userID := range msg.AtList {
-		if userID == onebot.AtAllUserID {
-			parts = append(parts, "@全体成员")
-		} else if selfID > 0 && userID == selfID {
-			parts = append(parts, "@"+botMentionDisplayName(botName))
-		} else if userID > 0 {
-			displayName := utils.FirstNonEmpty(msg.AtNames[userID], fmt.Sprintf("%d", userID))
-			parts = append(parts, "@"+displayName)
-		}
-	}
-	for _, face := range msg.Faces {
-		if face.Name != "" {
-			parts = append(parts, fmt.Sprintf("[表情:%s]", face.Name))
-		} else if face.ID > 0 {
-			parts = append(parts, fmt.Sprintf("[表情:%d]", face.ID))
-		} else {
-			parts = append(parts, "[表情]")
-		}
-	}
-	for _, image := range msg.Images {
-		if image.SubType == 1 {
-			if image.Desc != "" {
-				parts = append(parts, fmt.Sprintf("[表情包:%s]", image.Desc))
-			} else {
-				parts = append(parts, "[表情包]")
-			}
-		} else if image.Desc != "" {
-			parts = append(parts, fmt.Sprintf("[图片:%s]", image.Desc))
-		} else {
-			parts = append(parts, "[图片]")
-		}
-	}
-	for range msg.Videos {
-		parts = append(parts, "[视频]")
-	}
-	if msg.HasRecord {
-		parts = append(parts, "[语音]")
-	}
-	for _, name := range msg.FileNames {
-		if name = strings.TrimSpace(name); name != "" {
-			parts = append(parts, fmt.Sprintf("[文件:%s]", name))
-		} else {
-			parts = append(parts, "[文件]")
-		}
-	}
-	for i := range msg.Cards {
-		parts = append(parts, msg.Cards[i].Format())
-	}
-	for range msg.ForwardIDs {
-		parts = append(parts, "[合并转发]")
-	}
-	reply := ""
-	if msg.Reply != nil && msg.Reply.MessageID > 0 {
-		reply = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
-	}
-	displayName := utils.FirstNonEmpty(msg.GroupCard, msg.DisplayName, msg.Nickname, fmt.Sprintf("%d", msg.UserID))
-	return fmt.Sprintf("[%s] #%d %s(%d):%s %s\n",
-		msg.Time.Format("15:04:05"), msg.MessageID, displayName, msg.UserID, reply, strings.Join(parts, " "))
+	return true
 }
 
 func botMentionDisplayName(botName string) string {
@@ -348,33 +451,12 @@ func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 	if bufSize <= 0 {
 		bufSize = 15
 	}
+	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可。
 	messages := append(a.buffers[msg.GroupID], msg)
 	if len(messages) > bufSize {
 		messages = slices.Delete(messages, 0, len(messages)-bufSize)
 	}
 	a.buffers[msg.GroupID] = messages
-}
-
-func (a *Agent) replaceBufferedMessage(messageID int64, source, replacement *onebot.GroupMessage) bool {
-	if messageID == 0 || source == nil || replacement == nil {
-		return false
-	}
-	a.buffersMu.Lock()
-	defer a.buffersMu.Unlock()
-	for i, current := range a.buffers[source.GroupID] {
-		if current == nil || current.MessageID != messageID {
-			continue
-		}
-		if current != source {
-			return false
-		}
-		a.buffers[source.GroupID][i] = replacement
-		if a.lastReadMessage[source.GroupID] == current {
-			a.lastReadMessage[source.GroupID] = replacement
-		}
-		return true
-	}
-	return false
 }
 
 func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {

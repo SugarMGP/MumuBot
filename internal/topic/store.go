@@ -57,18 +57,6 @@ func (s *DBStore) PersistMessageLog(ctx context.Context, item memory.MessageLog)
 	return &stored, created, nil
 }
 
-func (s *DBStore) UpdateMessagePresentation(ctx context.Context, messageLogID uint, displayContent string, forwardPayload *string, mentioned bool) (bool, error) {
-	result := s.db.WithContext(ctx).Model(&memory.MessageLog{}).Where("id = ? AND recalled_at IS NULL", messageLogID).Updates(map[string]any{
-		"display_content": displayContent,
-		"forward_payload": forwardPayload,
-		"is_mentioned":    mentioned,
-	})
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected > 0, nil
-}
-
 func (s *DBStore) ListPendingTopicAssignmentMessages(ctx context.Context, groupID int64, limit int) ([]memory.MessageLog, error) {
 	var rows []memory.MessageLog
 	err := s.db.WithContext(ctx).Table("message_logs ml").Select("ml.*").

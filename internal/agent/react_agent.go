@@ -57,6 +57,13 @@ type Agent struct {
 	lastReadMessage map[int64]*onebot.GroupMessage
 	buffersMu       sync.RWMutex
 
+	commitMu     sync.Mutex
+	commitQueues map[int64]chan commitItem
+	commitWG     sync.WaitGroup
+
+	recallMu       sync.Mutex
+	pendingRecalls map[int64]map[int64]time.Time
+
 	pendingThinks map[int64]*pendingThink
 	pendingMu     sync.Mutex
 
@@ -78,6 +85,7 @@ type startupEvent struct {
 	groupID    int64
 	messageID  int64
 	operatorID int64
+	arrivalSeq uint64
 }
 
 func New(mem *memory.Manager) (*Agent, error) {
@@ -123,6 +131,8 @@ func New(mem *memory.Manager) (*Agent, error) {
 		vision:          visionClient,
 		bot:             botClient,
 		buffers:         make(map[int64][]*onebot.GroupMessage),
+		commitQueues:    make(map[int64]chan commitItem),
+		pendingRecalls:  make(map[int64]map[int64]time.Time),
 		pendingThinks:   make(map[int64]*pendingThink),
 		lastReadMessage: make(map[int64]*onebot.GroupMessage),
 		replyCache:      newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
@@ -165,6 +175,8 @@ func New(mem *memory.Manager) (*Agent, error) {
 	}
 	go a.replyCache.Start()
 	go a.visionCache.Start()
+	a.wg.Add(1)
+	go a.recallPruneLoop()
 	constructed = true
 	return a, nil
 }
@@ -323,16 +335,16 @@ func (a *Agent) handleIncomingMessage(msg *onebot.GroupMessage) {
 	a.onMessage(msg)
 }
 
-func (a *Agent) handleIncomingRecall(groupID, messageID, operatorID int64) {
+func (a *Agent) handleIncomingRecall(groupID, messageID, operatorID int64, arrivalSeq uint64) {
 	a.startupMu.Lock()
 	if a.startupRecovering {
-		a.startupQueue = append(a.startupQueue, startupEvent{groupID: groupID, messageID: messageID, operatorID: operatorID})
+		a.startupQueue = append(a.startupQueue, startupEvent{groupID: groupID, messageID: messageID, operatorID: operatorID, arrivalSeq: arrivalSeq})
 		a.startupMu.Unlock()
 		return
 	}
 	a.startupMu.Unlock()
 
-	a.onRecall(groupID, messageID, operatorID)
+	a.onRecall(groupID, messageID, operatorID, arrivalSeq)
 }
 
 func (a *Agent) drainStartupEvents() {
@@ -351,7 +363,7 @@ func (a *Agent) drainStartupEvents() {
 			if event.message != nil {
 				a.onMessage(event.message)
 			} else {
-				a.onRecall(event.groupID, event.messageID, event.operatorID)
+				a.onRecall(event.groupID, event.messageID, event.operatorID, event.arrivalSeq)
 			}
 		}
 	}
@@ -363,16 +375,28 @@ func (a *Agent) Stop() {
 }
 
 func (a *Agent) shutdown() {
+	// 1. 停止 OneBot 接收并等待所有已分发事件处理完成，事件生产者全部退出。
 	if a.bot != nil {
 		if err := a.bot.Close(); err != nil {
 			zap.L().Warn("关闭 OneBot 连接失败", zap.Error(err))
 		}
 	}
+	// 2. 取消 Agent 上下文并停止思考调度，等待所有 think（含本地发言生产者）退出，
+	//    之后不会再有任何 enqueueCommit 调用。
 	a.cancel()
 	a.clearPendingThinks()
 	if a.concurrencyMgr != nil {
 		a.concurrencyMgr.Close()
 	}
+	// 3. 关闭提交队列并排空：此时没有生产者，队列消息以排空上下文完成落库。
+	a.commitMu.Lock()
+	for groupID, queue := range a.commitQueues {
+		close(queue)
+		delete(a.commitQueues, groupID)
+	}
+	a.commitMu.Unlock()
+	a.commitWG.Wait()
+
 	a.wg.Wait()
 	a.stopCaches()
 	if a.learner != nil {
