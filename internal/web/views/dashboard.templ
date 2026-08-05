@@ -7,7 +7,7 @@ templ DashboardPage(data DashboardPageData, currentPath string) {
 }
 
 templ DashboardMetric(icon string, label string, value string, tone string) {
-	<div class={ joinClasses("card border border-base-300 bg-base-100", tone) }>
+	<div class={ joinClasses("card border border-base-300 bg-base-100 shadow-sm", tone) }>
 		<div class="card-body flex-row items-center gap-3 p-4">
 			<span class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-base-200 text-base-content/65">@AdminIcon(icon, "size-5", "dashboard-"+icon)</span>
 			<div><div class="text-xs text-base-content/50">{ label }</div><div class="admin-number mt-1 text-xl font-semibold text-base-content">{ value }</div></div>
@@ -15,10 +15,17 @@ templ DashboardMetric(icon string, label string, value string, tone string) {
 	</div>
 }
 
+templ MoodProgressRow(label string, kind string, raw float64, barClass string) {
+	<div class="flex items-center gap-3">
+		<span class="w-11 shrink-0 text-sm text-base-content/60">{ label }</span>
+		<progress class={ joinClasses("progress h-2 flex-1", barClass) } value={ fmt.Sprintf("%d", moodPercent(kind, raw)) } max="100" title={ fmt.Sprintf("%s %d%%", label, moodPercent(kind, raw)) } aria-label={ fmt.Sprintf("%s %d%%", label, moodPercent(kind, raw)) }></progress>
+	</div>
+}
+
 templ DashboardBody(data DashboardPageData) {
 	<div class="space-y-6">
 		@PageHeader("首页", "查看机器人运行状态与学习概况。", "")
-		<section class="grid grid-cols-6 gap-3">
+		<section class="grid grid-cols-3 gap-3 2xl:grid-cols-6">
 			@DashboardMetric("groups", "启用群聊", fmt.Sprintf("%d", data.EnabledGroupCount), "bg-[#eef5ff]")
 			@DashboardMetric("memories", "长期记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
 			@DashboardMetric("members", "成员画像", fmt.Sprintf("%d", data.MemberCount), "bg-[#fff5ee]")
@@ -27,17 +34,21 @@ templ DashboardBody(data DashboardPageData) {
 			@DashboardMetric("stickers", "表情包", fmt.Sprintf("%d", data.StickerCount), "bg-[#fff8e8]")
 		</section>
 		<div class="grid grid-cols-[minmax(0,2fr)_minmax(280px,0.8fr)] gap-4">
-			<section class="card border border-base-300 bg-base-100">
+			<section class="card border border-base-300 bg-base-100 shadow-sm">
 				<div class="card-body p-5">
 					<div class="flex items-center justify-between"><div><h2 class="font-semibold">当前心情</h2><p class="mt-1 text-xs text-base-content/50">机器人此刻的情绪与交流意愿</p></div><span class="badge badge-primary badge-soft">实时</span></div>
 					if data.CurrentMood != nil {
-						<div class="admin-mood-chart" data-admin-mood-chart data-valence={ fmt.Sprintf("%.4f", data.CurrentMood.Valence) } data-energy={ fmt.Sprintf("%.4f", data.CurrentMood.Energy) } data-sociability={ fmt.Sprintf("%.4f", data.CurrentMood.Sociability) }></div>
+						<div class="mt-4 space-y-4">
+							@MoodProgressRow("心情", "valence", data.CurrentMood.Valence, "progress-primary")
+							@MoodProgressRow("精力", "energy", data.CurrentMood.Energy, "progress-success")
+							@MoodProgressRow("社交欲", "sociability", data.CurrentMood.Sociability, "progress-warning")
+						</div>
 					} else {
 						<div class="flex h-[220px] items-center justify-center text-sm text-base-content/45">暂无心情数据</div>
 					}
 				</div>
 			</section>
-			<section class="card border border-base-300 bg-base-100">
+			<section class="card border border-base-300 bg-base-100 shadow-sm">
 				<div class="card-body p-5">
 					<div class="flex items-center justify-between"><h2 class="font-semibold">运行状态</h2>@AdminIcon("connection", "size-5 text-success", "runtime")</div>
 					<div class="mt-2 divide-y divide-base-300 text-sm">
@@ -50,7 +61,7 @@ templ DashboardBody(data DashboardPageData) {
 			</section>
 		</div>
 		if data.CurrentMood != nil {
-			<section class="card border border-base-300 bg-base-100"><div class="card-body flex-row items-center gap-4 p-4"><span class="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">@AdminIcon("mood", "size-5", "mood-reason")</span><div><h2 class="text-sm font-semibold">当前状态摘要</h2><p class="mt-1 text-sm text-base-content/58">{ EmptyDash(data.CurrentMood.LastReason) }</p></div></div></section>
+			<section class="card border border-base-300 bg-base-100 shadow-sm"><div class="card-body flex-row items-center gap-4 p-4"><span class="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">@AdminIcon("mood", "size-5", "mood-reason")</span><div><h2 class="text-sm font-semibold">当前状态摘要</h2><p class="mt-1 text-sm text-base-content/58">{ EmptyDash(data.CurrentMood.LastReason) }</p></div></div></section>
 		}
 	</div>
 }

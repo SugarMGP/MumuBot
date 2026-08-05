@@ -12,27 +12,34 @@ templ SystemPage(data SystemPageData, currentPath string) {
 templ SystemBody(data SystemPageData) {
 	<div class="space-y-6">
 		@PageHeader("系统状态", "查看机器人连接、模型和运行环境的当前状态。", "运行信息")
-		<div class="grid grid-cols-2 gap-5">
-			for _, section := range data.Sections {
-				<section class="card border border-base-300 bg-base-100">
-					<div class="card-body gap-5 p-5">
-						<div class="flex items-center gap-3">
-							<span class="flex size-9 items-center justify-center rounded-box bg-base-200 text-base-content/60">
-								@AdminIcon(systemSectionIconName(section.Title), "size-5", "system-section")
-							</span>
-							<h2 class="text-lg font-semibold">{ section.Title }</h2>
-						</div>
-						<div class="grid grid-cols-2 gap-3">
-							for _, field := range section.Fields {
-								<div class={ systemFieldCardClass(field) }>
-									<div class="text-xs text-base-content/50">{ field.Label }</div>
-									<div class={ systemFieldValueClass(field) }>{ field.Value }</div>
-								</div>
-							}
-						</div>
-					</div>
-				</section>
-			}
+		<div class="flex items-start gap-5">
+			@SystemSectionColumn(systemSectionsLeft(data.Sections))
+			@SystemSectionColumn(systemSectionsRight(data.Sections))
 		</div>
+	</div>
+}
+
+templ SystemSectionColumn(sections []SystemSection) {
+	<div class="flex min-w-0 flex-1 flex-col gap-5">
+		for _, section := range sections {
+			<section class="card border border-base-300 bg-base-100 shadow-sm">
+				<div class="card-body gap-5 p-5">
+					<div class="flex items-center gap-3">
+						<span class="flex size-9 items-center justify-center rounded-box bg-base-200 text-base-content/60">
+							@AdminIcon(systemSectionIconName(section.Title), "size-5", "system-section")
+						</span>
+						<h2 class="text-lg font-semibold">{ section.Title }</h2>
+					</div>
+					<div class="grid grid-cols-2 gap-3">
+						for _, field := range section.Fields {
+							<div class={ systemFieldCardClass(field) }>
+								<div class="text-xs text-base-content/60">{ field.Label }</div>
+								<div class={ systemFieldValueClass(field) }>{ field.Value }</div>
+							</div>
+						}
+					</div>
+				</div>
+			</section>
+		}
 	</div>
 }

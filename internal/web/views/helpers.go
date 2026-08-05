@@ -1,6 +1,7 @@
 package views
 
 import (
+	"math"
 	"mumu-bot/internal/memory"
 	"strings"
 	"time"
@@ -16,8 +17,8 @@ func NavItems() []NavItem {
 		{Label: "话题管理", Href: "/admin/topics"},
 		{Label: "长期记忆", Href: "/admin/memories"},
 		{Label: "成员画像", Href: "/admin/members"},
-		{Label: "系统状态", Href: "/admin/system"},
 		{Label: "风格卡片", Href: "/admin/style-cards"},
+		{Label: "系统状态", Href: "/admin/system"},
 	}
 }
 
@@ -52,6 +53,14 @@ func boolText(v bool) string {
 	return "未启用"
 }
 
+func moodPercent(kind string, raw float64) int {
+	if kind == "valence" {
+		raw = (raw + 1) / 2
+	}
+	clamped := math.Min(1, math.Max(0, raw))
+	return int(math.Round(clamped * 100))
+}
+
 func ConnectionText(v bool) string {
 	if v {
 		return "已连接"
@@ -82,7 +91,7 @@ func navIconName(href string) string {
 	case "/admin/stickers":
 		return "stickers"
 	case "/admin/topics":
-		return "memories"
+		return "topics"
 	case "/admin/memories":
 		return "memories"
 	case "/admin/members":
@@ -92,6 +101,22 @@ func navIconName(href string) string {
 	default:
 		return "overview"
 	}
+}
+
+func systemSectionsLeft(sections []SystemSection) []SystemSection {
+	mid := (len(sections) + 1) / 2
+	if mid >= len(sections) {
+		return sections
+	}
+	return sections[:mid]
+}
+
+func systemSectionsRight(sections []SystemSection) []SystemSection {
+	mid := (len(sections) + 1) / 2
+	if mid >= len(sections) {
+		return nil
+	}
+	return sections[mid:]
 }
 
 func systemSectionIconName(title string) string {
@@ -116,7 +141,7 @@ func systemSectionIconName(title string) string {
 }
 
 func systemFieldCardClass(field SystemField) string {
-	base := "rounded-xl border border-base-300 bg-base-200/55 p-4"
+	base := "rounded-xl bg-base-200/50 p-4"
 	if systemFieldNeedsWide(field) {
 		return joinClasses(base, "sm:col-span-2")
 	}

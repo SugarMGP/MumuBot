@@ -12,20 +12,20 @@ templ StickerListPage(data StickerListPageData, currentPath string) {
 templ StickerListBody(data StickerListPageData) {
 	<div class="space-y-6">
 		@PageHeader("表情包管理", "查看和管理机器人用于回复的自定义表情资源。", "")
-		@FilterPanel("sticker-filters", "筛选条件", "按描述、文件名或哈希查找表情包。", EmptyComponent(), false, StickerFilterForm(data))
+		@FilterPanel("sticker-filters", "筛选条件", EmptyComponent(), false, StickerFilterForm(data))
 		@SortToolbar(data.Sort)
 		<section class="card min-h-[520px] border border-base-300 bg-base-100">
 			<div class="card-body p-5">
 				if len(data.Items) == 0 {
-					<div class="flex min-h-[420px] items-center justify-center text-sm text-base-content/45">当前筛选条件下暂无表情包</div>
+					<div class="flex min-h-[420px] items-center justify-center text-sm text-base-content/55">当前筛选条件下暂无表情包</div>
 				} else {
-					<div class="grid grid-cols-5 gap-4">
+					<div class="grid grid-cols-4 gap-4 2xl:grid-cols-5">
 						for _, item := range data.Items {
-							<article class="card border border-base-300 bg-base-100">
+							<article class="card border border-base-300 bg-base-100 shadow-sm">
 								<figure class="m-3 mb-0 aspect-square overflow-hidden rounded-xl bg-base-200 p-2">
 									if stickerFileURL(item.FileName) != "" {
-										<button class="h-full w-full" type="button" data-admin-dialog="#admin-sticker-preview-dialog" hx-get={ stickerPreviewDialogHref(item.ID) } hx-target="#admin-sticker-preview-content" hx-swap="innerHTML">
-											<img class="h-full w-full object-contain" src={ stickerFileURL(item.FileName) } alt={ stickerDescriptionText(item.Description) } loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"/>
+										<button class="h-full w-full" type="button" title="查看大图" data-admin-dialog="#admin-sticker-preview-dialog" hx-get={ stickerPreviewDialogHref(item.ID) } hx-target="#admin-sticker-preview-content" hx-swap="innerHTML" aria-label={ stickerPreviewAlt(item.Description, item.ID) }>
+											<img class="h-full w-full object-contain" width="240" height="240" src={ stickerFileURL(item.FileName) } alt={ stickerPreviewAlt(item.Description, item.ID) } loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"/>
 											<span class="hidden text-xl font-semibold text-base-content/35">{ stickerPreviewText(item.Description) }</span>
 										</button>
 									} else {
@@ -33,11 +33,10 @@ templ StickerListBody(data StickerListPageData) {
 									}
 								</figure>
 								<div class="card-body gap-2 p-3">
-									<h2 class="truncate text-sm font-medium" title={ item.FileName }>{ item.FileName }</h2>
-									<p class="line-clamp-2 min-h-8 text-xs leading-4 text-base-content/55">{ stickerDescriptionText(item.Description) }</p>
-									<div class="flex items-center justify-between text-[11px] text-base-content/45"><span>使用 { fmt.Sprintf("%d", item.UseCount) } 次</span><time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
-									<div class="card-actions mt-1 justify-between">
-										<button class="btn btn-success btn-soft btn-xs" type="button" data-admin-dialog="#admin-sticker-preview-dialog" hx-get={ stickerPreviewDialogHref(item.ID) } hx-target="#admin-sticker-preview-content" hx-swap="innerHTML">查看大图</button>
+									<h2 class="truncate text-sm font-medium" title={ stickerDescriptionText(item.Description) }>{ stickerCardTitle(item) }</h2>
+									<p class="truncate text-xs text-base-content/55" title={ item.FileName }>{ item.FileName }</p>
+									<div class="flex items-center justify-between text-xs text-base-content/55"><span>使用 { fmt.Sprintf("%d", item.UseCount) } 次</span><time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
+									<div class="card-actions mt-1 justify-end">
 										<button class="btn btn-error btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ stickerDeleteDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">删除</button>
 									</div>
 								</div>
@@ -54,7 +53,7 @@ templ StickerListBody(data StickerListPageData) {
 templ StickerFilterForm(data StickerListPageData) {
 	<form class="grid grid-cols-[minmax(240px,1fr)_auto] items-center gap-3" method="get" action="/admin/stickers" hx-get="/admin/stickers" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索描述、文件名或哈希"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索描述、文件名或哈希" aria-label="搜索描述、文件名或哈希"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">@AdminIcon("filter", "size-4", "sticker-filter")<span>筛选</span></button>
 	</form>
 }
@@ -77,15 +76,15 @@ templ MemoryListPage(data MemoryListPageData, currentPath string) {
 templ MemoryListBody(data MemoryListPageData) {
 	<div class="space-y-6">
 		@PageHeader("长期记忆", "查看机器人保存的稳定事实与目标状态。", "")
-		@FilterPanel("memory-filters", "筛选条件", "按内容、范围、状态和归类查找长期记忆。", MemoryFilterControls(data), true, MemoryFilterForm(data))
+		@FilterPanel("memory-filters", "筛选条件", MemoryFilterControls(data), true, MemoryFilterForm(data))
 		@SortToolbar(data.Sort)
 		if len(data.Items) == 0 {
-			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无长期记忆</div></div>
+			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无长期记忆</div></div>
 		}
 		if len(data.Items) > 0 {
 			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<article class="admin-record-card card border border-base-300 bg-base-100" data-tone={ ternaryString(item.Status == memory.MemoryStatusArchived, "neutral", "primary") }>
+					<article class="admin-record-card card border border-base-300 bg-base-100 shadow-sm" data-tone={ ternaryString(item.Status == memory.MemoryStatusArchived, "neutral", "primary") }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
 								<div class="flex flex-wrap gap-2"><span class="badge badge-info badge-soft badge-sm">{ memoryScopeText(item.Scope) }</span><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span><span class="badge badge-ghost badge-sm">{ memoryKindText(item.Kind) }</span></div>
@@ -98,8 +97,8 @@ templ MemoryListBody(data MemoryListPageData) {
 									<button class="btn btn-error btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ memoryDeleteDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">删除</button>
 								</div>
 							</div>
-							<p class="admin-quote rounded-xl p-4 text-sm leading-7 text-base-content/78">{ item.Content }</p>
-							<div class="flex items-center justify-between text-xs text-base-content/48">
+							<p class="admin-quote line-clamp-4 rounded-xl p-4 text-sm leading-7 text-base-content/78" title={ item.Content }>{ item.Content }</p>
+							<div class="flex items-center justify-between text-xs text-base-content/58">
 								<span>
 									群 { fmt.Sprintf("%d", item.GroupID) }
 									if item.SubjectUserID != nil {
@@ -127,9 +126,9 @@ templ MemoryFilterControls(data MemoryListPageData) {
 templ MemoryFilterForm(data MemoryListPageData) {
 	<form id="memory-filter-form" class="grid grid-cols-[minmax(240px,1fr)_150px_150px_auto] items-center gap-3" method="get" action="/admin/memories" hx-get="/admin/memories" hx-trigger="change from:input[form='memory-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索记忆内容"/>
-		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号"/>
-		<select class="select w-full border-base-300" name="kind"><option value="">全部归类</option><option value="fact" selected?={ data.Kind == "fact" }>事实</option><option value="episode" selected?={ data.Kind == "episode" }>经历</option><option value="preference" selected?={ data.Kind == "preference" }>偏好</option><option value="constraint" selected?={ data.Kind == "constraint" }>约束</option><option value="goal" selected?={ data.Kind == "goal" }>目标</option></select>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索记忆内容" aria-label="搜索记忆内容"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号" aria-label="群号"/>
+		<select class="select w-full border-base-300" name="kind" aria-label="记忆归类"><option value="">全部归类</option><option value="fact" selected?={ data.Kind == "fact" }>事实</option><option value="episode" selected?={ data.Kind == "episode" }>经历</option><option value="preference" selected?={ data.Kind == "preference" }>偏好</option><option value="constraint" selected?={ data.Kind == "constraint" }>约束</option><option value="goal" selected?={ data.Kind == "goal" }>目标</option></select>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
@@ -141,25 +140,22 @@ templ MemberListPage(data MemberListPageData, currentPath string) {
 templ MemberListBody(data MemberListPageData) {
 	<div class="space-y-6">
 		@PageHeader("成员画像", "查看群成员的身份变化、社交特征与兴趣画像。", "")
-		@FilterPanel("member-filters", "筛选条件", "按昵称、QQ、群名片、兴趣或常用词查找成员。", EmptyComponent(), false, MemberFilterForm(data))
+		@FilterPanel("member-filters", "筛选条件", EmptyComponent(), false, MemberFilterForm(data))
 		@SortToolbar(data.Sort)
 		<div class="space-y-4">
 			if len(data.Items) == 0 {
-				<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无成员画像</div></div>
+				<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无成员画像</div></div>
 			}
 			for _, item := range data.Items {
-				<article class="card border border-base-300 bg-base-100">
-					<div class="card-body grid grid-cols-[260px_minmax(0,1fr)_150px] items-center gap-6 p-5">
-						<section class="flex items-center gap-4">
-							<div class="avatar placeholder"><div class="w-14 rounded-full border-2 border-primary/15 bg-primary/10 text-primary"><span class="text-lg font-semibold">{ avatarText(memberPrimaryName(item)) }</span></div></div>
-							<div class="min-w-0">
-								<h2 class="truncate text-lg font-semibold">{ memberDisplayName(memberPrimaryName(item)) }</h2>
-								<p class="admin-number mt-1 text-xs text-base-content/50">QQ { fmt.Sprintf("%d", item.UserID) }</p>
-								<div class="mt-2 flex flex-wrap gap-1">
-									for _, tag := range memberGroupCards(item, 2) {
-										<span class="badge badge-primary badge-soft badge-xs">{ tag }</span>
-									}
-								</div>
+				<article class="card border border-base-300 bg-base-100 shadow-sm">
+					<div class="card-body grid grid-cols-[200px_minmax(0,1fr)_150px] items-center gap-6 p-5">
+						<section class="min-w-0">
+							<h2 class="truncate text-lg font-semibold">{ memberDisplayName(memberPrimaryName(item)) }</h2>
+							<p class="admin-number mt-1 text-xs text-base-content/50">QQ { fmt.Sprintf("%d", item.UserID) }</p>
+							<div class="mt-2 flex flex-wrap gap-1">
+								for _, tag := range memberGroupCards(item, 2) {
+									<span class="badge badge-primary badge-soft badge-xs">{ tag }</span>
+								}
 							</div>
 						</section>
 						<section class="grid grid-cols-3 gap-4 text-sm">
@@ -167,7 +163,7 @@ templ MemberListBody(data MemberListPageData) {
 							@MemberTraitGroup("兴趣", memberTraits(item, "interest", 3), "badge badge-accent badge-soft badge-sm")
 							@MemberTraitGroup("常用词", memberTraits(item, "phrase", 3), "badge badge-warning badge-soft badge-sm")
 						</section>
-						<section class="border-l border-base-300 pl-6"><div class="text-xs text-base-content/48">发言数</div><div class="admin-number mt-1 text-xl font-semibold">{ fmt.Sprintf("%d", item.MessageCount) }</div><div class="mt-3 text-xs text-base-content/48">最后活跃</div><time class="mt-1 block text-xs" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time></section>
+						<section class="border-l border-base-300 pl-6"><div class="text-xs text-base-content/58">发言数</div><div class="admin-number mt-1 text-xl font-semibold">{ fmt.Sprintf("%d", item.MessageCount) }</div><div class="mt-3 text-xs text-base-content/58">最后活跃</div><time class="mt-1 block text-xs" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time></section>
 					</div>
 				</article>
 			}
@@ -178,10 +174,10 @@ templ MemberListBody(data MemberListPageData) {
 
 templ MemberTraitGroup(label string, tags []string, badgeClass string) {
 	<div>
-		<div class="text-xs font-medium text-base-content/48">{ label }</div>
+		<div class="text-xs font-medium text-base-content/58">{ label }</div>
 		<div class="mt-2 flex flex-wrap gap-1">
 			if len(tags) == 0 {
-				<span class="text-base-content/35">暂无</span>
+				<span class="italic text-base-content/30">暂无</span>
 			}
 			for _, tag := range tags {
 				<span class={ badgeClass }>{ tag }</span>
@@ -193,7 +189,7 @@ templ MemberTraitGroup(label string, tags []string, badgeClass string) {
 templ MemberFilterForm(data MemberListPageData) {
 	<form class="grid grid-cols-[minmax(280px,1fr)_auto] items-center gap-3" method="get" action="/admin/members" hx-get="/admin/members" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="昵称 / QQ号 / 关键词"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="昵称 / QQ号 / 关键词" aria-label="昵称 / QQ号 / 关键词"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }

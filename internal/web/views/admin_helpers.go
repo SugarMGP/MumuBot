@@ -35,6 +35,26 @@ func stickerPreviewText(description string) string {
 	return preview
 }
 
+func stickerCardTitle(item memory.Sticker) string {
+	cleaned := stickerDescriptionText(item.Description)
+	if cleaned == "暂无描述" {
+		return fmt.Sprintf("表情包 #%d", item.ID)
+	}
+	return cleaned
+}
+
+func stickerPreviewAlt(description string, id uint) string {
+	cleaned := stickerDescriptionText(description)
+	runes := []rune(cleaned)
+	if len(runes) > 20 {
+		cleaned = string(runes[:20]) + "…"
+	}
+	if cleaned == "暂无描述" {
+		return fmt.Sprintf("预览表情包 #%d", id)
+	}
+	return "预览表情包：" + cleaned
+}
+
 func stickerFileURL(fileName string) string {
 	fileName = strings.TrimSpace(fileName)
 	if fileName == "" {
@@ -93,17 +113,6 @@ func memoryStatusClass(status memory.MemoryStatus) string {
 	default:
 		return "badge badge-success badge-soft badge-sm"
 	}
-}
-
-func avatarText(value string) string {
-	if isPlaceholderText(value) {
-		return "友"
-	}
-	preview := firstReadableRunes(value, 1)
-	if preview == "" {
-		return "友"
-	}
-	return preview
 }
 
 func memberDisplayName(value string) string {

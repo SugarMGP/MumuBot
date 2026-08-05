@@ -1,166 +1,215 @@
 package views
 
+// AdminIcon 后台统一图标，path 取自 lucide 官方线性图标（v1.28.0，ISC 协议）。
 templ AdminIcon(name string, className string, marker string) {
 	if name == "overview" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<rect x="3.25" y="3.25" width="5.5" height="5.5" rx="1.2"></rect>
-			<rect x="11.25" y="3.25" width="5.5" height="5.5" rx="1.2"></rect>
-			<rect x="3.25" y="11.25" width="5.5" height="5.5" rx="1.2"></rect>
-			<rect x="11.25" y="11.25" width="5.5" height="5.5" rx="1.2"></rect>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<rect width="7" height="9" x="3" y="3" rx="1"></rect>
+			<rect width="7" height="5" x="14" y="3" rx="1"></rect>
+			<rect width="7" height="9" x="14" y="12" rx="1"></rect>
+			<rect width="7" height="5" x="3" y="16" rx="1"></rect>
 		</svg>
 	} else if name == "style-cards" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M6 5.5h8.5a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 13V7A1.5 1.5 0 0 1 6 5.5Z"></path>
-			<path d="M7.5 3.5h5"></path>
-			<path d="M7.5 8.5h5.5"></path>
-			<path d="M7.5 11h3.5"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z"></path>
+			<path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7"></path>
+			<path d="M 7 17h.01"></path>
+			<path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8"></path>
+		</svg>
+	} else if name == "topics" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
 		</svg>
 	} else if name == "jargons" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M5.5 5h9a2 2 0 0 1 2 2v4.5a2 2 0 0 1-2 2H10l-3.5 2V13.5h-1A2 2 0 0 1 3.5 11.5V7a2 2 0 0 1 2-2Z"></path>
-			<path d="M7.5 8.5h5"></path>
-			<path d="M7.5 11h3.5"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
+			<path d="M7 11h10"></path>
+			<path d="M7 15h6"></path>
+			<path d="M7 7h8"></path>
 		</svg>
 	} else if name == "stickers" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<rect x="4" y="4" width="12" height="12" rx="2.5"></rect>
-			<path d="M7.25 8.25h.01"></path>
-			<path d="M12.75 8.25h.01"></path>
-			<path d="M7 11.75c.9 1 1.9 1.5 3 1.5s2.1-.5 3-1.5"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m22 11-1.296-1.296a2.4 2.4 0 0 0-3.408 0L11 16"></path>
+			<path d="M4 8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2"></path>
+			<circle cx="13" cy="7" r="1" fill="currentColor"></circle>
+			<rect x="8" y="2" width="14" height="14" rx="2"></rect>
 		</svg>
 	} else if name == "memories" || name == "memory-metric" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M5 4.5h8.5a2 2 0 0 1 2 2V15l-3-1.75L9.5 15 6.5 13.25 3.5 15V6.5a2 2 0 0 1 2-2Z"></path>
-			<path d="M7 8h5.5"></path>
-			<path d="M7 10.75h4"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M12 5v16"></path>
+			<path d="M16 13h2"></path>
+			<path d="M16 9h2"></path>
+			<path d="M20.001 19A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2 5 5 0 0 1 4-2z"></path>
+			<path d="M6 13h2"></path>
+			<path d="M6 9h2"></path>
 		</svg>
 	} else if name == "members" || name == "group-config" || name == "member-metric" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M7 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"></path>
-			<path d="M13.5 10.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"></path>
-			<path d="M3.75 15.5a4.25 4.25 0 0 1 6.5-3.6"></path>
-			<path d="M11 15.5a3.5 3.5 0 0 1 5.25-3"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M18 21a8 8 0 0 0-16 0"></path>
+			<circle cx="10" cy="8" r="5"></circle>
+			<path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"></path>
 		</svg>
 	} else if name == "system" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="m10 3 1.1 1.9 2.15.45-.8 2.05 1.35 1.6-1.7 1.35.2 2.2-2.3-.15L10 15l-1.8-1.05-2.3.15.2-2.2-1.7-1.35 1.35-1.6-.8-2.05 2.15-.45L10 3Z"></path>
-			<circle cx="10" cy="10" r="2.25"></circle>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"></path>
 		</svg>
 	} else if name == "sort" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M7 4.5v11"></path>
-			<path d="m4.75 6.75 2.25-2.25 2.25 2.25"></path>
-			<path d="M13 15.5v-11"></path>
-			<path d="m10.75 13.25 2.25 2.25 2.25-2.25"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m21 16-4 4-4-4"></path>
+			<path d="M17 20V4"></path>
+			<path d="m3 8 4-4 4 4"></path>
+			<path d="M7 4v16"></path>
 		</svg>
 	} else if name == "filter" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M4.5 5.5h11"></path>
-			<path d="m7.5 9.25 2.5 2.5 2.5-2.5"></path>
-			<path d="M10 11.75v2.75"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M2 5h20"></path>
+			<path d="M6 12h12"></path>
+			<path d="M9 19h6"></path>
 		</svg>
 	} else if name == "sort-desc" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M7 4.75v10.5"></path>
-			<path d="m4.75 13 2.25 2.25L9.25 13"></path>
-			<path d="M11.5 6h3.75"></path>
-			<path d="M11.5 9.5h2.75"></path>
-			<path d="M11.5 13h1.75"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m3 16 4 4 4-4"></path>
+			<path d="M7 20V4"></path>
+			<path d="M11 4h10"></path>
+			<path d="M11 8h7"></path>
+			<path d="M11 12h4"></path>
 		</svg>
 	} else if name == "sort-asc" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M7 15.25V4.75"></path>
-			<path d="m4.75 7 2.25-2.25L9.25 7"></path>
-			<path d="M11.5 6h1.75"></path>
-			<path d="M11.5 9.5h2.75"></path>
-			<path d="M11.5 13h3.75"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m3 8 4-4 4 4"></path>
+			<path d="M7 4v16"></path>
+			<path d="M11 12h4"></path>
+			<path d="M11 16h7"></path>
+			<path d="M11 20h10"></path>
 		</svg>
 	} else if name == "connection" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M7.5 6.25v3"></path>
-			<path d="M12.5 10.75v3"></path>
-			<path d="M5.75 9.25h5.5a1.75 1.75 0 0 0 0-3.5H9.5"></path>
-			<path d="M14.25 10.75H8.75a1.75 1.75 0 1 0 0 3.5h1.75"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"></path>
+			<path d="m2 22 3-3"></path>
+			<path d="M7.5 13.5 10 11"></path>
+			<path d="M10.5 16.5 13 14"></path>
+			<path d="m18 3-4 4h6l-4 4"></path>
 		</svg>
 	} else if name == "learning" || name == "style-metric" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="m10 3 1.2 3.2L14.5 7.5l-3.3 1.3L10 12l-1.2-3.2L5.5 7.5l3.3-1.3L10 3Z"></path>
-			<path d="m15 11.25.5 1.25 1.25.5-1.25.5-.5 1.25-.5-1.25-1.25-.5 1.25-.5.5-1.25Z"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path>
+			<path d="M20 2v4"></path>
+			<path d="M22 4h-4"></path>
+			<circle cx="4" cy="20" r="2"></circle>
 		</svg>
 	} else if name == "groups" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<circle cx="6.5" cy="8" r="1.75"></circle>
-			<circle cx="13.5" cy="8" r="1.75"></circle>
-			<path d="M3.75 14.5a3.75 3.75 0 0 1 5.5-2.2"></path>
-			<path d="M10.75 12.3a3.75 3.75 0 0 1 5.5 2.2"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+			<path d="M16 3.128a4 4 0 0 1 0 7.744"></path>
+			<path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+			<circle cx="9" cy="7" r="4"></circle>
 		</svg>
 	} else if name == "tools" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="m12.75 4.5 2.75 2.75"></path>
-			<path d="m7.5 9.75 6-6a2 2 0 1 1 2.75 2.75l-6 6"></path>
-			<path d="m6 11.25 2.75 2.75"></path>
-			<path d="M4 16h3.25L13 10.25 9.75 7 4 12.75V16Z"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"></path>
 		</svg>
 	} else if name == "runtime-summary" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M4.5 15.5h11"></path>
-			<path d="M6.25 13V9.5"></path>
-			<path d="M10 13V6.5"></path>
-			<path d="M13.75 13v-5"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
+			<path d="M18 17V9"></path>
+			<path d="M13 17V5"></path>
+			<path d="M8 17v-3"></path>
 		</svg>
 	} else if name == "mood" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M10 15.75s-5.25-2.95-5.25-7.1A3.1 3.1 0 0 1 10 6.5a3.1 3.1 0 0 1 5.25 2.15c0 4.15-5.25 7.1-5.25 7.1Z"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"></path>
 		</svg>
 	} else if name == "persona" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<circle cx="10" cy="7" r="3"></circle>
-			<path d="M4.75 15.5a5.25 5.25 0 0 1 10.5 0"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<circle cx="12" cy="5" r="1"></circle>
+			<path d="m9 20 3-6 3 6"></path>
+			<path d="m6 8 6 2 6-2"></path>
+			<path d="M12 10v4"></path>
 		</svg>
 	} else if name == "behavior" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<circle cx="10" cy="10" r="6"></circle>
-			<path d="M10 6.5v4l2.5 1.5"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<line x1="10" x2="14" y1="2" y2="2"></line>
+			<line x1="12" x2="15" y1="14" y2="11"></line>
+			<circle cx="12" cy="14" r="8"></circle>
 		</svg>
 	} else if name == "model" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="m10 3.5 5.5 3v6L10 15.5l-5.5-3v-6L10 3.5Z"></path>
-			<path d="M10 15.5v-6"></path>
-			<path d="m4.5 6.5 5.5 3 5.5-3"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M12 20v2"></path>
+			<path d="M12 2v2"></path>
+			<path d="M17 20v2"></path>
+			<path d="M17 2v2"></path>
+			<path d="M2 12h2"></path>
+			<path d="M2 17h2"></path>
+			<path d="M2 7h2"></path>
+			<path d="M20 12h2"></path>
+			<path d="M20 17h2"></path>
+			<path d="M20 7h2"></path>
+			<path d="M7 20v2"></path>
+			<path d="M7 2v2"></path>
+			<rect x="4" y="4" width="16" height="16" rx="2"></rect>
+			<rect x="8" y="8" width="8" height="8" rx="1"></rect>
 		</svg>
 	} else if name == "storage" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<ellipse cx="10" cy="5.5" rx="5.5" ry="2.5"></ellipse>
-			<path d="M4.5 5.5v4c0 1.4 2.45 2.5 5.5 2.5s5.5-1.1 5.5-2.5v-4"></path>
-			<path d="M4.5 9.5v4c0 1.4 2.45 2.5 5.5 2.5s5.5-1.1 5.5-2.5v-4"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+			<path d="M3 5V19A9 3 0 0 0 21 19V5"></path>
+			<path d="M3 12A9 3 0 0 0 21 12"></path>
 		</svg>
 	} else if name == "backend" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="m10 3.5 5 2v4c0 3.15-2.1 5.65-5 6.85-2.9-1.2-5-3.7-5-6.85v-4l5-2Z"></path>
-			<path d="m8.25 10 1.25 1.25 2.75-2.75"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path>
+			<path d="m9 12 2 2 4-4"></path>
 		</svg>
 	} else if name == "flash-success" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<circle cx="10" cy="10" r="6.25"></circle>
-			<path d="m7.5 10.25 1.75 1.75 3.5-3.5"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<circle cx="12" cy="12" r="10"></circle>
+			<path d="m9 12 2 2 4-4"></path>
 		</svg>
 	} else if name == "flash-warn" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<path d="M10 3.75 16 14.5H4L10 3.75Z"></path>
-			<path d="M10 8v2.75"></path>
-			<path d="M10 13h.01"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path>
+			<path d="M12 9v4"></path>
+			<path d="M12 17h.01"></path>
 		</svg>
 	} else if name == "flash-error" {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<circle cx="10" cy="10" r="6.25"></circle>
-			<path d="m8 8 4 4"></path>
-			<path d="m12 8-4 4"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<circle cx="12" cy="12" r="10"></circle>
+			<path d="m15 9-6 6"></path>
+			<path d="m9 9 6 6"></path>
+		</svg>
+	} else if name == "chevron-left" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m15 18-6-6 6-6"></path>
+		</svg>
+	} else if name == "chevron-right" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m9 18 6-6-6-6"></path>
+		</svg>
+	} else if name == "chevron-down" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m6 9 6 6 6-6"></path>
+		</svg>
+	} else if name == "x" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M18 6 6 18"></path>
+			<path d="m6 6 12 12"></path>
+		</svg>
+	} else if name == "log-out" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="m16 17 5-5-5-5"></path>
+			<path d="M21 12H9"></path>
+			<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+		</svg>
+	} else if name == "arrow-right" {
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M5 12h14"></path>
+			<path d="m12 5 7 7-7 7"></path>
 		</svg>
 	} else {
-		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<circle cx="10" cy="10" r="6"></circle>
-			<path d="M10 7.25v3.5"></path>
-			<path d="M10 13h.01"></path>
+		<svg data-admin-icon={ marker } class={ className } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<circle cx="12" cy="12" r="10"></circle>
+			<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+			<path d="M12 17h.01"></path>
 		</svg>
 	}
 }

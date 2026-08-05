@@ -2,9 +2,7 @@ package views
 
 templ DialogCloseButton(selector string) {
 	<button type="button" class="btn btn-ghost btn-circle btn-sm" data-admin-dialog-close={ selector } aria-label="关闭弹层">
-		<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-			<path d="m6 6 8 8M14 6l-8 8"></path>
-		</svg>
+		@AdminIcon("x", "size-4", "dialog-x")
 	</button>
 }
 
@@ -30,11 +28,11 @@ templ AdminActionDialogContent(data AdminActionDialogContentData) {
 			</div>
 		}
 		if len(data.Fields) > 0 {
-			<div class="grid grid-cols-2 gap-3">
+			<div class={ ternaryString(len(data.Fields) > 1, "grid grid-cols-2 gap-3", "grid gap-3") }>
 				for _, field := range data.Fields {
 					<div class="rounded-box bg-base-200 p-4">
 						<strong class="text-xs font-medium text-base-content/50">{ field.Label }</strong>
-						<div class="mt-2 whitespace-pre-line break-words text-sm leading-6 text-base-content/75">{ field.Value }</div>
+						<div class="mt-2 max-h-56 overflow-y-auto whitespace-pre-line break-words text-sm leading-6 text-base-content/75">{ field.Value }</div>
 					</div>
 				}
 			</div>

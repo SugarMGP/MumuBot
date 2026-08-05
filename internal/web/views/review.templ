@@ -9,7 +9,7 @@ templ StyleCardListPage(data StyleCardListPageData, currentPath string) {
 templ StyleCardListBody(data StyleCardListPageData) {
 	<div class="space-y-6">
 		@PageHeader("风格卡片", "审核群聊中学习到的表达风格。", "")
-		@FilterPanel("style-card-filters", "筛选条件", "按群号、关键词和状态查找风格卡片。", StyleCardFilterControls(data), true, StyleCardFilterForm(data))
+		@FilterPanel("style-card-filters", "筛选条件", StyleCardFilterControls(data), true, StyleCardFilterForm(data))
 		@SortToolbar(data.Sort)
 		if len(data.Items) == 0 {
 			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无风格卡片</div></div>
@@ -17,15 +17,15 @@ templ StyleCardListBody(data StyleCardListPageData) {
 		if len(data.Items) > 0 {
 			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<article class="admin-record-card card border border-base-300 bg-base-100" data-tone={ styleCardTone(item.Status) }>
+					<article class="admin-record-card card border border-base-300 bg-base-100 shadow-sm" data-tone={ styleCardTone(item.Status) }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
-								<div>
+								<div class="min-w-0">
 									<div class="flex items-center gap-2">
-										<h2 class="text-xl font-semibold">{ item.Situation }</h2>
-										<span class={ styleCardStatusClass(item.Status) }>{ styleCardStatusText(item.Status) }</span>
+										<h2 class="line-clamp-2 min-w-0 flex-1 text-xl font-semibold leading-7">{ item.Situation }</h2>
+										<span class={ joinClasses("shrink-0 whitespace-nowrap", styleCardStatusClass(item.Status)) }>{ styleCardStatusText(item.Status) }</span>
 									</div>
-									<p class="mt-1 text-xs text-base-content/50">群号：{ fmt.Sprintf("%d", item.GroupID) } <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></p>
+									<p class="mt-1 text-xs text-base-content/60">群号：{ fmt.Sprintf("%d", item.GroupID) } <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></p>
 								</div>
 								<div class="flex shrink-0 gap-2">
 									for _, action := range styleCardActions(item.Status) {
@@ -40,7 +40,7 @@ templ StyleCardListBody(data StyleCardListPageData) {
 								}
 								for i, evidence := range item.Evidence {
 									if i < 3 {
-										<p class="text-sm leading-6 text-base-content/72"><span class="font-medium text-info">{ "@" + evidence.Nickname }</span>：{ evidence.TextContent }</p>
+										<p class="line-clamp-2 text-sm leading-6 text-base-content/72" title={ evidence.TextContent }><span class="font-medium text-info">{ "@" + evidence.Nickname }</span>：{ evidence.TextContent }</p>
 									}
 								}
 							</div></div>
@@ -60,8 +60,8 @@ templ StyleCardFilterControls(data StyleCardListPageData) {
 templ StyleCardFilterForm(data StyleCardListPageData) {
 	<form id="style-card-filter-form" class="grid grid-cols-[180px_minmax(220px,1fr)_auto] items-center gap-3" method="get" action="/admin/style-cards" hx-get="/admin/style-cards" hx-trigger="change from:input[form='style-card-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名"/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="关键词"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名" aria-label="群号 / 群名"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="关键词" aria-label="关键词"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">@AdminIcon("filter", "size-4", "style-filter")<span>筛选</span></button>
 	</form>
 }
@@ -73,7 +73,7 @@ templ JargonListPage(data JargonListPageData, currentPath string) {
 templ JargonListBody(data JargonListPageData) {
 	<div class="space-y-6">
 		@PageHeader("黑话词典", "审核群聊中学习到的词语和含义。", "")
-		@FilterPanel("jargon-filters", "筛选条件", "按群号、关键词和状态查找词条。", JargonFilterControls(data), true, JargonFilterForm(data))
+		@FilterPanel("jargon-filters", "筛选条件", JargonFilterControls(data), true, JargonFilterForm(data))
 		@SortToolbar(data.Sort)
 		if len(data.Items) == 0 {
 			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无黑话记录</div></div>
@@ -81,15 +81,15 @@ templ JargonListBody(data JargonListPageData) {
 		if len(data.Items) > 0 {
 			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<article class="admin-record-card card border border-base-300 bg-base-100" data-tone={ jargonTone(item.Jargon) }>
+					<article class="admin-record-card card border border-base-300 bg-base-100 shadow-sm" data-tone={ jargonTone(item.Jargon) }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
-								<div>
+								<div class="min-w-0">
 									<div class="flex items-center gap-2">
-										<h2 class="text-xl font-semibold">{ item.Term }</h2>
-										<span class={ jargonStatusClass(item.Jargon) }>{ jargonStatusText(item.Jargon) }</span>
+										<h2 class="line-clamp-2 min-w-0 flex-1 text-xl font-semibold leading-7">{ item.Term }</h2>
+										<span class={ joinClasses("shrink-0 whitespace-nowrap", jargonStatusClass(item.Jargon)) }>{ jargonStatusText(item.Jargon) }</span>
 									</div>
-									<p class="mt-1 text-xs text-base-content/50">群 { fmt.Sprintf("%d", item.GroupID) } <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></p>
+									<p class="mt-1 text-xs text-base-content/60">群 { fmt.Sprintf("%d", item.GroupID) } <time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></p>
 								</div>
 								<div class="flex shrink-0 gap-2">
 									for _, action := range jargonActions(jargonStatusValue(item.Jargon)) {
@@ -104,7 +104,7 @@ templ JargonListBody(data JargonListPageData) {
 								}
 								for i, evidence := range item.Evidence {
 									if i < 3 {
-										<p class="text-sm leading-6 text-base-content/72"><span class="font-medium">{ evidence.Nickname }</span>：{ evidence.TextContent }</p>
+										<p class="line-clamp-2 text-sm leading-6 text-base-content/72" title={ evidence.TextContent }><span class="font-medium">{ evidence.Nickname }</span>：{ evidence.TextContent }</p>
 									}
 								}
 							</div></div>
@@ -124,8 +124,8 @@ templ JargonFilterControls(data JargonListPageData) {
 templ JargonFilterForm(data JargonListPageData) {
 	<form id="jargon-filter-form" class="grid grid-cols-[180px_minmax(220px,1fr)_auto] items-center gap-3" method="get" action="/admin/jargons" hx-get="/admin/jargons" hx-trigger="change from:input[form='jargon-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名"/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="关键词"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名" aria-label="群号 / 群名"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="关键词" aria-label="关键词"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">@AdminIcon("filter", "size-4", "jargon-filter")<span>筛选</span></button>
 	</form>
 }

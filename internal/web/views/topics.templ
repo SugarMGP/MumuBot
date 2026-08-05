@@ -12,29 +12,32 @@ templ TopicListPage(data TopicListPageData, currentPath string) {
 templ TopicListBody(data TopicListPageData) {
 	<div class="space-y-6">
 		@PageHeader("话题管理", "查看群聊话题、摘要与未完事项。", "")
-		@FilterPanel("topic-filters", "筛选条件", "按群号或关键词查找话题。", EmptyComponent(), false, TopicFilterForm(data))
+		@FilterPanel("topic-filters", "筛选条件", EmptyComponent(), false, TopicFilterForm(data))
 		@SortToolbar(data.Sort)
 		if len(data.Items) == 0 {
-			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/45">当前筛选条件下暂无话题</div></div>
+			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无话题</div></div>
 		}
 		if len(data.Items) > 0 {
 			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<a href={ fmt.Sprintf("/admin/topics/%d", item.ID) } class="admin-record-card card border border-base-300 bg-base-100 transition-colors hover:border-primary/35" data-tone={ topicTone(item) }>
+					<a href={ fmt.Sprintf("/admin/topics/%d", item.ID) } class="admin-record-card card border border-base-300 bg-base-100 shadow-sm transition-colors hover:border-primary/35 hover:shadow-md" data-tone={ topicTone(item) }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
-								<div><h2 class="text-lg font-semibold leading-6">{ topicTitle(item) }</h2><p class="admin-number mt-1 text-xs text-base-content/48">群 { fmt.Sprintf("%d", item.GroupID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p></div>
-								<span class={ topicSummaryProgressClass(item) }>{ topicSummaryProgressText(item) }</span>
+								<div class="min-w-0">
+									<h2 class="line-clamp-2 text-lg font-semibold leading-6">{ topicTitle(item) }</h2>
+									<p class="admin-number mt-1 text-xs text-base-content/58">群 { fmt.Sprintf("%d", item.GroupID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p>
+								</div>
+								<span class={ joinClasses("shrink-0", topicSummaryProgressClass(item)) }>{ topicSummaryProgressText(item) }</span>
 							</div>
-							<p class="admin-quote rounded-xl p-4 text-sm leading-7 text-base-content/70">{ topicGist(item) }</p>
+							<p class="admin-quote line-clamp-3 rounded-xl p-4 text-sm leading-7 text-base-content/70" title={ topicGist(item) }>{ topicGist(item) }</p>
 							<div class="flex flex-wrap gap-2">
 								for _, keyword := range topicKeywords(item) {
 									<span class="badge badge-primary badge-soft badge-sm">{ keyword }</span>
 								}
 							</div>
-							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/48">
+							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/58">
 								<span>摘要覆盖至 #{ fmt.Sprintf("%d", topicSummaryThroughID(item)) }</span>
-								<span class="flex items-center gap-1 font-medium text-primary">查看详情<svg class="size-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7.5 5 5 5-5 5"></path></svg></span>
+								<span class="flex items-center gap-1 font-medium text-primary">查看详情 @AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")</span>
 							</div>
 						</div>
 					</a>
@@ -49,8 +52,8 @@ templ TopicFilterForm(data TopicListPageData) {
 	<form id="topic-filter-form" class="grid grid-cols-[180px_minmax(280px,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
 		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名"/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名" aria-label="群号 / 群名"/>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词" aria-label="话题关键词"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
@@ -61,28 +64,35 @@ templ TopicDetailPage(data TopicDetailPageData, currentPath string) {
 
 templ TopicDetailBody(data TopicDetailPageData) {
 	<div class="space-y-5">
-		<header class="flex items-center justify-between gap-6">
+		<header class="flex flex-col gap-3">
 			<div class="flex min-w-0 items-center gap-3">
-				<a class="btn btn-ghost btn-circle btn-sm" href="/admin/topics" aria-label="返回话题列表"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m12.5 5-5 5 5 5"></path></svg></a>
-				<div class="flex min-w-0 items-center gap-2"><h1 class="truncate text-lg font-semibold">{ topicTitle(data.Thread) }</h1><span class="badge badge-ghost badge-sm">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span><span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span></div>
+				<a class="btn btn-ghost btn-circle btn-sm" href="/admin/topics" aria-label="返回话题列表">@AdminIcon("chevron-left", "size-4", "topic-back")</a>
+				<h1 class="min-w-0 truncate text-lg font-semibold">{ topicTitle(data.Thread) }</h1>
 			</div>
-			<span class="text-xs text-base-content/45">更新于 { formatTime(data.Thread.UpdatedAt) }</span>
+			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-xs text-base-content/50">
+				<span class="badge badge-ghost badge-sm">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span>
+				<span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span>
+				<span>更新于 { formatTime(data.Thread.UpdatedAt) }</span>
+			</div>
 		</header>
 		<div class="grid grid-cols-[minmax(0,1fr)_300px] items-start gap-4">
 			<div class="space-y-4">
 				@TopicCurrentSummary(data.Thread)
-				<section class="card border border-base-300 bg-base-100">
+				<section class="card border border-base-300 bg-base-100 shadow-sm">
 					<div class="card-body p-5">
-						<div><h2 class="font-semibold">话题消息溯源</h2><p class="mt-1 text-xs text-base-content/48">按时间顺序展示最近关联消息</p></div>
+						<div><h2 class="font-semibold">话题消息溯源</h2><p class="mt-1 text-xs text-base-content/58">按时间顺序展示最近关联消息</p></div>
 						if len(data.Messages) == 0 {
 							<div class="py-10 text-center text-sm text-base-content/40">暂无关联消息</div>
 						}
 						if len(data.Messages) > 0 {
 							<div class="mt-2 space-y-3">
 								for _, item := range data.Messages {
-									<article class="flex gap-3">
-										<div class="avatar placeholder"><div class="w-9 rounded-full bg-primary/10 text-primary"><span class="text-xs">{ avatarText(item.Nickname) }</span></div></div>
-										<div class="min-w-0 flex-1 rounded-xl border border-base-300 bg-base-200/45 p-3"><div class="flex items-center justify-between"><span class="text-xs font-medium">{ item.Nickname }</span><time class="text-[11px] text-base-content/42" datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time></div><p class="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-base-content/70">{ topicMessageText(item) }</p></div>
+									<article class="rounded-xl border border-base-300 bg-base-200/45 p-3">
+										<div class="flex items-center justify-between gap-3">
+											<span class="min-w-0 truncate text-xs font-medium text-base-content/70">{ item.Nickname }</span>
+											<time class="shrink-0 text-xs text-base-content/55" datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time>
+										</div>
+										<p class="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-base-content/70">{ topicMessageText(item) }</p>
 									</article>
 								}
 							</div>
@@ -90,9 +100,9 @@ templ TopicDetailBody(data TopicDetailPageData) {
 					</div>
 				</section>
 			</div>
-			<aside class="card border border-base-300 bg-base-100">
+			<aside class="card border border-base-300 bg-base-100 shadow-sm">
 				<div class="card-body gap-3 p-4">
-					<div><h2 class="font-semibold">摘要生成历史</h2><p class="mt-1 text-xs text-base-content/45">{ topicSummaryChangeCountLabel(data.Thread, data.SummaryChanges) }</p></div>
+					<div><h2 class="font-semibold">摘要生成历史</h2><p class="mt-1 text-xs text-base-content/55">{ topicSummaryChangeCountLabel(data.Thread, data.SummaryChanges) }</p></div>
 					if len(data.SummaryChanges) == 0 {
 						<div class="py-8 text-center text-sm text-base-content/40">还没有摘要快照</div>
 					}
@@ -108,7 +118,7 @@ templ TopicDetailBody(data TopicDetailPageData) {
 }
 
 templ TopicCurrentSummary(topic services.TopicThreadView) {
-	<section class="card border border-base-300 bg-base-100">
+	<section class="card border border-base-300 bg-base-100 shadow-sm">
 		<div class="card-body gap-4 p-5">
 			<div class="flex items-center gap-2 text-primary">@AdminIcon("memories", "size-5", "topic-summary")<h2 class="font-semibold text-base-content">当前摘要</h2></div>
 			<p class="text-sm leading-7 text-base-content/72">{ topicGist(topic) }</p>
@@ -151,7 +161,7 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 		<summary class="admin-topic-change-card__summary">
 			<span class="admin-topic-change-card__rail" aria-hidden="true"></span>
 			<div class="min-w-0 flex-1">
-				<time class="text-[11px] text-base-content/45" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
+				<time class="text-xs text-base-content/55" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
 				<p class="mt-1 text-sm font-medium leading-5">{ change.Headline }</p>
 				<div class="mt-2 flex flex-wrap gap-1">
 					for _, badge := range change.Badges {
@@ -159,7 +169,7 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 					}
 				</div>
 			</div>
-			<svg class="admin-topic-change-card__chevron size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 8 4 4 4-4"></path></svg>
+			@AdminIcon("chevron-down", "size-4 admin-topic-change-card__chevron", "topic-change-chevron")
 		</summary>
 		<div class="admin-topic-change-card__body">
 			if change.TitleChanged {

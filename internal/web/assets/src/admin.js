@@ -1,15 +1,9 @@
 import htmx from "htmx.org";
 import Toastify from "toastify-js";
-import * as echarts from "echarts/core";
-import { BarChart } from "echarts/charts";
-import { DatasetComponent, GridComponent, TooltipComponent } from "echarts/components";
-import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([BarChart, DatasetComponent, GridComponent, TooltipComponent, CanvasRenderer]);
 window.htmx = htmx;
 
 const DEFAULT_TOAST_DELAY = 4200;
-const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 function markFormSubmitting(form, activeButton) {
   if (!(form instanceof HTMLFormElement)) return;
@@ -21,8 +15,12 @@ function markFormSubmitting(form, activeButton) {
   if (activeButton instanceof HTMLButtonElement) {
     const label = activeButton.dataset.loadingLabel;
     if (label) {
-      activeButton.dataset.originalLabel = activeButton.textContent || "";
-      activeButton.textContent = label;
+      activeButton.dataset.originalHTML = activeButton.innerHTML;
+      activeButton.textContent = "";
+      const spinner = document.createElement("span");
+      spinner.className = "loading loading-spinner loading-xs";
+      activeButton.appendChild(spinner);
+      activeButton.appendChild(document.createTextNode(" " + label));
     }
   }
 }
@@ -33,9 +31,9 @@ function resetFormSubmitting(form) {
   form.querySelectorAll('button[type="submit"]').forEach((button) => {
     button.disabled = false;
     button.classList.remove("cursor-wait");
-    if (button.dataset.originalLabel) {
-      button.textContent = button.dataset.originalLabel;
-      delete button.dataset.originalLabel;
+    if (button.dataset.originalHTML !== undefined) {
+      button.innerHTML = button.dataset.originalHTML;
+      delete button.dataset.originalHTML;
     }
   });
 }
@@ -86,9 +84,10 @@ function toastKind(kind) {
 }
 
 function toastIcon(kind) {
-  if (kind === "error") return '<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="6.5"/><path d="M10 6.5v4.5M10 13.5h.01"/></svg>';
-  if (kind === "warn") return '<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3.5 17 16.5H3L10 3.5Z"/><path d="M10 7.5v4M10 13.5h.01"/></svg>';
-  return '<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5.5 10 3 3 6-6"/></svg>';
+  const common = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+  if (kind === "error") return `<svg class="size-4" ${common}><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>`;
+  if (kind === "warn") return `<svg class="size-4" ${common}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
+  return `<svg class="size-4" ${common}><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`;
 }
 
 function showAdminToast(detail) {
@@ -100,7 +99,7 @@ function showAdminToast(detail) {
   node.dataset.kind = kind;
   node.setAttribute("role", kind === "success" ? "status" : "alert");
   node.setAttribute("aria-live", kind === "success" ? "polite" : "assertive");
-  node.innerHTML = `<div class="admin-toast__icon">${toastIcon(kind)}</div><div class="admin-toast__content"><div data-toast-title class="font-semibold"></div><div data-toast-body class="mt-0.5 text-sm text-base-content/65"></div></div><button type="button" class="admin-toast__close" aria-label="关闭提示"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 8 8M14 6l-8 8"/></svg></button>`;
+  node.innerHTML = `<div class="admin-toast__icon">${toastIcon(kind)}</div><div class="admin-toast__content"><div data-toast-title class="font-semibold"></div><div data-toast-body class="mt-0.5 text-sm text-base-content/65"></div></div><button type="button" class="admin-toast__close" aria-label="关闭提示"><svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>`;
   node.querySelector("[data-toast-title]").textContent = normalized.title;
   const body = node.querySelector("[data-toast-body]");
   body.textContent = normalized.body;
@@ -145,47 +144,12 @@ function togglePassword(button) {
   if (label) label.textContent = visible ? "隐藏" : "显示";
 }
 
-function moodPercent(kind, raw) {
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return 0;
-  const normalized = kind === "valence" ? (value + 1) / 2 : value;
-  return Math.round(Math.min(1, Math.max(0, normalized)) * 100);
-}
-
-function initMoodCharts(root = document) {
-  root.querySelectorAll?.("[data-admin-mood-chart]").forEach((element) => {
-    if (!(element instanceof HTMLElement)) return;
-    const existing = echarts.getInstanceByDom(element);
-    if (existing) {
-      existing.resize();
-      return;
-    }
-    const chart = echarts.init(element, null, { renderer: "canvas" });
-    const rows = [
-      ["心情", moodPercent("valence", element.dataset.valence), "#e85d75"],
-      ["精力", moodPercent("energy", element.dataset.energy), "#159a8c"],
-      ["社交欲", moodPercent("sociability", element.dataset.sociability), "#d59a22"],
-    ];
-    chart.setOption({
-      animation: !REDUCED_MOTION.matches,
-      grid: { left: 58, right: 40, top: 12, bottom: 10 },
-      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, formatter: (items) => `${items[0].name}：${items[0].value}%` },
-      xAxis: { type: "value", min: 0, max: 100, show: false },
-      yAxis: { type: "category", inverse: true, data: rows.map((row) => row[0]), axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "#4b4c59", fontSize: 13 } },
-      series: [{ type: "bar", data: rows.map((row) => ({ value: row[1], itemStyle: { color: row[2], borderRadius: 8 } })), barWidth: 8, showBackground: true, backgroundStyle: { color: "#eef0f4", borderRadius: 8 }, label: { show: true, position: "right", formatter: "{c}%", color: "#727381", fontSize: 12 } }],
-    });
-  });
-}
-
-function disposeMoodCharts(root) {
-  root?.querySelectorAll?.("[data-admin-mood-chart]").forEach((element) => echarts.getInstanceByDom(element)?.dispose());
-}
-
 function bootAdminPage() {
   const detail = readInitialToast();
   if (detail) showAdminToast(detail);
   clearFlashQueryParams();
-  initMoodCharts();
+  const pageBody = document.getElementById("admin-page-body");
+  if (pageBody) pageBody.classList.add("admin-page-enter");
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootAdminPage, { once: true });
@@ -215,8 +179,6 @@ document.addEventListener("submit", (event) => {
   markFormSubmitting(form, event.submitter instanceof HTMLButtonElement ? event.submitter : null);
 }, true);
 
-document.addEventListener("htmx:beforeSwap", (event) => disposeMoodCharts(event.detail?.target));
-document.addEventListener("htmx:afterSwap", (event) => initMoodCharts(event.detail?.target || document));
 document.addEventListener("htmx:afterRequest", (event) => resetFormSubmitting(formFromEvent(event)));
 document.addEventListener("htmx:responseError", (event) => resetFormSubmitting(formFromEvent(event)));
 document.addEventListener("htmx:sendError", (event) => resetFormSubmitting(formFromEvent(event)));
@@ -225,4 +187,3 @@ document.addEventListener("admin:toast", (event) => {
   if (detail) showAdminToast(detail);
 });
 document.addEventListener("admin:action-dialog-close", () => closeDialog("#admin-action-dialog"));
-window.addEventListener("resize", () => document.querySelectorAll("[data-admin-mood-chart]").forEach((element) => echarts.getInstanceByDom(element)?.resize()));

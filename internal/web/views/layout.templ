@@ -25,7 +25,7 @@ templ EmptyComponent() {
 }
 
 templ PageContent(content templ.Component) {
-	<div id="admin-page-body" class="admin-page-enter">
+	<div id="admin-page-body">
 		@content
 	</div>
 }
@@ -40,19 +40,6 @@ templ LayoutWithOverlay(data LayoutData, content templ.Component, overlay templ.
 					@SidebarPanel(data)
 				</aside>
 				<div class="min-w-0">
-					<header class="admin-topbar">
-						<div class="flex items-center gap-3">
-							<span class="text-base font-semibold text-base-content">MumuBot 管理后台</span>
-							<span class="h-4 w-px bg-base-300"></span>
-							<span class="text-sm text-base-content/55">{ data.Title }</span>
-						</div>
-						<div class="flex items-center gap-3">
-							<span class="badge badge-success badge-soft badge-sm">服务在线</span>
-							<div class="avatar placeholder" aria-hidden="true">
-								<div class="w-9 rounded-full border border-primary/15 bg-primary/10 text-primary"><span class="text-xs font-semibold">M</span></div>
-							</div>
-						</div>
-					</header>
 					<main class="admin-page">
 						@PageContent(content)
 					</main>
@@ -76,15 +63,10 @@ templ AdminActionDialog() {
 }
 
 templ SidebarPanel(data LayoutData) {
-	<div class="flex h-full flex-col px-3 py-5">
-		<div class="flex items-center gap-3 px-3 pb-5">
-			<div class="avatar placeholder">
-				<div class="w-10 rounded-full bg-primary text-primary-content"><span class="text-sm font-semibold">M</span></div>
-			</div>
-			<div>
-				<div id="admin-sidebar-title" class="text-lg font-semibold leading-5 text-base-content">MumuBot</div>
-				<div class="mt-1 text-xs text-base-content/55">管理后台</div>
-			</div>
+	<div class="flex h-full flex-col px-3 py-4">
+		<div class="px-3 pb-4">
+			<div id="admin-sidebar-title" class="text-lg font-semibold leading-5 text-base-content">MumuBot</div>
+			<div class="mt-1 text-xs text-base-content/55">管理后台</div>
 		</div>
 		<nav class="min-h-0 flex-1 overflow-y-auto" aria-label="后台导航">
 			<ul class="menu w-full gap-1 p-0">
@@ -98,12 +80,9 @@ templ SidebarPanel(data LayoutData) {
 				}
 			</ul>
 		</nav>
-		<form class="mt-4 border-t border-base-300 pt-4" method="post" action="/logout">
+		<form class="mt-3 border-t border-base-300 pt-3" method="post" action="/logout">
 			<button class="btn btn-ghost w-full justify-start text-base-content/65" type="submit" data-loading-label="退出中">
-				<svg class="size-[18px]" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-					<path d="M7 4.75H5.75A1.75 1.75 0 0 0 4 6.5v7a1.75 1.75 0 0 0 1.75 1.75H7"></path>
-					<path d="M11 6.5 14.5 10 11 13.5M8 10h6.5"></path>
-				</svg>
+				@AdminIcon("log-out", "size-[18px]", "nav-logout")
 				<span>退出登录</span>
 			</button>
 		</form>
@@ -155,11 +134,11 @@ templ ListFooter(meta ListMeta) {
 		<div>{ metaSummary(meta) }</div>
 		<div class="join">
 			if meta.PrevURL != "" {
-				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="上一页"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m12.5 5-5 5 5 5"></path></svg></a>
+				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="上一页">@AdminIcon("chevron-left", "size-4", "page-prev")</a>
 			}
 			<button class="btn btn-primary btn-sm join-item" type="button" aria-current="page">{ fmt.Sprintf("%d", meta.Page) }</button>
 			if meta.NextURL != "" {
-				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页"><svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7.5 5 5 5-5 5"></path></svg></a>
+				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页">@AdminIcon("chevron-right", "size-4", "page-next")</a>
 			}
 		</div>
 	</div>
@@ -188,16 +167,11 @@ templ ChoiceFilterGroupForFormAligned(formID string, name string, current string
 	</div>
 }
 
-templ FilterPanel(id string, title string, summary string, controls templ.Component, hasControls bool, content templ.Component) {
-	<section id={ id } class="card border border-base-300 bg-base-100">
-		<div class="card-body gap-4 p-4">
+templ FilterPanel(id string, title string, controls templ.Component, hasControls bool, content templ.Component) {
+	<section id={ id } class="card border border-base-300 bg-base-100 shadow-sm">
+		<div class="card-body gap-3 p-4">
 			<div class="flex items-center justify-between gap-6">
-				<div class="min-w-0">
-					<h2 class="text-sm font-semibold text-base-content">{ title }</h2>
-					if summary != "" {
-						<p class="mt-1 text-xs text-base-content/50">{ summary }</p>
-					}
-				</div>
+				<h2 class="text-sm font-semibold text-base-content">{ title }</h2>
 				if hasControls {
 					<div class="shrink-0">@controls</div>
 				}
@@ -212,7 +186,7 @@ templ DialogLoadingPlaceholder(title string, summary string) {
 		<div class="flex items-start justify-between gap-4">
 			<div><h3 id="admin-action-dialog-title" class="text-xl font-semibold">{ title }</h3><p class="mt-2 text-sm text-base-content/60">{ summary }</p></div>
 			<button type="button" class="btn btn-ghost btn-circle btn-sm" data-admin-dialog-close="#admin-action-dialog" aria-label="关闭弹层">
-				<svg class="size-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8"></path></svg>
+				@AdminIcon("x", "size-4", "dialog-x")
 			</button>
 		</div>
 		<div class="space-y-3"><div class="skeleton h-24 w-full"></div><div class="grid grid-cols-2 gap-3"><div class="skeleton h-20"></div><div class="skeleton h-20"></div></div></div>
