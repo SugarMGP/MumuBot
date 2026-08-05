@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-08-05
+
 ### 新增
 
 - **管理后台统一使用 Lucide 图标与组件库阴影**：后台全部图标迁移到 Lucide 线性图标，卡片统一使用 daisyUI 深度与阴影层级，页面层级更清晰一致。
@@ -319,7 +321,8 @@
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
 
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.5...HEAD
+[2.0.5]: https://github.com/SugarMGP/MumuBot/compare/v2.0.3...v2.0.5
 [2.0.3]: https://github.com/SugarMGP/MumuBot/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/SugarMGP/MumuBot/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/SugarMGP/MumuBot/compare/v2.0.0...v2.0.1
