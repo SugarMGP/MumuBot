@@ -129,14 +129,9 @@ func (m *Manager) exactMemoryCandidate(ctx context.Context, incoming Memory) (*M
 
 func (m *Manager) semanticMergeCandidates(ctx context.Context, incoming Memory) ([]Memory, error) {
 	query := m.db.WithContext(ctx).Where(
-		"group_id = ? AND scope = ? AND kind = ? AND status IN ?",
-		incoming.GroupID, incoming.Scope, incoming.Kind, []MemoryStatus{MemoryStatusActive, MemoryStatusCandidate},
+		"group_id = ? AND status IN ? AND 1 - (embedding <=> ?) >= ?",
+		incoming.GroupID, []MemoryStatus{MemoryStatusActive, MemoryStatusCandidate}, incoming.Embedding, activeContextVectorThreshold,
 	)
-	if incoming.SubjectUserID == nil {
-		query = query.Where("subject_user_id IS NULL")
-	} else {
-		query = query.Where("subject_user_id = ?", *incoming.SubjectUserID)
-	}
 	var rows []Memory
 	if err := query.Order(clause.Expr{SQL: "embedding <=> ?", Vars: []any{incoming.Embedding}}).Limit(8).Find(&rows).Error; err != nil {
 		return nil, err
@@ -182,7 +177,10 @@ func applyMemoryMerge(tx *gorm.DB, input MemoryIngestInput, prepared preparedMem
 		ids = []uint{prepared.decision.TargetID}
 	}
 	var locked []Memory
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", ids).Find(&locked).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+		"id IN ? AND group_id = ? AND status IN ?", ids, prepared.incoming.GroupID,
+		[]MemoryStatus{MemoryStatusActive, MemoryStatusCandidate},
+	).Find(&locked).Error; err != nil {
 		return nil, "", err
 	}
 	if len(locked) == 0 {
@@ -233,7 +231,14 @@ func applyMemoryMerge(tx *gorm.DB, input MemoryIngestInput, prepared preparedMem
 			return nil, "", err
 		}
 	}
-	updates := map[string]any{"content": prepared.incoming.Content, "embedding": prepared.incoming.Embedding, "status": MemoryStatusActive}
+	updates := map[string]any{
+		"scope":           prepared.incoming.Scope,
+		"subject_user_id": prepared.incoming.SubjectUserID,
+		"kind":            prepared.incoming.Kind,
+		"content":         prepared.incoming.Content,
+		"embedding":       prepared.incoming.Embedding,
+		"status":          MemoryStatusActive,
+	}
 	if err := tx.Model(&Memory{}).Where("id = ?", targetID).Updates(updates).Error; err != nil {
 		return nil, "", err
 	}

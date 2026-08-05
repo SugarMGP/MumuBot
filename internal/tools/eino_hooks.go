@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	callbacktpl "github.com/cloudwego/eino/utils/callbacks"
+	"github.com/eino-contrib/jsonschema"
 )
 
 type toolLogStateKey struct{}
@@ -25,25 +27,98 @@ type duplicateToolOutput struct {
 	Message string `json:"message"`
 }
 
-var sortedJSONAPI = sonic.Config{SortMapKeys: true}.Froze()
+var sortedJSONAPI = sonic.Config{SortMapKeys: true, UseNumber: true}.Froze()
 
-// CanonicalizeToolArguments 标准化工具调用参数，消除空白和字段顺序差异。
-func CanonicalizeToolArguments(arguments string) (string, error) {
+// NewToolArgumentsHandler 创建按工具 schema 矫正并标准化参数的处理器。
+func NewToolArgumentsHandler(ctx context.Context, toolList []einotool.BaseTool) (func(context.Context, string, string) (string, error), error) {
+	schemas := make(map[string]*jsonschema.Schema, len(toolList))
+	for _, t := range toolList {
+		info, err := t.Info(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("读取工具参数 schema 失败: %w", err)
+		}
+		if info == nil || info.Name == "" || info.ParamsOneOf == nil {
+			continue
+		}
+		parameterSchema, err := info.ParamsOneOf.ToJSONSchema()
+		if err != nil {
+			return nil, fmt.Errorf("转换工具 %s 参数 schema 失败: %w", info.Name, err)
+		}
+		schemas[info.Name] = parameterSchema
+	}
+
+	return func(_ context.Context, name, arguments string) (string, error) {
+		return canonicalizeToolArguments(arguments, schemas[name])
+	}, nil
+}
+
+func canonicalizeToolArguments(arguments string, parameterSchema *jsonschema.Schema) (string, error) {
 	trimmed := strings.TrimSpace(arguments)
 	if trimmed == "" {
 		return "", nil
 	}
 
 	var payload any
-	if err := sonic.UnmarshalString(trimmed, &payload); err != nil {
+	if err := sortedJSONAPI.UnmarshalFromString(trimmed, &payload); err != nil {
 		return trimmed, nil
 	}
+	payload = coerceToolArgument(payload, parameterSchema)
 
 	canonical, err := sortedJSONAPI.MarshalToString(payload)
 	if err != nil {
 		return "", err
 	}
 	return canonical, nil
+}
+
+func coerceToolArgument(value any, parameterSchema *jsonschema.Schema) any {
+	if parameterSchema == nil {
+		return value
+	}
+
+	switch parameterSchema.Type {
+	case "object":
+		object, ok := value.(map[string]any)
+		if !ok || parameterSchema.Properties == nil {
+			return value
+		}
+		for name, fieldValue := range object {
+			if fieldSchema, exists := parameterSchema.Properties.Get(name); exists {
+				object[name] = coerceToolArgument(fieldValue, fieldSchema)
+			}
+		}
+		return object
+	case "array":
+		items, ok := value.([]any)
+		if !ok || parameterSchema.Items == nil {
+			return value
+		}
+		for i := range items {
+			items[i] = coerceToolArgument(items[i], parameterSchema.Items)
+		}
+		return items
+	}
+
+	text, ok := value.(string)
+	if !ok {
+		return value
+	}
+	text = strings.TrimSpace(text)
+	if !sonic.ValidString(text) {
+		return value
+	}
+	switch parameterSchema.Type {
+	case "integer", "number":
+		return json.Number(text)
+	case "boolean":
+		if strings.EqualFold(text, "true") {
+			return true
+		}
+		if strings.EqualFold(text, "false") {
+			return false
+		}
+	}
+	return value
 }
 
 // ToolDedupMiddleware 拦截同一轮 think 中完全相同的工具调用。

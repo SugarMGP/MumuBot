@@ -227,15 +227,17 @@ func (a *Agent) initReact() error {
 	if maxStep <= 0 {
 		maxStep = 12
 	}
+	argumentsHandler, err := tools.NewToolArgumentsHandler(a.ctx, a.tools)
+	if err != nil {
+		return err
+	}
 	agent, err := react.NewAgent(a.ctx, &react.AgentConfig{
 		ToolCallingModel: a.model,
 		ToolsConfig: compose.ToolsNodeConfig{
-			Tools:               a.tools,
-			ExecuteSequentially: true,
-			ToolArgumentsHandler: func(ctx context.Context, name, arguments string) (string, error) {
-				return tools.CanonicalizeToolArguments(arguments)
-			},
-			ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: tools.ToolDedupMiddleware()}},
+			Tools:                a.tools,
+			ExecuteSequentially:  true,
+			ToolArgumentsHandler: argumentsHandler,
+			ToolCallMiddlewares:  []compose.ToolMiddleware{{Invokable: tools.ToolDedupMiddleware()}},
 		},
 		MaxStep:            maxStep,
 		ToolReturnDirectly: map[string]struct{}{"stayQuiet": {}},

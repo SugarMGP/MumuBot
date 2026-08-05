@@ -38,10 +38,10 @@ groups:
 
 # Agent 决策配置
 agent:
-  observe_window: 60            # 观察窗口时间（秒）
-  think_interval: 12            # 决策间隔（秒）
-  think_debounce_ms: 4800       # 思考聚合窗口（毫秒）
-  message_buffer_size: 40       # 消息缓冲区大小
+  observe_window: 90            # 观察窗口时间（秒）
+  think_interval: 15            # 决策间隔（秒）
+  think_debounce_ms: 5000       # 思考聚合窗口（毫秒）
+  message_buffer_size: 30       # 消息缓冲区大小
   max_step: 12                  # ReAct 最大步数
   max_coroutine: 3              # 最大并发思考进程数（0表示不限制）
 
@@ -66,11 +66,11 @@ chat:
 # 学习系统配置
 learning:
   enabled: true                 # 是否启用
-  interval_minutes: 10          # 学习任务间隔（分钟）
+  interval_minutes: 15          # 学习任务间隔（分钟）
   review_interval_minutes: 45   # 审核任务间隔（分钟）
   recovery_interval: 180        # 话题与记忆后台恢复扫描间隔（秒）
   batch_size: 100               # 每次学习的消息数量限制，必须不小于 min_msg_count
-  min_msg_count: 5              # 触发学习的最少消息数量
+  min_msg_count: 15             # 触发学习的最少消息数量
 
 # 两档模型配置（需为 OpenAI 兼容 ChatModel；high 需支持工具调用，low 需支持结构化输出）
 # 高档模型：用于沐沐实时思考与回复，推荐使用 GLM-4.7、Mimo v2.5 Pro 等旗舰模型
