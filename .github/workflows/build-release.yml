@@ -185,10 +185,6 @@ jobs:
                 }
               }
 
-              capture && /^\[[^]]+\]:[[:space:]]+/ {
-                exit
-              }
-
               capture {
                 print
               }

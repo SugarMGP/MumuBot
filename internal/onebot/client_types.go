@@ -14,7 +14,6 @@ type GroupMessage struct {
 	UserID       int64            `json:"user_id"`
 	Nickname     string           `json:"nickname"`                // QQ 原始昵称
 	GroupCard    string           `json:"group_card,omitempty"`    // 当前群名片
-	DisplayName  string           `json:"display_name,omitempty"`  // 当前渲染显示名
 	Content      string           `json:"content"`                 // 纯文本内容
 	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
 	Time         time.Time        `json:"time"`                    // 消息时间
@@ -62,7 +61,6 @@ type ReplyInfo struct {
 	SenderID  int64  `json:"sender_id,omitempty"` // 被回复消息发送者 ID
 	Nickname  string `json:"nickname,omitempty"`  // 被回复消息发送者原始昵称
 	GroupCard string `json:"group_card,omitempty"`
-	Display   string `json:"display,omitempty"`
 }
 
 // ForwardMessage 合并转发中的单条消息

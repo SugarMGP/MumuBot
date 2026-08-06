@@ -11,6 +11,8 @@
 - **长期记忆减少普通聊天和同义重复**：话题摘要严格区分稳定事实与最近对话过程，保留旧事实时不再反复改写；长期记忆提取默认忽略一次性发言、情绪和玩笑，并合并同一命题的重复表述。
 - **长期记忆跨分类去重**：同群语义候选不再被范围、类型或主体字段过早过滤，合并判断会核对元数据，并以新记忆的规范化分类保存结果。
 - **DeepSeek 工具调用参数更稳定**：模型将整数或布尔参数误写成字符串时，会依据工具参数定义做保守矫正，减少格式差异导致的工具调用失败。
+- **戳一戳现已显示成员昵称**：交互事件会复用群名片、昵称和成员信息缓存补全发起者与目标，查询失败时才回退 QQ 号。
+- **结构化模型输出解析更稳**：正常 JSON 会原样保留，格式异常时清理代码块、尾部字符等语法噪声后再按目标结构反序列化，无法匹配时仍然报错。
 - **成员画像减少单句误学**：学习时会结合已有画像输出完整结果，新口癖、说话风格和兴趣至少需要两条直接证据，并提供消息时间供模型识别临时刷屏；学习批次、审核周期和消息缓冲的代码默认值同步最新示例配置。
 - **聊天表达减少梗滥用和重复**：人格提示进一步要求结合语境使用流行梗、控制拌嘴攻击性，并在发言前避免复述已有内容。
 - **话题列表详情箭头恢复显示**：修正模板组件被当作普通文字输出的问题，“查看详情”不再显示内部图标调用文本。
@@ -330,22 +332,3 @@
 ### 修复
 
 - **后台 Toast 样式现已恢复正常**：修复提示信息显示异常的问题。
-
-[Unreleased]: https://github.com/SugarMGP/MumuBot/compare/v2.0.5...HEAD
-[2.0.5]: https://github.com/SugarMGP/MumuBot/compare/v2.0.3...v2.0.5
-[2.0.3]: https://github.com/SugarMGP/MumuBot/compare/v2.0.2...v2.0.3
-[2.0.2]: https://github.com/SugarMGP/MumuBot/compare/v2.0.1...v2.0.2
-[2.0.1]: https://github.com/SugarMGP/MumuBot/compare/v2.0.0...v2.0.1
-[2.0.0]: https://github.com/SugarMGP/MumuBot/compare/v1.3.10...v2.0.0
-[1.3.10]: https://github.com/SugarMGP/MumuBot/compare/v1.3.9...v1.3.10
-[1.3.9]: https://github.com/SugarMGP/MumuBot/compare/v1.3.8...v1.3.9
-[1.3.8]: https://github.com/SugarMGP/MumuBot/compare/v1.3.7...v1.3.8
-[1.3.7]: https://github.com/SugarMGP/MumuBot/compare/v1.3.6...v1.3.7
-[1.3.6]: https://github.com/SugarMGP/MumuBot/compare/v1.3.5...v1.3.6
-[1.3.5]: https://github.com/SugarMGP/MumuBot/compare/v1.3.4...v1.3.5
-[1.3.4]: https://github.com/SugarMGP/MumuBot/compare/v1.3.3...v1.3.4
-[1.3.3]: https://github.com/SugarMGP/MumuBot/compare/v1.3.2...v1.3.3
-[1.3.2]: https://github.com/SugarMGP/MumuBot/compare/v1.3.1...v1.3.2
-[1.3.1]: https://github.com/SugarMGP/MumuBot/compare/v1.3.0...v1.3.1
-[1.3.0]: https://github.com/SugarMGP/MumuBot/compare/v1.2.4...v1.3.0
-[1.2.4]: https://github.com/SugarMGP/MumuBot/releases/tag/v1.2.4

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	jsonrepair "github.com/RealAlexandreAI/json-repair"
 	"github.com/bytedance/sonic"
 	openaimodel "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
@@ -73,10 +74,7 @@ JSON Schema:
 		return zero, fmt.Errorf("结构化输出响应为空")
 	}
 
-	parser := schema.NewMessageJSONParser[T](&schema.MessageJSONParseConfig{
-		ParseFrom: schema.MessageParseFromContent,
-	})
-	parsed, err := parser.Parse(ctx, resp)
+	parsed, err := parseStructuredJSON[T](resp.Content)
 	if err != nil {
 		content := strings.TrimSpace(resp.Content)
 		contentRunes := []rune(content)
@@ -86,5 +84,20 @@ JSON Schema:
 		return zero, fmt.Errorf("解析结构化 JSON 失败: %w; content=%q", err, content)
 	}
 
+	return parsed, nil
+}
+
+func parseStructuredJSON[T any](content string) (T, error) {
+	var parsed T
+	if !sonic.ValidString(content) {
+		var err error
+		content, err = jsonrepair.RepairJSON(content)
+		if err != nil {
+			return parsed, fmt.Errorf("修复结构化 JSON 失败: %w", err)
+		}
+	}
+	if err := sonic.UnmarshalString(content, &parsed); err != nil {
+		return parsed, fmt.Errorf("反序列化结构化 JSON 失败: %w", err)
+	}
 	return parsed, nil
 }

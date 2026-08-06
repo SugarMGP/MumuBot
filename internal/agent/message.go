@@ -328,8 +328,13 @@ func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) bool {
 		return false
 	}
 	targetID := msg.AtList[0]
-	actorName := utils.FirstNonEmpty(msg.GroupCard, msg.DisplayName, msg.Nickname, fmt.Sprintf("%d", msg.UserID))
-	targetName := fmt.Sprintf("%d", targetID)
+	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+	defer cancel()
+	actorName := utils.FirstNonEmpty(msg.GroupCard, msg.Nickname)
+	if actorName == "" {
+		actorName = a.resolveMentionDisplayName(ctx, msg, msg.UserID)
+	}
+	targetName := a.resolveMentionDisplayName(ctx, msg, targetID)
 	msg.Content = ""
 	msg.FinalContent = fmt.Sprintf("[%s] %s(%d) 戳了戳 %s(%d)\n", msg.Time.Format("15:04:05"), actorName, msg.UserID, targetName, targetID)
 	return true
@@ -439,8 +444,6 @@ func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
 			reply.GroupCard = card
 		}
 	}
-	reply.Display = utils.FirstNonEmpty(reply.GroupCard, reply.Nickname)
-
 	return reply, nil
 }
 
@@ -520,7 +523,6 @@ func findReplyInfoInMessages(msgs []*onebot.GroupMessage, messageID int64) *oneb
 			SenderID:  msg.UserID,
 			Nickname:  msg.Nickname,
 			GroupCard: msg.GroupCard,
-			Display:   msg.DisplayName,
 		}
 	}
 	return nil

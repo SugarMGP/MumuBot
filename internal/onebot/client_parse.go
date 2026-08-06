@@ -47,7 +47,6 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 	if msg.UserID <= 0 {
 		return nil
 	}
-	msg.DisplayName = utils.FirstNonEmpty(msg.GroupCard, msg.Nickname)
 
 	// 解析消息段，提取各类信息
 	c.parseMessageSegments(event, msg)

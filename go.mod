@@ -66,6 +66,7 @@ require (
 )
 
 require (
+	github.com/RealAlexandreAI/json-repair v0.0.17
 	github.com/a-h/templ v0.3.1020
 	github.com/bytedance/sonic v1.15.2
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260527130239-95019b303cc6

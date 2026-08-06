@@ -184,18 +184,13 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 		latestMsg := latestNames[userID]
 		nickname := ""
 		groupCard := ""
-		displayName := ""
 		if latestMsg != nil {
 			nickname = latestMsg.Nickname
 			groupCard = latestMsg.GroupCard
-			displayName = latestMsg.DisplayName
 		}
 		profile, err := a.memory.GetMemberProfile(userID)
 		if err != nil {
-			name := utils.FirstNonEmpty(groupCard, displayName, nickname)
-			if name == "" {
-				name = strings.TrimSpace(nickname)
-			}
+			name := utils.FirstNonEmpty(groupCard, nickname)
 			if name == "" {
 				name = fmt.Sprintf("%d", userID)
 			}
@@ -207,7 +202,7 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 		if currentGroupName == "" {
 			currentGroupName, _ = a.memory.LatestMemberGroupCard(userID, groupID)
 		}
-		displayName = currentGroupName
+		displayName := currentGroupName
 		traits, _ := a.memory.ListMemberTraits(userID)
 		if displayName == "" {
 			for _, trait := range traits {
@@ -254,16 +249,19 @@ func (a *Agent) getMemberProfileForDisplay(userID int64) (*memory.MemberProfile,
 	return a.memory.GetMemberProfile(userID)
 }
 
-func (a *Agent) resolveRenderedDisplayName(groupID, userID int64, groupCard, runtimeName, qq string) string {
+func (a *Agent) resolveRenderedDisplayName(userID int64, groupCard, nickname string) string {
 	if card := strings.TrimSpace(groupCard); card != "" {
 		return card
+	}
+	if name := strings.TrimSpace(nickname); name != "" {
+		return name
 	}
 	if profile, err := a.getMemberProfileForDisplay(userID); err == nil {
 		if name := strings.TrimSpace(profile.Nickname); name != "" {
 			return name
 		}
 	}
-	return utils.FirstNonEmpty(runtimeName, qq)
+	return ""
 }
 
 func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.GroupMessage, userID int64) string {
@@ -281,7 +279,10 @@ func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.Group
 	} else {
 		zap.L().Debug("补全提及成员显示名失败", zap.Int64("group_id", msg.GroupID), zap.Int64("user_id", userID), zap.Error(err))
 	}
-	return a.resolveRenderedDisplayName(msg.GroupID, userID, "", "", fmt.Sprintf("%d", userID))
+	if displayName := a.resolveRenderedDisplayName(userID, "", ""); displayName != "" {
+		return displayName
+	}
+	return fmt.Sprintf("%d", userID)
 }
 
 func visionCacheKey(kind string, remoteURL string, file string) string {
@@ -341,7 +342,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 
 	replyInfo := ""
 	if msg.Reply != nil {
-		replyDisplayName := a.resolveRenderedDisplayName(msg.GroupID, msg.Reply.SenderID, msg.Reply.GroupCard, msg.Reply.Display, msg.Reply.Nickname)
+		replyDisplayName := a.resolveRenderedDisplayName(msg.Reply.SenderID, msg.Reply.GroupCard, msg.Reply.Nickname)
 		replyInfo = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
 		if replyDisplayName != "" {
 			replyInfo = fmt.Sprintf(" [回复 #%d %s]", msg.Reply.MessageID, replyDisplayName)
@@ -473,7 +474,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	} else {
 		qid = fmt.Sprintf("%d", msg.UserID)
 	}
-	displayName := a.resolveRenderedDisplayName(msg.GroupID, msg.UserID, msg.GroupCard, msg.DisplayName, msg.Nickname)
+	displayName := a.resolveRenderedDisplayName(msg.UserID, msg.GroupCard, msg.Nickname)
 	if displayName == "" {
 		displayName = qid
 	}
