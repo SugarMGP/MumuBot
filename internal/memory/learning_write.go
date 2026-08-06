@@ -43,6 +43,7 @@ type CultureJargonInput struct {
 
 type MemberTraitInput struct {
 	UserID     int64
+	ExistingID uint
 	Kind       string
 	Value      string
 	MessageIDs []uint
@@ -140,23 +141,96 @@ func (m *Manager) CommitCultureBatch(ctx context.Context, groupID int64, waterma
 	})
 }
 
-func (m *Manager) CommitMemberProfileBatch(ctx context.Context, groupID int64, watermark uint, sourceMessageIDs []uint, traits []MemberTraitInput) error {
+func (m *Manager) CommitMemberProfileBatch(ctx context.Context, groupID int64, watermark uint, sourceMessageIDs []uint, userIDs []int64, traits []MemberTraitInput) error {
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		sourceIDs, err := lockUnrecalledMessageBatch(tx, groupID, sourceMessageIDs)
 		if err != nil {
 			return err
 		}
+		if len(userIDs) == 0 {
+			return fmt.Errorf("成员画像目标不能为空")
+		}
+		targetUsers := make(map[int64]struct{}, len(userIDs))
+		for _, userID := range userIDs {
+			if userID == 0 {
+				return fmt.Errorf("成员画像目标无效")
+			}
+			targetUsers[userID] = struct{}{}
+		}
+		var existing []MemberTrait
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id IN ?", userIDs).Find(&existing).Error; err != nil {
+			return err
+		}
+		existingByID := make(map[uint]MemberTrait, len(existing))
+		existingByKey := make(map[string]MemberTrait, len(existing))
+		for _, trait := range existing {
+			existingByID[trait.ID] = trait
+			existingByKey[memberTraitKey(trait.UserID, trait.Kind, trait.Value)] = trait
+		}
+		kept := make(map[uint]struct{}, len(traits))
 		for _, input := range traits {
-			trait := MemberTrait{UserID: input.UserID, Kind: input.Kind, Value: input.Value}
-			if !messageIDsBelongTo(input.MessageIDs, sourceIDs) {
+			kind := strings.TrimSpace(input.Kind)
+			value := strings.TrimSpace(input.Value)
+			if _, ok := targetUsers[input.UserID]; !ok || kind == "" || value == "" {
+				return fmt.Errorf("成员画像内容不能为空")
+			}
+			if len(input.MessageIDs) > 0 && !messageIDsBelongTo(input.MessageIDs, sourceIDs) {
 				return fmt.Errorf("成员画像证据不属于当前输入")
 			}
-			if err := saveMemberTrait(tx, &trait, input.MessageIDs); err != nil {
+			var trait MemberTrait
+			if input.ExistingID != 0 {
+				var ok bool
+				trait, ok = existingByID[input.ExistingID]
+				if !ok || trait.UserID != input.UserID {
+					return fmt.Errorf("成员画像引用无效")
+				}
+			} else if old, ok := existingByKey[memberTraitKey(input.UserID, kind, value)]; ok {
+				trait = old
+			} else {
+				trait = MemberTrait{UserID: input.UserID}
+			}
+			trait.Kind = kind
+			trait.Value = value
+			if trait.ID == 0 && len(input.MessageIDs) == 0 {
+				return fmt.Errorf("新成员画像必须包含证据")
+			}
+			if trait.ID == 0 {
+				if err := tx.Create(&trait).Error; err != nil {
+					return err
+				}
+			} else {
+				if old, ok := existingByKey[memberTraitKey(input.UserID, kind, value)]; ok && old.ID != trait.ID {
+					return fmt.Errorf("成员画像与已有项冲突")
+				}
+				if err := tx.Model(&trait).Updates(MemberTrait{Kind: kind, Value: value}).Error; err != nil {
+					return err
+				}
+			}
+			if _, duplicate := kept[trait.ID]; duplicate {
+				return fmt.Errorf("成员画像重复")
+			}
+			kept[trait.ID] = struct{}{}
+			for _, messageID := range input.MessageIDs {
+				evidence := MemberTraitEvidence{MemberTraitID: trait.ID, MessageLogID: messageID}
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&evidence).Error; err != nil {
+					return err
+				}
+			}
+		}
+		for _, trait := range existing {
+			if _, ok := kept[trait.ID]; ok {
+				continue
+			}
+			if err := tx.Delete(&MemberTrait{}, trait.ID).Error; err != nil {
 				return err
 			}
 		}
 		return updateLearningState(tx, groupID, LearningKindMemberProfile, watermark)
 	})
+}
+
+func memberTraitKey(userID int64, kind, value string) string {
+	return fmt.Sprintf("%d:%s:%s", userID, strings.ToLower(strings.TrimSpace(kind)), strings.ToLower(strings.TrimSpace(value)))
 }
 
 func lockUnrecalledMessageBatch(tx *gorm.DB, groupID int64, ids []uint) (map[uint]struct{}, error) {

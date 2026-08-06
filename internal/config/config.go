@@ -159,7 +159,7 @@ type MessageLogCleanupConfig struct {
 type StickerConfig struct {
 	AutoSave    bool   `mapstructure:"auto_save"`    // 是否自动保存收到的表情包，默认 true
 	StoragePath string `mapstructure:"storage_path"` // 表情包存储目录，默认 "./stickers"
-	MaxSizeMB   int    `mapstructure:"max_size_mb"`  // 单个文件最大大小(MB)，默认 5
+	MaxSizeMB   int    `mapstructure:"max_size_mb"`  // 单个文件最大大小(MB)，默认 2
 }
 
 // ServerConfig HTTP服务配置
@@ -248,7 +248,7 @@ func validate(c *Config) error {
 		c.Learning.BatchSize = 100
 	}
 	if c.Learning.MinMsgCount == 0 {
-		c.Learning.MinMsgCount = 5
+		c.Learning.MinMsgCount = 15
 	}
 	if c.Learning.BatchSize < 0 {
 		return fmt.Errorf("learning.batch_size 不能小于 0")

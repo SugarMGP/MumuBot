@@ -37,7 +37,7 @@ templ TopicListBody(data TopicListPageData) {
 							</div>
 							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/58">
 								<span>摘要覆盖至 #{ fmt.Sprintf("%d", topicSummaryThroughID(item)) }</span>
-								<span class="flex items-center gap-1 font-medium text-primary">查看详情 @AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")</span>
+								<span class="flex items-center gap-1 font-medium text-primary"><span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")</span>
 							</div>
 						</div>
 					</a>

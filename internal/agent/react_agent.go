@@ -287,7 +287,7 @@ func (a *Agent) loadBuffersFromDB() {
 
 		bufSize := cfg.Agent.MessageBufferSize
 		if bufSize <= 0 {
-			bufSize = 15
+			bufSize = 30
 		}
 
 		logs := a.memory.GetRecentMessages(gc.GroupID, 0, bufSize, 0)

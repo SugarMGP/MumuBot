@@ -35,29 +35,11 @@ func (m *Manager) ListMemberTraits(userID int64) ([]MemberTrait, error) {
 	return rows, err
 }
 
-func saveMemberTrait(tx *gorm.DB, trait *MemberTrait, messageIDs []uint) error {
-	if trait == nil {
-		return nil
+func (m *Manager) ListMemberTraitsByUsers(userIDs []int64) ([]MemberTrait, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
 	}
-	trait.Kind = strings.TrimSpace(trait.Kind)
-	trait.Value = strings.TrimSpace(trait.Value)
-	if trait.UserID == 0 || trait.Kind == "" || trait.Value == "" || len(messageIDs) == 0 {
-		return nil
-	}
-	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(trait)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		if err := tx.Where("user_id = ? AND kind = ? AND lower(btrim(value)) = lower(btrim(?))", trait.UserID, trait.Kind, trait.Value).First(trait).Error; err != nil {
-			return err
-		}
-	}
-	for _, messageID := range messageIDs {
-		evidence := MemberTraitEvidence{MemberTraitID: trait.ID, MessageLogID: messageID}
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&evidence).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	var rows []MemberTrait
+	err := m.db.Where("user_id IN ?", userIDs).Order("user_id, kind, updated_at DESC").Find(&rows).Error
+	return rows, err
 }

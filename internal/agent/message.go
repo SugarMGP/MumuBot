@@ -449,7 +449,7 @@ func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 	defer a.buffersMu.Unlock()
 	bufSize := config.Get().Agent.MessageBufferSize
 	if bufSize <= 0 {
-		bufSize = 15
+		bufSize = 30
 	}
 	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可。
 	messages := append(a.buffers[msg.GroupID], msg)
