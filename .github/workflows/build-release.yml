@@ -179,9 +179,12 @@ jobs:
                 if (capture) {
                   exit
                 }
-                if ($0 ~ ("^##[[:space:]]+\\[v?" version "\\]([[:space:]]+-|[[:space:]]*$)")) {
-                  capture = 1
-                  found = 1
+                if (index($0, "## [" version "]") == 1 || index($0, "## [v" version "]") == 1) {
+                  suffix = substr($0, index($0, "]") + 1)
+                  if (suffix == "" || suffix ~ /^[[:space:]]*$/ || suffix ~ /^[[:space:]]+-/) {
+                    capture = 1
+                    found = 1
+                  }
                 }
               }
 
