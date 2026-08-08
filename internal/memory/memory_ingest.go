@@ -169,44 +169,48 @@ func (m *Manager) validateClaimEvidence(ctx context.Context, storeCtx StoreClaim
 		}
 	}
 
-	allowedSubjects, err := m.allowedSubjectIDs(ctx, storeCtx.GroupID, evidence)
-	if err != nil {
-		return err
+	evidenceByMessageID := make(map[int64]MessageLog, len(evidence))
+	replyMessageIDs := make([]int64, 0, len(evidence))
+	for _, row := range evidence {
+		evidenceByMessageID[row.OneBotMessageID] = row
+		if row.ReplyToMessageID != nil {
+			replyMessageIDs = append(replyMessageIDs, *row.ReplyToMessageID)
+		}
+	}
+	type replyAuthor struct {
+		OneBotMessageID int64
+		UserID          int64
+	}
+	replyAuthors := make(map[int64]int64)
+	if replyMessageIDs = uniqueNonzeroInt64(replyMessageIDs); len(replyMessageIDs) > 0 {
+		var rows []replyAuthor
+		if err := m.db.WithContext(ctx).Model(&MessageLog{}).
+			Select("one_bot_message_id, user_id").
+			Where("group_id = ? AND one_bot_message_id IN ?", storeCtx.GroupID, replyMessageIDs).
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			replyAuthors[row.OneBotMessageID] = row.UserID
+		}
 	}
 	for _, claim := range claims {
 		if claim.SubjectUserID == 0 || claim.SubjectUserID == storeCtx.SelfID {
 			continue
 		}
-		if _, ok := allowedSubjects[claim.SubjectUserID]; !ok {
+		allowed := false
+		for _, messageID := range claim.EvidenceMessageIDs {
+			row := evidenceByMessageID[messageID]
+			if row.UserID == claim.SubjectUserID || (row.ReplyToMessageID != nil && replyAuthors[*row.ReplyToMessageID] == claim.SubjectUserID) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
 			return claimError("invalid_subject", fmt.Sprintf("主体 %d 未出现在证据消息作者或回复目标中", claim.SubjectUserID))
 		}
 	}
 	return nil
-}
-
-func (m *Manager) allowedSubjectIDs(ctx context.Context, groupID int64, evidence []MessageLog) (map[int64]struct{}, error) {
-	allowed := make(map[int64]struct{}, len(evidence))
-	replies := make([]int64, 0)
-	for _, row := range evidence {
-		if row.UserID > 0 {
-			allowed[row.UserID] = struct{}{}
-		}
-		if row.ReplyToMessageID != nil && *row.ReplyToMessageID != 0 {
-			replies = append(replies, *row.ReplyToMessageID)
-		}
-	}
-	if len(replies) > 0 {
-		var replyAuthors []int64
-		if err := m.db.WithContext(ctx).Model(&MessageLog{}).Where("group_id=? AND one_bot_message_id IN ?", groupID, uniqueNonzeroInt64(replies)).Pluck("user_id", &replyAuthors).Error; err != nil {
-			return nil, err
-		}
-		for _, id := range replyAuthors {
-			if id > 0 {
-				allowed[id] = struct{}{}
-			}
-		}
-	}
-	return allowed, nil
 }
 
 func messageLogIDs(rows []MessageLog) []uint {

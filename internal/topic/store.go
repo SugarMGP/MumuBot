@@ -66,6 +66,36 @@ func (s *DBStore) ListPendingTopicAssignmentMessages(ctx context.Context, groupI
 	return rows, err
 }
 
+func (s *DBStore) HasPendingTopicAssignmentMessages(ctx context.Context, groupID int64, minimum int) (bool, error) {
+	if groupID == 0 || minimum <= 0 {
+		return false, nil
+	}
+	var ready bool
+	err := s.db.WithContext(ctx).Raw(`SELECT EXISTS (
+		SELECT 1 FROM message_logs ml
+		LEFT JOIN topic_assignments ta ON ta.message_log_id = ml.id
+		WHERE ml.group_id = ? AND ml.recalled_at IS NULL AND ta.id IS NULL AND btrim(ml.text_content) <> ''
+		LIMIT 1 OFFSET ?
+	)`, groupID, minimum-1).Scan(&ready).Error
+	return ready, err
+}
+
+func (s *DBStore) ListTopicAssignmentContext(ctx context.Context, groupID int64, beforeMessageLogID uint, limit int) ([]topicAssignmentContextMessage, error) {
+	if groupID == 0 || beforeMessageLogID == 0 || limit <= 0 {
+		return nil, nil
+	}
+	var rows []topicAssignmentContextMessage
+	err := s.db.WithContext(ctx).Table("message_logs ml").
+		Select("ml.id message_log_id, ml.one_bot_message_id, ml.nickname, ml.text_content text, ml.message_time, ml.reply_to_message_id, ta.topic_id").
+		Joins("JOIN topic_assignments ta ON ta.message_log_id = ml.id").
+		Where("ml.group_id = ? AND ml.id < ? AND ml.recalled_at IS NULL AND btrim(ml.text_content) <> ''", groupID, beforeMessageLogID).
+		Order("ml.id DESC").Limit(limit).Scan(&rows).Error
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	return rows, err
+}
+
 func (s *DBStore) TopicRefForOneBotMessage(ctx context.Context, groupID, messageID int64) (topicID, messageLogID uint, err error) {
 	var row struct {
 		MessageLogID uint
