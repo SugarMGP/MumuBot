@@ -75,6 +75,14 @@ func positiveID(data map[string]interface{}, field, action string) (int64, error
 	return id, nil
 }
 
+func messageID(data map[string]interface{}, action string) (int64, error) {
+	id, ok := utils.ParseInt64Value(data["message_id"])
+	if !ok || id == 0 {
+		return 0, fmt.Errorf("%s 返回无效的 message_id", action)
+	}
+	return id, nil
+}
+
 func oneBotID(id int64) string { return strconv.FormatInt(id, 10) }
 
 // SendGroupMessage 发送群消息
@@ -83,7 +91,7 @@ func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content st
 	var message []map[string]interface{}
 
 	// reply 消息段
-	if replyTo > 0 {
+	if replyTo != 0 {
 		message = append(message, map[string]interface{}{
 			"type": "reply",
 			"data": map[string]interface{}{
@@ -169,7 +177,7 @@ func messageIDFromResponse(resp interface{}) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return positiveID(data, "message_id", "发送消息")
+	return messageID(data, "发送消息")
 }
 
 // DeleteMsg 撤回消息
@@ -370,7 +378,7 @@ func (c *Client) GetEssenceMessages(ctx context.Context, groupID int64) ([]Essen
 		if !ok {
 			return nil, fmt.Errorf("get_essence_msg_list 第 %d 项不是对象", i)
 		}
-		messageID, err := positiveID(data, "message_id", fmt.Sprintf("get_essence_msg_list 第 %d 项", i))
+		messageID, err := messageID(data, fmt.Sprintf("get_essence_msg_list 第 %d 项", i))
 		if err != nil {
 			return nil, err
 		}

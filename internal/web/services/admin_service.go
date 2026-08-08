@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"mumu-bot/internal/memory"
 	"strings"
@@ -22,9 +23,9 @@ type ListFilter struct {
 }
 
 type MemoryFilter struct {
-	GroupID                                   int64
-	Scope, Kind, Status, Keyword, Sort, Order string
-	Page, PageSize                            int
+	GroupID                                     int64
+	Subject, Kind, Status, Keyword, Sort, Order string
+	Page, PageSize                              int
 }
 
 type TopicThreadView struct {
@@ -58,17 +59,23 @@ type JargonView struct {
 	Evidence []memory.MessageLog
 }
 
+type MemoryView struct {
+	memory.Memory
+	Evidence []memory.MessageLog
+}
+
 type AdminService struct {
 	db            *gorm.DB
 	memory        *memory.Manager
 	stickerDir    string
 	reloadJargons func()
+	selfID        func() int64
 }
 
 type OverviewStats struct{ MemoryCount, MemberCount, JargonCount, StyleCardCount, StickerCount int64 }
 
-func NewAdminService(memoryManager *memory.Manager, stickerDir string, reloadJargons func()) *AdminService {
-	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir, reloadJargons: reloadJargons}
+func NewAdminService(memoryManager *memory.Manager, stickerDir string, reloadJargons func(), selfID func() int64) *AdminService {
+	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir, reloadJargons: reloadJargons, selfID: selfID}
 }
 func (s *AdminService) StickerDir() string { return s.stickerDir }
 
@@ -277,14 +284,32 @@ func (s *AdminService) jargonEvidence(items []memory.Jargon) (map[uint][]memory.
 	return result, err
 }
 
-func (s *AdminService) ListMemories(f MemoryFilter) (Page[memory.Memory], error) {
+func (s *AdminService) ListMemories(f MemoryFilter) (Page[MemoryView], error) {
 	var items []memory.Memory
 	q := s.db.Model(&memory.Memory{})
 	if f.GroupID > 0 {
 		q = q.Where("group_id = ?", f.GroupID)
 	}
-	if f.Scope != "" {
-		q = q.Where("scope = ?", f.Scope)
+	if f.Subject != "" {
+		selfID := int64(0)
+		if s.selfID != nil {
+			selfID = s.selfID()
+		}
+		switch f.Subject {
+		case "group":
+			q = q.Where("subject_user_id=0")
+		case "self":
+			if selfID <= 0 {
+				q = q.Where("1=0")
+			} else {
+				q = q.Where("subject_user_id=?", selfID)
+			}
+		case "member":
+			q = q.Where("subject_user_id<>0")
+			if selfID > 0 {
+				q = q.Where("subject_user_id<>?", selfID)
+			}
+		}
 	}
 	if f.Kind != "" {
 		q = q.Where("kind = ?", f.Kind)
@@ -296,7 +321,19 @@ func (s *AdminService) ListMemories(f MemoryFilter) (Page[memory.Memory], error)
 		q = q.Where("content ILIKE ?", "%"+k+"%")
 	}
 	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "default": "updated_at"})
-	return paginate(q, f.Page, f.PageSize, &items)
+	page, err := paginate(q, f.Page, f.PageSize, &items)
+	if err != nil {
+		return Page[MemoryView]{}, err
+	}
+	views := make([]MemoryView, 0, len(items))
+	for _, item := range items {
+		evidence, evidenceErr := s.memory.ListMemoryEvidence(context.Background(), item.ID)
+		if evidenceErr != nil {
+			return Page[MemoryView]{}, evidenceErr
+		}
+		views = append(views, MemoryView{Memory: item, Evidence: evidence})
+	}
+	return Page[MemoryView]{Items: views, Total: page.Total, Page: page.Page, PageSize: page.PageSize}, nil
 }
 
 func (s *AdminService) GetMemory(id uint) (memory.Memory, error) {

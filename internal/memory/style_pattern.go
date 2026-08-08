@@ -46,7 +46,7 @@ type ExpressionMatch struct {
 
 func (m *Manager) SearchExpressions(ctx context.Context, groupID int64, query string, throughOneBotMessageID int64, limit int) ([]ExpressionMatch, error) {
 	query = strings.TrimSpace(query)
-	if groupID == 0 || query == "" || throughOneBotMessageID <= 0 || limit <= 0 {
+	if groupID == 0 || query == "" || throughOneBotMessageID == 0 || limit <= 0 {
 		return nil, nil
 	}
 	var upperBound uint
@@ -77,9 +77,9 @@ func (m *Manager) SearchExpressions(ctx context.Context, groupID int64, query st
 	var texts []rankedIDRow
 	if err := m.db.WithContext(ctx).Raw(`SELECT id FROM (
 		SELECT sp.id, greatest(
-			max(greatest(word_similarity(?, sp.situation), word_similarity(sp.situation, ?))),
-			max(greatest(word_similarity(?, sp.expression), word_similarity(sp.expression, ?))),
-			max(greatest(word_similarity(?, ml.text_content), word_similarity(ml.text_content, ?)))
+			max(greatest(public.word_similarity(?, sp.situation), public.word_similarity(sp.situation, ?))),
+			max(greatest(public.word_similarity(?, sp.expression), public.word_similarity(sp.expression, ?))),
+			max(greatest(public.word_similarity(?, ml.text_content), public.word_similarity(ml.text_content, ?)))
 		) score
 		FROM style_patterns sp
 		JOIN style_pattern_evidence e ON e.style_pattern_id = sp.id
@@ -110,9 +110,9 @@ func (m *Manager) SearchExpressions(ctx context.Context, groupID int64, query st
 		FROM style_patterns sp
 		JOIN style_pattern_evidence e ON e.style_pattern_id = sp.id
 		JOIN message_logs ml ON ml.id = e.message_log_id
-		WHERE sp.id IN ? AND sp.group_id = ? AND sp.status = 'active'
+		WHERE sp.id = ANY(?) AND sp.group_id = ? AND sp.status = 'active'
 			AND ml.recalled_at IS NULL AND btrim(ml.text_content) <> '' AND ml.id <= ?
-	) examples WHERE example_rank <= 3 ORDER BY id, example_rank`, ids, groupID, upperBound).Scan(&rows).Error; err != nil {
+	) examples WHERE example_rank <= 3 ORDER BY id, example_rank`, uintIDArray(ids), groupID, upperBound).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	byID := make(map[uint]*ExpressionMatch, len(ids))

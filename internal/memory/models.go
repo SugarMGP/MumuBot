@@ -7,14 +7,6 @@ import (
 	pgvector "github.com/pgvector/pgvector-go"
 )
 
-type MemoryScope string
-
-const (
-	MemoryScopeGroup  MemoryScope = "group"
-	MemoryScopeSelf   MemoryScope = "self"
-	MemoryScopeMember MemoryScope = "member"
-)
-
 type MemoryKind string
 
 const (
@@ -28,16 +20,30 @@ const (
 type MemoryStatus string
 
 const (
-	MemoryStatusCandidate MemoryStatus = "candidate"
-	MemoryStatusActive    MemoryStatus = "active"
-	MemoryStatusArchived  MemoryStatus = "archived"
+	MemoryStatusActive   MemoryStatus = "active"
+	MemoryStatusArchived MemoryStatus = "archived"
 )
+
+const SubjectSelfInputID int64 = -1
+
+type RawMemoryClaim struct {
+	SubjectUserID      *int64  `json:"subject_user_id" jsonschema:"description=记忆主体；-1 表示机器人自身，0 表示群组，正数表示成员 QQ"`
+	Kind               string  `json:"kind" jsonschema:"enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal"`
+	Content            string  `json:"content" jsonschema:"description=包含当前昵称且脱离原句仍可理解的完整自然语言命题"`
+	EvidenceMessageIDs []int64 `json:"evidence_message_ids" jsonschema:"description=1 到 8 条原始证据消息 ID"`
+}
+
+type MemoryClaim struct {
+	SubjectUserID      int64      `json:"subject_user_id"`
+	Kind               MemoryKind `json:"kind"`
+	Content            string     `json:"content"`
+	EvidenceMessageIDs []int64    `json:"evidence_message_ids"`
+}
 
 type Memory struct {
 	ID            uint            `gorm:"primaryKey" json:"id"`
 	GroupID       int64           `gorm:"not null;index" json:"group_id"`
-	SubjectUserID *int64          `gorm:"index" json:"subject_user_id,omitempty"`
-	Scope         MemoryScope     `gorm:"type:text;not null;index" json:"scope"`
+	SubjectUserID int64           `gorm:"not null;default:0;index" json:"subject_user_id"`
 	Kind          MemoryKind      `gorm:"type:text;not null;index" json:"kind"`
 	Status        MemoryStatus    `gorm:"type:text;not null;index" json:"status"`
 	Content       string          `gorm:"type:text;not null" json:"content"`
@@ -53,16 +59,15 @@ func NormalizeContent(raw string) string {
 }
 
 type MemoryEvidence struct {
-	MemoryID       uint  `gorm:"not null;index" json:"memory_id"`
-	MessageLogID   *uint `gorm:"index" json:"message_log_id,omitempty"`
-	TopicSummaryID *uint `gorm:"index" json:"topic_summary_id,omitempty"`
+	MemoryID     uint `gorm:"primaryKey" json:"memory_id"`
+	MessageLogID uint `gorm:"primaryKey" json:"message_log_id"`
 }
 
 func (MemoryEvidence) TableName() string { return "memory_evidence" }
 
 type MessageLog struct {
 	ID               uint       `gorm:"primaryKey" json:"id"`
-	OneBotMessageID  int64      `gorm:"uniqueIndex;not null" json:"onebot_message_id"`
+	OneBotMessageID  int64      `gorm:"not null" json:"onebot_message_id"`
 	GroupID          int64      `gorm:"index;not null" json:"group_id"`
 	UserID           int64      `gorm:"index;not null" json:"user_id"`
 	Nickname         string     `gorm:"type:text;not null" json:"nickname"`
@@ -93,25 +98,21 @@ type TopicAssignment struct {
 
 func (TopicAssignment) TableName() string { return "topic_assignments" }
 
-type TopicSummaryParticipant struct {
+type TopicParticipant struct {
+	UserID   int64  `json:"user_id"`
 	Nickname string `json:"nickname"`
 	Position string `json:"position"`
 }
 
-type TopicParticipantRef struct {
-	UserID   int64  `json:"user_id"`
-	Nickname string `json:"nickname"`
-}
-
 type TopicSummary struct {
-	Version      int                       `json:"version"`
-	Title        string                    `json:"title"`
-	Gist         string                    `json:"gist"`
-	Facts        []string                  `json:"facts"`
-	Participants []TopicSummaryParticipant `json:"participants"`
-	OpenLoops    []string                  `json:"open_loops"`
-	RecentTurns  []string                  `json:"recent_turns"`
-	Keywords     []string                  `json:"keywords"`
+	Version      int                `json:"version"`
+	Title        string             `json:"title"`
+	Gist         string             `json:"gist"`
+	Claims       []MemoryClaim      `json:"claims"`
+	Participants []TopicParticipant `json:"participants"`
+	OpenLoops    []string           `json:"open_loops"`
+	RecentTurns  []string           `json:"recent_turns"`
+	Keywords     []string           `json:"keywords"`
 }
 
 type TopicSummaryRecord struct {
@@ -253,3 +254,11 @@ type MoodState struct {
 }
 
 func (MoodState) TableName() string { return "mood_state" }
+
+type SchemaMigration struct {
+	Version   int       `gorm:"primaryKey" json:"version"`
+	Name      string    `gorm:"type:text;not null" json:"name"`
+	AppliedAt time.Time `gorm:"not null;default:now()" json:"applied_at"`
+}
+
+func (SchemaMigration) TableName() string { return "schema_migrations" }

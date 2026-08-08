@@ -1,7 +1,9 @@
 package views
 
 import (
+	"mumu-bot/internal/logger"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/web/services"
 )
 
@@ -145,12 +147,13 @@ type StickerListPageData struct {
 
 type MemoryListPageData struct {
 	GroupID string
-	Scope   string
+	Subject string
 	Status  string
 	Kind    string
 	Keyword string
 	Sort    SortToolbarData
-	Items   []memory.Memory
+	Items   []services.MemoryView
+	SelfID  int64
 	Meta    ListMeta
 	Flash   *FlashMessage
 }
@@ -191,8 +194,16 @@ type SystemSection struct {
 }
 
 type SystemPageData struct {
-	Sections []SystemSection
-	Flash    *FlashMessage
+	View        string
+	Sections    []SystemSection
+	Logs        []logger.Line
+	LogKeyword  string
+	LogLevel    string
+	LogTotal    int
+	LogFiltered int
+	StatsRange  string
+	Stats       modelstats.Snapshot
+	Flash       *FlashMessage
 }
 
 type TopicSummaryChangeView struct {
@@ -210,8 +221,8 @@ type TopicSummaryChangeView struct {
 	CurrentGist      string
 	PreviousGist     string
 	GistDiff         TopicTextDiffView
-	AddedFacts       []string
-	RemovedFacts     []string
+	AddedClaims      []string
+	RemovedClaims    []string
 	AddedOpenLoops   []string
 	RemovedOpenLoops []string
 	Changed          bool

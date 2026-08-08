@@ -3,11 +3,14 @@ package views
 import (
 	"fmt"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/web/services"
 	neturl "net/url"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/bytedance/sonic"
 )
 
 func FaviconSVG() string {
@@ -63,16 +66,14 @@ func stickerFileURL(fileName string) string {
 	return "/admin/stickers/files/" + neturl.PathEscape(fileName)
 }
 
-func memoryScopeText(kind memory.MemoryScope) string {
-	switch kind {
-	case memory.MemoryScopeGroup:
+func memorySubjectText(subjectUserID, selfID int64) string {
+	switch memory.SubjectLabel(subjectUserID, selfID) {
+	case "group":
 		return "群组"
-	case memory.MemoryScopeSelf:
+	case "self":
 		return "自身"
-	case memory.MemoryScopeMember:
-		return "成员"
 	default:
-		return "未分类"
+		return "成员"
 	}
 }
 
@@ -95,8 +96,6 @@ func memoryKindText(kind memory.MemoryKind) string {
 
 func memoryStatusText(status memory.MemoryStatus) string {
 	switch status {
-	case memory.MemoryStatusCandidate:
-		return "待收敛"
 	case memory.MemoryStatusArchived:
 		return "已归档"
 	default:
@@ -106,8 +105,6 @@ func memoryStatusText(status memory.MemoryStatus) string {
 
 func memoryStatusClass(status memory.MemoryStatus) string {
 	switch status {
-	case memory.MemoryStatusCandidate:
-		return "badge badge-warning badge-soft badge-sm"
 	case memory.MemoryStatusArchived:
 		return "badge badge-ghost badge-sm"
 	default:
@@ -252,6 +249,67 @@ func ternaryString(condition bool, whenTrue string, whenFalse string) string {
 	return whenFalse
 }
 
+func systemViewLabel(view string) string {
+	switch view {
+	case "logs":
+		return "运行日志"
+	case "models":
+		return "模型调用"
+	default:
+		return "运行信息"
+	}
+}
+
+func systemLogFragmentURL(data SystemPageData) string {
+	values := neturl.Values{"view": {"logs"}, "fragment": {"logs"}, "level": {data.LogLevel}}
+	if data.LogKeyword != "" {
+		values.Set("keyword", data.LogKeyword)
+	}
+	return "/admin/system?" + values.Encode()
+}
+
+func systemLogDownloadURL(data SystemPageData) string {
+	values := neturl.Values{"level": {data.LogLevel}}
+	if data.LogKeyword != "" {
+		values.Set("keyword", data.LogKeyword)
+	}
+	return "/admin/system/logs/download?" + values.Encode()
+}
+
+func modelFailureRate(row modelstats.AggregateRow) string {
+	if row.RequestCount == 0 {
+		return "暂无数据"
+	}
+	return fmt.Sprintf("%.1f%%", float64(row.FailureCount)*100/float64(row.RequestCount))
+}
+
+func modelLatency(row modelstats.AggregateRow) string {
+	if row.RequestCount == 0 {
+		return "暂无数据"
+	}
+	return fmt.Sprintf("%.0f ms", row.AverageLatencyMS)
+}
+
+func modelUsageCoverage(row modelstats.AggregateRow) string {
+	success := row.RequestCount - row.FailureCount
+	if success <= 0 {
+		return "暂无数据"
+	}
+	return fmt.Sprintf("%.1f%%", float64(row.UsageReportedCount)*100/float64(success))
+}
+
+func modelAverageTokens(row modelstats.AggregateRow) string {
+	if row.UsageReportedCount == 0 {
+		return "暂无数据"
+	}
+	return fmt.Sprintf("%.0f", float64(row.TotalTokens)/float64(row.UsageReportedCount))
+}
+
+func modelStatsJSON(snapshot modelstats.Snapshot) string {
+	raw, _ := sonic.MarshalString(snapshot)
+	return raw
+}
+
 func equalTrimmed(left string, right string) bool {
 	return strings.TrimSpace(left) == strings.TrimSpace(right)
 }
@@ -363,7 +421,7 @@ func StickerDeleteDialogData(item memory.Sticker, returnTo string) AdminActionDi
 	}
 }
 
-func MemoryDeleteDialogData(item memory.Memory, returnTo string) AdminActionDialogContentData {
+func MemoryDeleteDialogData(item memory.Memory, selfID int64, returnTo string) AdminActionDialogContentData {
 	action := RowAction{Kind: "danger", BusyLabel: "删除中"}
 	return AdminActionDialogContentData{
 		Title:       "删除记忆",
@@ -373,7 +431,7 @@ func MemoryDeleteDialogData(item memory.Memory, returnTo string) AdminActionDial
 		BusyLabel:   action.BusyLabel,
 		Fields: []AdminActionField{
 			{Label: "记忆内容", Value: item.Content},
-			{Label: "范围", Value: memoryScopeText(item.Scope)},
+			{Label: "主体", Value: memorySubjectText(item.SubjectUserID, selfID)},
 		},
 		Hidden: []AdminActionHiddenField{
 			{Name: "action_kind", Value: "memory-delete"},
@@ -387,7 +445,7 @@ func MemoryArchiveDialogData(item memory.Memory, returnTo string) AdminActionDia
 	action := RowAction{Kind: "ghost", BusyLabel: "归档中"}
 	return AdminActionDialogContentData{
 		Title:       "归档记忆",
-		Body:        "归档后默认不再参与召回，但仍保留在历史里，之后可以重新放回待收敛区。",
+		Body:        "归档后不再参与召回，但仍保留在历史里，之后可以直接恢复。",
 		SubmitLabel: "确认归档",
 		SubmitClass: modalActionClass(action),
 		BusyLabel:   action.BusyLabel,
@@ -406,8 +464,8 @@ func MemoryArchiveDialogData(item memory.Memory, returnTo string) AdminActionDia
 func MemoryRestoreDialogData(item memory.Memory, returnTo string) AdminActionDialogContentData {
 	action := RowAction{Kind: "approve", BusyLabel: "恢复中"}
 	return AdminActionDialogContentData{
-		Title:       "恢复到待收敛",
-		Body:        "恢复后会重新进入待收敛区，后续仍需新的证据继续确认，不会直接恢复为生效中。",
+		Title:       "恢复记忆",
+		Body:        "恢复后会重新参与召回；如已有完全相同的生效记忆，证据会自动合并。",
 		SubmitLabel: "确认恢复",
 		SubmitClass: modalActionClass(action),
 		BusyLabel:   action.BusyLabel,

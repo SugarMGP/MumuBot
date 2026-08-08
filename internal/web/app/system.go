@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/llm"
+	"mumu-bot/internal/memory"
 	"mumu-bot/internal/web/views"
 	neturl "net/url"
 	"strconv"
@@ -72,6 +74,9 @@ func (a *App) systemSections() []views.SystemSection {
 	runtimeFields := []views.SystemField{
 		{Label: "当前连接", Value: views.ConnectionText(snapshot.Connected)},
 		{Label: "重连间隔", Value: fmt.Sprintf("%d 秒", cfg.OneBot.ReconnectInterval)},
+	}
+	if currentVersion, err := a.memMgr.SchemaVersion(context.Background()); err == nil {
+		runtimeFields = append(runtimeFields, views.SystemField{Label: "数据结构版本", Value: fmt.Sprintf("v%d / v%d", currentVersion, memory.LatestSchemaVersion())})
 	}
 	if snapshot.SelfID > 0 {
 		runtimeFields = append(runtimeFields, views.SystemField{Label: "机器人 QQ", Value: fmt.Sprintf("%d", snapshot.SelfID)})
@@ -223,7 +228,11 @@ func parsePositiveInt(raw string, fallback int) int {
 }
 
 func listPageSize(raw string) int {
-	return parsePositiveInt(raw, defaultListPageSize)
+	return listPageSizeWithDefault(raw, defaultListPageSize)
+}
+
+func listPageSizeWithDefault(raw string, fallback int) int {
+	return parsePositiveInt(raw, fallback)
 }
 
 func parseInt64Query(raw string) int64 {

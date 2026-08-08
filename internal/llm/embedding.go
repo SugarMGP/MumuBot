@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/modelstats"
 
 	"github.com/cloudwego/eino-ext/components/embedding/openai"
+	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/components"
 )
 
 // EmbeddingClient 向量嵌入客户端
@@ -39,6 +42,7 @@ func NewEmbeddingClient() (*EmbeddingClient, error) {
 
 // Embed 生成文本的向量表示
 func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float64, error) {
+	ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{Component: components.ComponentOfEmbedding}, modelstats.Handler("embedding", config.Get().Embedding.Model))
 	vectors, err := c.client.EmbedStrings(ctx, []string{text})
 	if err != nil {
 		return nil, err

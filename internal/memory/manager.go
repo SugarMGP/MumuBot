@@ -26,28 +26,12 @@ type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
 }
 
-type MemoryIngestInput struct {
-	GroupID           int64
-	RelatedUserID     int64
-	SelfID            int64
-	Content           string
-	MessageLogID      *uint
-	TopicSummaryID    *uint
-	SubjectCandidates []TopicParticipantRef
-	AllowedKinds      []MemoryKind
-}
-
-type TopicMemoryCandidateInput struct {
-	GroupID        int64
-	TopicSummaryID uint
-	SelfID         int64
-	Claims         []TopicMemoryClaimInput
-	Participants   []TopicParticipantRef
-}
-
-type TopicMemoryClaimInput struct {
-	Content      string
-	AllowedKinds []MemoryKind
+type StoreClaimsContext struct {
+	GroupID                 int64
+	SelfID                  int64
+	SnapshotOneBotMessageID int64
+	TopicID                 uint
+	ThroughAssignmentID     uint
 }
 
 type memoryMergeInput struct {
@@ -71,13 +55,7 @@ type Manager struct {
 	background  sync.WaitGroup
 }
 
-func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatModel) (*Manager, error) {
-	if embedding == nil {
-		return nil, fmt.Errorf("embedding 未初始化")
-	}
-	if claimModel == nil {
-		return nil, fmt.Errorf("claimModel 未初始化")
-	}
+func OpenDB() (*gorm.DB, error) {
 	cfg := config.Get()
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
@@ -89,90 +67,23 @@ func NewManager(embedding EmbeddingProvider, claimModel model.ToolCallingChatMod
 	if err != nil {
 		return nil, fmt.Errorf("连接 PostgreSQL 数据库失败: %w", err)
 	}
-	if err := ensureExtensions(db); err != nil {
-		return nil, err
+	return db, nil
+}
+
+func NewManager(db *gorm.DB, embedding EmbeddingProvider, claimModel model.ToolCallingChatModel) (*Manager, error) {
+	if db == nil {
+		return nil, fmt.Errorf("PostgreSQL 未初始化")
 	}
-	if err := migrateSchema(db, cfg.Embedding.Dimensions); err != nil {
-		return nil, fmt.Errorf("初始化 PostgreSQL 数据结构失败: %w", err)
+	if embedding == nil {
+		return nil, fmt.Errorf("embedding 未初始化")
+	}
+	if claimModel == nil {
+		return nil, fmt.Errorf("claimModel 未初始化")
 	}
 	m := &Manager{db: db, embedding: embedding, claimModel: claimModel, cleanupStop: make(chan struct{})}
 	m.startMessageLogCleanup()
 	m.startMoodDecay()
 	return m, nil
-}
-
-func ensureExtensions(db *gorm.DB) error {
-	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
-		return fmt.Errorf("启用 PostgreSQL 扩展 vector 失败，请确认服务端已安装扩展且运行账户有创建权限: %w", err)
-	}
-	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm").Error; err != nil {
-		return fmt.Errorf("启用 PostgreSQL 扩展 pg_trgm 失败，请确认运行账户有创建权限: %w", err)
-	}
-	return nil
-}
-
-func migrateSchema(db *gorm.DB, dimensions int) error {
-	models := []any{
-		&MessageLog{}, &TopicThread{}, &TopicAssignment{}, &TopicSummaryRecord{},
-		&Memory{}, &MemoryEvidence{}, &StylePattern{}, &StylePatternEvidence{},
-		&Jargon{}, &JargonEvidence{}, &MemberProfile{}, &MemberName{}, &MemberTrait{},
-		&MemberTraitEvidence{}, &LearningState{}, &Sticker{}, &MoodState{},
-	}
-	if err := db.AutoMigrate(models...); err != nil {
-		return err
-	}
-	for _, table := range []string{"memories", "topic_summaries", "style_patterns"} {
-		stmt := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN embedding TYPE vector(%d)", table, dimensions)
-		if err := db.Exec(stmt).Error; err != nil {
-			return err
-		}
-	}
-	statements := []string{
-		`ALTER TABLE topic_assignments DROP CONSTRAINT IF EXISTS fk_topic_assignments_message`,
-		`ALTER TABLE topic_assignments ADD CONSTRAINT fk_topic_assignments_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE CASCADE`,
-		`ALTER TABLE topic_assignments DROP CONSTRAINT IF EXISTS fk_topic_assignments_topic`,
-		`ALTER TABLE topic_assignments ADD CONSTRAINT fk_topic_assignments_topic FOREIGN KEY (topic_id) REFERENCES topic_threads(id) ON DELETE RESTRICT`,
-		`ALTER TABLE topic_summaries DROP CONSTRAINT IF EXISTS fk_topic_summaries_assignment`,
-		`ALTER TABLE topic_summaries ADD CONSTRAINT fk_topic_summaries_assignment FOREIGN KEY (through_topic_assignment_id) REFERENCES topic_assignments(id) ON DELETE RESTRICT`,
-		`ALTER TABLE memories DROP CONSTRAINT IF EXISTS memories_scope_subject_check`,
-		`ALTER TABLE memories ADD CONSTRAINT memories_scope_subject_check CHECK ((scope = 'member' AND subject_user_id IS NOT NULL) OR (scope <> 'member' AND subject_user_id IS NULL))`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_active_memory_content ON memories (group_id, scope, COALESCE(subject_user_id, 0), kind, lower(btrim(content))) WHERE status = 'active'`,
-		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS memory_evidence_source_check`,
-		`ALTER TABLE memory_evidence ADD CONSTRAINT memory_evidence_source_check CHECK ((message_log_id IS NOT NULL)::int + (topic_summary_id IS NOT NULL)::int = 1)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_message_evidence ON memory_evidence(memory_id, message_log_id) WHERE message_log_id IS NOT NULL`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_summary_evidence ON memory_evidence(memory_id, topic_summary_id) WHERE topic_summary_id IS NOT NULL`,
-		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS fk_memory_evidence_memory`,
-		`ALTER TABLE memory_evidence ADD CONSTRAINT fk_memory_evidence_memory FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE`,
-		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS fk_memory_evidence_message`,
-		`ALTER TABLE memory_evidence ADD CONSTRAINT fk_memory_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
-		`ALTER TABLE memory_evidence DROP CONSTRAINT IF EXISTS fk_memory_evidence_summary`,
-		`ALTER TABLE memory_evidence ADD CONSTRAINT fk_memory_evidence_summary FOREIGN KEY (topic_summary_id) REFERENCES topic_summaries(id) ON DELETE RESTRICT`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_style_pattern_text ON style_patterns(group_id, lower(btrim(situation)), lower(btrim(expression)))`,
-		`ALTER TABLE style_pattern_evidence DROP CONSTRAINT IF EXISTS fk_style_evidence_pattern`,
-		`ALTER TABLE style_pattern_evidence ADD CONSTRAINT fk_style_evidence_pattern FOREIGN KEY (style_pattern_id) REFERENCES style_patterns(id) ON DELETE CASCADE`,
-		`ALTER TABLE style_pattern_evidence DROP CONSTRAINT IF EXISTS fk_style_evidence_message`,
-		`ALTER TABLE style_pattern_evidence ADD CONSTRAINT fk_style_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_jargon_term ON jargons(group_id, lower(btrim(term)))`,
-		`ALTER TABLE jargon_evidence DROP CONSTRAINT IF EXISTS fk_jargon_evidence_jargon`,
-		`ALTER TABLE jargon_evidence ADD CONSTRAINT fk_jargon_evidence_jargon FOREIGN KEY (jargon_id) REFERENCES jargons(id) ON DELETE CASCADE`,
-		`ALTER TABLE jargon_evidence DROP CONSTRAINT IF EXISTS fk_jargon_evidence_message`,
-		`ALTER TABLE jargon_evidence ADD CONSTRAINT fk_jargon_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_member_trait ON member_traits(user_id, kind, lower(btrim(value)))`,
-		`ALTER TABLE member_names DROP CONSTRAINT IF EXISTS fk_member_names_profile`,
-		`ALTER TABLE member_names ADD CONSTRAINT fk_member_names_profile FOREIGN KEY (user_id) REFERENCES member_profiles(user_id) ON DELETE CASCADE`,
-		`ALTER TABLE member_traits DROP CONSTRAINT IF EXISTS fk_member_traits_profile`,
-		`ALTER TABLE member_traits ADD CONSTRAINT fk_member_traits_profile FOREIGN KEY (user_id) REFERENCES member_profiles(user_id) ON DELETE CASCADE`,
-		`ALTER TABLE member_trait_evidence DROP CONSTRAINT IF EXISTS fk_member_trait_evidence_trait`,
-		`ALTER TABLE member_trait_evidence ADD CONSTRAINT fk_member_trait_evidence_trait FOREIGN KEY (member_trait_id) REFERENCES member_traits(id) ON DELETE CASCADE`,
-		`ALTER TABLE member_trait_evidence DROP CONSTRAINT IF EXISTS fk_member_trait_evidence_message`,
-		`ALTER TABLE member_trait_evidence ADD CONSTRAINT fk_member_trait_evidence_message FOREIGN KEY (message_log_id) REFERENCES message_logs(id) ON DELETE RESTRICT`,
-	}
-	for _, stmt := range statements {
-		if err := db.Exec(stmt).Error; err != nil {
-			return err
-		}
-	}
-	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&MoodState{ID: 1, Energy: 0.5, Sociability: 0.5}).Error
 }
 
 func EmbeddingVector(values []float64) (pgvector.Vector, error) {
@@ -190,7 +101,7 @@ func EmbeddingVector(values []float64) (pgvector.Vector, error) {
 func (m *Manager) GetRecentMessages(groupID, throughOneBotMessageID int64, limit, offset int) []MessageLog {
 	var items []MessageLog
 	q := m.db.Where("group_id = ?", groupID).Order("message_time DESC, id DESC").Limit(limit)
-	if throughOneBotMessageID > 0 {
+	if throughOneBotMessageID != 0 {
 		upperBound := m.db.Model(&MessageLog{}).Select("id").
 			Where("group_id = ? AND one_bot_message_id = ?", groupID, throughOneBotMessageID)
 		q = q.Where("message_logs.id <= (?)", upperBound)
@@ -249,7 +160,7 @@ func fuseRRF(lists ...[]rankedID) []uint {
 	return ids
 }
 
-func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupID int64, scope MemoryScope, limit int, vectorThreshold float64) ([]Memory, error) {
+func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupID int64, subjectUserID *int64, kind MemoryKind, limit int, vectorThreshold float64) ([]Memory, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || limit <= 0 {
 		return nil, nil
@@ -258,7 +169,7 @@ func (m *Manager) SearchSimilarMemories(ctx context.Context, text string, groupI
 	if err != nil {
 		return nil, err
 	}
-	return m.searchPreparedMemories(ctx, query, groupID, 0, scope, limit, vectorThreshold)
+	return m.searchPreparedMemories(ctx, query, groupID, 0, subjectUserID, nil, kind, limit, vectorThreshold)
 }
 
 func (m *Manager) loadMemoriesInOrder(ctx context.Context, ids []uint) ([]Memory, error) {
@@ -282,11 +193,26 @@ func (m *Manager) loadMemoriesInOrder(ctx context.Context, ids []uint) ([]Memory
 	return result, nil
 }
 
-func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, scope MemoryScope, limit int) ([]Memory, error) {
+func (m *Manager) QueryMemory(ctx context.Context, query string, groupID int64, subjectUserID *int64, kind MemoryKind, selfID int64, limit int) ([]Memory, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	return m.SearchSimilarMemories(ctx, query, groupID, scope, limit, 0.3)
+	if subjectUserID != nil {
+		resolved := *subjectUserID
+		if resolved == SubjectSelfInputID {
+			if selfID <= 0 {
+				return nil, claimError("self_id_unavailable", "机器人账号尚未就绪")
+			}
+			resolved = selfID
+		} else if resolved < SubjectSelfInputID {
+			return nil, claimError("invalid_subject", "subject_user_id 不能小于 -1")
+		}
+		subjectUserID = &resolved
+		if resolved == selfID && selfID > 0 {
+			groupID = 0
+		}
+	}
+	return m.SearchSimilarMemories(ctx, query, groupID, subjectUserID, kind, limit, 0.3)
 }
 
 func (m *Manager) DeleteMemory(ctx context.Context, id uint) error {
@@ -297,8 +223,26 @@ func (m *Manager) ArchiveMemory(ctx context.Context, id uint) error {
 	return requireAffected(m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusArchived))
 }
 
-func (m *Manager) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	return requireAffected(m.db.WithContext(ctx).Model(&Memory{}).Where("id = ?", id).Update("status", MemoryStatusCandidate))
+func (m *Manager) RestoreMemory(ctx context.Context, id uint) error {
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var archived Memory
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=? AND status=?", id, MemoryStatusArchived).First(&archived).Error; err != nil {
+			return err
+		}
+		var active Memory
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id=? AND subject_user_id=? AND kind=? AND status=? AND lower(btrim(content))=lower(btrim(?))",
+			archived.GroupID, archived.SubjectUserID, archived.Kind, MemoryStatusActive, archived.Content).First(&active).Error
+		if err == nil {
+			if err := tx.Exec(`INSERT INTO memory_evidence(memory_id,message_log_id) SELECT ?,message_log_id FROM memory_evidence WHERE memory_id=? ON CONFLICT DO NOTHING`, active.ID, archived.ID).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&archived).Error
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Model(&archived).Update("status", MemoryStatusActive).Error
+	})
 }
 
 func (m *Manager) UpdateStylePatternStatus(ctx context.Context, id uint, status StylePatternStatus) error {
@@ -317,48 +261,6 @@ func requireAffected(result *gorm.DB) error {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
-}
-
-func (m *Manager) UpsertTopicMemoryCandidate(ctx context.Context, input TopicMemoryCandidateInput) ([]Memory, error) {
-	if input.TopicSummaryID == 0 {
-		return nil, nil
-	}
-	preparedItems := make([]preparedMemory, 0, len(input.Claims))
-	seen := make(map[string]struct{})
-	for _, claim := range input.Claims {
-		content := strings.TrimSpace(strings.TrimLeft(claim.Content, "-•*1234567890. "))
-		if content == "" {
-			continue
-		}
-		key := NormalizeContent(content) + "|" + allowedKindsPrompt(claim.AllowedKinds)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		prepared, err := m.prepareMemory(ctx, MemoryIngestInput{
-			GroupID: input.GroupID, SelfID: input.SelfID, Content: content,
-			TopicSummaryID: &input.TopicSummaryID, SubjectCandidates: input.Participants, AllowedKinds: claim.AllowedKinds,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if prepared != nil {
-			preparedItems = append(preparedItems, *prepared)
-		}
-	}
-	result := make([]Memory, 0, len(preparedItems))
-	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, prepared := range preparedItems {
-			item, _, err := applyPreparedMemory(tx, MemoryIngestInput{TopicSummaryID: &input.TopicSummaryID}, prepared)
-			if err != nil {
-				return err
-			}
-			result = append(result, *item)
-		}
-		return tx.Model(&TopicSummaryRecord{}).Where("id = ? AND memory_processed = false", input.TopicSummaryID).
-			Update("memory_processed", true).Error
-	})
-	return result, err
 }
 
 func (m *Manager) GetMemberProfile(userID int64) (*MemberProfile, error) {
@@ -385,16 +287,49 @@ func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt
 	return m.GetMemberProfile(userID)
 }
 
-func (m *Manager) GetMessageLogByID(messageID int64) (*MessageLog, error) {
+func (m *Manager) GetMessageLogByID(groupID, messageID int64) (*MessageLog, error) {
 	var item MessageLog
-	if err := m.db.Where("one_bot_message_id = ?", messageID).First(&item).Error; err != nil {
+	if err := m.db.Where("group_id=? AND one_bot_message_id = ?", groupID, messageID).First(&item).Error; err != nil {
 		return nil, err
 	}
 	return &item, nil
 }
 
+func SubjectLabel(subjectUserID, selfID int64) string {
+	switch {
+	case subjectUserID == 0:
+		return "group"
+	case selfID > 0 && subjectUserID == selfID:
+		return "self"
+	default:
+		return "member"
+	}
+}
+
+func (m *Manager) ListMemoryEvidenceOneBotIDs(ctx context.Context, memoryID uint) ([]int64, error) {
+	var ids []int64
+	err := m.db.WithContext(ctx).Table("memory_evidence e").
+		Joins("JOIN message_logs ml ON ml.id=e.message_log_id").
+		Where("e.memory_id=?", memoryID).Order("ml.message_time ASC, ml.id ASC").Pluck("ml.one_bot_message_id", &ids).Error
+	return ids, err
+}
+
+func (m *Manager) ListMemoryEvidence(ctx context.Context, memoryID uint) ([]MessageLog, error) {
+	var rows []MessageLog
+	err := m.db.WithContext(ctx).Table("memory_evidence e").Select("ml.*").
+		Joins("JOIN message_logs ml ON ml.id=e.message_log_id").
+		Where("e.memory_id=?", memoryID).Order("ml.message_time ASC, ml.id ASC").Scan(&rows).Error
+	return rows, err
+}
+
+func (m *Manager) SchemaVersion(ctx context.Context) (int, error) {
+	var version int
+	err := m.db.WithContext(ctx).Model(&SchemaMigration{}).Select("COALESCE(max(version),0)").Scan(&version).Error
+	return version, err
+}
+
 func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bool, error) {
-	if groupID <= 0 || messageID <= 0 {
+	if groupID <= 0 || messageID == 0 {
 		return nil, false, nil
 	}
 	var item MessageLog
@@ -412,7 +347,12 @@ func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bo
 		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
 		}
-		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error; err != nil {
+			return err
+		}
+		return tx.Exec(`UPDATE memories m SET status='archived', updated_at=now()
+			WHERE m.status='active' AND EXISTS (SELECT 1 FROM memory_evidence hit WHERE hit.memory_id=m.id AND hit.message_log_id=?)
+			AND NOT EXISTS (SELECT 1 FROM memory_evidence e JOIN message_logs ml ON ml.id=e.message_log_id WHERE e.memory_id=m.id AND ml.recalled_at IS NULL)`, item.ID).Error
 	})
 	if err != nil {
 		return nil, false, err
@@ -436,11 +376,3 @@ func (m *Manager) Close() error {
 func (m *Manager) GetDB() *gorm.DB { return m.db }
 
 func (m *Manager) EmbeddingProvider() EmbeddingProvider { return m.embedding }
-
-func createEvidence(tx *gorm.DB, memoryID uint, input MemoryIngestInput) error {
-	evidence := MemoryEvidence{MemoryID: memoryID, MessageLogID: input.MessageLogID, TopicSummaryID: input.TopicSummaryID}
-	if (evidence.MessageLogID == nil) == (evidence.TopicSummaryID == nil) {
-		return errors.New("长期记忆证据必须且只能有一个来源")
-	}
-	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&evidence).Error
-}

@@ -88,10 +88,38 @@
     position: sticky;
     top: 0;
     height: 100vh;
+    overflow-x: clip;
     border-right: 1px solid #f0e4ea;
     background: rgb(255 250 251 / 0.82);
     backdrop-filter: blur(14px);
     box-shadow: 6px 0 24px rgb(232 93 117 / 0.05);
+  }
+
+  .admin-sidebar > div {
+    min-width: 0;
+  }
+
+  .admin-sidebar nav {
+    overflow-x: clip;
+  }
+
+  .admin-sidebar nav a > svg {
+    transform-origin: center;
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), color 180ms ease-out;
+  }
+
+  .admin-sidebar nav a > span {
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), color 180ms ease-out;
+  }
+
+  .admin-sidebar nav a:hover > svg,
+  .admin-sidebar nav a:focus-visible > svg {
+    transform: translateX(3px) rotate(-8deg);
+  }
+
+  .admin-sidebar nav a:hover > span,
+  .admin-sidebar nav a:focus-visible > span {
+    transform: translateX(3px);
   }
 
   .admin-page {
@@ -120,6 +148,166 @@
 
   .admin-record-card[data-tone="neutral"]::before {
     background: #c7c9d4;
+  }
+
+  .admin-page .card:not(.modal-box),
+  .admin-page .table tbody tr {
+	transition: border-color 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1), background-color 180ms ease-out;
+  }
+
+  .admin-page .card:not(.modal-box):hover {
+    border-color: #d7c9d8;
+    box-shadow: 0 12px 28px rgb(61 48 74 / 0.08);
+  }
+
+  .admin-page .table tbody tr:hover {
+    background: #fff7f9;
+  }
+
+  .admin-log-view {
+	position: relative;
+    min-height: 34rem;
+    max-height: 62vh;
+    overflow: auto;
+    border: 1px solid #e4e7ee;
+    border-radius: 0.9rem;
+    background: #20212d;
+    padding: 0.75rem 0;
+    color: #e8f7f5;
+    font: 0.78rem/1.7 var(--font-mono);
+	white-space: nowrap;
+  }
+
+  .admin-log-count {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.55rem;
+	min-height: 1.5rem;
+	padding: 0 0.25rem;
+	color: rgb(32 33 45 / 0.55);
+	font-family: var(--font-sans);
+	font-size: 0.75rem;
+  }
+
+  .admin-log-count span {
+	width: 1px;
+	height: 0.75rem;
+	background: #d9dce4;
+  }
+
+  .admin-log-line {
+	display: flex;
+	min-width: max-content;
+	align-items: baseline;
+	gap: 0.7rem;
+	border-left: 2px solid transparent;
+	padding: 0.12rem 1rem;
+	transition: background-color 160ms ease, border-color 160ms ease;
+  }
+
+  .admin-log-line:hover {
+	background: rgb(255 255 255 / 0.05);
+  }
+
+  .admin-log-line time {
+	color: #80cbc4;
+  }
+
+  .admin-log-line strong {
+	width: 3.25rem;
+	color: #8fb8ff;
+	font-weight: 700;
+  }
+
+  .admin-log-message {
+	color: #f4f5f8;
+  }
+
+  .admin-log-fields {
+	display: flex;
+	gap: 0.7rem;
+	color: #c4b5fd;
+  }
+
+  .admin-log-field {
+	display: inline-flex;
+  }
+
+  .admin-log-field b {
+	font-weight: 600;
+  }
+
+  .admin-log-field b::after {
+	content: "=";
+  }
+
+  .admin-log-formatted .admin-log-view {
+	white-space: normal;
+  }
+
+  .admin-log-formatted .admin-log-line {
+	display: grid;
+	min-width: 0;
+	grid-template-columns: max-content 3.25rem minmax(0, 1fr);
+	gap: 0.15rem 0.8rem;
+	padding-block: 0.5rem;
+  }
+
+  .admin-log-formatted .admin-log-message {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+  }
+
+  .admin-log-formatted .admin-log-fields {
+	grid-column: 3;
+	display: grid;
+	gap: 0.2rem;
+	padding-top: 0.2rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+  }
+
+  .admin-log-formatted .admin-log-field {
+	display: grid;
+	grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+	gap: 0.6rem;
+	color: #d9d2ff;
+  }
+
+  .admin-log-formatted .admin-log-field b {
+	color: #9387ca;
+  }
+
+  .admin-log-formatted .admin-log-field b::after {
+	content: "";
+  }
+
+  .admin-log-line[data-level="WARN"] {
+	border-left-color: #f4c95d;
+	background: rgb(244 201 93 / 0.06);
+  }
+
+  .admin-log-line[data-level="WARN"] strong {
+	color: #f4c95d;
+  }
+
+  .admin-log-line[data-level="ERROR"] {
+	border-left-color: #fb7185;
+	background: rgb(251 113 133 / 0.09);
+  }
+
+  .admin-log-line[data-level="ERROR"] strong {
+	color: #fb7185;
+  }
+
+  .admin-log-line[data-level="DEBUG"] strong {
+	color: #a9b0c2;
+  }
+
+  .admin-model-chart {
+	height: 20rem;
+	min-width: 0;
   }
 
   .admin-quote {
@@ -332,10 +520,10 @@
 }
 
 @layer utilities {
-  @keyframes admin-fade {
+  @keyframes admin-page-enter {
     from {
       opacity: 0;
-      transform: translateY(6px);
+      transform: translateY(10px);
     }
     to {
       opacity: 1;
@@ -343,18 +531,9 @@
     }
   }
 
-  .admin-page-enter {
-    animation: admin-fade 180ms ease-out both;
+  #admin-page-body {
+    animation: admin-page-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-}
-
-/* 未分层规则，避免被工具类层的 transition-colors 覆盖 */
-a.admin-record-card {
-  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
-}
-
-a.admin-record-card:hover {
-  transform: translateY(-1px);
 }
 
 @media (prefers-reduced-motion: reduce) {

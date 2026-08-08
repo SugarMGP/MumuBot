@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
@@ -52,7 +53,7 @@ func (a *Agent) thinkCycle() {
 			a.scheduleThink(gc.GroupID, true, false, receivedAt)
 			continue
 		}
-		lastMsg := latestPositiveMessage(currentMessages)
+		lastMsg := latestMessageWithID(currentMessages)
 		if lastMsg == nil {
 			continue
 		}
@@ -241,19 +242,10 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		return
 	}
 	snapshotMessageID := int64(0)
-	if message := latestPositiveMessage(buffer); message != nil {
+	if message := latestMessageWithID(buffer); message != nil {
 		snapshotMessageID = message.MessageID
 	}
-	evidenceMessageID := int64(0)
-	for i := len(currentMessages) - 1; i >= 0; i-- {
-		msg := currentMessages[i]
-		if msg != nil && msg.MessageID > 0 && msg.UserID != selfID && strings.TrimSpace(msg.Content) != "" {
-			evidenceMessageID = msg.MessageID
-			break
-		}
-	}
-
-	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID, evidenceMessageID)
+	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID)
 	tc := tools.GetToolContext(ctx)
 
 	chatContext := renderChatContext(buffer, lastReadMessage, selfID)
@@ -273,12 +265,12 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		}
 	}
 
-	if semanticCurrent && snapshotMessageID > 0 {
+	if semanticCurrent && snapshotMessageID != 0 {
 		retrievalQuery, retrievalErr := a.memory.PrepareHybridQuery(ctx, collectRetrievalTextFragments(readMessages, currentMessages, cfg.Agent.MessageBufferSize))
 		if retrievalErr != nil {
 			zap.L().Warn("构建原始上下文检索查询失败", zap.Int64("group_id", groupID), zap.Error(retrievalErr))
 		}
-		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(snapshotMessageID)
+		snapshotLog, snapshotErr := a.memory.GetMessageLogByID(groupID, snapshotMessageID)
 		if snapshotErr != nil {
 			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", snapshotMessageID), zap.Error(snapshotErr))
 		} else {
@@ -290,7 +282,9 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 			}
 		}
 
-		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, retrievalQuery)
+		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, buffer, retrievalQuery)
+		promptCtx.SelfID = selfID
+		promptCtx.MemorySubjectNames = a.memorySubjectNames(promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences)
 	}
 
 	if mood, err := a.memory.GetMoodState(); err == nil {
@@ -331,7 +325,8 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, agentThinkTimeout)
 	defer cancelTimeout()
 
-	opts := make([]flowagent.AgentOption, 0, 1)
+	opts := make([]flowagent.AgentOption, 0, 2)
+	opts = append(opts, flowagent.WithComposeOptions(compose.WithCallbacks(modelstats.Handler("react", cfg.ModelTiers.High.Model))))
 	if cfg.Debug.ShowToolCalls {
 		opts = append(opts, flowagent.WithComposeOptions(compose.WithCallbacks(tools.NewToolLogHandler())))
 	}
@@ -386,9 +381,9 @@ func (a *Agent) hasStrongInteraction(messages []*onebot.GroupMessage) bool {
 	return false
 }
 
-func latestPositiveMessage(messages []*onebot.GroupMessage) *onebot.GroupMessage {
+func latestMessageWithID(messages []*onebot.GroupMessage) *onebot.GroupMessage {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i] != nil && messages[i].MessageID > 0 {
+		if messages[i] != nil && messages[i].MessageID != 0 {
 			return messages[i]
 		}
 	}
@@ -401,7 +396,7 @@ func (a *Agent) commitReadSnapshot(groupID int64, message *onebot.GroupMessage) 
 	}
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
-	if message.MessageID > 0 {
+	if message.MessageID != 0 {
 		for _, current := range a.buffers[groupID] {
 			if current != nil && current.MessageID == message.MessageID {
 				message = current
@@ -412,13 +407,12 @@ func (a *Agent) commitReadSnapshot(groupID int64, message *onebot.GroupMessage) 
 	a.lastReadMessage[groupID] = message
 }
 
-func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID, evidenceMessageID int64) context.Context {
+func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID int64) context.Context {
 	return tools.WithToolContext(ctx, &tools.ToolContext{
 		GroupID:           groupID,
 		MemoryMgr:         a.memory,
 		Bot:               a.bot,
 		SnapshotMessageID: snapshotMessageID,
-		EvidenceMessageID: evidenceMessageID,
 		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) (int64, error) {
 			return a.doSpeak(callCtx, gid, content, replyTo, mentions)
 		},
@@ -469,7 +463,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		Time:      time.Now(),
 	}
 
-	if replyTo > 0 {
+	if replyTo != 0 {
 		msg.Reply = &onebot.ReplyInfo{MessageID: replyTo}
 	}
 

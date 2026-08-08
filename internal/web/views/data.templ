@@ -87,7 +87,7 @@ templ MemoryListBody(data MemoryListPageData) {
 					<article class="admin-record-card card border border-base-300 bg-base-100 shadow-sm" data-tone={ ternaryString(item.Status == memory.MemoryStatusArchived, "neutral", "primary") }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
-								<div class="flex flex-wrap gap-2"><span class="badge badge-info badge-soft badge-sm">{ memoryScopeText(item.Scope) }</span><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span><span class="badge badge-ghost badge-sm">{ memoryKindText(item.Kind) }</span></div>
+								<div class="flex flex-wrap gap-2"><span class="badge badge-info badge-soft badge-sm">{ memorySubjectText(item.SubjectUserID, data.SelfID) }</span><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span><span class="badge badge-ghost badge-sm">{ memoryKindText(item.Kind) }</span></div>
 								<div class="flex gap-2">
 									if item.Status == memory.MemoryStatusArchived {
 										<button class="btn btn-success btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ memoryRestoreDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">恢复</button>
@@ -101,12 +101,22 @@ templ MemoryListBody(data MemoryListPageData) {
 							<div class="flex items-center justify-between text-xs text-base-content/58">
 								<span>
 									群 { fmt.Sprintf("%d", item.GroupID) }
-									if item.SubjectUserID != nil {
-										<span> · 成员 { fmt.Sprintf("%d", *item.SubjectUserID) }</span>
+									if item.SubjectUserID != 0 {
+										<span> · 用户 { fmt.Sprintf("%d", item.SubjectUserID) }</span>
 									}
 								</span>
 								<time datetime={ formatTimeAttr(item.UpdatedAt) }>更新于 { formatTime(item.UpdatedAt) }</time>
-							</div>
+								</div>
+								if len(item.Evidence) > 0 {
+									<details class="rounded-lg border border-base-300 bg-base-200/30 px-3 py-2">
+										<summary class="cursor-pointer text-xs font-medium text-base-content/65">查看证据（{ fmt.Sprintf("%d", len(item.Evidence)) }）</summary>
+										<div class="mt-3 space-y-2">
+											for _, evidence := range item.Evidence {
+												<div class="rounded-md bg-base-100 px-3 py-2 text-xs leading-5"><div class="text-base-content/50">#{ fmt.Sprintf("%d", evidence.OneBotMessageID) } · { evidence.Nickname } · { formatTime(evidence.MessageTime) }</div><div class="mt-1 text-base-content/75">{ displayText(evidence.TextContent, "该证据消息已撤回") }</div></div>
+											}
+										</div>
+									</details>
+								}
 						</div>
 					</article>
 				}
@@ -118,8 +128,8 @@ templ MemoryListBody(data MemoryListPageData) {
 
 templ MemoryFilterControls(data MemoryListPageData) {
 	<div class="flex flex-col items-end gap-2">
-		@ChoiceFilterGroupForForm("memory-filter-form", "scope", data.Scope, []FilterChoice{{Label: "全部范围", Value: ""}, {Label: "群组", Value: "group"}, {Label: "自身", Value: "self"}, {Label: "成员", Value: "member"}})
-		@ChoiceFilterGroupForForm("memory-filter-form", "status", data.Status, []FilterChoice{{Label: "全部状态", Value: ""}, {Label: "生效中", Value: "active"}, {Label: "待收敛", Value: "candidate"}, {Label: "已归档", Value: "archived"}})
+		@ChoiceFilterGroupForForm("memory-filter-form", "subject", data.Subject, []FilterChoice{{Label: "全部主体", Value: ""}, {Label: "群组", Value: "group"}, {Label: "自身", Value: "self"}, {Label: "成员", Value: "member"}})
+		@ChoiceFilterGroupForForm("memory-filter-form", "status", data.Status, []FilterChoice{{Label: "全部状态", Value: ""}, {Label: "生效中", Value: "active"}, {Label: "已归档", Value: "archived"}})
 	</div>
 }
 
@@ -128,7 +138,7 @@ templ MemoryFilterForm(data MemoryListPageData) {
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索记忆内容" aria-label="搜索记忆内容"/>
 		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号" aria-label="群号"/>
-		<select class="select w-full border-base-300" name="kind" aria-label="记忆归类"><option value="">全部归类</option><option value="fact" selected?={ data.Kind == "fact" }>事实</option><option value="episode" selected?={ data.Kind == "episode" }>经历</option><option value="preference" selected?={ data.Kind == "preference" }>偏好</option><option value="constraint" selected?={ data.Kind == "constraint" }>约束</option><option value="goal" selected?={ data.Kind == "goal" }>目标</option></select>
+		<select class="select w-full border-base-300" name="kind" aria-label="记忆归类"><option value="">全部归类</option><option value="fact" selected?={ data.Kind == "fact" }>属性/关系</option><option value="episode" selected?={ data.Kind == "episode" }>经历</option><option value="preference" selected?={ data.Kind == "preference" }>偏好</option><option value="constraint" selected?={ data.Kind == "constraint" }>约束</option><option value="goal" selected?={ data.Kind == "goal" }>目标</option></select>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
@@ -139,7 +149,7 @@ templ MemberListPage(data MemberListPageData, currentPath string) {
 
 templ MemberListBody(data MemberListPageData) {
 	<div class="space-y-6">
-		@PageHeader("成员画像", "查看群成员的身份变化、社交特征与兴趣画像。", "")
+		@PageHeader("成员画像", "查看群成员的身份变化、说话风格与群聊表达特征。", "")
 		@FilterPanel("member-filters", "筛选条件", EmptyComponent(), false, MemberFilterForm(data))
 		@SortToolbar(data.Sort)
 		<div class="space-y-4">
@@ -160,7 +170,6 @@ templ MemberListBody(data MemberListPageData) {
 						</section>
 						<section class="grid grid-cols-3 gap-4 text-sm">
 							@MemberTraitGroup("说话风格", memberTraits(item, "speaking", 3), "badge badge-success badge-soft badge-sm")
-							@MemberTraitGroup("兴趣", memberTraits(item, "interest", 3), "badge badge-accent badge-soft badge-sm")
 							@MemberTraitGroup("常用词", memberTraits(item, "phrase", 3), "badge badge-warning badge-soft badge-sm")
 						</section>
 						<section class="border-l border-base-300 pl-6"><div class="text-xs text-base-content/58">发言数</div><div class="admin-number mt-1 text-xl font-semibold">{ fmt.Sprintf("%d", item.MessageCount) }</div><div class="mt-3 text-xs text-base-content/58">最后活跃</div><time class="mt-1 block text-xs" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time></section>

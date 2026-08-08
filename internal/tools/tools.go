@@ -30,7 +30,6 @@ type ToolContext struct {
 	MemoryMgr               *memory.Manager
 	Bot                     *onebot.Client
 	SnapshotMessageID       int64
-	EvidenceMessageID       int64
 	SpeakCallback           SpeakCallback       // 发言回调
 	SendStickerCallback     SendStickerCallback // 发送表情包回调
 	MessageRecalledCallback func(*memory.MessageLog)
@@ -448,7 +447,7 @@ func getForwardMessageDetailFunc(ctx context.Context, input *GetForwardMessageDe
 		return &GetForwardMessageDetailOutput{Success: false, Message: "记忆管理器未初始化"}, nil
 	}
 
-	log, err := tc.MemoryMgr.GetMessageLogByID(input.MessageID)
+	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, input.MessageID)
 	if err != nil {
 		return &GetForwardMessageDetailOutput{Success: false, Message: "未找到该消息的记录"}, nil
 	}

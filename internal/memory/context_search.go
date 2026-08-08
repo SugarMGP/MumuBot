@@ -58,12 +58,23 @@ func (m *Manager) PrepareHybridQuery(ctx context.Context, fragments []string) (H
 	return HybridQuery{fragments: cleaned, embedding: vector}, nil
 }
 
-func (m *Manager) RecallContext(ctx context.Context, groupID int64, query HybridQuery) ([]Memory, []Memory, error) {
-	if groupID == 0 || query.Empty() {
+func (m *Manager) RecallContext(ctx context.Context, groupID, selfID int64, relatedUserIDs []int64, query HybridQuery) ([]Memory, []Memory, error) {
+	if groupID == 0 || selfID <= 0 || query.Empty() {
 		return nil, nil, nil
 	}
-
-	local, err := m.searchPreparedMemories(ctx, query, groupID, 0, "", 4, activeContextVectorThreshold)
+	subjects := []int64{0, selfID}
+	seenSubjects := map[int64]struct{}{0: {}, selfID: {}}
+	for _, id := range relatedUserIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := seenSubjects[id]; exists {
+			continue
+		}
+		seenSubjects[id] = struct{}{}
+		subjects = append(subjects, id)
+	}
+	local, err := m.searchPreparedMemories(ctx, query, groupID, 0, nil, subjects, "", 4, activeContextVectorThreshold)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -79,7 +90,7 @@ func (m *Manager) RecallContext(ctx context.Context, groupID int64, query Hybrid
 		return local, nil, nil
 	}
 
-	candidates, err := m.searchPreparedMemories(ctx, query, 0, groupID, MemoryScopeSelf, 4, activeContextVectorThreshold)
+	candidates, err := m.searchPreparedMemories(ctx, query, 0, groupID, &selfID, nil, "", 4, activeContextVectorThreshold)
 	if err != nil {
 		return local, nil, err
 	}
@@ -101,7 +112,7 @@ func (m *Manager) RecallContext(ctx context.Context, groupID int64, query Hybrid
 	return local, cross, nil
 }
 
-func (m *Manager) searchPreparedMemories(ctx context.Context, query HybridQuery, groupID, excludedGroupID int64, scope MemoryScope, limit int, vectorThreshold float64) ([]Memory, error) {
+func (m *Manager) searchPreparedMemories(ctx context.Context, query HybridQuery, groupID, excludedGroupID int64, subjectUserID *int64, allowedSubjectIDs []int64, kind MemoryKind, limit int, vectorThreshold float64) ([]Memory, error) {
 	if query.Empty() || limit <= 0 {
 		return nil, nil
 	}
@@ -116,9 +127,16 @@ func (m *Manager) searchPreparedMemories(ctx context.Context, query HybridQuery,
 		base += " AND group_id <> ?"
 		baseArgs = append(baseArgs, excludedGroupID)
 	}
-	if scope != "" {
-		base += " AND scope = ?"
-		baseArgs = append(baseArgs, scope)
+	if subjectUserID != nil {
+		base += " AND subject_user_id = ?"
+		baseArgs = append(baseArgs, *subjectUserID)
+	} else if len(allowedSubjectIDs) > 0 {
+		base += " AND subject_user_id = ANY(?)"
+		baseArgs = append(baseArgs, int64Array(allowedSubjectIDs))
+	}
+	if kind != "" {
+		base += " AND kind = ?"
+		baseArgs = append(baseArgs, kind)
 	}
 
 	var vectorRows []rankedIDRow
@@ -131,8 +149,8 @@ func (m *Manager) searchPreparedMemories(ctx context.Context, query HybridQuery,
 	var textRows []rankedIDRow
 	textSQL := `SELECT id FROM (
 		SELECT id, (SELECT max(greatest(
-			word_similarity(memories.content, fragment),
-			word_similarity(fragment, memories.content)
+			public.word_similarity(memories.content, fragment),
+			public.word_similarity(fragment, memories.content)
 		)) FROM unnest(?::text[]) AS fragments(fragment)) score
 		FROM memories WHERE ` + base + `
 	) ranked WHERE score >= ? ORDER BY score DESC LIMIT 20`
@@ -147,4 +165,20 @@ func (m *Manager) searchPreparedMemories(ctx context.Context, query HybridQuery,
 		ids = ids[:limit]
 	}
 	return m.loadMemoriesInOrder(ctx, ids)
+}
+
+func int64Array(values []int64) pgtype.Array[int64] {
+	return pgtype.Array[int64]{
+		Elements: values,
+		Dims:     []pgtype.ArrayDimension{{Length: int32(len(values)), LowerBound: 1}},
+		Valid:    true,
+	}
+}
+
+func uintIDArray(values []uint) pgtype.Array[int64] {
+	elements := make([]int64, len(values))
+	for i, value := range values {
+		elements[i] = int64(value)
+	}
+	return int64Array(elements)
 }

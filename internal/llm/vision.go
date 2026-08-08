@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/modelstats"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/components"
 	"github.com/cloudwego/eino/schema"
+	"go.uber.org/zap"
 )
 
 // VisionClient 多模态视觉模型客户端
@@ -66,11 +70,19 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 		},
 	}
 
+	ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{Component: components.ComponentOfChatModel}, modelstats.Handler("vision", config.Get().VisionLLM.Model))
 	resp, err := v.model.Generate(ctx, []*schema.Message{msg})
 	if err != nil {
-		return "", nil
+		return "", logVisionError("image", err)
 	}
-	return strings.TrimSpace(resp.Content), nil
+	if resp == nil {
+		return "", logVisionError("image", fmt.Errorf("视觉模型返回空响应"))
+	}
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return "", logVisionError("image", fmt.Errorf("视觉模型返回空响应"))
+	}
+	return content, nil
 }
 
 // DescribeVideo 描述视频内容
@@ -97,9 +109,22 @@ func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (stri
 		},
 	}
 
+	ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{Component: components.ComponentOfChatModel}, modelstats.Handler("vision", config.Get().VisionLLM.Model))
 	resp, err := v.model.Generate(ctx, []*schema.Message{msg})
 	if err != nil {
-		return "", nil
+		return "", logVisionError("video", err)
 	}
-	return strings.TrimSpace(resp.Content), nil
+	if resp == nil {
+		return "", logVisionError("video", fmt.Errorf("视觉模型返回空响应"))
+	}
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return "", logVisionError("video", fmt.Errorf("视觉模型返回空响应"))
+	}
+	return content, nil
+}
+
+func logVisionError(mediaType string, err error) error {
+	zap.L().Error("视觉模型调用失败", zap.String("media_type", mediaType), zap.String("model", config.Get().VisionLLM.Model), zap.Error(err))
+	return err
 }

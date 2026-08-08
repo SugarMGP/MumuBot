@@ -3,15 +3,26 @@ package llm
 import (
 	"context"
 	"fmt"
+	"mumu-bot/internal/modelstats"
 	"strings"
 
 	jsonrepair "github.com/RealAlexandreAI/json-repair"
 	"github.com/bytedance/sonic"
 	openaimodel "github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/components"
 	"github.com/cloudwego/eino/components/model"
 	toolutils "github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/schema"
 )
+
+type taskContextKey struct{}
+
+type taskContext struct{ task, model string }
+
+func WithTask(ctx context.Context, task, modelName string) context.Context {
+	return context.WithValue(ctx, taskContextKey{}, taskContext{task: task, model: modelName})
+}
 
 // GenerateStructuredJSONObject 使用 OpenAI 兼容模型的 json_object 输出模式，
 // 并把目标结构体对应的 JSON Schema 作为 system 提示词约束输出，
@@ -66,6 +77,9 @@ JSON Schema:
 		}),
 	}, opts...)
 
+	if task, ok := ctx.Value(taskContextKey{}).(taskContext); ok {
+		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{Component: components.ComponentOfChatModel}, modelstats.Handler(task.task, task.model))
+	}
 	resp, err := chatModel.Generate(ctx, input, callOpts...)
 	if err != nil {
 		return zero, err

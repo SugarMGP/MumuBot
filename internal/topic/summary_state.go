@@ -9,18 +9,18 @@ import (
 )
 
 func EmptySummary() memory.TopicSummary {
-	return memory.TopicSummary{Version: 1, Facts: []string{}, Participants: []memory.TopicSummaryParticipant{}, OpenLoops: []string{}, RecentTurns: []string{}, Keywords: []string{}}
+	return memory.TopicSummary{Version: 1, Claims: []memory.MemoryClaim{}, Participants: []memory.TopicParticipant{}, OpenLoops: []string{}, RecentTurns: []string{}, Keywords: []string{}}
 }
 
 func MarshalSummary(summary memory.TopicSummary) (string, error) {
 	if summary.Version == 0 {
 		summary.Version = 1
 	}
-	if summary.Facts == nil {
-		summary.Facts = []string{}
+	if summary.Claims == nil {
+		summary.Claims = []memory.MemoryClaim{}
 	}
 	if summary.Participants == nil {
-		summary.Participants = []memory.TopicSummaryParticipant{}
+		summary.Participants = []memory.TopicParticipant{}
 	}
 	if summary.OpenLoops == nil {
 		summary.OpenLoops = []string{}

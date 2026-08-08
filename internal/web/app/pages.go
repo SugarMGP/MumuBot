@@ -2,11 +2,14 @@ package app
 
 import (
 	"errors"
+	"mumu-bot/internal/logger"
+	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/web/services"
 	"mumu-bot/internal/web/views"
 	"net/http"
 	neturl "net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -139,10 +142,58 @@ func (a *App) handleMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
-	a.render(w, views.SystemPage(views.SystemPageData{
-		Sections: a.systemSections(),
-		Flash:    a.flashFromRequest(r),
-	}, r.URL.Path))
+	data := views.SystemPageData{View: r.URL.Query().Get("view"), Sections: a.systemSections(), Flash: a.flashFromRequest(r)}
+	switch data.View {
+	case "logs":
+		data.LogKeyword = strings.TrimSpace(r.URL.Query().Get("keyword"))
+		data.LogLevel = strings.TrimSpace(r.URL.Query().Get("level"))
+		if data.LogLevel == "" {
+			data.LogLevel = "debug"
+		}
+		logs := logger.Query(data.LogKeyword, data.LogLevel)
+		data.Logs, data.LogTotal, data.LogFiltered = logs.Lines, logs.Total, logs.Filtered
+	case "models":
+		data.StatsRange = r.URL.Query().Get("range")
+		var since time.Time
+		switch data.StatsRange {
+		case "7d":
+			since = time.Now().Add(-7 * 24 * time.Hour)
+		case "30d":
+			since = time.Now().Add(-30 * 24 * time.Hour)
+		case "all":
+		default:
+			data.StatsRange = "24h"
+			since = time.Now().Add(-24 * time.Hour)
+		}
+		stats, err := modelstats.Query(r.Context(), a.memMgr.GetDB(), since)
+		if err != nil {
+			http.Error(w, "模型调用数据加载失败，请稍后再试。", http.StatusInternalServerError)
+			return
+		}
+		data.Stats = stats
+	default:
+		data.View = "status"
+	}
+	switch r.URL.Query().Get("fragment") {
+	case "logs":
+		a.render(w, views.SystemLogContent(data))
+		return
+	case "logs-view":
+		a.render(w, views.SystemLogLines(data))
+		return
+	}
+	a.renderPageResponse(w, r, views.SystemPage(data, r.URL.Path), views.PageContent(views.SystemBody(data)))
+}
+
+func (a *App) handleLogDownload(w http.ResponseWriter, r *http.Request) {
+	result := logger.Query(r.URL.Query().Get("keyword"), r.URL.Query().Get("level"))
+	lines := make([]string, len(result.Lines))
+	for i := range result.Lines {
+		lines[i] = result.Lines[i].Text
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="mumubot-logs-`+time.Now().Format("20060102-150405")+`.txt"`)
+	_, _ = w.Write([]byte(strings.Join(lines, "\n") + "\n"))
 }
 
 func (a *App) handleActionDialogFragment(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +244,7 @@ func (a *App) handleActionDialogFragment(w http.ResponseWriter, r *http.Request)
 			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "记忆无法加载", "这条记忆可能已经被删除。"))
 			return
 		}
-		a.render(w, views.AdminActionDialogContent(views.MemoryDeleteDialogData(item, returnTo)))
+		a.render(w, views.AdminActionDialogContent(views.MemoryDeleteDialogData(item, a.runtimeSnapshot().SelfID, returnTo)))
 	case "memory-archive":
 		item, err := a.admin.GetMemory(id)
 		if err != nil {
@@ -232,7 +283,7 @@ func (a *App) handleStickerPreviewDialogFragment(w http.ResponseWriter, r *http.
 func (a *App) styleCardPageData(current *neturl.URL, flash *views.FlashMessage) (views.StyleCardListPageData, error) {
 	sortKey, order := services.NormalizeStyleCardSort(current.Query().Get("sort"), current.Query().Get("order"))
 	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSize(current.Query().Get("page_size"))
+	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
 	filter := services.ListFilter{
 		GroupID:  parseInt64Query(current.Query().Get("group_id")),
 		Status:   strings.TrimSpace(current.Query().Get("status")),
@@ -262,7 +313,7 @@ func (a *App) styleCardPageData(current *neturl.URL, flash *views.FlashMessage) 
 func (a *App) jargonPageData(current *neturl.URL, flash *views.FlashMessage) (views.JargonListPageData, error) {
 	sortKey, order := services.NormalizeJargonSort(current.Query().Get("sort"), current.Query().Get("order"))
 	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSize(current.Query().Get("page_size"))
+	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
 	filter := services.ListFilter{
 		GroupID:  parseInt64Query(current.Query().Get("group_id")),
 		Status:   strings.TrimSpace(current.Query().Get("status")),
@@ -318,10 +369,10 @@ func (a *App) stickerPageData(current *neturl.URL, flash *views.FlashMessage) (v
 func (a *App) memoryPageData(current *neturl.URL, flash *views.FlashMessage) (views.MemoryListPageData, error) {
 	sortKey, order := services.NormalizeMemorySort(current.Query().Get("sort"), current.Query().Get("order"))
 	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSize(current.Query().Get("page_size"))
+	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
 	filter := services.MemoryFilter{
 		GroupID:  parseInt64Query(current.Query().Get("group_id")),
-		Scope:    strings.TrimSpace(current.Query().Get("scope")),
+		Subject:  strings.TrimSpace(current.Query().Get("subject")),
 		Status:   strings.TrimSpace(current.Query().Get("status")),
 		Kind:     strings.TrimSpace(current.Query().Get("kind")),
 		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
@@ -338,12 +389,13 @@ func (a *App) memoryPageData(current *neturl.URL, flash *views.FlashMessage) (vi
 
 	return views.MemoryListPageData{
 		GroupID: current.Query().Get("group_id"),
-		Scope:   filter.Scope,
+		Subject: filter.Subject,
 		Status:  filter.Status,
 		Kind:    filter.Kind,
 		Keyword: filter.Keyword,
 		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}}),
 		Items:   result.Items,
+		SelfID:  a.runtimeSnapshot().SelfID,
 		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
 		Flash:   flash,
 	}, nil
@@ -352,7 +404,7 @@ func (a *App) memoryPageData(current *neturl.URL, flash *views.FlashMessage) (vi
 func (a *App) topicPageData(current *neturl.URL, flash *views.FlashMessage) (views.TopicListPageData, error) {
 	sortKey, order := services.NormalizeTopicSort(current.Query().Get("sort"), current.Query().Get("order"))
 	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSize(current.Query().Get("page_size"))
+	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
 	filter := services.ListFilter{
 		GroupID:  parseInt64Query(current.Query().Get("group_id")),
 		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),

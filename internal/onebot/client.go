@@ -37,6 +37,10 @@ type Client struct {
 	mutedMu    sync.RWMutex
 	mutedUntil map[int64]time.Time
 	selfID     atomic.Int64
+	selfReady  chan struct{}
+	selfOnce   sync.Once
+	eventGate  chan struct{}
+	gateOnce   sync.Once
 
 	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
 	onMessage       func(*GroupMessage)
@@ -57,6 +61,8 @@ func NewClient() *Client {
 		mutedUntil:      make(map[int64]time.Time),
 		memberInfoCache: cache,
 		groupSeq:        make(map[int64]uint64),
+		selfReady:       make(chan struct{}),
+		eventGate:       make(chan struct{}),
 	}
 	go cache.Start()
 	return c
@@ -92,6 +98,7 @@ func (c *Client) connect() error {
 		return context.Canceled
 	}
 	c.selfID.Store(selfID)
+	c.selfOnce.Do(func() { close(c.selfReady) })
 	old := c.sdk
 	c.sdk = sdk
 	c.generation++
@@ -112,6 +119,11 @@ func (c *Client) connect() error {
 }
 
 func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
+	select {
+	case <-c.eventGate:
+	case <-c.transportCtx.Done():
+		return
+	}
 	for ev := range sdk.Events() {
 		c.enqueueEvent(ev.Raw())
 	}
@@ -184,7 +196,7 @@ func (c *Client) enqueueEvent(raw []byte) {
 	}
 	if postType == "message" {
 		messageID, messageOK := utils.ParseInt64Value(event["message_id"])
-		if !messageOK || messageID <= 0 {
+		if !messageOK || messageID == 0 {
 			zap.L().Warn("忽略缺少有效编号的群消息")
 			return
 		}
@@ -232,7 +244,8 @@ func (c *Client) startConnectLoop(generation uint64) {
 }
 
 func (c *Client) connectLoop(generation uint64) {
-	interval := time.Duration(config.Get().OneBot.ReconnectInterval) * time.Second
+	cfg := config.Get()
+	interval := time.Duration(cfg.OneBot.ReconnectInterval) * time.Second
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -246,7 +259,7 @@ func (c *Client) connectLoop(generation uint64) {
 		}
 		err := c.connect()
 		if err == nil {
-			zap.L().Info("已连接到 OneBot", zap.String("url", config.Get().OneBot.WsURL), zap.Int64("self_id", c.GetSelfID()))
+			zap.L().Info("已连接到 OneBot", zap.String("url", cfg.OneBot.WsURL), zap.Int64("self_id", c.GetSelfID()))
 			return
 		}
 		if c.transportCtx.Err() != nil {
@@ -388,6 +401,19 @@ func (c *Client) OnRecall(handler func(groupID, messageID, operatorID int64, arr
 }
 func (c *Client) OnConnected(handler func()) { c.onConnected = handler }
 func (c *Client) GetSelfID() int64           { return c.selfID.Load() }
+func (c *Client) WaitSelfID(ctx context.Context) (int64, error) {
+	if selfID := c.GetSelfID(); selfID > 0 {
+		return selfID, nil
+	}
+	select {
+	case <-c.selfReady:
+		return c.GetSelfID(), nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func (c *Client) ReleaseEventGate() { c.gateOnce.Do(func() { close(c.eventGate) }) }
 func (c *Client) IsConnected() bool {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()

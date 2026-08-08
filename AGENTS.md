@@ -27,7 +27,8 @@
 | 看消息如何进入 bot | `internal/onebot/client.go`、`internal/agent/message.go` |
 | 看回复决策 | `internal/agent/think.go` |
 | 看话题分配和摘要 | `internal/topic/manager.go`、`internal/topic/assignment.go` |
-| 看长期记忆入库 | `internal/memory/claim_extractor.go`、`internal/memory/memory_ingest.go` |
+| 看长期记忆入库 | `internal/memory/memory_ingest.go`、`internal/memory/merge_decider.go` |
+| 看数据库启动迁移 | `internal/memory/migrations_v1.go`、`main.go` |
 | 看群文化学习 | `internal/learning/learner.go` |
 | 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
 
@@ -143,6 +144,11 @@ go vet ./...
 - 人格提示词只做增量调整；保留 `config/persona.prompt` 中 B站、贴吧、知乎和微博四个平台的参考原句，不恢复已删除的成组矫正案例。
 - 学习系统只负责群文化学习：黑话、表达方式、成员画像。学习系统不承担自动长期记忆写入职责。
 - 自动长期记忆下沉只由话题摘要链路触发；显式工具调用（如 `saveMemory`）与该自动链路分开考虑，不要把 learner 扩展成长期记忆写入宿主。
+- 长期记忆主体只保存 `subject_user_id`：`0` 为群组、运行时 `self_id` 为自身、其他正数为成员；数据库不保存 `scope`。模型和工具输入用 `-1` 表示自身，必须在写库前解析，任何负数主体都不能进入持久化模型。
+- `saveMemory` 和话题摘要直接提交同一个结构化 claim：必填主体、`fact/episode/preference/constraint/goal` 类型、包含当前昵称的自然语言正文和 1-8 条原始消息证据；服务端不拼昵称、不二次调用 claim 分类模型、不用 open loop 强制猜目标。
+- 长期记忆只保留 `active/archived`。验证通过直接生效，验证失败明确拒绝；管理员恢复归档记忆时先做 active 精确去重并合并证据。
+- 长期记忆证据只关联 `message_logs`，不把 TopicSummary 当证据；证据必须同群、未撤回且不晚于固定快照或话题 assignment 上界。最后一条有效证据撤回时自动归档记忆。
+- 成员画像只学习 `alias/speaking/phrase`；成员兴趣和偏好统一由长期记忆 `preference` 负责，禁止恢复 `interest` 双写。
 - learner 的消费应由话题系统决定，只消费“话题系统已处理完成”的消息；不要让 learner 与话题摘要重复扫描同一批未判定原文。
 - 成员画像保持全局 `user_id` 维度，不引入 `group_id` 维度，除非用户明确提出新的画像隔离需求。
 - 表达方式由 learner 保存为群级 `situation + expression` 和直接原始消息证据，主 ReAct 只在需要时通过工具查询；不自动注入每轮提示词，不新增冗余示例字段或跨群共享。
@@ -153,7 +159,12 @@ go vet ./...
 - 话题归属、话题摘要、话题与主动长期记忆检索、黑话匹配、表达方式查询、成员画像学习、长期记忆提取等语义链路默认只使用原始文本；如果原始文本为空，就直接跳过，不要回退到渲染后的展示文本。
 - 当主动检索或混合查询构建失败时，优先跳过该步骤，不要回退到聊天展示文本、关键词提取或其他启发式拼接结果。
 - 话题与主动长期记忆检索共用固定消息快照生成的一份混合查询：拼接原文只用于单次向量查询，逐条原文用于 pg_trgm 文本召回，再由 RRF 融合；不要增加关键词提取模型、手写中文分词或第二份检索上下文。
-- 持久化使用 PostgreSQL；当前按全新数据库设计，不保留旧数据迁移、兼容字段或过渡表。
+- 持久化使用 PostgreSQL。OneBot 首次连接并取得 `self_id` 后才允许打开数据库；连接已建立但业务事件必须由闸门阻塞，直到 schema 迁移、Agent 恢复和后台初始化全部完成。
+- schema 版本由 `schema_migrations` 记录并在后端启动时顺序执行。完全空库只走 `initializeV1Schema`；无版本表但全部已知旧业务表存在时只走 `migrateV1`；部分表、未知结构、版本断档或数据库版本高于程序时拒绝启动。迁移使用事务级 advisory lock 和显式 SQL，不使用 `AutoMigrate`。
+- `message_logs.one_bot_message_id` 只在群内唯一，所有查询必须携带 `group_id`；`0` 表示缺失，负数 OneBot 消息 ID 仍是合法外部 ID。
+- 自动长期记忆召回先用当前群的群级、自身、消息作者和回复目标作者做主体硬过滤，再执行 pgvector + pg_trgm + RRF；不足时只补其他群的自身记忆。主动查询默认当前群，查询 `-1` 或真实自身 ID 时自动跨群。
+- 管理后台日志每秒刷新内存中完整 300 条 buffer，搜索、最低级别和下载必须共用同一过滤逻辑；日志滚动以是否接近列表底部决定自动跟随，用户向上回看时自动暂停，回到底部自动恢复。用户选中日志文本时暂停轮询交换以保留选区，清除选区后自动恢复。日志高亮直接使用服务端已解析的时间、级别、消息与字段，格式化视图展开字段并保留真实换行，不引入第二套文本解析器。模型观测只保存按小时的任务/模型请求数、失败、耗时和 provider Token 聚合，不保存 prompt/response，不估算 Token 或成本。
+- 视觉模型调用失败或返回空响应时必须记录错误并向调用方返回失败，禁止静默降级成空描述；上层可以继续使用既有图片或视频占位展示。
 - 第一版检索固定为 pgvector 精确向量、pg_trgm 文本召回和 RRF 融合；没有明确需求和测量依据时，不引入 BM25 扩展、HNSW、Milvus、Elasticsearch、MMR、reranker、聚类或额外分类器。
 - PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符，避免 ORM 将元素展开成错误的函数参数或数组字面量。
 

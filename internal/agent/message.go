@@ -262,7 +262,7 @@ func (a *Agent) prunePendingRecalls() {
 
 // onRecall 撤回事件入口：带到达序号进入提交队列，与同群消息保持顺序。
 func (a *Agent) onRecall(groupID, messageID, operatorID int64, arrivalSeq uint64) {
-	if groupID <= 0 || messageID <= 0 || !config.Get().IsGroupEnabled(groupID) {
+	if groupID <= 0 || messageID == 0 || !config.Get().IsGroupEnabled(groupID) {
 		a.enqueueCommitSkip(groupID, arrivalSeq)
 		return
 	}
@@ -393,7 +393,7 @@ func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
 		return nil
 	}
 
-	log, err := a.memory.GetMessageLogByID(msg.Reply.MessageID)
+	log, err := a.memory.GetMessageLogByID(msg.GroupID, msg.Reply.MessageID)
 	if err == nil {
 		if reply := replyInfoFromMessageLog(log); reply != nil {
 			msg.Reply = reply

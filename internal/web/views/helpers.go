@@ -43,7 +43,7 @@ func navClass(currentPath string, href string) string {
 	if active {
 		return joinClasses(base, "bg-primary/12 text-primary before:absolute before:-left-3 before:h-7 before:w-1 before:rounded-r-full before:bg-primary")
 	}
-	return joinClasses(base, "text-base-content/68 hover:bg-base-200 hover:text-base-content")
+	return joinClasses(base, "text-base-content/68 hover:bg-primary/10 hover:text-primary")
 }
 
 func boolText(v bool) string {

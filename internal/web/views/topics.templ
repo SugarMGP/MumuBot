@@ -142,12 +142,12 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 					</ul>
 				</div>
 			}
-			if len(topicSummary(topic).Facts) > 0 {
+			if len(topicSummary(topic).Claims) > 0 {
 				<div>
 					<h3 class="text-xs font-semibold text-base-content/52">已确认事项</h3>
 					<ul class="mt-2 space-y-2">
-						for _, item := range topicSummary(topic).Facts {
-							<li class="flex items-start gap-2 text-sm"><span class="mt-2 size-1.5 shrink-0 rounded-full bg-success"></span><span class="text-base-content/70">{ item }</span></li>
+					for _, item := range topicSummary(topic).Claims {
+							<li class="flex items-start gap-2 text-sm"><span class="mt-2 size-1.5 shrink-0 rounded-full bg-success"></span><span class="text-base-content/70">{ item.Content }</span></li>
 						}
 					</ul>
 				</div>
@@ -178,22 +178,22 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 			if change.GistChanged {
 				@TopicInlineDiff("概括变化", change.GistDiff)
 			}
-			if len(change.AddedFacts) > 0 {
+			if len(change.AddedClaims) > 0 {
 				<div>
 					<h4 class="text-xs font-medium text-success">新增事实</h4>
 					<ul class="mt-1 space-y-1">
-						for _, item := range change.AddedFacts {
-							<li class="text-xs leading-5 text-base-content/65">+ { item }</li>
+					for _, item := range change.AddedClaims {
+							<li class="text-xs leading-5 text-base-content/65">+ { topicClaimDisplay(item) }</li>
 						}
 					</ul>
 				</div>
 			}
-			if len(change.RemovedFacts) > 0 {
+			if len(change.RemovedClaims) > 0 {
 				<div>
 					<h4 class="text-xs font-medium text-error">移除事实</h4>
 					<ul class="mt-1 space-y-1">
-						for _, item := range change.RemovedFacts {
-							<li class="text-xs leading-5 text-base-content/65">- { item }</li>
+					for _, item := range change.RemovedClaims {
+							<li class="text-xs leading-5 text-base-content/65">- { topicClaimDisplay(item) }</li>
 						}
 					</ul>
 				</div>

@@ -71,9 +71,9 @@ func buildTopicSummaryChangeView(prev *topicSummarySnapshot, current topicSummar
 		view.InitialSnapshot = true
 		view.TitleChanged = currentTitle != ""
 		view.GistChanged = currentGist != ""
-		view.AddedFacts = normalizedTopicSummaryItems(current.Summary.Facts)
+		view.AddedClaims = topicClaimItems(current.Summary.Claims)
 		view.AddedOpenLoops = normalizedTopicSummaryItems(current.Summary.OpenLoops)
-		view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedFacts) > 0 || len(view.AddedOpenLoops) > 0
+		view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedClaims) > 0 || len(view.AddedOpenLoops) > 0
 		view.TitleDiff = buildAddedTextDiffView(currentTitle, "之前没有标题", "现在没有标题")
 		view.GistDiff = buildAddedTextDiffView(currentGist, "之前没有概括", "现在没有概括")
 		view.Headline = topicSummaryChangeHeadline(view)
@@ -89,12 +89,31 @@ func buildTopicSummaryChangeView(prev *topicSummarySnapshot, current topicSummar
 	view.GistChanged = prevGist != currentGist
 	view.TitleDiff = buildTopicTextDiffView(prevTitle, currentTitle, "之前没有标题", "现在没有标题")
 	view.GistDiff = buildTopicTextDiffView(prevGist, currentGist, "之前没有概括", "现在没有概括")
-	view.AddedFacts, view.RemovedFacts = diffStringSet(prev.Summary.Facts, current.Summary.Facts)
+	view.AddedClaims, view.RemovedClaims = diffStringSet(topicClaimItems(prev.Summary.Claims), topicClaimItems(current.Summary.Claims))
 	view.AddedOpenLoops, view.RemovedOpenLoops = diffStringSet(prev.Summary.OpenLoops, current.Summary.OpenLoops)
-	view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedFacts) > 0 || len(view.RemovedFacts) > 0 || len(view.AddedOpenLoops) > 0 || len(view.RemovedOpenLoops) > 0
+	view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedClaims) > 0 || len(view.RemovedClaims) > 0 || len(view.AddedOpenLoops) > 0 || len(view.RemovedOpenLoops) > 0
 	view.Headline = topicSummaryChangeHeadline(view)
 	view.Badges = topicSummaryChangeBadges(view)
 	return view
+}
+
+func topicClaimItems(claims []memory.MemoryClaim) []string {
+	items := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		content := strings.TrimSpace(claim.Content)
+		if content != "" {
+			items = append(items, fmt.Sprintf("%d|%s|%s", claim.SubjectUserID, claim.Kind, content))
+		}
+	}
+	return normalizedTopicSummaryItems(items)
+}
+
+func topicClaimDisplay(item string) string {
+	parts := strings.SplitN(item, "|", 3)
+	if len(parts) == 3 {
+		return parts[2]
+	}
+	return item
 }
 
 func buildTopicTextDiffView(previous string, current string, previousPlaceholder string, currentPlaceholder string) TopicTextDiffView {
@@ -216,7 +235,7 @@ func topicSummaryChangeHeadline(change TopicSummaryChangeView) string {
 	if count := len(change.AddedOpenLoops) + len(change.RemovedOpenLoops); count > 0 {
 		parts = append(parts, fmt.Sprintf("未完事项调整 %d 项", count))
 	}
-	if count := len(change.AddedFacts) + len(change.RemovedFacts); count > 0 {
+	if count := len(change.AddedClaims) + len(change.RemovedClaims); count > 0 {
 		parts = append(parts, fmt.Sprintf("已确认事项调整 %d 项", count))
 	}
 	if len(parts) == 0 {
@@ -236,7 +255,7 @@ func topicSummaryChangeBadges(change TopicSummaryChangeView) []TopicSummaryChang
 	if len(change.AddedOpenLoops) > 0 || len(change.RemovedOpenLoops) > 0 {
 		badges = append(badges, TopicSummaryChangeBadgeView{Label: "未完事项", Tone: "amber"})
 	}
-	if len(change.AddedFacts) > 0 || len(change.RemovedFacts) > 0 {
+	if len(change.AddedClaims) > 0 || len(change.RemovedClaims) > 0 {
 		badges = append(badges, TopicSummaryChangeBadgeView{Label: "已确认事项", Tone: "emerald"})
 	}
 	return badges

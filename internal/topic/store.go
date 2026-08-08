@@ -34,7 +34,7 @@ func (s *DBStore) PersistMessageLog(ctx context.Context, item memory.MessageLog)
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			if err := tx.Where("one_bot_message_id = ?", item.OneBotMessageID).First(&stored).Error; err != nil {
+			if err := tx.Where("group_id=? AND one_bot_message_id = ?", item.GroupID, item.OneBotMessageID).First(&stored).Error; err != nil {
 				return err
 			}
 			if strings.TrimSpace(stored.TextContent) == "" {
@@ -201,17 +201,6 @@ func (s *DBStore) ListRecentTopicMessages(ctx context.Context, topicID, throughM
 	return rows, nil
 }
 
-func (s *DBStore) ListRecentTopicParticipants(ctx context.Context, topicID, throughAssignmentID uint, limit int) ([]memory.TopicParticipantRef, error) {
-	var rows []memory.TopicParticipantRef
-	err := s.db.WithContext(ctx).Raw(`SELECT user_id, nickname FROM (
-		SELECT DISTINCT ON (ml.user_id) ml.user_id, ml.nickname, ml.message_time, ml.id
-		FROM message_logs ml JOIN topic_assignments ta ON ta.message_log_id = ml.id
-		WHERE ta.topic_id = ? AND ml.recalled_at IS NULL AND (? = 0 OR ta.id <= ?)
-		ORDER BY ml.user_id, ml.message_time DESC, ml.id DESC
-	) latest ORDER BY message_time DESC, id DESC LIMIT ?`, topicID, throughAssignmentID, throughAssignmentID, limit).Scan(&rows).Error
-	return rows, err
-}
-
 func (s *DBStore) MessagesAfterSummary(ctx context.Context, topicID uint, limit int) ([]memory.MessageLog, uint, error) {
 	var watermark uint
 	if err := s.db.WithContext(ctx).Table("topic_summaries ts").Select("COALESCE(max(ts.through_topic_assignment_id), 0)").
@@ -325,8 +314,8 @@ func (s *DBStore) SearchTopicHits(ctx context.Context, query memory.HybridQuery,
 	textArgs = append(textArgs, 0.1)
 	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (
 		SELECT topic_id, (SELECT max(greatest(
-			word_similarity(fragment, latest.summary_json::text),
-			word_similarity(latest.summary_json::text, fragment)
+			public.word_similarity(fragment, latest.summary_json::text),
+			public.word_similarity(latest.summary_json::text, fragment)
 		))
 			FROM unnest(?::text[]) AS fragments(fragment)) score
 		FROM (`+latest+`) latest
@@ -403,21 +392,12 @@ func (s *DBStore) ProcessTopicSummaryMemory(ctx context.Context, record memory.T
 	if err != nil {
 		return err
 	}
-	participants, err := s.ListRecentTopicParticipants(ctx, topicID, record.ThroughTopicAssignmentID, TailKeepMessages)
-	if err != nil {
-		return err
-	}
 	summary := ParseSummary(record.SummaryJSON)
-	claims := make([]memory.TopicMemoryClaimInput, 0, len(summary.Facts)+len(summary.OpenLoops))
-	for _, claim := range summary.Facts {
-		claims = append(claims, memory.TopicMemoryClaimInput{Content: claim})
+	claims := summary.Claims
+	_, err = s.memory.StoreClaims(ctx, memory.StoreClaimsContext{GroupID: groupID, SelfID: selfID, TopicID: topicID, ThroughAssignmentID: record.ThroughTopicAssignmentID}, claims)
+	if err == nil {
+		err = s.db.WithContext(ctx).Model(&memory.TopicSummaryRecord{}).Where("id=? AND memory_processed=false", record.ID).Update("memory_processed", true).Error
 	}
-	for _, claim := range summary.OpenLoops {
-		claims = append(claims, memory.TopicMemoryClaimInput{Content: claim, AllowedKinds: []memory.MemoryKind{memory.MemoryKindGoal}})
-	}
-	_, err = s.memory.UpsertTopicMemoryCandidate(ctx, memory.TopicMemoryCandidateInput{
-		GroupID: groupID, TopicSummaryID: record.ID, SelfID: selfID, Claims: claims, Participants: participants,
-	})
 	return err
 }
 

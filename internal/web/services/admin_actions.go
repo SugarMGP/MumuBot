@@ -41,7 +41,7 @@ func (s *AdminService) ArchiveMemory(ctx context.Context, id uint) error {
 	return s.memory.ArchiveMemory(ctx, id)
 }
 func (s *AdminService) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	return s.memory.RestoreMemoryToCandidate(ctx, id)
+	return s.memory.RestoreMemory(ctx, id)
 }
 
 func (s *AdminService) DeleteSticker(ctx context.Context, id uint) error {

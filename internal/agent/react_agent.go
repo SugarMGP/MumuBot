@@ -67,10 +67,6 @@ type Agent struct {
 	pendingThinks map[int64]*pendingThink
 	pendingMu     sync.Mutex
 
-	startupMu         sync.Mutex
-	startupRecovering bool
-	startupQueue      []startupEvent
-
 	wg sync.WaitGroup
 }
 
@@ -80,18 +76,13 @@ type pendingThink struct {
 	generation        uint64
 }
 
-type startupEvent struct {
-	message    *onebot.GroupMessage
-	groupID    int64
-	messageID  int64
-	operatorID int64
-	arrivalSeq uint64
-}
-
-func New(mem *memory.Manager) (*Agent, error) {
+func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 	cfg := config.Get()
 	if cfg == nil {
 		return nil, fmt.Errorf("配置未加载")
+	}
+	if botClient == nil || botClient.GetSelfID() <= 0 {
+		return nil, fmt.Errorf("OneBot 尚未取得登录账号")
 	}
 
 	p, err := persona.NewPersona(&cfg.Persona)
@@ -118,8 +109,6 @@ func New(mem *memory.Manager) (*Agent, error) {
 			zap.L().Info("Vision 已启用", zap.String("model", cfg.VisionLLM.Model))
 		}
 	}
-
-	botClient := onebot.NewClient()
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
@@ -251,18 +240,12 @@ func (a *Agent) initReact() error {
 
 func (a *Agent) Start() {
 	cfg := config.Get()
-
-	a.startupMu.Lock()
-	a.startupRecovering = true
-	a.startupQueue = nil
-	a.startupMu.Unlock()
-
-	a.bot.OnMessage(a.handleIncomingMessage)
-	a.bot.OnRecall(a.handleIncomingRecall)
+	a.bot.OnMessage(a.onMessage)
+	a.bot.OnRecall(a.onRecall)
 	if a.learner != nil {
 		a.bot.OnConnected(func() { a.learner.Start(a.ctx) })
+		a.learner.Start(a.ctx)
 	}
-	a.bot.Connect()
 
 	a.loadBuffersFromDB()
 	groupIDs := make([]int64, 0, len(cfg.Groups))
@@ -272,7 +255,6 @@ func (a *Agent) Start() {
 		}
 	}
 	a.topicMgr.RecoverPendingAssignments(groupIDs)
-	a.drainStartupEvents()
 	a.wg.Add(1)
 	go a.thinkLoop()
 	zap.L().Info("Agent 已启动")
@@ -323,52 +305,6 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 		_ = sonic.UnmarshalString(*log.ForwardPayload, &msg.Forwards)
 	}
 	return msg
-}
-
-func (a *Agent) handleIncomingMessage(msg *onebot.GroupMessage) {
-	a.startupMu.Lock()
-	if a.startupRecovering {
-		a.startupQueue = append(a.startupQueue, startupEvent{message: msg})
-		a.startupMu.Unlock()
-		return
-	}
-	a.startupMu.Unlock()
-
-	a.onMessage(msg)
-}
-
-func (a *Agent) handleIncomingRecall(groupID, messageID, operatorID int64, arrivalSeq uint64) {
-	a.startupMu.Lock()
-	if a.startupRecovering {
-		a.startupQueue = append(a.startupQueue, startupEvent{groupID: groupID, messageID: messageID, operatorID: operatorID, arrivalSeq: arrivalSeq})
-		a.startupMu.Unlock()
-		return
-	}
-	a.startupMu.Unlock()
-
-	a.onRecall(groupID, messageID, operatorID, arrivalSeq)
-}
-
-func (a *Agent) drainStartupEvents() {
-	for {
-		a.startupMu.Lock()
-		if len(a.startupQueue) == 0 {
-			a.startupRecovering = false
-			a.startupMu.Unlock()
-			return
-		}
-		pending := a.startupQueue
-		a.startupQueue = nil
-		a.startupMu.Unlock()
-
-		for _, event := range pending {
-			if event.message != nil {
-				a.onMessage(event.message)
-			} else {
-				a.onRecall(event.groupID, event.messageID, event.operatorID, event.arrivalSeq)
-			}
-		}
-	}
 }
 
 func (a *Agent) Stop() {

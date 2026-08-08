@@ -44,6 +44,7 @@ type sortOption struct {
 }
 
 const defaultListPageSize = 15
+const compactListPageSize = 12
 
 func New(cfg *config.Config, admin *services.AdminService, memMgr *memory.Manager, mumuAgent *agent.Agent) *App {
 	app := &App{
@@ -94,6 +95,7 @@ func (a *App) routes() http.Handler {
 		protected.Get("/admin/memories", a.handleMemories)
 		protected.Get("/admin/members", a.handleMembers)
 		protected.Get("/admin/system", a.handleSystem)
+		protected.Get("/admin/system/logs/download", a.handleLogDownload)
 		protected.Get("/admin/dialogs/actions", a.handleActionDialogFragment)
 		protected.Get("/admin/dialogs/stickers/{id}", a.handleStickerPreviewDialogFragment)
 

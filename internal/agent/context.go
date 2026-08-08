@@ -46,15 +46,47 @@ func (a *Agent) buildGroupContext(groupID int64) string {
 	return strings.Join(parts, "\n")
 }
 
-func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, query memory.HybridQuery) ([]memory.Memory, []memory.Memory) {
+func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot []*onebot.GroupMessage, query memory.HybridQuery) ([]memory.Memory, []memory.Memory) {
 	if query.Empty() {
 		return nil, nil
 	}
-	local, cross, err := a.memory.RecallContext(ctx, groupID, query)
+	selfID := a.bot.GetSelfID()
+	related := make([]int64, 0, len(snapshot)*2)
+	for _, msg := range snapshot {
+		if msg == nil {
+			continue
+		}
+		if msg.UserID > 0 && msg.UserID != selfID {
+			related = append(related, msg.UserID)
+		}
+		if msg.Reply != nil && msg.Reply.SenderID > 0 && msg.Reply.SenderID != selfID {
+			related = append(related, msg.Reply.SenderID)
+		}
+	}
+	local, cross, err := a.memory.RecallContext(ctx, groupID, selfID, related, query)
 	if err != nil {
 		zap.L().Warn("主动记忆检索失败", zap.Int64("group_id", groupID), zap.Error(err))
 	}
 	return local, cross
+}
+
+func (a *Agent) memorySubjectNames(groups ...[]memory.Memory) map[int64]string {
+	result := make(map[int64]string)
+	selfID := a.bot.GetSelfID()
+	for _, items := range groups {
+		for _, item := range items {
+			if item.SubjectUserID <= 0 || item.SubjectUserID == selfID {
+				continue
+			}
+			if _, exists := result[item.SubjectUserID]; exists {
+				continue
+			}
+			if profile, err := a.memory.GetMemberProfile(item.SubjectUserID); err == nil {
+				result[item.SubjectUserID] = profile.Nickname
+			}
+		}
+	}
+	return result
 }
 
 func collectTextFragments(msgs []*onebot.GroupMessage) []string {
@@ -228,7 +260,7 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 			details = append(details, "原昵称: "+originalNickname)
 		}
 		for _, trait := range traits {
-			if trait.Kind != "alias" {
+			if trait.Kind == "speaking" || trait.Kind == "phrase" {
 				details = append(details, trait.Kind+": "+trait.Value)
 			}
 		}

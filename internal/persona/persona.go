@@ -30,6 +30,8 @@ type PromptContext struct {
 	TopicMemory           string
 	RelatedMemories       []memory.Memory // 当前群相关记忆
 	CrossGroupExperiences []memory.Memory // 跨群自我经历
+	SelfID                int64
+	MemorySubjectNames    map[int64]string
 }
 
 // Persona 人格定义
@@ -114,9 +116,7 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 		b.WriteString("\n## 相关记忆\n")
 		b.WriteString("只有这些记忆会明显改变这次判断或回复时才引用；不要为了显得记得而硬提旧事。\n")
 		for _, mem := range ctx.RelatedMemories {
-			b.WriteString(fmt.Sprintf("- [%s] %s\n",
-				mem.CreatedAt.Format("2006-01-02"),
-				mem.Content))
+			b.WriteString(formatMemoryPromptLine(mem, ctx.SelfID, ctx.MemorySubjectNames))
 		}
 	}
 
@@ -124,9 +124,7 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 		b.WriteString("\n## 你在别处的相关经历\n")
 		b.WriteString("这些经历只能作为你的背景参考，不能覆盖当前群里的事实。\n")
 		for _, mem := range ctx.CrossGroupExperiences {
-			b.WriteString(fmt.Sprintf("- [%s] %s\n",
-				mem.CreatedAt.Format("2006-01-02"),
-				mem.Content))
+			b.WriteString(formatMemoryPromptLine(mem, ctx.SelfID, ctx.MemorySubjectNames))
 		}
 	}
 
@@ -146,6 +144,35 @@ func (p *Persona) GetThinkPrompt(ctx *PromptContext, chatContext string, groupEx
 现在请你仔细阅读上下文，遵守规则和指引，直接调用工具来行动。
 `)
 	return b.String()
+}
+
+func formatMemoryPromptLine(item memory.Memory, selfID int64, names map[int64]string) string {
+	subject := "群组"
+	if item.SubjectUserID == selfID && selfID > 0 {
+		subject = fmt.Sprintf("自身:%d", selfID)
+	} else if item.SubjectUserID > 0 {
+		name := strings.TrimSpace(names[item.SubjectUserID])
+		if name == "" {
+			name = fmt.Sprintf("%d", item.SubjectUserID)
+		}
+		subject = fmt.Sprintf("成员:%s(%d)", name, item.SubjectUserID)
+	}
+	return fmt.Sprintf("- [%s][%s][更新于 %s] %s\n", subject, memoryKindPromptText(item.Kind), item.UpdatedAt.Format("2006-01-02"), item.Content)
+}
+
+func memoryKindPromptText(kind memory.MemoryKind) string {
+	switch kind {
+	case memory.MemoryKindEpisode:
+		return "经历"
+	case memory.MemoryKindPreference:
+		return "偏好"
+	case memory.MemoryKindConstraint:
+		return "约束"
+	case memory.MemoryKindGoal:
+		return "目标"
+	default:
+		return "属性/关系"
+	}
 }
 
 // getTimeContext 获取时间上下文

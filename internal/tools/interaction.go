@@ -174,7 +174,7 @@ type ReactToMessageInput struct {
 	// MessageID 要回应的消息ID
 	MessageID int64 `json:"message_id" jsonschema:"description=要回应的消息ID"`
 	// Reaction 要使用的语义表情
-	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=surprised,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
+	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
 }
 
 var messageReactionEmojiIDs = map[string]int{
@@ -186,7 +186,6 @@ var messageReactionEmojiIDs = map[string]int{
 	"ok":        124,
 	"question":  32,
 	"no":        123,
-	"surprised": 180,
 	"cry":       5,
 	"facepalm":  264,
 	"cheer":     144,
@@ -265,7 +264,7 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return &RecallMessageOutput{Success: false, Message: "记忆管理器未初始化"}, nil
 	}
 
-	log, err := tc.MemoryMgr.GetMessageLogByID(input.MessageID)
+	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, input.MessageID)
 	if err != nil {
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}

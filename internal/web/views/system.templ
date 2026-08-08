@@ -1,5 +1,10 @@
 package views
 
+import (
+	"fmt"
+	"mumu-bot/internal/modelstats"
+)
+
 templ SystemPage(data SystemPageData, currentPath string) {
 	@Layout(LayoutData{
 		Title:       "系统状态",
@@ -11,12 +16,99 @@ templ SystemPage(data SystemPageData, currentPath string) {
 
 templ SystemBody(data SystemPageData) {
 	<div class="space-y-6">
-		@PageHeader("系统状态", "查看机器人连接、模型和运行环境的当前状态。", "运行信息")
+		<div class="flex items-end justify-between gap-6">
+			@PageHeader("系统状态", "查看机器人连接、模型和运行环境的当前状态。", systemViewLabel(data.View))
+			<div class="join shrink-0" role="tablist" aria-label="系统信息视图">
+				<a class={ joinClasses("join-item btn btn-sm", ternaryString(data.View == "status", "btn-primary", "btn-ghost")) } href="/admin/system?view=status" hx-get="/admin/system?view=status" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" role="tab" aria-selected={ ternaryString(data.View == "status", "true", "false") }>状态概览</a>
+				<a class={ joinClasses("join-item btn btn-sm", ternaryString(data.View == "logs", "btn-primary", "btn-ghost")) } href="/admin/system?view=logs" hx-get="/admin/system?view=logs" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" role="tab" aria-selected={ ternaryString(data.View == "logs", "true", "false") }>实时日志</a>
+				<a class={ joinClasses("join-item btn btn-sm", ternaryString(data.View == "models", "btn-primary", "btn-ghost")) } href="/admin/system?view=models" hx-get="/admin/system?view=models" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" role="tab" aria-selected={ ternaryString(data.View == "models", "true", "false") }>模型调用</a>
+			</div>
+		</div>
+		if data.View == "logs" {
+			@SystemLogView(data)
+		} else if data.View == "models" {
+			@SystemModelStats(data)
+		} else {
 		<div class="flex items-start gap-5">
 			@SystemSectionColumn(systemSectionsLeft(data.Sections))
 			@SystemSectionColumn(systemSectionsRight(data.Sections))
 		</div>
+		}
 	</div>
+}
+
+templ SystemLogView(data SystemPageData) {
+	<section class="card border border-base-300 bg-base-100 shadow-sm">
+		<div class="card-body gap-4 p-5">
+			<div class="flex items-center justify-between gap-4"><div><h2 class="text-lg font-semibold">最近运行记录</h2><p class="mt-1 text-sm text-base-content/55">每秒刷新，展示当前进程内最近 300 条日志。</p></div><span class="badge badge-success badge-soft gap-2"><span class="size-2 animate-pulse rounded-full bg-success"></span>实时</span></div>
+			<div class="flex items-center gap-3 rounded-box border border-base-300 bg-base-200/45 p-2.5">
+				<form id="admin-log-filter-form" class="contents" hx-get="/admin/system" hx-target="#admin-log-stream" hx-swap="outerHTML" hx-trigger="input delay:250ms, change">
+					<input type="hidden" name="view" value="logs"/><input type="hidden" name="fragment" value="logs-view"/>
+					<label class="input input-sm w-72 border-base-300"><span class="text-base-content/45">搜索</span><input type="search" name="keyword" value={ data.LogKeyword } placeholder="关键词"/></label>
+					<select class="select select-sm w-36 border-base-300" name="level" aria-label="最低日志级别"><option value="debug" selected?={ data.LogLevel == "debug" }>DEBUG 以上</option><option value="info" selected?={ data.LogLevel == "info" }>INFO 以上</option><option value="warn" selected?={ data.LogLevel == "warn" }>WARN 以上</option><option value="error" selected?={ data.LogLevel == "error" }>ERROR</option></select>
+				</form>
+				<label class="label ml-auto cursor-pointer gap-2"><input id="admin-log-format" class="toggle toggle-sm toggle-primary" type="checkbox"/><span class="label-text text-sm">格式化</span></label>
+				<a class="btn btn-sm btn-ghost border-base-300" data-admin-log-download href={ systemLogDownloadURL(data) }>下载当前日志</a>
+			</div>
+			@SystemLogLines(data)
+		</div>
+	</section>
+}
+
+templ SystemLogLines(data SystemPageData) {
+	<div id="admin-log-stream" class="space-y-2">
+		@SystemLogCount(data, false)
+		<div id="admin-log-lines" class="admin-log-view" data-admin-log-view role="log" aria-live="off" hx-get={ systemLogFragmentURL(data) } hx-trigger="every 1s" hx-target="this" hx-swap="innerHTML">
+			@SystemLogRows(data)
+		</div>
+	</div>
+}
+
+templ SystemLogContent(data SystemPageData) {
+	@SystemLogCount(data, true)
+	@SystemLogRows(data)
+}
+
+templ SystemLogCount(data SystemPageData, outOfBand bool) {
+	if outOfBand {
+		<div id="admin-log-count" class="admin-log-count" hx-swap-oob="outerHTML">筛选后 { fmt.Sprintf("%d", data.LogFiltered) } 条<span></span>缓冲区 { fmt.Sprintf("%d", data.LogTotal) } / 300 条</div>
+	} else {
+		<div id="admin-log-count" class="admin-log-count">筛选后 { fmt.Sprintf("%d", data.LogFiltered) } 条<span></span>缓冲区 { fmt.Sprintf("%d", data.LogTotal) } / 300 条</div>
+	}
+}
+
+templ SystemLogRows(data SystemPageData) {
+	for _, line := range data.Logs {
+		<div class="admin-log-line" data-admin-log-line data-log-key={ line.Text } data-level={ line.Level }>
+			<time>{ line.Time }</time><strong>{ line.Level }</strong><span class="admin-log-message">{ line.Message }</span>
+			if len(line.Fields) > 0 {
+				<span class="admin-log-fields">
+					for _, field := range line.Fields {
+						<span class="admin-log-field"><b>{ field.Name }</b><span>{ field.Value }</span></span>
+					}
+				</span>
+			}
+		</div>
+	}
+}
+
+templ SystemModelStats(data SystemPageData) {
+	<div class="space-y-5" data-model-stats={ modelStatsJSON(data.Stats) } data-model-stats-range={ data.StatsRange }>
+		<div class="flex justify-end"><div class="join"><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "24h", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=24h" hx-get="/admin/system?view=models&range=24h" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">24 小时</a><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "7d", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=7d" hx-get="/admin/system?view=models&range=7d" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">7 天</a><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "30d", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=30d" hx-get="/admin/system?view=models&range=30d" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">30 天</a><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "all", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=all" hx-get="/admin/system?view=models&range=all" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">全部</a></div></div>
+		<div class="stats stats-horizontal w-full border border-base-300 bg-base-100 shadow-sm"><div class="stat"><div class="stat-title">请求次数</div><div class="stat-value text-2xl">{ fmt.Sprintf("%d", data.Stats.Totals.RequestCount) }</div><div class="stat-desc">成功 { fmt.Sprintf("%d", data.Stats.Totals.RequestCount-data.Stats.Totals.FailureCount) } 次</div></div><div class="stat"><div class="stat-title">失败率</div><div class="stat-value text-2xl">{ modelFailureRate(data.Stats.Totals) }</div></div><div class="stat"><div class="stat-title">平均耗时</div><div class="stat-value text-2xl">{ modelLatency(data.Stats.Totals) }</div></div><div class="stat"><div class="stat-title">Token</div><div class="stat-value text-2xl">{ fmt.Sprintf("%d", data.Stats.Totals.TotalTokens) }</div><div class="stat-desc">平均 { modelAverageTokens(data.Stats.Totals) } · 覆盖 { modelUsageCoverage(data.Stats.Totals) }</div></div></div>
+		<div class="grid grid-cols-2 gap-5"><section class="card border border-base-300 bg-base-100"><div class="card-body p-5"><h2 class="font-semibold">请求、Token 与耗时趋势</h2><div id="model-stats-trend" class="admin-model-chart"></div></div></section><section class="card border border-base-300 bg-base-100"><div class="card-body p-5"><h2 class="font-semibold">任务与模型分布</h2><div class="grid grid-cols-2"><div id="model-stats-task" class="admin-model-chart"></div><div id="model-stats-model" class="admin-model-chart"></div></div></div></section></div>
+		<div class="grid grid-cols-2 gap-5">@ModelStatsTable("按任务", data.Stats.ByTask)@ModelStatsTable("按模型", data.Stats.ByModel)</div>
+	</div>
+}
+
+templ ModelStatsTable(title string, rows []modelstats.AggregateRow) {
+	<section class="card border border-base-300 bg-base-100">
+		<div class="card-body p-5"><h2 class="font-semibold">{ title }</h2><div class="overflow-x-auto"><table class="table table-sm"><thead><tr><th>分类</th><th>请求</th><th>失败率</th><th>平均耗时</th><th>Token</th></tr></thead><tbody>
+			for _, row := range rows {
+				<tr><td>{ row.Label }</td><td>{ fmt.Sprintf("%d", row.RequestCount) }</td><td>{ modelFailureRate(row) }</td><td>{ modelLatency(row) }</td><td><div>{ fmt.Sprintf("%d", row.TotalTokens) }</div><div class="text-xs text-base-content/50">平均 { modelAverageTokens(row) } · { modelUsageCoverage(row) }</div></td></tr>
+			}
+		</tbody></table></div></div>
+	</section>
 }
 
 templ SystemSectionColumn(sections []SystemSection) {

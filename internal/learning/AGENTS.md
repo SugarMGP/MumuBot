@@ -21,7 +21,7 @@
 
 - 黑话：群内特殊说法、梗、固定表达。
 - 表达方式：开放的 `situation + expression`，描述群聊语气、表达习惯和互动风格；证据消息自身必须直接体现该表达，不能把只用于说明场景的前文保存为原始示例。
-- 成员画像：按全局 `user_id` 维护 `alias`、`speaking`、`interest`、`phrase` 等带证据特征，不恢复 Activity/Intimacy 数值模型。
+- 成员画像：按全局 `user_id` 只维护 `alias`、`speaking`、`phrase` 等带证据特征，不恢复 Activity/Intimacy 数值模型；兴趣和偏好归长期记忆 `preference`，不得双写 `interest`。
 - 不在 learner 中新增自动长期记忆写入、话题归属或摘要刷新逻辑。
 
 ## 修改注意
