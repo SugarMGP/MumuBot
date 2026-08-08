@@ -6,6 +6,7 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/modelstats"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/callbacks"
@@ -65,7 +66,7 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 			},
 			{
 				Type: schema.ChatMessagePartTypeText,
-				Text: "请用中文尽可能地描述这张图片的内容和内涵，输出一段纯文本，300字以内，不要分点。优先说明关键事件、关键角色或物体、表情、情绪、画面文字、梗点。",
+				Text: "请用中文尽可能地描述这张图片的内容和内涵，输出一段紧凑纯文本，300字以内，不要分点、换行或使用多余空格。优先说明关键事件、关键角色或物体、表情、情绪、画面文字、梗点。",
 			},
 		},
 	}
@@ -78,7 +79,7 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 	if resp == nil {
 		return "", logVisionError("image", fmt.Errorf("视觉模型返回空响应"))
 	}
-	content := strings.TrimSpace(resp.Content)
+	content := compactVisionText(resp.Content)
 	if content == "" {
 		return "", logVisionError("image", fmt.Errorf("视觉模型返回空响应"))
 	}
@@ -104,7 +105,7 @@ func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (stri
 			},
 			{
 				Type: schema.ChatMessagePartTypeText,
-				Text: "请用中文尽可能地描述这段视频的内容和内涵，输出一段纯文本，300字以内，不要分点。优先说明关键事件、关键角色或物体、情绪、画面文字、梗点。",
+				Text: "请用中文尽可能地描述这段视频的内容和内涵，输出一段紧凑纯文本，300字以内，不要分点、换行或使用多余空格。优先说明关键事件、关键角色或物体、情绪、画面文字、梗点。",
 			},
 		},
 	}
@@ -117,11 +118,33 @@ func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (stri
 	if resp == nil {
 		return "", logVisionError("video", fmt.Errorf("视觉模型返回空响应"))
 	}
-	content := strings.TrimSpace(resp.Content)
+	content := compactVisionText(resp.Content)
 	if content == "" {
 		return "", logVisionError("video", fmt.Errorf("视觉模型返回空响应"))
 	}
 	return content, nil
+}
+
+func compactVisionText(raw string) string {
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return ""
+	}
+	var result strings.Builder
+	result.Grow(len(raw))
+	for i, field := range fields {
+		if i > 0 {
+			left, _ := utf8.DecodeLastRuneInString(fields[i-1])
+			right, _ := utf8.DecodeRuneInString(field)
+			leftIsWord := left >= 'a' && left <= 'z' || left >= 'A' && left <= 'Z' || left >= '0' && left <= '9'
+			rightIsWord := right >= 'a' && right <= 'z' || right >= 'A' && right <= 'Z' || right >= '0' && right <= '9'
+			if leftIsWord && rightIsWord {
+				result.WriteByte(' ')
+			}
+		}
+		result.WriteString(field)
+	}
+	return result.String()
 }
 
 func logVisionError(mediaType string, err error) error {

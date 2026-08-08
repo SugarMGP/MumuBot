@@ -45,6 +45,7 @@ func (b *logBuffer) Snapshot() []string {
 }
 
 var recentLogs = newLogBuffer(300)
+var logJSONAPI = sonic.Config{UseNumber: true}.Froze()
 
 // Init 初始化日志系统
 func Init(level string, debug bool) {
@@ -123,7 +124,7 @@ func Query(keyword, minimumLevel string) QueryResult {
 	}
 	for _, line := range raw {
 		var fields map[string]any
-		if err := sonic.UnmarshalString(line, &fields); err != nil {
+		if err := logJSONAPI.UnmarshalFromString(line, &fields); err != nil {
 			continue
 		}
 		levelText, _ := fields["level"].(string)

@@ -235,12 +235,13 @@ func (m *Manager) StoreClaims(ctx context.Context, storeCtx StoreClaimsContext, 
 	results := make([]StoreClaimResult, 0, len(prepared))
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, item := range prepared {
-			var count int64
-			if err := tx.Model(&MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id IN ? AND recalled_at IS NULL", item.evidence).Count(&count).Error; err != nil {
-				return err
+			var evidence []MessageLog
+			result := tx.Model(&MessageLog{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+				Select("id").Where("id IN ? AND recalled_at IS NULL", item.evidence).Find(&evidence)
+			if result.Error != nil {
+				return result.Error
 			}
-			if count != int64(len(item.evidence)) {
+			if len(evidence) != len(item.evidence) {
 				return claimError("invalid_evidence", "证据消息在提交前已撤回")
 			}
 			memoryRow, action, err := applyPreparedMemory(tx, item)
