@@ -259,8 +259,20 @@ func (m *Manager) memoryRecoveryLoop() {
 }
 
 func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query memory.HybridQuery, throughMessageLogID uint, replyMessageIDs []int64) (string, error) {
+	const maxPromptTopics = 3
+
 	seen := make(map[uint]struct{})
-	topics := make([]memory.TopicThread, 0, len(replyMessageIDs)+10)
+	topics := make([]memory.TopicThread, 0, maxPromptTopics)
+	addTopic := func(topic memory.TopicThread) {
+		if topic.ID == 0 || len(topics) >= maxPromptTopics {
+			return
+		}
+		if _, ok := seen[topic.ID]; ok {
+			return
+		}
+		seen[topic.ID] = struct{}{}
+		topics = append(topics, topic)
+	}
 	for _, messageID := range replyMessageIDs {
 		topicID, _, err := m.store.TopicRefForOneBotMessage(ctx, groupID, messageID)
 		if err != nil {
@@ -269,36 +281,36 @@ func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query m
 		if topicID == 0 {
 			continue
 		}
-		if _, ok := seen[topicID]; !ok {
-			seen[topicID] = struct{}{}
-			topics = append(topics, memory.TopicThread{ID: topicID, GroupID: groupID})
+		addTopic(memory.TopicThread{ID: topicID, GroupID: groupID})
+		if len(topics) >= maxPromptTopics {
+			break
 		}
 	}
-	recent, err := m.store.ListRecentTopicThreads(ctx, groupID, throughMessageLogID, 4)
-	if err != nil {
-		return "", err
-	}
-	for _, topic := range recent {
-		if _, ok := seen[topic.ID]; !ok {
-			seen[topic.ID] = struct{}{}
-			topics = append(topics, topic)
+	if len(topics) < maxPromptTopics {
+		recent, err := m.store.ListRecentTopicThreads(ctx, groupID, throughMessageLogID, 4)
+		if err != nil {
+			return "", err
+		}
+		for _, topic := range recent {
+			addTopic(topic)
+			if len(topics) >= maxPromptTopics {
+				break
+			}
 		}
 	}
-	if !query.Empty() {
+	if len(topics) < maxPromptTopics && !query.Empty() {
 		hits, err := m.store.SearchTopicHits(ctx, query, groupID, throughMessageLogID, 6)
 		if err != nil {
 			return "", err
 		}
 		for _, hit := range hits {
-			if _, ok := seen[hit.ID]; !ok {
-				seen[hit.ID] = struct{}{}
-				topics = append(topics, hit)
+			addTopic(hit)
+			if len(topics) >= maxPromptTopics {
+				break
 			}
 		}
 	}
 	var prompt strings.Builder
-	promptRunes := 0
-	const maxPromptRunes = 2200
 	for _, topic := range topics {
 		record, err := m.store.LatestTopicSummary(ctx, topic.ID, throughMessageLogID)
 		if err != nil {
@@ -316,23 +328,10 @@ func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query m
 		if section == "" {
 			continue
 		}
-		sectionRunes := []rune(section)
-		separator := 0
-		if promptRunes > 0 {
-			separator = 2
-		}
-		if promptRunes+separator+len(sectionRunes) > maxPromptRunes {
-			if promptRunes > 0 {
-				break
-			}
-			sectionRunes = sectionRunes[:maxPromptRunes]
-		}
-		if separator > 0 {
+		if prompt.Len() > 0 {
 			prompt.WriteString("\n\n")
-			promptRunes += separator
 		}
-		prompt.WriteString(string(sectionRunes))
-		promptRunes += len(sectionRunes)
+		prompt.WriteString(section)
 	}
 	return prompt.String(), nil
 }

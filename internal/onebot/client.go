@@ -326,15 +326,13 @@ func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt 
 	if seconds, ok := utils.ParseInt64Value(event["time"]); ok && seconds > 0 {
 		eventTime = time.Unix(seconds, 0)
 	}
-	selfID := c.GetSelfID()
 	c.onMessage(&GroupMessage{
-		GroupID:     groupID,
-		UserID:      userID,
-		AtList:      []int64{targetID},
-		IsMentioned: targetID == selfID && userID != selfID,
-		Time:        eventTime,
-		ReceivedAt:  receivedAt,
-		ArrivalSeq:  arrivalSeq,
+		GroupID:    groupID,
+		UserID:     userID,
+		AtList:     []int64{targetID},
+		Time:       eventTime,
+		ReceivedAt: receivedAt,
+		ArrivalSeq: arrivalSeq,
 	})
 }
 

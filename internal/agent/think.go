@@ -48,17 +48,13 @@ func (a *Agent) thinkCycle() {
 		if len(currentMessages) == 0 {
 			continue
 		}
-		receivedAt := currentMessages[len(currentMessages)-1].ReceivedAt
+		lastMessage := currentMessages[len(currentMessages)-1]
+		receivedAt := lastMessage.ReceivedAt
 		if a.hasStrongInteraction(currentMessages) {
 			a.scheduleThink(gc.GroupID, true, false, receivedAt)
 			continue
 		}
-		lastMsg := latestMessageWithID(currentMessages)
-		if lastMsg == nil {
-			continue
-		}
-
-		if time.Since(lastMsg.Time) > time.Duration(cfg.Agent.ObserveWindow)*time.Second {
+		if time.Since(lastMessage.Time) > time.Duration(cfg.Agent.ObserveWindow)*time.Second {
 			continue
 		}
 		speakProb := a.getSpeakProbability(gc.GroupID)

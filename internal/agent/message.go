@@ -62,7 +62,7 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 			a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
 			return
 		}
-		a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg, isMentioned: msg.IsMentioned && msg.UserID != a.bot.GetSelfID()})
+		a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg})
 		return
 	}
 
