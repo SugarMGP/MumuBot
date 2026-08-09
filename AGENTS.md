@@ -35,8 +35,8 @@
 ## 运行与验证命令
 
 ```bash
-npm ci
-npm run build
+bun install --frozen-lockfile
+bun run build
 templ generate ./internal/web/views
 go build ./...
 go vet ./...
@@ -44,7 +44,7 @@ go vet ./...
 
 - 只改 Go 逻辑时，至少运行 `go build ./...`；涉及语法或逻辑变更时再运行 `go vet ./...`。
 - 修改 `.templ` 后运行 `templ generate ./internal/web/views`。
-- 修改 `internal/web/assets/src/` 后运行 `npm run build`。
+- 修改 `internal/web/assets/src/` 后运行 `bun run build`。
 - 修改 `Dockerfile`、`docker-compose.yml` 或 `.env.example` 后运行 `docker-compose config --quiet`（或等价的 `docker compose config --quiet`）。
 - 文档类改动不需要为了形式重跑前端构建，但如果同时已有代码改动，交付时要说明本轮实际验证了什么。
 
@@ -71,7 +71,7 @@ go vet ./...
 - 后台页面模板位于 `internal/web/views/*.templ`。
 - 修改 `.templ` 文件后，必须运行 `templ generate ./internal/web/views`。
 - 前端资源源码位于 `internal/web/assets/src/`。
-- 修改前端资源后，必须运行 `npm run build`。
+- 修改前端资源后，必须运行 `bun run build`。
 - `internal/web/assets/dist/` 是构建产物，不手工修改，不纳入版本控制。
 
 ## 更新日志与发布

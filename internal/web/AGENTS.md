@@ -38,7 +38,7 @@ templ generate ./internal/web/views
 - 修改 `assets/src/` 后运行：
 
 ```bash
-npm run build
+bun run build
 ```
 
 - 涉及后台 UI 的改动，交付前使用 Codex 内置浏览器做真实页面验证，包含截图、交互、控制台和网络请求检查；不要使用 Chrome DevTools MCP。完整集成环境不可用时可以使用真实模板、前端资源和 mock 数据，但验收后必须清理临时进程与目录。

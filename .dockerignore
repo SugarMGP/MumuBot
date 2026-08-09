@@ -6,7 +6,7 @@
 !go.sum
 !main.go
 !package.json
-!package-lock.json
+!bun.lock
 !config/
 !config/config.example.yaml
 !config/mcp.example.json

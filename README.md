@@ -93,8 +93,8 @@ git clone https://github.com/SugarMGP/MumuBot.git
 cd MumuBot
 
 # 2. 安装前端依赖并构建后台资源
-npm ci
-npm run build
+bun install --frozen-lockfile
+bun run build
 
 # 3. 生成 templ 视图代码
 go run github.com/a-h/templ/cmd/templ@latest generate ./internal/web/views

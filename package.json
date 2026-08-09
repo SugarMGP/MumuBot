@@ -2,7 +2,7 @@
   "name": "mumu-bot-admin-assets",
   "private": true,
   "scripts": {
-    "build": "npm run build:css && npm run build:js",
+    "build": "bun run build:css && bun run build:js",
     "build:css": "tailwindcss -i ./internal/web/assets/src/admin.css -o ./internal/web/assets/dist/admin.css --minify",
     "build:js": "esbuild ./internal/web/assets/src/admin.js --bundle --format=iife --target=es2020 --minify --outfile=./internal/web/assets/dist/admin.js"
   },

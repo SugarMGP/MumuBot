@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS assets
+FROM --platform=$BUILDPLATFORM oven/bun:1.3.14-alpine AS assets
 WORKDIR /src
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 COPY internal/web/assets/src/ internal/web/assets/src/
 COPY internal/web/views/ internal/web/views/
-RUN npm run build
+RUN bun run build
 
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
 WORKDIR /src

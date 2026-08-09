@@ -93,8 +93,8 @@ git clone https://github.com/SugarMGP/MumuBot.git
 cd MumuBot
 
 # 2. Install frontend dependencies and build dashboard assets
-npm ci
-npm run build
+bun install --frozen-lockfile
+bun run build
 
 # 3. Generate templ view code
 go run github.com/a-h/templ/cmd/templ@latest generate ./internal/web/views
