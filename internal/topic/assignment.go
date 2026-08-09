@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -45,10 +44,8 @@ type topicAssignmentSubmission struct {
 }
 
 type topicAssignmentDecision struct {
-	MessageKey  string `json:"message_key" jsonschema:"description=输入消息的编号，例如 m123"`
-	Action      string `json:"action" jsonschema:"enum=no_topic,enum=new,enum=reuse,description=分配动作"`
-	TopicID     uint   `json:"topic_id,omitempty" jsonschema:"description=reuse 时填写已有话题 ID"`
-	NewTopicKey string `json:"new_topic_key,omitempty" jsonschema:"description=创建新话题时填写批内新话题临时编号"`
+	MessageKey string `json:"message_key" jsonschema:"description=输入消息的编号，例如 m123"`
+	TopicKey   string `json:"topic_key" jsonschema:"description=话题归属键；只能是 no_topic、候选列表中的 existing:tN，或批内新话题 new:自定义编号"`
 }
 
 type topicAssignmentCandidate struct {
@@ -192,9 +189,9 @@ func assignmentItems(jobs []topicAssignJob, decisions []topicAssignmentDecision,
 	for _, job := range jobs {
 		jobByKey[assignmentMessageKey(job)] = job
 	}
-	candidateIDs := make(map[uint]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		candidateIDs[candidate.ID] = struct{}{}
+	candidateByKey := make(map[string]uint, len(candidates))
+	for index, candidate := range candidates {
+		candidateByKey[assignmentCandidateKey(index)] = candidate.ID
 	}
 	seen := make(map[uint]struct{}, len(decisions))
 	items := make([]AssignmentBatchItem, 0, len(decisions))
@@ -209,21 +206,20 @@ func assignmentItems(jobs []topicAssignJob, decisions []topicAssignmentDecision,
 			continue
 		}
 		seen[job.messageLogID] = struct{}{}
-		item := AssignmentBatchItem{MessageLogID: job.messageLogID, Action: AssignmentAction(decision.Action), TopicID: decision.TopicID, NewTopicKey: decision.NewTopicKey}
-		switch item.Action {
-		case AssignmentActionNoTopic:
-		case AssignmentActionReuse:
-			if _, ok := candidateIDs[item.TopicID]; !ok {
-				zap.L().Warn("话题模型引用了非候选话题", zap.Uint("message_log_id", job.messageLogID), zap.Uint("topic_id", item.TopicID))
-				continue
-			}
-		case AssignmentActionNew:
-			if item.NewTopicKey == "" {
-				zap.L().Warn("话题模型创建话题时缺少临时编号", zap.Uint("message_log_id", job.messageLogID))
-				continue
-			}
+		item := AssignmentBatchItem{MessageLogID: job.messageLogID}
+		candidateID, existing := candidateByKey[decision.TopicKey]
+		newLabel := strings.TrimSpace(strings.TrimPrefix(decision.TopicKey, "new:"))
+		switch {
+		case decision.TopicKey == "no_topic":
+			item.Action = AssignmentActionNoTopic
+		case existing:
+			item.Action = AssignmentActionReuse
+			item.TopicID = candidateID
+		case strings.HasPrefix(decision.TopicKey, "new:") && newLabel != "":
+			item.Action = AssignmentActionNew
+			item.NewTopicKey = "new:" + newLabel
 		default:
-			zap.L().Warn("话题模型返回非法归属动作", zap.Uint("message_log_id", job.messageLogID), zap.String("action", decision.Action))
+			zap.L().Warn("话题模型返回无效话题键", zap.Uint("message_log_id", job.messageLogID), zap.String("topic_key", decision.TopicKey))
 			continue
 		}
 		items = append(items, item)
@@ -340,21 +336,31 @@ func normalizeTopicAssignmentSubmission(raw *topicAssignmentSubmission) []topicA
 	result := make([]topicAssignmentDecision, 0, len(raw.Assignments))
 	for _, item := range raw.Assignments {
 		item.MessageKey = strings.TrimSpace(item.MessageKey)
-		item.Action = strings.ToLower(strings.TrimSpace(item.Action))
-		item.NewTopicKey = strings.TrimSpace(item.NewTopicKey)
+		item.TopicKey = strings.TrimSpace(item.TopicKey)
 		result = append(result, item)
 	}
 	return result
 }
 
+func assignmentCandidateKey(index int) string {
+	return fmt.Sprintf("existing:t%d", index+1)
+}
+
 func buildTopicAssignmentPrompt(groupID int64, history []topicAssignmentContextMessage, messages []topicAssignJob, candidates []topicAssignmentCandidate) string {
 	var b strings.Builder
+	candidateKeys := make(map[uint]string, len(candidates))
+	for index, candidate := range candidates {
+		candidateKeys[candidate.ID] = assignmentCandidateKey(index)
+	}
 	fmt.Fprintf(&b, "群 %d 有一批新消息需要分配话题。先结合已处理上文和整批新消息划分连贯会话，再逐条返回归属。\n", groupID)
+	b.WriteString("每条 assignments 只填写 message_key 和 topic_key，禁止输出 action、topic_id 或 new_topic_key。topic_key 是本次输入中的临时归属键，不是数据库话题 ID。\n")
+	b.WriteString("- no_topic：仅用于纯灌水、纯表情、单字附和或没有可持续语义的孤立消息。\n")
+	b.WriteString("- existing:tN：只能原样使用下方候选话题明确列出的键，禁止自行编造、递增、猜测或直接填写数字；候选列表为空时不存在任何合法的 existing 键。\n")
+	b.WriteString("- new:编号：用于本批中新出现的话题，例如 new:1、new:2。编号只负责区分本批新话题，不代表数据库 ID。\n")
+	b.WriteString("- 同一新话题中的每条消息都必须填写完全相同的 new:编号；不能让第一条使用 new:1、后续消息改用 existing:t1。\n")
 	b.WriteString("- 追问、澄清、复述、短附和及依赖前文的句子应跟随所属会话，不要因局部措辞变化创建新话题。\n")
-	b.WriteString("- reuse: 归入已有候选话题，topic_id 必须来自候选；较早的 semantic 候选只有明确属于同一实体、事件或未完事项时才能复用。\n")
-	b.WriteString("- new: 只有出现可独立描述的主体、事件或讨论目标变化时才创建；同一新话题的多条消息必须复用同一个 new_topic_key。\n")
-	b.WriteString("- no_topic: 纯灌水、纯表情、单字附和或没有可持续语义的孤立消息。\n")
-	b.WriteString("- 每个 message_key 只能返回一次，assignments 必须完整覆盖本批消息。\n")
+	b.WriteString("- 较早的 semantic 候选只有明确属于同一实体、事件或未完事项时才能复用；出现可独立描述的主体、事件或讨论目标变化时才创建新话题。\n")
+	b.WriteString("- 每个待分配 message_key 必须恰好返回一次，不能遗漏、重复或加入输入之外的消息。\n")
 	b.WriteString("\n已处理上文：\n")
 	if len(history) == 0 {
 		b.WriteString("无\n")
@@ -362,20 +368,20 @@ func buildTopicAssignmentPrompt(groupID int64, history []topicAssignmentContextM
 	for _, item := range history {
 		assigned := "no_topic"
 		if item.TopicID != nil {
-			assigned = strconv.FormatUint(uint64(*item.TopicID), 10)
+			assigned = candidateKeys[*item.TopicID]
 		}
 		replyTo := int64(0)
 		if item.ReplyToMessageID != nil {
 			replyTo = *item.ReplyToMessageID
 		}
-		fmt.Fprintf(&b, "message_log_id=%d message_id=%d assigned_topic_id=%s time=%s reply_to=%d nickname=%q text=%q\n",
+		fmt.Fprintf(&b, "message_log_id=%d message_id=%d assigned_topic_key=%s time=%s reply_to=%d nickname=%q text=%q\n",
 			item.MessageLogID, item.OneBotMessageID, assigned, item.MessageTime.Format("2006-01-02 15:04:05"), replyTo, item.Nickname, item.Text)
 	}
 	b.WriteString("\n候选话题：\n")
 	if len(candidates) == 0 {
 		b.WriteString("无\n")
 	}
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
 		lastTime := "无"
 		distance := "未知"
 		if !candidate.LastMessageTime.IsZero() {
@@ -388,7 +394,7 @@ func buildTopicAssignmentPrompt(groupID int64, history []topicAssignmentContextM
 				distance = age.Round(time.Minute).String()
 			}
 		}
-		fmt.Fprintf(&b, "topic_id=%d source=%s last_message_time=%s distance_to_batch=%s\n", candidate.ID, candidate.Source, lastTime, distance)
+		fmt.Fprintf(&b, "topic_key=%s source=%s last_message_time=%s distance_to_batch=%s\n", assignmentCandidateKey(index), candidate.Source, lastTime, distance)
 		if candidate.Summary != "" {
 			b.WriteString(candidate.Summary + "\n")
 		}
@@ -400,7 +406,9 @@ func buildTopicAssignmentPrompt(groupID int64, history []topicAssignmentContextM
 	for _, msg := range messages {
 		fmt.Fprintf(&b, "%s time=%s reply_to=%d", assignmentMessageKey(msg), msg.messageTime.Format("2006-01-02 15:04:05"), msg.replyToMessageID)
 		if msg.replyTopicID != 0 {
-			fmt.Fprintf(&b, " reply_topic_id=%d", msg.replyTopicID)
+			if key := candidateKeys[msg.replyTopicID]; key != "" {
+				fmt.Fprintf(&b, " reply_topic_key=%s", key)
+			}
 		}
 		fmt.Fprintf(&b, " nickname=%q text=%q\n", msg.nickname, msg.text)
 	}
@@ -424,5 +432,5 @@ func renderAssignmentTail(messages []memory.MessageLog) string {
 }
 
 func assignmentMessageKey(job topicAssignJob) string {
-	return "m" + strconv.FormatUint(uint64(job.messageLogID), 10)
+	return fmt.Sprintf("m%d", job.messageLogID)
 }
