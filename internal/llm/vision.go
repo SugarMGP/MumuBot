@@ -32,9 +32,10 @@ func NewVisionClient() (*VisionClient, error) {
 
 	ctx := context.Background()
 	model, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		BaseURL: cfg.BaseURL,
-		APIKey:  cfg.APIKey,
-		Model:   cfg.Model,
+		BaseURL:     cfg.BaseURL,
+		APIKey:      cfg.APIKey,
+		Model:       cfg.Model,
+		ExtraFields: cfg.ExtraFields,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建 VisionModel 失败: %w", err)

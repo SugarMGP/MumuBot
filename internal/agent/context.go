@@ -151,28 +151,30 @@ func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.Gr
 		return ""
 	}
 
-	var b strings.Builder
-	cursorPresent := false
-	for _, m := range buffer {
-		if m == lastReadMessage {
-			cursorPresent = true
-			break
-		}
+	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage, selfID)
+	var read, current strings.Builder
+	for _, message := range readMessages {
+		read.WriteString(message.FinalContent)
 	}
-	passedCursor := lastReadMessage == nil || !cursorPresent
-	for _, m := range buffer {
-		if m == nil {
-			continue
-		}
-		old := !passedCursor || (selfID != 0 && m.UserID == selfID)
-		if m == lastReadMessage {
-			old = true
-			passedCursor = true
-		}
-		if old {
-			b.WriteString("(OLD)")
-		}
-		b.WriteString(m.FinalContent)
+	for _, message := range currentMessages {
+		current.WriteString(message.FinalContent)
+	}
+	if read.Len() == 0 && current.Len() == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("### 旧消息（仅供参考）\n")
+	if read.Len() > 0 {
+		b.WriteString(read.String())
+	} else {
+		b.WriteString("（无）\n")
+	}
+	b.WriteString("\n### 新消息（需要处理）\n")
+	if current.Len() > 0 {
+		b.WriteString(current.String())
+	} else {
+		b.WriteString("（无）\n")
 	}
 	return b.String()
 }

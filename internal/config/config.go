@@ -133,10 +133,11 @@ type EmbeddingConfig struct {
 
 // VisionLLMConfig 多模态视觉模型配置
 type VisionLLMConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	APIKey  string `mapstructure:"api_key"`
-	BaseURL string `mapstructure:"base_url"`
-	Model   string `mapstructure:"model"`
+	Enabled     bool                   `mapstructure:"enabled"`
+	APIKey      string                 `mapstructure:"api_key"`
+	BaseURL     string                 `mapstructure:"base_url"`
+	Model       string                 `mapstructure:"model"`
+	ExtraFields map[string]interface{} `mapstructure:"extra_fields"` // 额外参数
 }
 
 // MemoryConfig 记忆系统配置

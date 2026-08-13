@@ -110,6 +110,7 @@ vision_llm:
   api_key: ""        # 留空则使用 MUMU_VISION_API_KEY 环境变量
   base_url: ""       # 留空则使用 MUMU_VISION_BASE_URL 环境变量
   model: ""          # 留空则使用 MUMU_VISION_MODEL 环境变量
+  extra_fields: {}    # 视觉模型请求的额外参数（可选）
 
 database:
   dsn: "postgres://mumu:password@127.0.0.1:5432/mumu_bot?sslmode=disable"
