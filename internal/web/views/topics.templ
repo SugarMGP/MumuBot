@@ -87,12 +87,17 @@ templ TopicDetailBody(data TopicDetailPageData) {
 						if len(data.Messages) > 0 {
 							<div class="mt-2 space-y-3">
 								for _, item := range data.Messages {
-									<article class="rounded-xl border border-base-300 bg-base-200/45 p-3">
+									<article class={ joinClasses("rounded-xl border p-3", ternaryString(item.RecalledAt != nil, "border-error/25 bg-error/5", "border-base-300 bg-base-200/45")) }>
 										<div class="flex items-center justify-between gap-3">
-											<span class="min-w-0 truncate text-xs font-medium text-base-content/70">{ item.Nickname }</span>
+											<div class="flex min-w-0 items-center gap-2">
+												<span class="min-w-0 truncate text-xs font-medium text-base-content/70">{ topicMessageSender(item) }</span>
+												if item.RecalledAt != nil {
+													<span class="badge badge-error badge-soft badge-xs shrink-0">已撤回</span>
+												}
+											</div>
 											<time class="shrink-0 text-xs text-base-content/55" datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time>
 										</div>
-										<p class="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-base-content/70">{ topicMessageText(item) }</p>
+										<p class={ joinClasses("mt-1 whitespace-pre-wrap break-words text-sm leading-6", ternaryString(item.RecalledAt != nil, "text-error/70", "text-base-content/70")) }>{ topicMessageText(item) }</p>
 									</article>
 								}
 							</div>

@@ -534,7 +534,9 @@ func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 	}
 
 	content := strings.TrimSpace(log.TextContent)
-	if content == "" {
+	if log.RecalledAt != nil {
+		content = strings.TrimSpace(memory.RecalledMessageDisplayContent(*log))
+	} else if content == "" {
 		content = strings.TrimSpace(log.DisplayContent)
 	}
 

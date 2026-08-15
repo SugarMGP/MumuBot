@@ -334,19 +334,34 @@ func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bo
 	}
 	var item MessageLog
 	err := m.db.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&item).Clauses(clause.Returning{}).
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("group_id = ? AND one_bot_message_id = ? AND recalled_at IS NULL", groupID, messageID).
-			Updates(map[string]any{
-				"recalled_at":         time.Now(),
-				"text_content":        "",
-				"display_content":     "[该消息已撤回]\n",
-				"forward_payload":     nil,
-				"reply_to_message_id": nil,
-				"is_mentioned":        false,
-			})
-		if result.Error != nil || result.RowsAffected == 0 {
+			First(&item)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if result.Error != nil {
 			return result.Error
 		}
+
+		recalledAt := time.Now()
+		displayContent := RecalledMessageDisplayContent(item)
+		if err := tx.Model(&item).Updates(map[string]any{
+			"recalled_at":         recalledAt,
+			"text_content":        "",
+			"display_content":     displayContent,
+			"forward_payload":     nil,
+			"reply_to_message_id": nil,
+			"is_mentioned":        false,
+		}).Error; err != nil {
+			return err
+		}
+		item.RecalledAt = &recalledAt
+		item.TextContent = ""
+		item.DisplayContent = displayContent
+		item.ForwardPayload = nil
+		item.ReplyToMessageID = nil
+		item.IsMentioned = false
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error; err != nil {
 			return err
 		}

@@ -291,13 +291,17 @@ func (a *Agent) loadBuffersFromDB() {
 }
 
 func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
+	displayContent := log.DisplayContent
+	if log.RecalledAt != nil {
+		displayContent = memory.RecalledMessageDisplayContent(log)
+	}
 	msg := &onebot.GroupMessage{
 		MessageID:    log.OneBotMessageID,
 		GroupID:      log.GroupID,
 		UserID:       log.UserID,
 		Nickname:     log.Nickname,
 		Content:      log.TextContent,
-		FinalContent: log.DisplayContent,
+		FinalContent: displayContent,
 		IsMentioned:  log.IsMentioned,
 		Time:         log.MessageTime,
 	}

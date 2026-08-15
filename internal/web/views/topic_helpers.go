@@ -409,6 +409,9 @@ func topicSummaryThroughID(topic services.TopicThreadView) uint {
 }
 
 func topicMessageText(log memory.MessageLog) string {
+	if log.RecalledAt != nil {
+		return "原消息内容已隐藏"
+	}
 	text := strings.TrimSpace(log.TextContent)
 	if text != "" {
 		return text
@@ -418,6 +421,14 @@ func topicMessageText(log memory.MessageLog) string {
 		return text
 	}
 	return "暂无内容"
+}
+
+func topicMessageSender(log memory.MessageLog) string {
+	name := strings.TrimSpace(log.Nickname)
+	if name == "" {
+		return fmt.Sprintf("%d", log.UserID)
+	}
+	return fmt.Sprintf("%s (%d)", name, log.UserID)
 }
 
 func EmptyDash(value string) string {
