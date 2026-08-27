@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bytedance/sonic"
 	getreq "github.com/cloudwego/eino-ext/components/tool/httprequest/get"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -419,60 +418,6 @@ func NewGetMessageReactionsTool() (tool.InvokableTool, error) {
 		"getMessageReactions",
 		"获取某条消息的表情回应。可以看到大家对这条消息的反应。",
 		getMessageReactionsFunc,
-	)
-}
-
-// ==================== 查看合并转发工具 ====================
-
-// GetForwardMessageDetailInput 查看合并转发详情的输入参数
-type GetForwardMessageDetailInput struct {
-	// MessageID 包含合并转发内容的消息ID
-	MessageID int64 `json:"message_id" jsonschema:"description=包含合并转发内容的消息ID"`
-}
-
-// GetForwardMessageDetailOutput 查看合并转发详情的输出
-type GetForwardMessageDetailOutput struct {
-	Success  bool                    `json:"success"`
-	Message  string                  `json:"message,omitempty"`
-	Forwards []onebot.ForwardMessage `json:"forwards,omitempty"`
-}
-
-// getForwardMessageDetailFunc 查看合并转发详情的实际实现
-func getForwardMessageDetailFunc(ctx context.Context, input *GetForwardMessageDetailInput) (*GetForwardMessageDetailOutput, error) {
-	tc := GetToolContext(ctx)
-	if tc == nil {
-		return &GetForwardMessageDetailOutput{Success: false, Message: "工具上下文未初始化"}, nil
-	}
-	if tc.MemoryMgr == nil {
-		return &GetForwardMessageDetailOutput{Success: false, Message: "记忆管理器未初始化"}, nil
-	}
-
-	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, input.MessageID)
-	if err != nil {
-		return &GetForwardMessageDetailOutput{Success: false, Message: "未找到该消息的记录"}, nil
-	}
-
-	if log.ForwardPayload == nil {
-		return &GetForwardMessageDetailOutput{Success: false, Message: "该消息不包含合并转发内容"}, nil
-	}
-
-	var forwards []onebot.ForwardMessage
-	if err := sonic.UnmarshalString(*log.ForwardPayload, &forwards); err != nil {
-		return &GetForwardMessageDetailOutput{Success: false, Message: "解析合并转发内容失败"}, nil
-	}
-
-	return &GetForwardMessageDetailOutput{
-		Success:  true,
-		Forwards: forwards,
-	}, nil
-}
-
-// NewGetForwardMessageDetailTool 创建查看合并转发工具
-func NewGetForwardMessageDetailTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
-		"getForwardMessageDetail",
-		"查看合并转发消息的具体内容。当你看到消息中包含[合并转发]字样时，使用此工具查看其中的详细对话。",
-		getForwardMessageDetailFunc,
 	)
 }
 

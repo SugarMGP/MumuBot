@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/model"
 	"go.uber.org/zap"
 )
@@ -69,16 +68,10 @@ func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, 
 		id := msg.Reply.MessageID
 		replyTo = &id
 	}
-	var forwardsJSON *string
-	if len(msg.Forwards) > 0 {
-		if b, err := sonic.MarshalString(msg.Forwards); err == nil {
-			forwardsJSON = &b
-		}
-	}
 	item, created, err := m.store.PersistMessageLog(ctx, memory.MessageLog{
 		OneBotMessageID: msg.MessageID, GroupID: msg.GroupID, UserID: msg.UserID, Nickname: msg.Nickname,
 		TextContent: strings.TrimSpace(msg.Content), DisplayContent: msg.FinalContent,
-		ForwardPayload: forwardsJSON, ReplyToMessageID: replyTo, IsMentioned: isMentioned, MessageTime: msg.Time,
+		ReplyToMessageID: replyTo, IsMentioned: isMentioned, MessageTime: msg.Time,
 	})
 	if err != nil {
 		return nil, false, err

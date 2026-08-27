@@ -74,7 +74,6 @@ type MessageLog struct {
 	Nickname         string     `gorm:"type:text;not null" json:"nickname"`
 	TextContent      string     `gorm:"type:text;not null" json:"text_content"`
 	DisplayContent   string     `gorm:"type:text;not null" json:"display_content"`
-	ForwardPayload   *string    `gorm:"type:jsonb" json:"forward_payload,omitempty"`
 	ReplyToMessageID *int64     `json:"reply_to_message_id,omitempty"`
 	IsMentioned      bool       `gorm:"not null" json:"is_mentioned"`
 	MessageTime      time.Time  `gorm:"index;not null" json:"message_time"`

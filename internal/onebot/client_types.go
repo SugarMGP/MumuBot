@@ -9,29 +9,28 @@ const AtAllUserID int64 = -1
 
 // GroupMessage 群消息
 type GroupMessage struct {
-	MessageID    int64            `json:"message_id"`
-	GroupID      int64            `json:"group_id"`
-	UserID       int64            `json:"user_id"`
-	Nickname     string           `json:"nickname"`                // QQ 原始昵称
-	GroupCard    string           `json:"group_card,omitempty"`    // 当前群名片
-	Content      string           `json:"content"`                 // 纯文本内容
-	IsMentioned  bool             `json:"is_mentioned"`            // 是否@机器人
-	Time         time.Time        `json:"time"`                    // 消息时间
-	ReceivedAt   time.Time        `json:"-"`                       // 当前进程从 OneBot 收到事件的时间
-	ArrivalSeq   uint64           `json:"-"`                       // 该群到达顺序序号，Agent 按此提交
-	ParseFailed  bool             `json:"-"`                       // 消息段解析失败占位，仅用于消费序号
-	Images       []ImageInfo      `json:"images,omitempty"`        // 图片列表
-	Videos       []VideoInfo      `json:"videos,omitempty"`        // 视频列表
-	Faces        []FaceInfo       `json:"faces,omitempty"`         // 表情列表
-	AtList       []int64          `json:"at_list,omitempty"`       // 消息指向的用户；普通消息为 @ 目标，互动消息为互动目标
-	AtNames      map[int64]string `json:"at_names,omitempty"`      // @ 目标在事件中的显示名
-	Reply        *ReplyInfo       `json:"reply,omitempty"`         // 回复信息
-	ForwardIDs   []string         `json:"-"`                       // 待延迟展开的合并转发 ID
-	Forwards     []ForwardMessage `json:"forwards,omitempty"`      // 合并转发内容
-	FileNames    []string         `json:"file_names,omitempty"`    // 文件消息名称
-	Cards        []CardMessage    `json:"cards,omitempty"`         // 卡片消息
-	HasRecord    bool             `json:"has_record,omitempty"`    // 是否包含语音消息
-	FinalContent string           `json:"final_content,omitempty"` // 处理后的最终内容
+	MessageID      int64            `json:"message_id"`
+	GroupID        int64            `json:"group_id"`
+	UserID         int64            `json:"user_id"`
+	Nickname       string           `json:"nickname"`                // QQ 原始昵称
+	GroupCard      string           `json:"group_card,omitempty"`    // 当前群名片
+	Content        string           `json:"content"`                 // 纯文本内容
+	IsMentioned    bool             `json:"is_mentioned"`            // 是否@机器人
+	Time           time.Time        `json:"time"`                    // 消息时间
+	ReceivedAt     time.Time        `json:"-"`                       // 当前进程从 OneBot 收到事件的时间
+	ArrivalSeq     uint64           `json:"-"`                       // 该群到达顺序序号，Agent 按此提交
+	ParseFailed    bool             `json:"-"`                       // 消息段解析失败占位，仅用于消费序号
+	Images         []ImageInfo      `json:"images,omitempty"`        // 图片列表
+	Videos         []VideoInfo      `json:"videos,omitempty"`        // 视频列表
+	Faces          []FaceInfo       `json:"faces,omitempty"`         // 表情列表
+	AtList         []int64          `json:"at_list,omitempty"`       // 消息指向的用户；普通消息为 @ 目标，互动消息为互动目标
+	AtNames        map[int64]string `json:"at_names,omitempty"`      // @ 目标在事件中的显示名
+	Reply          *ReplyInfo       `json:"reply,omitempty"`         // 回复信息
+	ForwardContent []interface{}    `json:"-"`                       // 合并转发原始内容，仅用于本轮总结
+	FileNames      []string         `json:"file_names,omitempty"`    // 文件消息名称
+	Cards          []CardMessage    `json:"cards,omitempty"`         // 卡片消息
+	HasRecord      bool             `json:"has_record,omitempty"`    // 是否包含语音消息
+	FinalContent   string           `json:"final_content,omitempty"` // 处理后的最终内容
 }
 
 // ImageInfo 图片信息
@@ -61,14 +60,6 @@ type ReplyInfo struct {
 	SenderID  int64  `json:"sender_id,omitempty"` // 被回复消息发送者 ID
 	Nickname  string `json:"nickname,omitempty"`  // 被回复消息发送者原始昵称
 	GroupCard string `json:"group_card,omitempty"`
-}
-
-// ForwardMessage 合并转发中的单条消息
-type ForwardMessage struct {
-	UserID   int64     `json:"user_id"`
-	Nickname string    `json:"nickname"`
-	Time     time.Time `json:"time"`
-	Content  string    `json:"content"`
 }
 
 // CardMessage 卡片消息解析结果

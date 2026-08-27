@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 1
+const latestSchemaVersion = 2
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -60,7 +60,10 @@ func RunMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		default:
 			return fmt.Errorf("数据库结构不完整：发现 %d/%d 张已知业务表，拒绝猜测修复", present, len(v1BusinessTables))
 		}
-		return recordSchemaVersion(tx, 1, "v1_schema")
+		if err := recordSchemaVersion(tx, 1, "v1_schema"); err != nil {
+			return err
+		}
+		return applyVersionedMigrations(tx, selfID, dimensions)
 	})
 }
 
@@ -108,18 +111,33 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		if item.Version != expected {
 			return fmt.Errorf("schema 版本记录不连续：期望 v%d，实际 v%d", expected, item.Version)
 		}
-		if item.Version == 1 && item.Name != "v1_schema" {
-			return fmt.Errorf("schema v1 名称无效：%s", item.Name)
+		if item.Version > latestSchemaVersion {
+			return fmt.Errorf("数据库 schema v%d 高于程序支持的 v%d", item.Version, latestSchemaVersion)
+		}
+		expectedName := "v1_schema"
+		if item.Version == 2 {
+			expectedName = "drop_forward_payload"
+		}
+		if item.Name != expectedName {
+			return fmt.Errorf("schema v%d 名称无效：%s", item.Version, item.Name)
 		}
 		current = item.Version
-	}
-	if current > latestSchemaVersion {
-		return fmt.Errorf("数据库 schema v%d 高于程序支持的 v%d", current, latestSchemaVersion)
 	}
 	if current < 1 {
 		return fmt.Errorf("schema 版本表存在但没有有效版本记录，拒绝猜测迁移")
 	}
-	return validateV1Schema(db, dimensions)
+	if current < 2 {
+		if err := migrateV2(db); err != nil {
+			return err
+		}
+		if err := recordSchemaVersion(db, 2, "drop_forward_payload"); err != nil {
+			return err
+		}
+	}
+	if err := validateV1Schema(db, dimensions); err != nil {
+		return err
+	}
+	return validateV2Schema(db)
 }
 
 func recordSchemaVersion(db *gorm.DB, version int, name string) error {

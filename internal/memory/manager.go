@@ -350,7 +350,6 @@ func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bo
 			"recalled_at":         recalledAt,
 			"text_content":        "",
 			"display_content":     displayContent,
-			"forward_payload":     nil,
 			"reply_to_message_id": nil,
 			"is_mentioned":        false,
 		}).Error; err != nil {
@@ -359,7 +358,6 @@ func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bo
 		item.RecalledAt = &recalledAt
 		item.TextContent = ""
 		item.DisplayContent = displayContent
-		item.ForwardPayload = nil
 		item.ReplyToMessageID = nil
 		item.IsMentioned = false
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error; err != nil {

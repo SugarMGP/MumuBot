@@ -64,9 +64,7 @@ func (a *App) systemSections() []views.SystemSection {
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierHigh), cfg.ModelTiers.High.Model)
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierLow), cfg.ModelTiers.Low.Model)
 	modelFields = appendField(modelFields, "记忆检索", cfg.Embedding.Model)
-	if cfg.VisionLLM.Enabled {
-		modelFields = appendField(modelFields, "图片理解", cfg.VisionLLM.Model)
-	}
+	modelFields = appendField(modelFields, "多模态理解", cfg.VisionLLM.Model)
 	if snapshot.MCPToolCount > 0 {
 		modelFields = append(modelFields, views.SystemField{Label: "扩展工具", Value: fmt.Sprintf("%d 个", snapshot.MCPToolCount)})
 	}

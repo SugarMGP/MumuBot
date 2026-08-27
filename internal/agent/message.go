@@ -77,7 +77,6 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	}
 	msg.IsMentioned = isMentioned
 
-	a.resolveForwardMessages(msg)
 	parsedContent := a.parseMessageContent(msg)
 	for _, t := range a.tools {
 		info, err := t.Info(a.ctx)
@@ -354,22 +353,6 @@ func (a *Agent) markMessageRead(messageID int64) error {
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
 	return a.bot.MarkMsgAsRead(ctx, messageID)
-}
-
-func (a *Agent) resolveForwardMessages(msg *onebot.GroupMessage) {
-	if msg == nil || a.bot == nil || len(msg.ForwardIDs) == 0 {
-		return
-	}
-	for _, forwardID := range msg.ForwardIDs {
-		ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
-		nodes, err := a.bot.GetForwardMsg(ctx, forwardID)
-		cancel()
-		if err != nil {
-			zap.L().Debug("解析合并转发失败", zap.String("forward_id", forwardID), zap.Error(err))
-			continue
-		}
-		msg.Forwards = append(msg.Forwards, nodes...)
-	}
 }
 
 func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {

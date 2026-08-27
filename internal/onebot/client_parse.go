@@ -49,7 +49,9 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 	}
 
 	// 解析消息段，提取各类信息
-	c.parseMessageSegments(event, msg)
+	if !c.parseMessageSegments(event, msg) {
+		return nil
+	}
 
 	// 检查是否@机器人
 	selfID := c.GetSelfID()
@@ -64,13 +66,13 @@ func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
 }
 
 // parseMessageSegments 解析消息段，填充消息各字段
-func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMessage) {
+func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMessage) bool {
 	message, ok := event["message"].([]interface{})
 	if !ok {
 		if raw, ok := event["raw_message"].(string); ok {
 			msg.Content = raw
 		}
-		return
+		return true
 	}
 
 	var textParts []string
@@ -184,9 +186,11 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 
 		case "forward": // 合并转发
-			if forwardID, ok := data["id"].(string); ok {
-				msg.ForwardIDs = append(msg.ForwardIDs, forwardID)
+			content, ok := data["content"].([]interface{})
+			if !ok {
+				return false
 			}
+			msg.ForwardContent = append(msg.ForwardContent, content...)
 		}
 	}
 
@@ -197,6 +201,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 		}
 		msg.Content += part
 	}
+	return true
 }
 
 // parseCardMessage 解析JSON卡片消息
@@ -294,54 +299,6 @@ func extractTextFromSegments(segments []interface{}) string {
 		}
 	}
 	return strings.Join(parts, "")
-}
-
-func parseForwardMessages(data map[string]interface{}) ([]ForwardMessage, error) {
-	var rawMsgs []interface{}
-	if msgs, ok := data["messages"].([]interface{}); ok {
-		rawMsgs = msgs
-	} else if msgs, ok := data["message"].([]interface{}); ok {
-		rawMsgs = msgs
-	} else {
-		return nil, fmt.Errorf("get_forward_msg 返回的 messages 不是数组")
-	}
-	if len(rawMsgs) == 0 {
-		return nil, nil
-	}
-
-	var result []ForwardMessage
-	for i, item := range rawMsgs {
-		msgMap, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("get_forward_msg 的 messages 第 %d 项不是对象", i)
-		}
-		fm := ForwardMessage{}
-		if sender, ok := msgMap["sender"].(map[string]interface{}); ok {
-			if rawUserID, exists := sender["user_id"]; exists {
-				uid, ok := utils.ParseInt64Value(rawUserID)
-				if !ok || uid <= 0 {
-					return nil, fmt.Errorf("get_forward_msg 的 messages 第 %d 项包含无效 user_id", i)
-				}
-				fm.UserID = uid
-			}
-			if nick, ok := sender["nickname"].(string); ok {
-				fm.Nickname = nick
-			}
-		}
-		if t, ok := utils.ParseInt64Value(msgMap["time"]); ok {
-			fm.Time = time.Unix(t, 0)
-		}
-		if segs, ok := msgMap["message"].([]interface{}); ok {
-			fm.Content = extractTextFromSegments(segs)
-		} else if content, ok := msgMap["content"].(string); ok {
-			fm.Content = content
-		}
-		if fm.Content == "" {
-			fm.Content = "[消息]"
-		}
-		result = append(result, fm)
-	}
-	return result, nil
 }
 
 func parseAtSegmentForGroup(data map[string]interface{}) (int64, bool) {

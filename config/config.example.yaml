@@ -105,9 +105,8 @@ embedding:
   model: ""          # 留空则使用 MUMU_EMBEDDING_MODEL 环境变量
   dimensions: 1536
 
-# 多模态视觉模型配置（用于理解图片和表情包）
+# 多模态视觉模型配置（用于理解图片、视频和合并转发消息）
 vision_llm:
-  enabled: true      # 是否启用图片理解
   api_key: ""        # 留空则使用 MUMU_VISION_API_KEY 环境变量
   base_url: ""       # 留空则使用 MUMU_VISION_BASE_URL 环境变量
   model: ""          # 留空则使用 MUMU_VISION_MODEL 环境变量

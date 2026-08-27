@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
@@ -100,15 +99,11 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		return nil, fmt.Errorf("创建话题摘要模型失败: %w", err)
 	}
 
-	var visionClient *llm.VisionClient
-	if cfg.VisionLLM.Enabled {
-		visionClient, err = llm.NewVisionClient()
-		if err != nil {
-			zap.L().Error("Vision 客户端创建失败，视觉理解不可用", zap.Error(err))
-		} else if visionClient != nil {
-			zap.L().Info("Vision 已启用", zap.String("model", cfg.VisionLLM.Model))
-		}
+	visionClient, err := llm.NewVisionClient()
+	if err != nil {
+		return nil, fmt.Errorf("创建视觉模型客户端失败: %w", err)
 	}
+	zap.L().Info("Vision 已启用", zap.String("model", cfg.VisionLLM.Model))
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
@@ -188,7 +183,6 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewGetGroupNoticesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetForwardMessageDetailTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
 		func() (tool.BaseTool, error) { return tools.NewHttpRequestTool() },
 	}
@@ -304,9 +298,6 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 		FinalContent: displayContent,
 		IsMentioned:  log.IsMentioned,
 		Time:         log.MessageTime,
-	}
-	if log.ForwardPayload != nil {
-		_ = sonic.UnmarshalString(*log.ForwardPayload, &msg.Forwards)
 	}
 	return msg
 }

@@ -134,7 +134,6 @@ type EmbeddingConfig struct {
 
 // VisionLLMConfig 多模态视觉模型配置
 type VisionLLMConfig struct {
-	Enabled     bool                   `mapstructure:"enabled"`
 	APIKey      string                 `mapstructure:"api_key"`
 	BaseURL     string                 `mapstructure:"base_url"`
 	Model       string                 `mapstructure:"model"`
@@ -288,6 +287,9 @@ func validate(c *Config) error {
 	}
 	if c.Embedding.Dimensions <= 0 {
 		return fmt.Errorf("embedding.dimensions 必须大于 0")
+	}
+	if strings.TrimSpace(c.VisionLLM.APIKey) == "" || strings.TrimSpace(c.VisionLLM.BaseURL) == "" || strings.TrimSpace(c.VisionLLM.Model) == "" {
+		return fmt.Errorf("vision_llm.api_key、vision_llm.base_url 和 vision_llm.model 不能为空")
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 必须在 1 到 65535 之间")

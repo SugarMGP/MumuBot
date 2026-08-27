@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 )
@@ -321,7 +322,7 @@ func visionCacheKey(kind string, remoteURL string, file string) string {
 }
 
 func (a *Agent) describeImageCached(ctx context.Context, img onebot.ImageInfo) (string, error) {
-	if a.vision == nil || img.URL == "" {
+	if img.URL == "" {
 		return "", nil
 	}
 
@@ -340,7 +341,7 @@ func (a *Agent) describeImageCached(ctx context.Context, img onebot.ImageInfo) (
 }
 
 func (a *Agent) describeVideoCached(ctx context.Context, vid onebot.VideoInfo) (string, error) {
-	if a.vision == nil || vid.URL == "" {
+	if vid.URL == "" {
 		return "", nil
 	}
 
@@ -356,6 +357,47 @@ func (a *Agent) describeVideoCached(ctx context.Context, vid onebot.VideoInfo) (
 		a.visionCache.Set(cacheKey, desc, ttlcache.DefaultTTL)
 	}
 	return desc, err
+}
+
+func collectForwardMedia(value interface{}, imageURLs, videoURLs *[]string) {
+	switch current := value.(type) {
+	case []interface{}:
+		for _, item := range current {
+			collectForwardMedia(item, imageURLs, videoURLs)
+		}
+	case map[string]interface{}:
+		segmentType, isSegment := current["type"].(string)
+		if isSegment {
+			data, _ := current["data"].(map[string]interface{})
+			switch segmentType {
+			case "image", "mface":
+				if url, ok := data["url"].(string); ok && strings.TrimSpace(url) != "" {
+					*imageURLs = append(*imageURLs, url)
+				}
+			case "video":
+				if url, ok := data["url"].(string); ok && strings.TrimSpace(url) != "" {
+					*videoURLs = append(*videoURLs, url)
+				}
+			case "forward":
+				collectForwardMedia(data["content"], imageURLs, videoURLs)
+			}
+			return
+		}
+		collectForwardMedia(current["message"], imageURLs, videoURLs)
+	}
+}
+
+func (a *Agent) summarizeForwardMessages(ctx context.Context, content []interface{}) (string, error) {
+	if len(content) == 0 {
+		return "", nil
+	}
+	var imageURLs, videoURLs []string
+	collectForwardMedia(content, &imageURLs, &videoURLs)
+	raw, err := sonic.MarshalString(content)
+	if err != nil {
+		return "", err
+	}
+	return a.vision.SummarizeForward(ctx, raw, imageURLs, videoURLs)
 }
 
 func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
@@ -413,10 +455,8 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 				continue
 			}
 			var visionDesc string
-			if a.vision != nil {
-				if d, err := a.describeImageCached(ctx, img); err == nil {
-					visionDesc = d
-				}
+			if d, err := a.describeImageCached(ctx, img); err == nil {
+				visionDesc = d
 			}
 			if img.URL != "" && visionDesc != "" && cfg.Sticker.AutoSave && a.ctx.Err() == nil {
 				a.wg.Add(1)
@@ -442,7 +482,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 				continue
 			}
 			var visionDesc string
-			if !cfg.Agent.UseNativeMultimodal && a.vision != nil {
+			if !cfg.Agent.UseNativeMultimodal {
 				if d, err := a.describeImageCached(ctx, img); err == nil {
 					visionDesc = d
 				}
@@ -456,12 +496,8 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	}
 
 	for _, vid := range msg.Videos {
-		if a.vision != nil {
-			if desc, err := a.describeVideoCached(ctx, vid); err == nil && desc != "" {
-				content += fmt.Sprintf(" [视频:%s]", desc)
-			} else {
-				content += " [视频]"
-			}
+		if desc, err := a.describeVideoCached(ctx, vid); err == nil && desc != "" {
+			content += fmt.Sprintf(" [视频:%s]", desc)
 		} else {
 			content += " [视频]"
 		}
@@ -480,26 +516,18 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	for _, card := range msg.Cards {
 		content += " " + card.Format()
 	}
-	if len(msg.Forwards) > 0 {
-		limit := 4
-		if len(msg.Forwards) < limit {
-			limit = len(msg.Forwards)
+	if len(msg.ForwardContent) > 0 {
+		count := len(msg.ForwardContent)
+		summary, err := a.summarizeForwardMessages(ctx, msg.ForwardContent)
+		if err != nil {
+			zap.L().Error("总结合并转发消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 		}
-		parts := make([]string, 0, limit)
-		for i := 0; i < limit; i++ {
-			node := msg.Forwards[i]
-			forwardContent := "[消息]"
-			if node.Content != "" {
-				runes := []rune(node.Content)
-				if len(runes) > 20 {
-					forwardContent = string(runes[:20]) + "..."
-				} else {
-					forwardContent = node.Content
-				}
-			}
-			parts = append(parts, fmt.Sprintf("%s(%d):%s", node.Nickname, node.UserID, forwardContent))
+		msg.ForwardContent = nil
+		if summary != "" {
+			content += fmt.Sprintf(" [合并转发，共%d条:%s]", count, summary)
+		} else {
+			content += fmt.Sprintf(" [合并转发，共%d条]", count)
 		}
-		content += fmt.Sprintf(" [合并转发，共%d条，预览：%s]", len(msg.Forwards), strings.Join(parts, " / "))
 	}
 
 	var qid string

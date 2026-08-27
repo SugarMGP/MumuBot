@@ -401,24 +401,6 @@ func (c *Client) GetEssenceMessages(ctx context.Context, groupID int64) ([]Essen
 	return messages, nil
 }
 
-// GetForwardMsg 获取合并转发消息内容
-func (c *Client) GetForwardMsg(ctx context.Context, forwardID string) ([]ForwardMessage, error) {
-	if forwardID == "" {
-		return nil, nil
-	}
-	resp, err := c.callAPI(ctx, "get_forward_msg", map[string]interface{}{
-		"message_id": forwardID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	data, err := responseDataMap(resp, "get_forward_msg")
-	if err != nil {
-		return nil, err
-	}
-	return parseForwardMessages(data)
-}
-
 // GetMessageReactions 获取消息的表情回应
 func (c *Client) GetMessageReactions(ctx context.Context, messageID int64) ([]EmojiReaction, error) {
 	// 通过 get_msg 获取消息详情，其中包含 emoji_likes_list
