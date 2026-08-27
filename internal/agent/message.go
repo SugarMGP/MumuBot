@@ -288,6 +288,7 @@ func (a *Agent) commitMessage(item commitItem) {
 		a.applyPendingRecall(msg)
 
 		if msg.UserID == selfID {
+			a.commitReadSnapshot(msg.GroupID, msg)
 			return
 		}
 		if a.ctx.Err() != nil {
