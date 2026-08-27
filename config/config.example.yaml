@@ -44,6 +44,7 @@ agent:
   message_buffer_size: 30       # 消息缓冲区大小
   max_step: 12                  # ReAct 最大步数
   max_coroutine: 3              # 最大并发思考进程数（0表示不限制）
+  use_native_multimodal: false  # 是否将原图和逐条消息直接传给主模型
 
 # 聊天行为配置
 chat:
@@ -142,5 +143,4 @@ web:
 debug:
   show_prompt: true        # 显示系统提示词
   show_thinking: true      # 显示思考过程
-  show_memory: true        # 显示记忆检索
   show_tool_calls: true    # 显示工具调用

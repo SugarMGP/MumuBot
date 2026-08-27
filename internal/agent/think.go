@@ -35,7 +35,6 @@ func (a *Agent) thinkLoop() {
 
 func (a *Agent) thinkCycle() {
 	cfg := config.Get()
-	selfID := a.bot.GetSelfID()
 	for _, gc := range cfg.Groups {
 		if !gc.Enabled {
 			continue
@@ -44,7 +43,7 @@ func (a *Agent) thinkCycle() {
 		if len(msgs) == 0 {
 			continue
 		}
-		_, currentMessages := splitMessageSnapshot(msgs, lastRead, selfID)
+		_, currentMessages := splitMessageSnapshot(msgs, lastRead)
 		if len(currentMessages) == 0 {
 			continue
 		}
@@ -220,7 +219,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	selfID := a.bot.GetSelfID()
 
 	buffer, lastReadMessage := a.getMessageSnapshot(groupID)
-	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage, selfID)
+	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage)
 	if len(currentMessages) == 0 {
 		return
 	}
@@ -230,7 +229,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		snapshotMessage = buffer[len(buffer)-1]
 	}
 	semanticCurrent := collectTextContext(currentMessages) != ""
-	hasCurrentContext := semanticCurrent || strings.TrimSpace(renderChatContext(currentMessages, nil, selfID)) != ""
+	hasCurrentContext := semanticCurrent || strings.TrimSpace(renderChatContext(currentMessages, nil)) != ""
 	if !isMention && !probabilityPassed {
 		if !hasCurrentContext {
 			a.commitReadSnapshot(groupID, snapshotMessage)
@@ -244,9 +243,12 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID)
 	tc := tools.GetToolContext(ctx)
 
-	chatContext := renderChatContext(buffer, lastReadMessage, selfID)
-	if chatContext == "" {
-		return
+	chatContext := ""
+	if !cfg.Agent.UseNativeMultimodal {
+		chatContext = renderChatContext(buffer, lastReadMessage)
+		if chatContext == "" {
+			return
+		}
 	}
 
 	promptCtx := &persona.PromptContext{
@@ -303,19 +305,37 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		groupExtra = gc.ExtraPrompt
 	}
 
-	thinkPrompt := a.persona.GetThinkPrompt(promptCtx, chatContext, groupExtra, recentPeople)
-	if isMention {
-		thinkPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
-	}
-
-	if cfg.Debug.ShowPrompt {
-		zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
-		zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
-	}
-
-	msgs := []*schema.Message{
-		schema.SystemMessage(systemPrompt),
-		schema.UserMessage(thinkPrompt),
+	var msgs []*schema.Message
+	if cfg.Agent.UseNativeMultimodal {
+		dynamicPrompt := a.persona.GetDynamicSystemPrompt(promptCtx, groupExtra, recentPeople)
+		if isMention {
+			dynamicPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
+		}
+		msgs = []*schema.Message{
+			schema.SystemMessage(systemPrompt),
+			schema.SystemMessage(dynamicPrompt),
+		}
+		msgs = append(msgs, buildNativeModelMessages(buffer, lastReadMessage)...)
+		if len(msgs) == 2 {
+			return
+		}
+		if cfg.Debug.ShowPrompt {
+			zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
+			zap.L().Debug("动态系统提示词", zap.String("prompt", dynamicPrompt))
+		}
+	} else {
+		thinkPrompt := a.persona.GetThinkPrompt(promptCtx, chatContext, groupExtra, recentPeople)
+		if isMention {
+			thinkPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
+		}
+		msgs = []*schema.Message{
+			schema.SystemMessage(systemPrompt),
+			schema.UserMessage(thinkPrompt),
+		}
+		if cfg.Debug.ShowPrompt {
+			zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
+			zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
+		}
 	}
 
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, agentThinkTimeout)

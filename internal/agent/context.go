@@ -125,7 +125,7 @@ func collectRetrievalTextFragments(readMessages, currentMessages []*onebot.Group
 	return collectTextFragments(messages)
 }
 
-func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage, selfID int64) (readMessages, currentMessages []*onebot.GroupMessage) {
+func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage) (readMessages, currentMessages []*onebot.GroupMessage) {
 	cursor := -1
 	for i, msg := range buffer {
 		if msg == lastReadMessage {
@@ -137,7 +137,7 @@ func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot
 		if msg == nil {
 			continue
 		}
-		if i <= cursor || (selfID != 0 && msg.UserID == selfID) {
+		if i <= cursor {
 			readMessages = append(readMessages, msg)
 		} else {
 			currentMessages = append(currentMessages, msg)
@@ -146,35 +146,25 @@ func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot
 	return readMessages, currentMessages
 }
 
-func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage, selfID int64) string {
+func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage) string {
 	if len(buffer) == 0 {
 		return ""
 	}
 
-	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage, selfID)
-	var read, current strings.Builder
+	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage)
+	var b strings.Builder
 	for _, message := range readMessages {
-		read.WriteString(message.FinalContent)
+		if message == nil || strings.TrimSpace(message.FinalContent) == "" {
+			continue
+		}
+		b.WriteString("(OLD)")
+		b.WriteString(message.FinalContent)
 	}
 	for _, message := range currentMessages {
-		current.WriteString(message.FinalContent)
-	}
-	if read.Len() == 0 && current.Len() == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("### 旧消息（仅供参考）\n")
-	if read.Len() > 0 {
-		b.WriteString(read.String())
-	} else {
-		b.WriteString("（无）\n")
-	}
-	b.WriteString("\n### 新消息（需要处理）\n")
-	if current.Len() > 0 {
-		b.WriteString(current.String())
-	} else {
-		b.WriteString("（无）\n")
+		if message == nil || strings.TrimSpace(message.FinalContent) == "" {
+			continue
+		}
+		b.WriteString(message.FinalContent)
 	}
 	return b.String()
 }
@@ -415,7 +405,11 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	for _, img := range msg.Images {
 		if img.SubType == 1 {
 			if img.Desc != "" {
-				content += fmt.Sprintf(" [表情包:%s]", img.Desc)
+				if cfg.Agent.UseNativeMultimodal {
+					content += " [表情包]"
+				} else {
+					content += fmt.Sprintf(" [表情包:%s]", img.Desc)
+				}
 				continue
 			}
 			var visionDesc string
@@ -431,18 +425,24 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 					a.autoSaveSticker(a.ctx, url, stickerDesc)
 				}(img.URL, visionDesc)
 			}
-			if visionDesc != "" {
+			if cfg.Agent.UseNativeMultimodal {
+				content += " [表情包]"
+			} else if visionDesc != "" {
 				content += fmt.Sprintf(" [表情包:%s]", visionDesc)
 			} else {
 				content += " [表情包]"
 			}
 		} else {
 			if img.Desc != "" {
-				content += fmt.Sprintf(" [图片:%s]", img.Desc)
+				if cfg.Agent.UseNativeMultimodal {
+					content += " [图片]"
+				} else {
+					content += fmt.Sprintf(" [图片:%s]", img.Desc)
+				}
 				continue
 			}
 			var visionDesc string
-			if a.vision != nil {
+			if !cfg.Agent.UseNativeMultimodal && a.vision != nil {
 				if d, err := a.describeImageCached(ctx, img); err == nil {
 					visionDesc = d
 				}
