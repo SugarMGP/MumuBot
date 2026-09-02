@@ -47,7 +47,6 @@ func (a *App) systemSections() []views.SystemSection {
 	groupFields := []views.SystemField{
 		{Label: "启用群数", Value: fmt.Sprintf("%d / %d", countEnabledGroups(cfg.Groups), len(cfg.Groups))},
 		{Label: "已启用群聊", Value: groupSummary},
-		{Label: "观察窗口", Value: fmt.Sprintf("%d 秒", cfg.Agent.ObserveWindow)},
 		{Label: "思考间隔", Value: fmt.Sprintf("%d 秒", cfg.Agent.ThinkInterval)},
 	}
 	if cfg.Agent.ThinkDebounceMS > 0 {

@@ -76,9 +76,8 @@ type SendStickerInput struct {
 }
 
 type SendStickerOutput struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
-	MessageID int64  `json:"message_id,omitempty"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
 }
 
 func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendStickerOutput, error) {
@@ -113,8 +112,7 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	}
 
 	// 发送表情包（使用回调以记录消息）
-	msgID, err := tc.SendStickerCallback(ctx, tc.GroupID, filePath, sticker.Description)
-	if err != nil {
+	if err := tc.SendStickerCallback(ctx, tc.GroupID, filePath, sticker.Description); err != nil {
 		return &SendStickerOutput{Success: false, Message: err.Error()}, nil
 	}
 	tc.MarkActed()
@@ -123,9 +121,8 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	_ = tc.MemoryMgr.UpdateStickerUsage(input.StickerID)
 
 	return &SendStickerOutput{
-		Success:   true,
-		Message:   "表情包已发送",
-		MessageID: msgID,
+		Success: true,
+		Message: "表情包已发送",
 	}, nil
 }
 

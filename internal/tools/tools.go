@@ -5,6 +5,7 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,11 +18,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// SpeakCallback 发言回调函数类型，返回消息ID
-type SpeakCallback func(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) (int64, error)
+// SpeakCallback 发言回调函数类型
+type SpeakCallback func(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) error
 
 // SendStickerCallback 发送表情包回调函数类型
-type SendStickerCallback func(ctx context.Context, groupID int64, filePath string, description string) (int64, error)
+type SendStickerCallback func(ctx context.Context, groupID int64, filePath string, description string) error
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
@@ -33,9 +34,46 @@ type ToolContext struct {
 	SendStickerCallback     SendStickerCallback // 发送表情包回调
 	MessageRecalledCallback func(*memory.MessageLog)
 
+	messageRefs map[int64]string
+	messageIDs  map[string]int64
+	nextMessage int
+
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
 	acted         atomic.Bool
+}
+
+func (tc *ToolContext) RegisterMessage(messageID int64) string {
+	if tc == nil || messageID == 0 {
+		return ""
+	}
+	if ref := tc.messageRefs[messageID]; ref != "" {
+		return ref
+	}
+	if tc.messageRefs == nil {
+		tc.messageRefs = make(map[int64]string)
+		tc.messageIDs = make(map[string]int64)
+	}
+	tc.nextMessage++
+	ref := "m" + strconv.Itoa(tc.nextMessage)
+	tc.messageRefs[messageID] = ref
+	tc.messageIDs[ref] = messageID
+	return ref
+}
+
+func (tc *ToolContext) MessageRef(messageID int64) string {
+	if tc == nil || messageID == 0 {
+		return ""
+	}
+	return tc.messageRefs[messageID]
+}
+
+func (tc *ToolContext) ResolveMessageRef(ref string) (int64, bool) {
+	if tc == nil {
+		return 0, false
+	}
+	messageID, ok := tc.messageIDs[strings.TrimSpace(ref)]
+	return messageID, ok
 }
 
 func (tc *ToolContext) MarkActed() {
@@ -214,11 +252,21 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
 	results := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
+		messageRef := tc.RegisterMessage(m.OneBotMessageID)
+		replyRef := ""
+		if m.ReplyToMessageID != nil {
+			replyRef = tc.RegisterMessage(*m.ReplyToMessageID)
+		}
+		content := m.DisplayContent
+		if m.RecalledAt != nil {
+			content = memory.RecalledMessageDisplayContent
+		}
 		results = append(results, map[string]interface{}{
-			"message_id":   m.OneBotMessageID,
+			"message_ref":  messageRef,
+			"reply_ref":    replyRef,
 			"user_id":      m.UserID,
 			"nickname":     m.Nickname,
-			"content":      m.DisplayContent,
+			"content":      content,
 			"time":         m.MessageTime.Format("15:04:05"),
 			"is_mentioned": m.IsMentioned,
 		})
@@ -307,7 +355,7 @@ type GetEssenceMessagesInput struct {
 }
 
 type EssenceMessageSummary struct {
-	MessageID    int64  `json:"message_id"`
+	MessageRef   string `json:"message_ref"`
 	SenderNick   string `json:"sender_nick"`
 	OperatorNick string `json:"operator_nick"`
 	OperatorTime string `json:"operator_time"`
@@ -345,7 +393,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 	results := make([]EssenceMessageSummary, 0, len(messages))
 	for _, m := range messages {
 		results = append(results, EssenceMessageSummary{
-			MessageID:    m.MessageID,
+			MessageRef:   tc.RegisterMessage(m.MessageID),
 			SenderNick:   m.SenderNick,
 			OperatorNick: m.OperatorNick,
 			OperatorTime: time.Unix(m.OperatorTime, 0).Format("2006-01-02 15:04:05"),
@@ -367,7 +415,7 @@ func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
 // ==================== 获取消息表情回应工具 ====================
 
 type GetMessageReactionsInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=消息ID"`
+	MessageRef string `json:"message_ref" jsonschema:"description=聊天记录中的消息编号，例如 m3"`
 }
 
 type ReactionSummary struct {
@@ -389,11 +437,12 @@ func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInpu
 	if tc.Bot == nil {
 		return &GetMessageReactionsOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
-	if input.MessageID == 0 {
-		return &GetMessageReactionsOutput{Success: false, Message: "消息 ID 不能为空"}, nil
+	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
+	if !ok {
+		return &GetMessageReactionsOutput{Success: false, Message: "消息编号不是当前对话中的消息"}, nil
 	}
 
-	reactions, err := tc.Bot.GetMessageReactions(ctx, input.MessageID)
+	reactions, err := tc.Bot.GetMessageReactions(ctx, messageID)
 	if err != nil {
 		return &GetMessageReactionsOutput{Success: false, Message: "获取表情回应失败: " + err.Error()}, nil
 	}

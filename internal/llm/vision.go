@@ -20,6 +20,11 @@ type VisionClient struct {
 	model *openai.ChatModel
 }
 
+const (
+	visualDescriptionPrompt  = "请用中文说明图中/视频中可直接观察到的主体、物体、场景、动作和事件，以及画面中的文字。只说确定内容，不要臆测身份、背景或来源。输出300字以内的紧凑纯文本，不分点、不换行。"
+	stickerDescriptionPrompt = "请用中文解释这张表情包表达的含义，优先识别其中的角色或人物、经典画面或网络梗、表情和情绪，以及画面中的文字和常见的使用语境。不确定的出处不要臆测。输出300字以内的紧凑纯文本，不分点、不换行。"
+)
+
 // NewVisionClient 创建视觉模型客户端
 func NewVisionClient() (*VisionClient, error) {
 	cfg := config.Get().VisionLLM
@@ -45,11 +50,19 @@ func NewVisionClient() (*VisionClient, error) {
 
 // DescribeImage 描述图片内容
 func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (string, error) {
+	return v.describeImage(ctx, imageURL, visualDescriptionPrompt)
+}
+
+// DescribeSticker 解释表情包内容
+func (v *VisionClient) DescribeSticker(ctx context.Context, imageURL string) (string, error) {
+	return v.describeImage(ctx, imageURL, stickerDescriptionPrompt)
+}
+
+func (v *VisionClient) describeImage(ctx context.Context, imageURL, prompt string) (string, error) {
 	if v == nil || v.model == nil {
 		return "", nil
 	}
 
-	// 构建多模态消息
 	msg := &schema.Message{
 		Role: schema.User,
 		UserInputMultiContent: []schema.MessageInputPart{
@@ -64,7 +77,7 @@ func (v *VisionClient) DescribeImage(ctx context.Context, imageURL string) (stri
 			},
 			{
 				Type: schema.ChatMessagePartTypeText,
-				Text: "请用中文尽可能地描述这张图片的内容和内涵，输出一段紧凑纯文本，300字以内，不要分点、换行或使用多余空格。优先说明关键事件、关键角色或物体、表情、情绪、画面文字、梗点。",
+				Text: prompt,
 			},
 		},
 	}
@@ -91,7 +104,7 @@ func (v *VisionClient) DescribeVideo(ctx context.Context, videoURL string) (stri
 			},
 			{
 				Type: schema.ChatMessagePartTypeText,
-				Text: "请用中文尽可能地描述这段视频的内容和内涵，输出一段紧凑纯文本，300字以内，不要分点、换行或使用多余空格。优先说明关键事件、关键角色或物体、情绪、画面文字、梗点。",
+				Text: visualDescriptionPrompt,
 			},
 		},
 	}

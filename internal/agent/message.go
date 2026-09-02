@@ -330,13 +330,9 @@ func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) bool {
 	targetID := msg.AtList[0]
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
-	actorName := utils.FirstNonEmpty(msg.GroupCard, msg.Nickname)
-	if actorName == "" {
-		actorName = a.resolveMentionDisplayName(ctx, msg, msg.UserID)
-	}
 	targetName := a.resolveMentionDisplayName(ctx, msg, targetID)
 	msg.Content = ""
-	msg.FinalContent = fmt.Sprintf("[%s] %s(%d) 戳了戳 %s(%d)\n", msg.Time.Format("15:04:05"), actorName, msg.UserID, targetName, targetID)
+	msg.FinalContent = fmt.Sprintf("戳了戳 %s(%d)", targetName, targetID)
 	return true
 }
 
@@ -496,9 +492,9 @@ func findReplyInfoInMessages(msgs []*onebot.GroupMessage, messageID int64) *oneb
 			continue
 		}
 
-		content := strings.TrimSpace(msg.Content)
+		content := strings.TrimSpace(msg.FinalContent)
 		if content == "" {
-			content = strings.TrimSpace(msg.FinalContent)
+			content = strings.TrimSpace(msg.Content)
 		}
 
 		return &onebot.ReplyInfo{
@@ -517,11 +513,17 @@ func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 		return nil
 	}
 
-	content := strings.TrimSpace(log.TextContent)
 	if log.RecalledAt != nil {
-		content = strings.TrimSpace(memory.RecalledMessageDisplayContent(*log))
-	} else if content == "" {
-		content = strings.TrimSpace(log.DisplayContent)
+		return &onebot.ReplyInfo{
+			MessageID: log.OneBotMessageID,
+			Content:   memory.RecalledMessageDisplayContent,
+			SenderID:  log.UserID,
+			Nickname:  log.Nickname,
+		}
+	}
+	content := strings.TrimSpace(log.DisplayContent)
+	if content == "" {
+		content = strings.TrimSpace(log.TextContent)
 	}
 
 	return &onebot.ReplyInfo{

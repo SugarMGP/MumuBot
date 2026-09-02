@@ -12,10 +12,10 @@ import (
 )
 
 type SaveMemoryInput struct {
-	SubjectUserID      *int64  `json:"subject_user_id" jsonschema:"description=必填；-1 表示你自己，0 表示群组，正数表示成员 QQ"`
-	Kind               string  `json:"kind" jsonschema:"enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal,description=记忆类型；偏好和目标不能写成 fact"`
-	Content            string  `json:"content" jsonschema:"description=包含当前昵称、脱离原句仍可理解的完整自然语言命题"`
-	EvidenceMessageIDs []int64 `json:"evidence_message_ids" jsonschema:"description=必填，1 到 8 条聊天中的消息 ID"`
+	SubjectUserID       *int64   `json:"subject_user_id" jsonschema:"description=必填；-1 表示你自己，0 表示群组，正数表示成员 QQ"`
+	Kind                string   `json:"kind" jsonschema:"enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal,description=记忆类型；偏好和目标不能写成 fact"`
+	Content             string   `json:"content" jsonschema:"description=包含当前昵称、脱离原句仍可理解的完整自然语言命题"`
+	EvidenceMessageRefs []string `json:"evidence_message_refs" jsonschema:"description=必填，1 到 8 条聊天中的消息编号"`
 }
 
 type SaveMemoryOutput struct {
@@ -33,11 +33,19 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 	if tc == nil || tc.MemoryMgr == nil {
 		return rejectedMemory("unavailable", "工具上下文未初始化"), nil
 	}
+	evidenceMessageIDs := make([]int64, 0, len(input.EvidenceMessageRefs))
+	for _, ref := range input.EvidenceMessageRefs {
+		messageID, ok := tc.ResolveMessageRef(ref)
+		if !ok {
+			return rejectedMemory("invalid_evidence", "证据中包含不属于当前对话的消息编号"), nil
+		}
+		evidenceMessageIDs = append(evidenceMessageIDs, messageID)
+	}
 	selfID := int64(0)
 	if tc.Bot != nil {
 		selfID = tc.Bot.GetSelfID()
 	}
-	raw := memory.RawMemoryClaim{SubjectUserID: input.SubjectUserID, Kind: input.Kind, Content: input.Content, EvidenceMessageIDs: input.EvidenceMessageIDs}
+	raw := memory.RawMemoryClaim{SubjectUserID: input.SubjectUserID, Kind: input.Kind, Content: input.Content, EvidenceMessageIDs: evidenceMessageIDs}
 	storeCtx := memory.StoreClaimsContext{GroupID: tc.GroupID, SelfID: selfID, SnapshotOneBotMessageID: tc.SnapshotMessageID}
 	claims, err := tc.MemoryMgr.NormalizeAndValidateClaims(ctx, storeCtx, []memory.RawMemoryClaim{raw})
 	if err != nil {
@@ -123,15 +131,22 @@ func queryMemoryFunc(ctx context.Context, input *QueryMemoryInput) (*QueryMemory
 	}
 	results := make([]map[string]interface{}, 0, len(items))
 	for _, item := range items {
-		evidence, _ := tc.MemoryMgr.ListMemoryEvidenceOneBotIDs(ctx, item.ID)
-		results = append(results, map[string]interface{}{
-			"subject_user_id":      item.SubjectUserID,
-			"subject":              memory.SubjectLabel(item.SubjectUserID, selfID),
-			"kind":                 item.Kind,
-			"content":              item.Content,
-			"updated_at":           item.UpdatedAt.Format("2006-01-02 15:04"),
-			"evidence_message_ids": evidence,
-		})
+		result := map[string]interface{}{
+			"subject_user_id": item.SubjectUserID,
+			"subject":         memory.SubjectLabel(item.SubjectUserID, selfID),
+			"kind":            item.Kind,
+			"content":         item.Content,
+			"updated_at":      item.UpdatedAt.Format("2006-01-02 15:04"),
+		}
+		if item.GroupID == tc.GroupID {
+			evidence, _ := tc.MemoryMgr.ListMemoryEvidenceOneBotIDs(ctx, item.ID)
+			evidenceRefs := make([]string, 0, len(evidence))
+			for _, messageID := range evidence {
+				evidenceRefs = append(evidenceRefs, tc.RegisterMessage(messageID))
+			}
+			result["evidence_message_refs"] = evidenceRefs
+		}
+		results = append(results, result)
 	}
 	return &QueryMemoryOutput{Success: true, Count: len(results), Memories: results}, nil
 }

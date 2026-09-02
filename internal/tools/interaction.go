@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -16,18 +15,17 @@ import (
 // SpeakInput 发言的输入参数
 type SpeakInput struct {
 	// Content 你想说的话
-	Content string `json:"content" jsonschema:"description=你想说的话，不要用markdown，说话要口语化"`
-	// ReplyTo 要回复的消息ID（可选）
-	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的消息ID"`
+	Content string `json:"content" jsonschema:"description=说话内容"`
+	// ReplyTo 要回复的消息消息编号（可选）
+	ReplyTo string `json:"reply_to,omitempty" jsonschema:"description=要回复的消息编号，例如 m3"`
 	// Mentions 要@的用户QQ号列表（可选）
 	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
 }
 
 // SpeakOutput 发言的输出
 type SpeakOutput struct {
-	Success   bool   `json:"success"`
-	MessageID int64  `json:"message_id,omitempty"` // 发送成功后的消息ID
-	Message   string `json:"message,omitempty"`
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
 }
 
 // speakFunc 发言的实际实现 - 会通过回调实际发送消息
@@ -42,8 +40,13 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	if input == nil || strings.TrimSpace(input.Content) == "" {
 		return &SpeakOutput{Success: false, Message: "说话内容不能为空"}, nil
 	}
-	if input.ReplyTo < 0 {
-		return &SpeakOutput{Success: false, Message: "reply_to 不能为负数"}, nil
+	replyTo := int64(0)
+	if input.ReplyTo != "" {
+		var ok bool
+		replyTo, ok = tc.ResolveMessageRef(input.ReplyTo)
+		if !ok {
+			return &SpeakOutput{Success: false, Message: "reply_to 不是当前对话中的消息编号"}, nil
+		}
 	}
 
 	mentions := make([]int64, 0, len(input.Mentions))
@@ -59,9 +62,7 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 		mentions = append(mentions, userID)
 	}
 
-	// 通过回调发送消息，获取返回的消息ID
-	msgID, err := tc.SpeakCallback(ctx, tc.GroupID, strings.TrimSpace(input.Content), input.ReplyTo, mentions)
-	if err != nil {
+	if err := tc.SpeakCallback(ctx, tc.GroupID, strings.TrimSpace(input.Content), replyTo, mentions); err != nil {
 		return &SpeakOutput{
 			Success: false,
 			Message: err.Error(),
@@ -70,9 +71,8 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	tc.MarkActed()
 
 	return &SpeakOutput{
-		Success:   true,
-		MessageID: msgID,
-		Message:   fmt.Sprintf("发言成功，消息ID: %d", msgID),
+		Success: true,
+		Message: "发言成功",
 	}, nil
 }
 
@@ -80,14 +80,14 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		`在群里说话。只有当你真的想说什么的时候才用，不用强迫自己每次都说话。说话要自然，像个真人群友。
-【重要】使用规则：
-- speak每次只能发送**一条**消息，不要把多句话合在一起；如果要说多句话，请多次调用speak
-- 不要用分号、句号或换行符连接多个独立的句子
+		`在群里说话。只有当你真的想说什么的时候才用，不用强迫自己每次都说话。
+使用规则：
+- 每次只能发送一条消息；如果要说多句话，请多次调用speak
+- 不要用空格、分号、句号或换行符连接多个独立的句子
 - 正确示例：speak("你好")，再调用speak("今天天气真好")
 - 错误示例：speak("你好。今天天气真好")或speak("你好\n今天天气真好")
-- 回复某条消息时使用reply_to参数，不要回复自己的消息
-- at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号`,
+- 要回复某条消息时填写reply_to参数，只有当发言内容与该消息强相关时才用；不要回复自己的消息
+- 要at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号`,
 		speakFunc,
 	)
 }
@@ -171,8 +171,8 @@ func NewPokeTool() (tool.InvokableTool, error) {
 
 // ReactToMessageInput 对消息贴表情的输入参数
 type ReactToMessageInput struct {
-	// MessageID 要回应的消息ID
-	MessageID int64 `json:"message_id" jsonschema:"description=要回应的消息ID"`
+	// MessageRef 要回应的本轮消息编号
+	MessageRef string `json:"message_ref" jsonschema:"description=聊天记录中的消息编号，例如 m3"`
 	// Reaction 要使用的语义表情
 	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
 }
@@ -209,15 +209,16 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	if tc.Bot == nil {
 		return &ReactToMessageOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
-	if input.MessageID == 0 {
-		return &ReactToMessageOutput{Success: false, Message: "消息 ID 不能为空"}, nil
+	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
+	if !ok {
+		return &ReactToMessageOutput{Success: false, Message: "消息编号不是当前对话中的消息"}, nil
 	}
 	emojiID, ok := messageReactionEmojiIDs[input.Reaction]
 	if !ok {
 		return &ReactToMessageOutput{Success: false, Message: "不支持该表情回应"}, nil
 	}
 
-	if err := tc.Bot.SetMsgEmojiLike(ctx, input.MessageID, emojiID); err != nil {
+	if err := tc.Bot.SetMsgEmojiLike(ctx, messageID, emojiID); err != nil {
 		return &ReactToMessageOutput{Success: false, Message: err.Error()}, nil
 	}
 	tc.MarkActed()
@@ -238,8 +239,8 @@ func NewReactToMessageTool() (tool.InvokableTool, error) {
 
 // RecallMessageInput 撤回消息的输入参数
 type RecallMessageInput struct {
-	// MessageID 要撤回的消息ID
-	MessageID int64 `json:"message_id" jsonschema:"description=要撤回的消息ID"`
+	// MessageRef 要撤回的本轮消息编号
+	MessageRef string `json:"message_ref" jsonschema:"description=聊天记录中的消息编号，例如 m3"`
 }
 
 // RecallMessageOutput 撤回消息的输出
@@ -257,14 +258,15 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if tc.Bot == nil {
 		return &RecallMessageOutput{Success: false, Message: "Bot 未连接"}, nil
 	}
-	if input.MessageID == 0 {
-		return &RecallMessageOutput{Success: false, Message: "消息 ID 不能为空"}, nil
+	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
+	if !ok {
+		return &RecallMessageOutput{Success: false, Message: "消息编号不是当前对话中的消息"}, nil
 	}
 	if tc.MemoryMgr == nil {
 		return &RecallMessageOutput{Success: false, Message: "记忆管理器未初始化"}, nil
 	}
 
-	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, input.MessageID)
+	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, messageID)
 	if err != nil {
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}
@@ -284,13 +286,13 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return &RecallMessageOutput{Success: false, Message: "消息已超过两分钟，无法撤回"}, nil
 	}
 
-	if err := tc.Bot.DeleteMsg(ctx, input.MessageID); err != nil {
+	if err := tc.Bot.DeleteMsg(ctx, messageID); err != nil {
 		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
 	}
 	tc.MarkActed()
-	recalled, changed, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, input.MessageID)
+	recalled, changed, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, messageID)
 	if syncErr != nil {
-		zap.L().Error("主动撤回成功但同步本地状态失败", zap.Int64("group_id", log.GroupID), zap.Int64("message_id", input.MessageID), zap.Error(syncErr))
+		zap.L().Error("主动撤回成功但同步本地状态失败", zap.Int64("group_id", log.GroupID), zap.Int64("message_id", messageID), zap.Error(syncErr))
 		return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
 	}
 	if changed && tc.MessageRecalledCallback != nil {

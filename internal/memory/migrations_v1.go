@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 2
+const latestSchemaVersion = 3
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -114,9 +114,9 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		if item.Version > latestSchemaVersion {
 			return fmt.Errorf("数据库 schema v%d 高于程序支持的 v%d", item.Version, latestSchemaVersion)
 		}
-		expectedName := "v1_schema"
-		if item.Version == 2 {
-			expectedName = "drop_forward_payload"
+		expectedName := map[int]string{1: "v1_schema", 2: "drop_forward_payload", 3: "normalize_message_display_content"}[item.Version]
+		if expectedName == "" {
+			return fmt.Errorf("schema 版本号无效：v%d", item.Version)
 		}
 		if item.Name != expectedName {
 			return fmt.Errorf("schema v%d 名称无效：%s", item.Version, item.Name)
@@ -134,10 +134,18 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 			return err
 		}
 	}
+	if current < 3 {
+		if err := migrateV3(db); err != nil {
+			return err
+		}
+		if err := recordSchemaVersion(db, 3, "normalize_message_display_content"); err != nil {
+			return err
+		}
+	}
 	if err := validateV1Schema(db, dimensions); err != nil {
 		return err
 	}
-	return validateV2Schema(db)
+	return validateCurrentSchema(db)
 }
 
 func recordSchemaVersion(db *gorm.DB, version int, name string) error {

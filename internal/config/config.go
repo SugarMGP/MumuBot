@@ -66,13 +66,11 @@ type GroupConfig struct {
 
 // AgentConfig Agent决策配置
 type AgentConfig struct {
-	ObserveWindow       int  `mapstructure:"observe_window"`        // 观察窗口时间（秒）
-	ThinkInterval       int  `mapstructure:"think_interval"`        // 决策间隔（秒）
-	ThinkDebounceMS     int  `mapstructure:"think_debounce_ms"`     // 思考聚合窗口（毫秒）
-	MessageBufferSize   int  `mapstructure:"message_buffer_size"`   // 消息缓冲区大小
-	MaxStep             int  `mapstructure:"max_step"`              // ReAct 最大步数
-	MaxCoroutine        int  `mapstructure:"max_coroutine"`         // 最大并发思考进程数（0表示不限制）
-	UseNativeMultimodal bool `mapstructure:"use_native_multimodal"` // 是否将原图和逐条消息直接传给主模型
+	ThinkInterval     int `mapstructure:"think_interval"`      // 决策间隔（秒）
+	ThinkDebounceMS   int `mapstructure:"think_debounce_ms"`   // 思考聚合窗口（毫秒）
+	MessageBufferSize int `mapstructure:"message_buffer_size"` // 消息缓冲区大小
+	MaxStep           int `mapstructure:"max_step"`            // ReAct 最大步数
+	MaxCoroutine      int `mapstructure:"max_coroutine"`       // 最大并发思考进程数（0表示不限制）
 }
 
 // ChatConfig 聊天行为配置

@@ -271,9 +271,21 @@ func (a *Agent) loadBuffersFromDB() {
 			continue
 		}
 
+		loadedMessageIDs := make(map[int64]struct{}, len(logs))
+		for _, log := range logs {
+			loadedMessageIDs[log.OneBotMessageID] = struct{}{}
+		}
 		messages := make([]*onebot.GroupMessage, 0, len(logs))
 		for _, log := range logs {
-			messages = append(messages, messageLogToBufferedGroupMessage(log))
+			message := messageLogToBufferedGroupMessage(log)
+			if log.ReplyToMessageID != nil {
+				if _, loaded := loadedMessageIDs[*log.ReplyToMessageID]; !loaded {
+					if replyLog, _ := a.memory.GetMessageLogByID(log.GroupID, *log.ReplyToMessageID); replyLog != nil {
+						message.Reply = replyInfoFromMessageLog(replyLog)
+					}
+				}
+			}
+			messages = append(messages, message)
 		}
 		a.buffersMu.Lock()
 		a.buffers[gc.GroupID] = messages
@@ -287,7 +299,7 @@ func (a *Agent) loadBuffersFromDB() {
 func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessage {
 	displayContent := log.DisplayContent
 	if log.RecalledAt != nil {
-		displayContent = memory.RecalledMessageDisplayContent(log)
+		displayContent = memory.RecalledMessageDisplayContent
 	}
 	msg := &onebot.GroupMessage{
 		MessageID:    log.OneBotMessageID,
@@ -298,6 +310,9 @@ func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessag
 		FinalContent: displayContent,
 		IsMentioned:  log.IsMentioned,
 		Time:         log.MessageTime,
+	}
+	if log.ReplyToMessageID != nil {
+		msg.Reply = &onebot.ReplyInfo{MessageID: *log.ReplyToMessageID}
 	}
 	return msg
 }

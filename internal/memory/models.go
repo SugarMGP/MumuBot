@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -82,14 +81,7 @@ type MessageLog struct {
 
 func (MessageLog) TableName() string { return "message_logs" }
 
-func RecalledMessageDisplayContent(item MessageLog) string {
-	sender := fmt.Sprintf("%d", item.UserID)
-	if nickname := strings.TrimSpace(item.Nickname); nickname != "" {
-		sender = fmt.Sprintf("%s(%d)", nickname, item.UserID)
-	}
-	return fmt.Sprintf("[%s] 【消息已撤回】原发送者：%s\n",
-		item.MessageTime.Format("15:04:05"), sender)
-}
+const RecalledMessageDisplayContent = "【消息已撤回】"
 
 type TopicThread struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`

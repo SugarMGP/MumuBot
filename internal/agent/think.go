@@ -10,7 +10,6 @@ import (
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
-	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/compose"
@@ -51,9 +50,6 @@ func (a *Agent) thinkCycle() {
 		receivedAt := lastMessage.ReceivedAt
 		if a.hasStrongInteraction(currentMessages) {
 			a.scheduleThink(gc.GroupID, true, false, receivedAt)
-			continue
-		}
-		if time.Since(lastMessage.Time) > time.Duration(cfg.Agent.ObserveWindow)*time.Second {
 			continue
 		}
 		speakProb := a.getSpeakProbability(gc.GroupID)
@@ -229,7 +225,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		snapshotMessage = buffer[len(buffer)-1]
 	}
 	semanticCurrent := collectTextContext(currentMessages) != ""
-	hasCurrentContext := semanticCurrent || strings.TrimSpace(renderChatContext(currentMessages, nil)) != ""
+	hasCurrentContext := semanticCurrent || hasDisplayContext(currentMessages)
 	if !isMention && !probabilityPassed {
 		if !hasCurrentContext {
 			a.commitReadSnapshot(groupID, snapshotMessage)
@@ -240,15 +236,12 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	if message := latestMessageWithID(buffer); message != nil {
 		snapshotMessageID = message.MessageID
 	}
-	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID)
+	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID, buffer)
 	tc := tools.GetToolContext(ctx)
 
-	chatContext := ""
-	if !cfg.Agent.UseNativeMultimodal {
-		chatContext = renderChatContext(buffer, lastReadMessage)
-		if chatContext == "" {
-			return
-		}
+	chatContext := a.renderChatContext(buffer, lastReadMessage, tc)
+	if chatContext == "" {
+		return
 	}
 
 	promptCtx := &persona.PromptContext{
@@ -305,37 +298,17 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		groupExtra = gc.ExtraPrompt
 	}
 
-	var msgs []*schema.Message
-	if cfg.Agent.UseNativeMultimodal {
-		dynamicPrompt := a.persona.GetDynamicSystemPrompt(promptCtx, groupExtra, recentPeople)
-		if isMention {
-			dynamicPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
-		}
-		msgs = []*schema.Message{
-			schema.SystemMessage(systemPrompt),
-			schema.SystemMessage(dynamicPrompt),
-		}
-		msgs = append(msgs, buildNativeModelMessages(buffer, lastReadMessage)...)
-		if len(msgs) == 2 {
-			return
-		}
-		if cfg.Debug.ShowPrompt {
-			zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
-			zap.L().Debug("动态系统提示词", zap.String("prompt", dynamicPrompt))
-		}
-	} else {
-		thinkPrompt := a.persona.GetThinkPrompt(promptCtx, chatContext, groupExtra, recentPeople)
-		if isMention {
-			thinkPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
-		}
-		msgs = []*schema.Message{
-			schema.SystemMessage(systemPrompt),
-			schema.UserMessage(thinkPrompt),
-		}
-		if cfg.Debug.ShowPrompt {
-			zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
-			zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
-		}
+	thinkPrompt := a.persona.GetThinkPrompt(promptCtx, chatContext, groupExtra, recentPeople)
+	if isMention {
+		thinkPrompt += "\n\n注意：有人提到你了，可能在找你说话，你可以看情况回复。"
+	}
+	msgs := []*schema.Message{
+		schema.SystemMessage(systemPrompt),
+		schema.UserMessage(thinkPrompt),
+	}
+	if cfg.Debug.ShowPrompt {
+		zap.L().Debug("系统提示词", zap.String("prompt", systemPrompt))
+		zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
 	}
 
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, agentThinkTimeout)
@@ -423,23 +396,29 @@ func (a *Agent) commitReadSnapshot(groupID int64, message *onebot.GroupMessage) 
 	a.lastReadMessage[groupID] = message
 }
 
-func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID int64) context.Context {
-	return tools.WithToolContext(ctx, &tools.ToolContext{
+func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID int64, messages []*onebot.GroupMessage) context.Context {
+	tc := &tools.ToolContext{
 		GroupID:           groupID,
 		MemoryMgr:         a.memory,
 		Bot:               a.bot,
 		SnapshotMessageID: snapshotMessageID,
-		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) (int64, error) {
+		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) error {
 			return a.doSpeak(callCtx, gid, content, replyTo, mentions)
 		},
-		SendStickerCallback: func(callCtx context.Context, gid int64, filePath string, description string) (int64, error) {
+		SendStickerCallback: func(callCtx context.Context, gid int64, filePath string, description string) error {
 			return a.doSendSticker(callCtx, gid, filePath, description)
 		},
 		MessageRecalledCallback: a.syncRecalledMessage,
-	})
+	}
+	for _, message := range messages {
+		if message != nil {
+			tc.RegisterMessage(message.MessageID)
+		}
+	}
+	return tools.WithToolContext(ctx, tc)
 }
 
-func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) (int64, error) {
+func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) error {
 	cfg := config.Get()
 	if cfg.Chat.TypingSimulation {
 		typingSpeed := cfg.Chat.TypingSpeed
@@ -459,7 +438,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return 0, ctx.Err()
+			return ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -467,7 +446,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	msgID, err := a.bot.SendGroupMessage(ctx, groupID, content, replyTo, mentions)
 	if err != nil {
 		zap.L().Error("发言失败", zap.Int64("group_id", groupID), zap.Error(err))
-		return 0, err
+		return err
 	}
 
 	msg := &onebot.GroupMessage{
@@ -495,14 +474,14 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 
 	a.onMessage(msg)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
-	return msgID, nil
+	return nil
 }
 
-func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath string, description string) (int64, error) {
+func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath string, description string) error {
 	msgID, err := a.bot.SendImageMessage(ctx, groupID, filePath, true)
 	if err != nil {
 		zap.L().Error("发送表情包失败", zap.Int64("group_id", groupID), zap.String("path", filePath), zap.Error(err))
-		return 0, err
+		return err
 	}
 
 	msg := &onebot.GroupMessage{
@@ -521,5 +500,5 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath strin
 	}
 	a.onMessage(msg)
 	zap.L().Info("发送表情包成功", zap.Int64("group_id", groupID), zap.String("desc", description))
-	return msgID, nil
+	return nil
 }

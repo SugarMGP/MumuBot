@@ -13,7 +13,7 @@ func migrateV2(db *gorm.DB) error {
 	return nil
 }
 
-func validateV2Schema(db *gorm.DB) error {
+func validateCurrentSchema(db *gorm.DB) error {
 	var exists bool
 	if err := db.Raw(`SELECT EXISTS (
 		SELECT 1 FROM information_schema.columns
@@ -22,7 +22,7 @@ func validateV2Schema(db *gorm.DB) error {
 		return err
 	}
 	if exists {
-		return fmt.Errorf("message_logs.forward_payload 在 schema v2 中不应存在")
+		return fmt.Errorf("message_logs.forward_payload 在当前 schema 中不应存在")
 	}
 	return nil
 }

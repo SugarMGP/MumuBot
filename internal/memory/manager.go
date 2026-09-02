@@ -345,7 +345,7 @@ func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bo
 		}
 
 		recalledAt := time.Now()
-		displayContent := RecalledMessageDisplayContent(item)
+		displayContent := RecalledMessageDisplayContent
 		if err := tx.Model(&item).Updates(map[string]any{
 			"recalled_at":         recalledAt,
 			"text_content":        "",

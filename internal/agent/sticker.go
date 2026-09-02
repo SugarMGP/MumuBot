@@ -23,13 +23,11 @@ func (a *Agent) autoSaveSticker(ctx context.Context, url string, description str
 	}
 
 	cfg := config.Get()
-	storagePath := cfg.Sticker.StoragePath
 	maxSizeMB := cfg.Sticker.MaxSizeMB
 	if maxSizeMB <= 0 {
 		maxSizeMB = 2
 	}
-
-	result, err := utils.DownloadImage(ctx, url, storagePath, maxSizeMB)
+	result, err := utils.DownloadImage(ctx, url, cfg.Sticker.StoragePath, maxSizeMB)
 	if err != nil {
 		zap.L().Debug("下载表情包失败", zap.String("url", url), zap.Error(err))
 		return

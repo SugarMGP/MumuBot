@@ -2,11 +2,11 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/tools"
 	"mumu-bot/internal/utils"
 	"strings"
 	"time"
@@ -147,7 +147,53 @@ func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot
 	return readMessages, currentMessages
 }
 
-func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage) string {
+func hasDisplayContext(messages []*onebot.GroupMessage) bool {
+	for _, message := range messages {
+		if message != nil && strings.TrimSpace(message.FinalContent) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) renderModelMessage(message *onebot.GroupMessage, tc *tools.ToolContext) string {
+	if message == nil || strings.TrimSpace(message.FinalContent) == "" {
+		return ""
+	}
+	userID := fmt.Sprintf("%d", message.UserID)
+	if message.UserID == a.bot.GetSelfID() {
+		userID = "你"
+	}
+	displayName := resolveMessageDisplayName(message.GroupCard, message.Nickname)
+	if displayName == "" {
+		displayName = userID
+	}
+	ref := tc.MessageRef(message.MessageID)
+	if ref != "" {
+		ref = "[" + ref + "] "
+	}
+	reply := ""
+	if message.Reply != nil {
+		if replyRef := tc.MessageRef(message.Reply.MessageID); replyRef != "" {
+			reply = "[回复 " + replyRef + "] "
+		} else if message.Reply.SenderID != 0 || strings.TrimSpace(message.Reply.Nickname) != "" || strings.TrimSpace(message.Reply.Content) != "" {
+			replyName := resolveMessageDisplayName(message.Reply.GroupCard, message.Reply.Nickname)
+			if replyName == "" {
+				replyName = "未知用户"
+			}
+			replyContent := strings.TrimSpace(message.Reply.Content)
+			if runes := []rune(replyContent); len(runes) > 20 {
+				replyContent = string(runes[:20])
+			}
+			reply = fmt.Sprintf("[回复 %s(%d): %s] ", replyName, message.Reply.SenderID, replyContent)
+		} else {
+			reply = "[回复历史消息] "
+		}
+	}
+	return fmt.Sprintf("%s[%s] %s(%s): %s%s\n", ref, message.Time.Format("15:04:05"), displayName, userID, reply, strings.TrimSpace(message.FinalContent))
+}
+
+func (a *Agent) renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage, tc *tools.ToolContext) string {
 	if len(buffer) == 0 {
 		return ""
 	}
@@ -155,17 +201,15 @@ func renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.Gr
 	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage)
 	var b strings.Builder
 	for _, message := range readMessages {
-		if message == nil || strings.TrimSpace(message.FinalContent) == "" {
+		content := a.renderModelMessage(message, tc)
+		if content == "" {
 			continue
 		}
 		b.WriteString("(OLD)")
-		b.WriteString(message.FinalContent)
+		b.WriteString(content)
 	}
 	for _, message := range currentMessages {
-		if message == nil || strings.TrimSpace(message.FinalContent) == "" {
-			continue
-		}
-		b.WriteString(message.FinalContent)
+		b.WriteString(a.renderModelMessage(message, tc))
 	}
 	return b.String()
 }
@@ -264,27 +308,12 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 	return strings.Join(lines, "\n")
 }
 
-func (a *Agent) getMemberProfileForDisplay(userID int64) (*memory.MemberProfile, error) {
-	if userID <= 0 {
-		return nil, errors.New("invalid user id")
-	}
-	if a == nil || a.memory == nil {
-		return nil, errors.New("member profile lookup unavailable")
-	}
-	return a.memory.GetMemberProfile(userID)
-}
-
-func (a *Agent) resolveRenderedDisplayName(userID int64, groupCard, nickname string) string {
+func resolveMessageDisplayName(groupCard, nickname string) string {
 	if card := strings.TrimSpace(groupCard); card != "" {
 		return card
 	}
 	if name := strings.TrimSpace(nickname); name != "" {
 		return name
-	}
-	if profile, err := a.getMemberProfileForDisplay(userID); err == nil {
-		if name := strings.TrimSpace(profile.Nickname); name != "" {
-			return name
-		}
 	}
 	return ""
 }
@@ -303,9 +332,6 @@ func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.Group
 		}
 	} else {
 		zap.L().Debug("补全提及成员显示名失败", zap.Int64("group_id", msg.GroupID), zap.Int64("user_id", userID), zap.Error(err))
-	}
-	if displayName := a.resolveRenderedDisplayName(userID, "", ""); displayName != "" {
-		return displayName
 	}
 	return fmt.Sprintf("%d", userID)
 }
@@ -326,14 +352,20 @@ func (a *Agent) describeImageCached(ctx context.Context, img onebot.ImageInfo) (
 		return "", nil
 	}
 
-	cacheKey := visionCacheKey("image", img.URL, img.File)
+	describe := a.vision.DescribeImage
+	kind := "image"
+	if img.SubType == 1 {
+		describe = a.vision.DescribeSticker
+		kind = "sticker"
+	}
+	cacheKey := visionCacheKey(kind, img.URL, img.File)
 	if cacheKey != "" {
 		if cached := a.visionCache.Get(cacheKey); cached != nil {
 			return cached.Value(), nil
 		}
 	}
 
-	desc, err := a.vision.DescribeImage(ctx, img.URL)
+	desc, err := describe(ctx, img.URL)
 	if err == nil && cacheKey != "" && strings.TrimSpace(desc) != "" {
 		a.visionCache.Set(cacheKey, desc, ttlcache.DefaultTTL)
 	}
@@ -405,16 +437,6 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	defer cancel()
 
 	cfg := config.Get()
-
-	replyInfo := ""
-	if msg.Reply != nil {
-		replyDisplayName := a.resolveRenderedDisplayName(msg.Reply.SenderID, msg.Reply.GroupCard, msg.Reply.Nickname)
-		replyInfo = fmt.Sprintf(" [回复 #%d]", msg.Reply.MessageID)
-		if replyDisplayName != "" {
-			replyInfo = fmt.Sprintf(" [回复 #%d %s]", msg.Reply.MessageID, replyDisplayName)
-		}
-	}
-
 	content := msg.Content
 	if len(msg.AtList) > 0 {
 		mentions := make([]string, 0, len(msg.AtList))
@@ -447,11 +469,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	for _, img := range msg.Images {
 		if img.SubType == 1 {
 			if img.Desc != "" {
-				if cfg.Agent.UseNativeMultimodal {
-					content += " [表情包]"
-				} else {
-					content += fmt.Sprintf(" [表情包:%s]", img.Desc)
-				}
+				content += fmt.Sprintf(" [表情包:%s]", img.Desc)
 				continue
 			}
 			var visionDesc string
@@ -465,27 +483,19 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 					a.autoSaveSticker(a.ctx, url, stickerDesc)
 				}(img.URL, visionDesc)
 			}
-			if cfg.Agent.UseNativeMultimodal {
-				content += " [表情包]"
-			} else if visionDesc != "" {
+			if visionDesc != "" {
 				content += fmt.Sprintf(" [表情包:%s]", visionDesc)
 			} else {
 				content += " [表情包]"
 			}
 		} else {
 			if img.Desc != "" {
-				if cfg.Agent.UseNativeMultimodal {
-					content += " [图片]"
-				} else {
-					content += fmt.Sprintf(" [图片:%s]", img.Desc)
-				}
+				content += fmt.Sprintf(" [图片:%s]", img.Desc)
 				continue
 			}
 			var visionDesc string
-			if !cfg.Agent.UseNativeMultimodal {
-				if d, err := a.describeImageCached(ctx, img); err == nil {
-					visionDesc = d
-				}
+			if d, err := a.describeImageCached(ctx, img); err == nil {
+				visionDesc = d
 			}
 			if visionDesc != "" {
 				content += fmt.Sprintf(" [图片:%s]", visionDesc)
@@ -530,17 +540,5 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 		}
 	}
 
-	var qid string
-	if msg.UserID == a.bot.GetSelfID() {
-		qid = "你"
-	} else {
-		qid = fmt.Sprintf("%d", msg.UserID)
-	}
-	displayName := a.resolveRenderedDisplayName(msg.UserID, msg.GroupCard, msg.Nickname)
-	if displayName == "" {
-		displayName = qid
-	}
-
-	return fmt.Sprintf("[%s] #%d %s(%s):%s %s\n",
-		msg.Time.Format("15:04:05"), msg.MessageID, displayName, qid, replyInfo, content)
+	return strings.TrimSpace(content)
 }
