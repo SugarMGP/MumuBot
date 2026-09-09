@@ -57,7 +57,7 @@
 | Node.js 22+ | 构建前端资源（仅从源码构建时需要） |
 | PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量 |
 | NapCat | OneBot 11 协议实现 |
-| 大语言模型 API | 兼容 OpenAI 格式；high/low 均需支持工具调用，不再要求 JSON object 输出模式 |
+| 大语言模型 API | 兼容 OpenAI 格式，需支持工具调用 |
 
 ### Docker Compose
 

@@ -55,6 +55,29 @@ func migrateV4(db *gorm.DB, selfID int64, dimensions int) error {
 			return fmt.Errorf("v4 切换: %w", err)
 		}
 	}
+	if err := db.Exec(`DO $$ DECLARE c record; BEGIN
+		FOR c IN SELECT conname,conrelid::regclass AS owner FROM pg_constraint
+		WHERE contype='f' AND conrelid=to_regclass('legacy_member_trait_evidence') AND confrelid='message_logs'::regclass
+		LOOP EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I',c.owner,c.conname); END LOOP;
+	END $$`).Error; err != nil {
+		return fmt.Errorf("v4 清理遗留约束: %w", err)
+	}
+	if err := db.Exec(`UPDATE knowledge_items ki SET reviewed_through_id=0,updated_at=now()
+		WHERE status='candidate' OR EXISTS(SELECT 1 FROM knowledge_relations kr WHERE kr.status='candidate' AND (kr.source_item_id=ki.id OR kr.target_item_id=ki.id))`).Error; err != nil {
+		return fmt.Errorf("v4 重置候选进度: %w", err)
+	}
+	if err := db.Exec("ALTER TABLE topic_summaries ALTER COLUMN embedding DROP NOT NULL").Error; err != nil {
+		return fmt.Errorf("v4 放宽摘要向量: %w", err)
+	}
+	if err := db.Exec(`INSERT INTO learning_states(group_id,last_message_log_id)
+		SELECT group_id,0 FROM message_logs GROUP BY group_id ON CONFLICT DO NOTHING;
+		UPDATE learning_states ls SET last_message_log_id=LEAST(ls.last_message_log_id,COALESCE((
+		 SELECT min(ml.id)-1 FROM message_logs ml LEFT JOIN topic_assignments ta ON ta.message_log_id=ml.id
+		 WHERE ml.group_id=ls.group_id AND ml.recalled_at IS NULL AND btrim(ml.text_content)<>''
+		 AND (ta.id IS NULL OR (ta.topic_id IS NOT NULL AND ta.id>COALESCE((SELECT max(ts.through_topic_assignment_id) FROM topic_summaries ts JOIN topic_assignments old ON old.id=ts.through_topic_assignment_id WHERE old.topic_id=ta.topic_id),0)))
+		),ls.last_message_log_id))`).Error; err != nil {
+		return fmt.Errorf("v4 接续统一整理水位: %w", err)
+	}
 	return nil
 }
 

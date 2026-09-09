@@ -152,22 +152,6 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 			return err
 		}
 	}
-	if current < 5 {
-		if err := migrateV5(db); err != nil {
-			return err
-		}
-		if err := recordSchemaVersion(db, 5, "knowledge_review_repair"); err != nil {
-			return err
-		}
-	}
-	if current < 6 {
-		if err := migrateV6(db); err != nil {
-			return err
-		}
-		if err := recordSchemaVersion(db, 6, "unified_conversation"); err != nil {
-			return err
-		}
-	}
 	if err := validateV4Schema(db, dimensions); err != nil {
 		return err
 	}

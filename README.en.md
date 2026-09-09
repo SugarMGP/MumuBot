@@ -57,7 +57,7 @@ Core capabilities of this project:
 | Node.js 22+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors |
 | NapCat | OneBot 11 protocol implementation |
-| LLM API | OpenAI-compatible; both high and low tiers must support tool calling; JSON object output mode is no longer required |
+| LLM API | OpenAI-compatible, must support tool calling |
 
 ### Docker Compose
 
