@@ -7,12 +7,11 @@ import (
 	"sync"
 
 	"github.com/bytedance/sonic"
+	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
-
-	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
 )
 
 // ServerConfig MCP 服务器配置

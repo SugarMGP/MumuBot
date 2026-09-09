@@ -2,11 +2,12 @@ package views
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"mumu-bot/internal/memory"
 	topicpkg "mumu-bot/internal/topic"
 	"mumu-bot/internal/web/services"
-	"strings"
-	"time"
 )
 
 func topicSummary(topic services.TopicThreadView) memory.TopicSummary {

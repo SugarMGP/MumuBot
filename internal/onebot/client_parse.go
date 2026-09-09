@@ -2,10 +2,11 @@ package onebot
 
 import (
 	"fmt"
-	"mumu-bot/internal/utils"
 	"strconv"
 	"strings"
 	"time"
+
+	"mumu-bot/internal/utils"
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
@@ -112,7 +113,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 
 		case "face":
 			face := FaceInfo{}
-			// ID
+			// 表情 ID
 			if id, ok := parseInt(data["id"]); ok {
 				face.ID = id
 			}

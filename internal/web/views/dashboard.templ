@@ -55,7 +55,6 @@ templ DashboardBody(data DashboardPageData) {
 						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">OneBot 连接</span><span class={ ternaryString(data.OneBotConnected, "badge badge-success badge-soft badge-sm", "badge badge-error badge-soft badge-sm") }>{ ConnectionText(data.OneBotConnected) }</span></div>
 						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">机器人账号</span><code class="text-xs">{ fmt.Sprintf("%d", data.SelfID) }</code></div>
 						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">扩展工具</span><span>{ fmt.Sprintf("%d", data.MCPToolCount) }</span></div>
-						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">群文化学习</span><span class="badge badge-success badge-soft badge-sm">{ boolText(data.LearningEnabled) }</span></div>
 					</div>
 				</div>
 			</section>

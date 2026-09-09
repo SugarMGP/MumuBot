@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
-	"mumu-bot/internal/web/auth"
-	"mumu-bot/internal/web/views"
 	"net/http"
 	neturl "net/url"
 	"strings"
+
+	"mumu-bot/internal/web/auth"
+	"mumu-bot/internal/web/views"
 
 	"github.com/a-h/templ"
 )
@@ -104,7 +105,6 @@ func (a *App) renderPageResponse(w http.ResponseWriter, r *http.Request, full te
 func (a *App) runtimeSnapshot() RuntimeSnapshot {
 	snapshot := RuntimeSnapshot{}
 	if a.cfg != nil {
-		snapshot.LearningOn = a.cfg.Learning.Enabled
 		snapshot.EnabledGroups = countEnabledGroups(a.cfg.Groups)
 	}
 	if a.mumuAgent != nil {

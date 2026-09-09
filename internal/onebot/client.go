@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/utils"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/utils"
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
@@ -168,7 +169,7 @@ func (c *Client) enqueueEvent(raw []byte) {
 			return
 		}
 		// 按事件类型确认对应业务回调已就绪，未就绪则直接丢弃且不分配序号，
-		// 保证每个已分配序号的事件最终都能进入业务回调消费。
+		// 保证每个已分配序号的事件最终都能进入业务回调消费
 		if notice == "group_recall" {
 			if c.onRecall == nil {
 				return
@@ -204,7 +205,7 @@ func (c *Client) enqueueEvent(raw []byte) {
 	c.dispatchEvent(groupID, groupEvent{event: event, receivedAt: receivedAt})
 }
 
-// nextArrivalSeq 为该群分配递增到达序号，事件入口单线程调用，序号即推送顺序。
+// nextArrivalSeq 为该群分配递增到达序号，事件入口单线程调用，序号即推送顺序
 func (c *Client) nextArrivalSeq(groupID int64) uint64 {
 	c.seqMu.Lock()
 	defer c.seqMu.Unlock()
@@ -212,8 +213,8 @@ func (c *Client) nextArrivalSeq(groupID int64) uint64 {
 	return c.groupSeq[groupID]
 }
 
-// dispatchEvent 每条事件直接并发处理，不做按群串行或并发上限。
-// 事件入口已确认对应业务回调就绪，分发后该事件必然进入业务回调消费序号。
+// dispatchEvent 每条事件直接并发处理，不做按群串行或并发上限
+// 事件入口已确认对应业务回调就绪，分发后该事件必然进入业务回调消费序号
 func (c *Client) dispatchEvent(groupID int64, event groupEvent) {
 	event.arrivalSeq = c.nextArrivalSeq(groupID)
 	c.eventWG.Add(1)
@@ -294,7 +295,7 @@ func (c *Client) handleGroupEvent(queued groupEvent) {
 func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
 	msg := c.parseGroupMessage(event)
 	if msg == nil {
-		// 解析失败：记录现场并构造占位消息消费到达序号，避免上层提交重排器死等。
+		// 解析失败：记录现场并构造占位消息消费到达序号，避免上层提交重排器死等
 		groupID, _ := utils.ParseInt64Value(event["group_id"])
 		messageID, _ := utils.ParseInt64Value(event["message_id"])
 		zap.L().Warn("群消息段解析失败，已构造占位消息", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Any("post_type", event["post_type"]))
@@ -318,7 +319,7 @@ func (c *Client) handleNoticeEvent(event map[string]interface{}, receivedAt time
 }
 
 func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	// 有效性由业务层校验：无效戳一戳也会通过占位路径消费序号，不在此处提前返回。
+	// 有效性由业务层校验：无效戳一戳也会通过占位路径消费序号，不在此处提前返回
 	groupID, _ := utils.ParseInt64Value(event["group_id"])
 	userID, _ := utils.ParseInt64Value(event["user_id"])
 	targetID, _ := utils.ParseInt64Value(event["target_id"])
@@ -337,7 +338,7 @@ func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt 
 }
 
 func (c *Client) handleGroupRecallNotice(event map[string]interface{}, arrivalSeq uint64) {
-	// 有效性由业务层校验（无效撤回会消费序号后跳过）。
+	// 有效性由业务层校验（无效撤回会消费序号后跳过）
 	groupID, _ := utils.ParseInt64Value(event["group_id"])
 	messageID, _ := utils.ParseInt64Value(event["message_id"])
 	operatorID, _ := utils.ParseInt64Value(event["operator_id"])
@@ -421,7 +422,7 @@ func (c *Client) IsConnected() bool {
 func (c *Client) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
-		// 先封死连接发布并终止拨号、重连和 SDK 事件流。
+		// 先封死连接发布并终止拨号、重连和 SDK 事件流
 		c.stopTransport()
 		c.connMu.Lock()
 		sdk := c.sdk
@@ -431,9 +432,9 @@ func (c *Client) Close() error {
 			closeErr = sdk.Close()
 		}
 
-		// 事件入口完全退出后，等待所有已分发的并发事件处理完成。
+		// 事件入口完全退出后，等待所有已分发的并发事件处理完成
 		// 注意：不清零 selfID——Agent 停机排空提交队列时仍需用真实账号
-		// 区分机器人自身消息；账号未就绪的语义由断线重连路径负责。
+		// 区分机器人自身消息；账号未就绪的语义由断线重连路径负责
 		c.transportWG.Wait()
 		c.eventWG.Wait()
 

@@ -3,6 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"mumu-bot/internal/agent"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/llm"
@@ -12,11 +18,6 @@ import (
 	"mumu-bot/internal/onebot"
 	webapp "mumu-bot/internal/web/app"
 	"mumu-bot/internal/web/services"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"go.uber.org/zap"
 )

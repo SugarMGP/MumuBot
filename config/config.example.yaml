@@ -38,6 +38,7 @@ groups:
 
 # Agent 决策配置
 agent:
+  think_timeout_seconds: 60   # 主 Agent 单轮超时
   think_interval: 15            # 决策间隔（秒）
   think_debounce_ms: 5000       # 思考聚合窗口（毫秒）
   message_buffer_size: 30       # 消息缓冲区大小
@@ -62,14 +63,14 @@ chat:
     max_messages: 30        # 周期内最大消息数（超过后概率降至最低）
     min_prob: 0.1           # 最小保底概率（即使刷屏也保留 0.1 的插话概率）
 
-# 统一群聊整理；enabled 只控制群文化学习，不关闭话题和稳定知识整理
+# 统一群聊整理
 learning:
-  enabled: true
+  max_step: 25                 # Memory Agent 最大步数
+  timeout_seconds: 300        # Memory Agent 单轮超时
   interval_minutes: 5           # 同群两次整理的最短间隔，包括失败尝试
   recovery_interval: 60         # 检查待处理任务的间隔，不直接触发模型调用
   batch_size: 50                # 累计到此数量后批量整理，实际输入还受文本预算限制
   max_wait_minutes: 15          # 未满批次时的最长等待条件，积压时仍受全局限速约束
-  request_interval_seconds: 20  # 所有后台推理请求的最短间隔，包括工具续轮；按模型配额调整
 
 # 两档模型配置（high/low 均需支持工具调用，不要求 JSON object 输出模式）
 # 高档模型：用于沐沐实时思考与回复，推荐使用 GLM-4.7、Mimo v2.5 Pro 等旗舰模型

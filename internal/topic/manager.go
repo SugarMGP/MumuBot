@@ -2,9 +2,10 @@ package topic
 
 import (
 	"context"
+	"strings"
+
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
-	"strings"
 )
 
 type Manager struct{ store *DBStore }

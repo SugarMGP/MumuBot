@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/bytedance/sonic"
 	cb "github.com/cloudwego/eino/callbacks"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	callbacktpl "github.com/cloudwego/eino/utils/callbacks"
 	"github.com/eino-contrib/jsonschema"
+	"go.uber.org/zap"
 )
 
 type toolLogStateKey struct{}
@@ -29,7 +28,7 @@ type duplicateToolOutput struct {
 
 var sortedJSONAPI = sonic.Config{SortMapKeys: true, UseNumber: true}.Froze()
 
-// NewToolArgumentsHandler 创建按工具 schema 矫正并标准化参数的处理器。
+// NewToolArgumentsHandler 创建按工具 schema 矫正并标准化参数的处理器
 func NewToolArgumentsHandler(ctx context.Context, toolList []einotool.BaseTool) (func(context.Context, string, string) (string, error), error) {
 	schemas := make(map[string]*jsonschema.Schema, len(toolList))
 	for _, t := range toolList {
@@ -121,7 +120,7 @@ func coerceToolArgument(value any, parameterSchema *jsonschema.Schema) any {
 	return value
 }
 
-// ToolDedupMiddleware 拦截同一轮 think 中完全相同的工具调用。
+// ToolDedupMiddleware 拦截同一轮 think 中完全相同的工具调用
 func ToolDedupMiddleware() compose.InvokableToolMiddleware {
 	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
 		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
@@ -166,7 +165,7 @@ func toolOutputSucceeded(output *compose.ToolOutput) bool {
 	return *result.Success
 }
 
-// NewToolLogHandler 创建统一的工具调用日志回调。
+// NewToolLogHandler 创建统一的工具调用日志回调
 func NewToolLogHandler() cb.Handler {
 	return callbacktpl.NewHandlerHelper().
 		Tool(&callbacktpl.ToolCallbackHandler{

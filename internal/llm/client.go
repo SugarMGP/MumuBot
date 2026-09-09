@@ -3,10 +3,10 @@ package llm
 import (
 	"context"
 	"fmt"
-	"mumu-bot/internal/config"
-	"net/http"
 	"strings"
 	"sync"
+
+	"mumu-bot/internal/config"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
@@ -69,12 +69,7 @@ func NewClientForTier(tier Tier) (model.ToolCallingChatModel, error) {
 			return
 		}
 
-		var client *http.Client
-		if tier == TierLow {
-			client = rateLimitedClient()
-		}
 		chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
-			HTTPClient:  client,
 			BaseURL:     baseURL,
 			APIKey:      apiKey,
 			Model:       modelName,

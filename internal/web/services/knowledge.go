@@ -2,8 +2,9 @@ package services
 
 import (
 	"context"
-	"mumu-bot/internal/memory"
 	"strings"
+
+	"mumu-bot/internal/memory"
 )
 
 type KnowledgeFilter struct {

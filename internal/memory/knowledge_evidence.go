@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// A proof remains usable only while every required source message remains usable.
+// 只有全部必要原文仍然有效时，整组证据才有效
 const validKnowledgeSetSQL = `(SELECT count(*) FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id) BETWEEN 1 AND 16
  AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em JOIN message_logs ml ON ml.id=em.message_log_id WHERE em.evidence_set_id=es.id AND (ml.recalled_at IS NOT NULL OR btrim(ml.text_content)=''))`
 
@@ -177,7 +177,7 @@ func (m *Manager) ListKnowledgeEvidence(ctx context.Context, groupID int64, item
 	return result, nil
 }
 
-// InvalidateKnowledgeEvidence runs inside the caller's same-group recall transaction.
+// InvalidateKnowledgeEvidence 在调用方的同群消息撤回事务中使相关证据失效
 func InvalidateKnowledgeEvidence(tx *gorm.DB, groupID int64) error {
 	if err := tx.Exec(`UPDATE knowledge_items ki SET status='candidate',reviewed_through_id=0,updated_at=now() WHERE ki.group_id=? AND ki.status='active' AND NOT (`+knowledgeEvidenceSQL("item_id")+`)`, groupID).Error; err != nil {
 		return err

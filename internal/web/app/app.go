@@ -2,6 +2,13 @@ package app
 
 import (
 	"fmt"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"mumu-bot/internal/agent"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
@@ -9,12 +16,6 @@ import (
 	"mumu-bot/internal/web/auth"
 	"mumu-bot/internal/web/services"
 	"mumu-bot/internal/web/views"
-	"net/http"
-	"os"
-	"path"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/go-chi/chi/v5"
@@ -25,7 +26,6 @@ type RuntimeSnapshot struct {
 	SelfID        int64
 	MCPToolCount  int
 	CurrentMood   *memory.MoodState
-	LearningOn    bool
 	EnabledGroups int
 }
 

@@ -2,19 +2,19 @@ package tools
 
 import (
 	"context"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/memory"
-	"mumu-bot/internal/onebot"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/onebot"
+
 	getreq "github.com/cloudwego/eino-ext/components/tool/httprequest/get"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-
 	"go.uber.org/zap"
 )
 
@@ -103,7 +103,7 @@ func GetToolContext(ctx context.Context) *ToolContext {
 	return nil
 }
 
-// IsToolCallSeen 判断本轮是否已经成功执行过相同工具调用。
+// IsToolCallSeen 判断本轮是否已经成功执行过相同工具调用
 func (tc *ToolContext) IsToolCallSeen(toolName string, arguments string) bool {
 	key := toolName + "-" + arguments
 
@@ -114,7 +114,7 @@ func (tc *ToolContext) IsToolCallSeen(toolName string, arguments string) bool {
 	return ok
 }
 
-// MarkToolCallSucceeded 记录已经成功执行的工具调用。
+// MarkToolCallSucceeded 记录已经成功执行的工具调用
 func (tc *ToolContext) MarkToolCallSucceeded(toolName string, arguments string) {
 	key := toolName + "-" + arguments
 	tc.seenMu.Lock()
@@ -160,7 +160,7 @@ func LogToolCall(toolName string, inputJSON string, outputJSON string, err error
 
 // GetGroupMemberDetailInput 获取群成员详情的输入参数
 type GetGroupMemberDetailInput struct {
-	// UserID 要查询的群成员QQ号
+	// UserID 要查询的群成员 QQ 号
 	UserID int64 `json:"user_id" jsonschema:"description=要查询的群成员QQ号"`
 }
 
@@ -171,7 +171,7 @@ type GetGroupMemberDetailOutput struct {
 	UserID        int64  `json:"user_id,omitempty"`
 	Nickname      string `json:"nickname,omitempty"`
 	GroupNickname string `json:"group_nickname,omitempty"` // 群昵称
-	Role          string `json:"role,omitempty"`           // owner/admin/member
+	Role          string `json:"role,omitempty"`           // 群主（owner）、管理员（admin）或成员（member）
 	Title         string `json:"title,omitempty"`          // 专属头衔
 	Level         string `json:"level,omitempty"`          // 群等级
 	JoinTime      string `json:"join_time,omitempty"`      // 入群时间

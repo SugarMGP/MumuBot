@@ -139,7 +139,7 @@ func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64,
 	})
 }
 
-func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int, beforeRequest func(context.Context) error) error {
+func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int) error {
 	var pending []struct {
 		ID      uint
 		Kind    string
@@ -152,9 +152,6 @@ func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int, before
 		return err
 	}
 	for _, item := range pending {
-		if err := beforeRequest(ctx); err != nil {
-			return err
-		}
 		values, err := m.embedding.Embed(ctx, item.Content)
 		if err != nil {
 			return err

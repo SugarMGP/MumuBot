@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// ParseInt64Value 将常见 JSON/OneBot 数值类型转换为 int64。
+// ParseInt64Value 将常见 JSON/OneBot 数值类型转换为 int64
 func ParseInt64Value(v any) (int64, bool) {
 	switch value := v.(type) {
 	case int64:
@@ -27,7 +27,7 @@ func ParseInt64Value(v any) (int64, bool) {
 	}
 }
 
-// FirstNonEmpty 返回 candidates 中第一个 TrimSpace 后非空的字符串。
+// FirstNonEmpty 返回 candidates 中第一个 TrimSpace 后非空的字符串
 func FirstNonEmpty(candidates ...string) string {
 	for _, s := range candidates {
 		trimmed := strings.TrimSpace(s)
@@ -38,7 +38,7 @@ func FirstNonEmpty(candidates ...string) string {
 	return ""
 }
 
-// UniqueIDs 去重 []uint，跳过零值，保持插入顺序。
+// UniqueIDs 去重 []uint，跳过零值，保持插入顺序
 func UniqueIDs(ids []uint) []uint {
 	seen := make(map[uint]struct{}, len(ids))
 	result := make([]uint, 0, len(ids))

@@ -2,14 +2,15 @@ package app
 
 import (
 	"errors"
-	"mumu-bot/internal/logger"
-	"mumu-bot/internal/modelstats"
-	"mumu-bot/internal/web/services"
-	"mumu-bot/internal/web/views"
 	"net/http"
 	neturl "net/url"
 	"strings"
 	"time"
+
+	"mumu-bot/internal/logger"
+	"mumu-bot/internal/modelstats"
+	"mumu-bot/internal/web/services"
+	"mumu-bot/internal/web/views"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -36,7 +37,6 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		OneBotConnected:   snapshot.Connected,
 		SelfID:            snapshot.SelfID,
 		MCPToolCount:      snapshot.MCPToolCount,
-		LearningEnabled:   snapshot.LearningOn,
 		CurrentMood:       snapshot.CurrentMood,
 		Flash:             flash,
 	}, r.URL.Path))

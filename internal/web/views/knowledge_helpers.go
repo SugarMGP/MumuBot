@@ -2,9 +2,11 @@ package views
 
 import (
 	"fmt"
-	"github.com/bytedance/sonic"
+
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/web/services"
+
+	"github.com/bytedance/sonic"
 )
 
 type KnowledgeDetailPageData struct {

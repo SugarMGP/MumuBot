@@ -16,9 +16,9 @@ import (
 type SpeakInput struct {
 	// Content 你想说的话
 	Content string `json:"content" jsonschema:"description=说话内容"`
-	// ReplyTo 要回复的消息消息编号（可选）
+	// ReplyTo 要回复的消息编号（可选）
 	ReplyTo string `json:"reply_to,omitempty" jsonschema:"description=要回复的消息编号，例如 m3"`
-	// Mentions 要@的用户QQ号列表（可选）
+	// Mentions 要提及的用户 QQ 号列表（可选）
 	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
 }
 
@@ -127,7 +127,7 @@ func NewStayQuietTool() (tool.InvokableTool, error) {
 
 // PokeInput 戳一戳的输入参数
 type PokeInput struct {
-	// UserID 要戳的群成员QQ号
+	// UserID 要戳的群成员 QQ 号
 	UserID int64 `json:"user_id" jsonschema:"description=要戳的群成员QQ号"`
 }
 

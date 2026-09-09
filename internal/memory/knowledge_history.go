@@ -3,8 +3,9 @@ package memory
 import (
 	"context"
 	"fmt"
-	"gorm.io/gorm"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 func (m *Manager) knowledgeHistoryQuery(ctx context.Context, groupID int64, upper uint) *gorm.DB {

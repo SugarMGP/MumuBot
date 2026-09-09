@@ -3,13 +3,14 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/tools"
 	"mumu-bot/internal/utils"
-	"strings"
-	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
@@ -67,7 +68,7 @@ func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot 
 	related = append(related, 0, selfID)
 	local, err := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: groupID, SubjectIDs: related, Prepared: &query, ThroughID: upper, Limit: 6})
 	direct := local
-	// Reserve two slots for neighbors, then refill unused slots from direct matches.
+	// 为关联知识预留两个名额，未用完的名额再由直接命中结果补齐
 	if len(local) > 4 {
 		local = append([]memory.KnowledgeItem(nil), local[:4]...)
 	}

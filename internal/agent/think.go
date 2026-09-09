@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"time"
+
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
-	"time"
 
 	"github.com/cloudwego/eino/compose"
 	flowagent "github.com/cloudwego/eino/flow/agent"
@@ -312,7 +313,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
 	}
 
-	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, agentThinkTimeout)
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, time.Duration(config.Get().Agent.ThinkTimeoutSeconds)*time.Second)
 	defer cancelTimeout()
 
 	opts := make([]flowagent.AgentOption, 0, 2)
@@ -324,7 +325,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	result, err := a.react.Generate(ctxWithTimeout, msgs, opts...)
 	if err != nil {
 		if errors.Is(ctxWithTimeout.Err(), context.DeadlineExceeded) {
-			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Duration("timeout", agentThinkTimeout))
+			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Int("timeout_seconds", config.Get().Agent.ThinkTimeoutSeconds))
 		} else if errors.Is(ctxWithTimeout.Err(), context.Canceled) || errors.Is(a.ctx.Err(), context.Canceled) {
 			zap.L().Debug("思考已取消", zap.Int64("group_id", groupID))
 		} else {

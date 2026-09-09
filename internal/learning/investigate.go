@@ -3,36 +3,32 @@ package learning
 import (
 	"context"
 	"fmt"
+	"time"
+	"unicode/utf8"
+
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/llm"
+	"mumu-bot/internal/memory"
+	agenttools "mumu-bot/internal/tools"
+
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
-	"mumu-bot/internal/memory"
-	"time"
-	"unicode/utf8"
-)
-
-const (
-	maxMemorySteps     = 6
-	maxMemoryReadCalls = 6
 )
 
 type investigation struct {
-	manager       *memory.Manager
-	batch         memory.KnowledgeBatch
-	seen          map[uint]bool
-	partial       map[uint]int
-	required      []uint
-	readCalls     int
-	textChars     int
-	finished      bool
-	rows          []memory.MessageLog
-	topics        memory.ConversationContext
-	beforeRequest func(context.Context) error
+	manager   *memory.Manager
+	batch     memory.KnowledgeBatch
+	seen      map[uint]bool
+	partial   map[uint]int
+	required  []uint
+	textChars int
+	finished  bool
+	rows      []memory.MessageLog
+	topics    memory.ConversationContext
 }
 
 type finishInput struct {
@@ -64,12 +60,11 @@ type contextInput struct {
 }
 
 func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance bool, rows []memory.MessageLog, candidates []memory.KnowledgeItem) error {
-	ctx, cancel := context.WithTimeout(l.ctx, 120*time.Second+(maxMemorySteps+maxMemoryReadCalls)*time.Duration(config.Get().Learning.RequestIntervalSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(config.Get().Learning.TimeoutSeconds)*time.Second)
 	defer cancel()
 	ctx = llm.WithTask(ctx, "memory_agent", config.Get().ModelTiers.Low.Model)
 	run := &investigation{manager: l.memMgr, batch: memory.KnowledgeBatch{GroupID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: advance, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}
 	run.rows = rows
-	run.beforeRequest = l.waitRequest
 	var err error
 	if len(rows) > 0 {
 		run.topics, err = l.memMgr.ConversationContext(ctx, groupID, upper, rows)
@@ -127,18 +122,14 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance 
 		return err
 	}
 	messages = append(messages, schema.UserMessage("已有话题及原归属："+topicText))
-	if !config.Get().Learning.Enabled {
-		messages = append(messages, schema.UserMessage("本群文化学习关闭：继续整理话题和稳定事实，但不新建 term/expression/alias。"))
-	}
 	run.textChars = utf8.RuneCountInString(initial) + utf8.RuneCountInString(candidateText) + utf8.RuneCountInString(topicText)
 	if run.textChars > 24000 {
 		return fmt.Errorf("整理输入超出预算")
 	}
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
-		ToolCallingModel: &memoryChatModel{ToolCallingChatModel: l.model, beforeRequest: l.waitRequest},
-		ToolsConfig:      compose.ToolsNodeConfig{Tools: available, ExecuteSequentially: true, ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: run.readBudget}}},
-		// Eino counts model + tools nodes, plus one direct-return node after finish.
-		MaxStep:            2*maxMemorySteps + 1,
+		ToolCallingModel:   l.model,
+		ToolsConfig:        compose.ToolsNodeConfig{Tools: available, ExecuteSequentially: true, ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: agenttools.ToolDedupMiddleware()}}},
+		MaxStep:            config.Get().Learning.MaxStep,
 		ToolReturnDirectly: map[string]struct{}{"finishMemoryBatch": {}},
 	})
 	if err != nil {
@@ -242,9 +233,6 @@ func (r *investigation) search(ctx context.Context, input *searchInput) (string,
 		return sonic.MarshalString(map[string]any{"item": items[0], "evidence_sets": groups[start:end], "relations": relations, "has_more": more, "next_offset": input.Offset + 10, "instruction": "使用 readContext 阅读原文后才能作为本轮证据；用 item_id 直接读取关系另一端"})
 	}
 	if input.Query != "" {
-		if err := r.beforeRequest(ctx); err != nil {
-			return "", err
-		}
 	}
 	items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, Query: input.Query, SubjectUserID: input.SubjectUserID, IncludeInactive: true, ThroughID: r.batch.ThroughID, Limit: 11, Offset: input.Offset})
 	if err != nil {
@@ -296,13 +284,6 @@ func (r *investigation) finish(ctx context.Context, input *finishInput) (string,
 	r.batch.Items = input.Items
 	r.batch.Relations = input.Relations
 	r.batch.ReviewedIDs = input.ReviewedIDs
-	if !config.Get().Learning.Enabled {
-		for _, item := range input.Items {
-			if item.ID == 0 && (item.Kind == "term" || item.Kind == "expression" || item.Kind == "alias") {
-				return "", fmt.Errorf("群文化新增已关闭")
-			}
-		}
-	}
 	var result *memory.KnowledgeCommitResult
 	var err error
 	if r.batch.AdvanceCursor {

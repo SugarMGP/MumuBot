@@ -66,11 +66,12 @@ type GroupConfig struct {
 
 // AgentConfig Agent决策配置
 type AgentConfig struct {
-	ThinkInterval     int `mapstructure:"think_interval"`      // 决策间隔（秒）
-	ThinkDebounceMS   int `mapstructure:"think_debounce_ms"`   // 思考聚合窗口（毫秒）
-	MessageBufferSize int `mapstructure:"message_buffer_size"` // 消息缓冲区大小
-	MaxStep           int `mapstructure:"max_step"`            // ReAct 最大步数
-	MaxCoroutine      int `mapstructure:"max_coroutine"`       // 最大并发思考进程数（0表示不限制）
+	ThinkTimeoutSeconds int `mapstructure:"think_timeout_seconds"` // 主 Agent 单轮超时（秒）
+	ThinkInterval       int `mapstructure:"think_interval"`        // 决策间隔（秒）
+	ThinkDebounceMS     int `mapstructure:"think_debounce_ms"`     // 思考聚合窗口（毫秒）
+	MessageBufferSize   int `mapstructure:"message_buffer_size"`   // 消息缓冲区大小
+	MaxStep             int `mapstructure:"max_step"`              // ReAct 最大步数
+	MaxCoroutine        int `mapstructure:"max_coroutine"`         // 最大并发思考进程数（0表示不限制）
 }
 
 // ChatConfig 聊天行为配置
@@ -100,12 +101,12 @@ type TimeRuleConfig struct {
 
 // LearningConfig 学习系统配置
 type LearningConfig struct {
-	Enabled                bool `mapstructure:"enabled"`           // 是否学习群文化；话题和稳定知识整理始终运行
-	IntervalMinutes        int  `mapstructure:"interval_minutes"`  // 学习任务间隔（分钟）
-	RecoveryInterval       int  `mapstructure:"recovery_interval"` // 后台恢复扫描间隔（秒）
-	BatchSize              int  `mapstructure:"batch_size"`        // 每次学习的消息数量限制
-	MaxWaitMinutes         int  `mapstructure:"max_wait_minutes"`
-	RequestIntervalSeconds int  `mapstructure:"request_interval_seconds"`
+	MaxStep          int `mapstructure:"max_step"`          // Memory Agent 最大步数
+	TimeoutSeconds   int `mapstructure:"timeout_seconds"`   // Memory Agent 单轮超时（秒）
+	IntervalMinutes  int `mapstructure:"interval_minutes"`  // 学习任务间隔（分钟）
+	RecoveryInterval int `mapstructure:"recovery_interval"` // 后台恢复扫描间隔（秒）
+	BatchSize        int `mapstructure:"batch_size"`        // 每次学习的消息数量限制
+	MaxWaitMinutes   int `mapstructure:"max_wait_minutes"`
 }
 
 // ModelConfig 对话模型配置
@@ -239,6 +240,18 @@ func overrideModelEndpoint(prefix string, apiKey, baseURL, modelName *string) {
 }
 
 func validate(c *Config) error {
+	if c.Learning.MaxStep == 0 {
+		c.Learning.MaxStep = 25
+	}
+	if c.Learning.TimeoutSeconds == 0 {
+		c.Learning.TimeoutSeconds = 300
+	}
+	if c.Learning.TimeoutSeconds < 1 {
+		return fmt.Errorf("learning.timeout_seconds 必须大于 0")
+	}
+	if c.Learning.MaxStep < 1 {
+		return fmt.Errorf("learning.max_step 必须大于 0")
+	}
 	if strings.TrimSpace(c.Sticker.StoragePath) == "" {
 		c.Sticker.StoragePath = "./stickers"
 	}
@@ -251,11 +264,8 @@ func validate(c *Config) error {
 	if c.Learning.MaxWaitMinutes == 0 {
 		c.Learning.MaxWaitMinutes = 15
 	}
-	if c.Learning.RequestIntervalSeconds == 0 {
-		c.Learning.RequestIntervalSeconds = 20
-	}
-	if c.Learning.IntervalMinutes < 1 || c.Learning.MaxWaitMinutes < c.Learning.IntervalMinutes || c.Learning.RequestIntervalSeconds < 1 {
-		return fmt.Errorf("整理间隔和请求间隔必须为正，最大等待时间不能短于整理间隔")
+	if c.Learning.IntervalMinutes < 1 || c.Learning.MaxWaitMinutes < c.Learning.IntervalMinutes {
+		return fmt.Errorf("整理间隔必须为正，最大等待时间不能短于整理间隔")
 	}
 	if c.Learning.BatchSize < 1 || c.Learning.BatchSize > 100 {
 		return fmt.Errorf("learning.batch_size 必须在1到100之间")

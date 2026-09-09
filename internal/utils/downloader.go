@@ -119,7 +119,7 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 		return nil, fmt.Errorf("文件大小超过限制")
 	}
 
-	// 关闭临时文件后再移动，确保内容已刷新。
+	// 关闭临时文件后再移动，确保内容已刷新
 	if err := tmpFile.Close(); err != nil {
 		return nil, fmt.Errorf("关闭临时文件失败: %w", err)
 	}

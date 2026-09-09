@@ -3,11 +3,12 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
+
 	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"slices"
-	"strings"
 )
 
 type ConversationTopic struct {
@@ -104,7 +105,7 @@ func (m *Manager) topicContexts(ctx context.Context, groupID int64, upper uint, 
 	return result, nil
 }
 
-// CommitConversation is the only background write boundary: topic, summary and knowledge commit together.
+// CommitConversation 是后台唯一的写入入口，话题归属、摘要和知识在同一事务中提交
 func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, rows []MessageLog, observed ConversationContext, topics []ConversationTopic, noTopic []uint) (*KnowledgeCommitResult, error) {
 	var result *KnowledgeCommitResult
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -223,7 +224,7 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 					return err
 				}
 			}
-			// Migrated messages may already have a newer summary; never replace it with an older batch.
+			// 迁移后的消息可能已有较新的摘要，不能用较早批次覆盖
 			if through <= existingThrough {
 				continue
 			}

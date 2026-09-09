@@ -2,12 +2,14 @@ package app
 
 import (
 	"errors"
-	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
-	"mumu-bot/internal/web/services"
-	"mumu-bot/internal/web/views"
 	"net/http"
 	"strings"
+
+	"mumu-bot/internal/web/services"
+	"mumu-bot/internal/web/views"
+
+	"github.com/go-chi/chi/v5"
+	"gorm.io/gorm"
 )
 
 func (a *App) handleKnowledge(w http.ResponseWriter, r *http.Request) {

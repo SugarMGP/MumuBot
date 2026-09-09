@@ -2,13 +2,14 @@ package views
 
 import (
 	"fmt"
-	"mumu-bot/internal/memory"
-	"mumu-bot/internal/modelstats"
-	"mumu-bot/internal/web/services"
 	neturl "net/url"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/modelstats"
+	"mumu-bot/internal/web/services"
 
 	"github.com/bytedance/sonic"
 )

@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/learning"
 	"mumu-bot/internal/llm"
@@ -12,8 +15,6 @@ import (
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 	"mumu-bot/internal/topic"
-	"sync"
-	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -24,7 +25,6 @@ import (
 )
 
 const (
-	agentThinkTimeout   = 60 * time.Second
 	replyCacheTTL       = 30 * time.Minute
 	replyCacheCapacity  = 1024
 	visionCacheTTL      = 6 * time.Hour
@@ -301,20 +301,20 @@ func (a *Agent) Stop() {
 }
 
 func (a *Agent) shutdown() {
-	// 1. 停止 OneBot 接收并等待所有已分发事件处理完成，事件生产者全部退出。
+	// 1. 停止 OneBot 接收并等待所有已分发事件处理完成，事件生产者全部退出
 	if a.bot != nil {
 		if err := a.bot.Close(); err != nil {
 			zap.L().Warn("关闭 OneBot 连接失败", zap.Error(err))
 		}
 	}
 	// 2. 取消 Agent 上下文并停止思考调度，等待所有 think（含本地发言生产者）退出，
-	//    之后不会再有任何 enqueueCommit 调用。
+	//    之后不会再有任何 enqueueCommit 调用
 	a.cancel()
 	a.clearPendingThinks()
 	if a.concurrencyMgr != nil {
 		a.concurrencyMgr.Close()
 	}
-	// 3. 关闭提交队列并排空：此时没有生产者，队列消息以排空上下文完成落库。
+	// 3. 关闭提交队列并排空：此时没有生产者，队列消息以排空上下文完成落库
 	a.commitMu.Lock()
 	for groupID, queue := range a.commitQueues {
 		close(queue)

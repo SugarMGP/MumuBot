@@ -2,11 +2,12 @@ package persona
 
 import (
 	"fmt"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/memory"
 	"strings"
 	"text/template"
 	"time"
+
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
 )
 
 type systemPromptData struct {

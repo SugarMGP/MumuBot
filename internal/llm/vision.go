@@ -3,10 +3,11 @@ package llm
 import (
 	"context"
 	"fmt"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/modelstats"
 	"strings"
 	"unicode/utf8"
+
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/modelstats"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/callbacks"

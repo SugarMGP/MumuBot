@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"mumu-bot/internal/memory"
+
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"mumu-bot/internal/memory"
-	"strings"
 )
 
 type SearchMemoryInput struct {

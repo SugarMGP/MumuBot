@@ -120,7 +120,7 @@ func (m *ConcurrencyManager) finish(groupID int64) {
 	}
 }
 
-// Close 停止调度并等待已启动任务退出。
+// Close 停止调度并等待已启动任务退出
 func (m *ConcurrencyManager) Close() {
 	if m.cancel != nil {
 		m.cancel()

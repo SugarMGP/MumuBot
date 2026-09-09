@@ -84,7 +84,7 @@ func Init(level string, debug bool) {
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
 
-	// 控制台与后台日志页共享同一条日志流，内存缓冲有界，重启后自然清空。
+	// 控制台与后台日志页共享同一条日志流，内存缓冲有界，重启后自然清空
 	consoleEncoder := zapcore.NewConsoleEncoder(encoderConfig)
 	bufferConfig := encoderConfig
 	bufferConfig.EncodeLevel = zapcore.LowercaseLevelEncoder

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// PrepareClaimBatch resolves external message IDs once at the producer boundary.
+// PrepareClaimBatch 在提交方入口统一将外部消息 ID 解析为内部消息 ID
 func (m *Manager) PrepareClaimBatch(ctx context.Context, scope StoreClaimsContext, claims []MemoryClaim) (KnowledgeBatch, error) {
 	batch := KnowledgeBatch{GroupID: scope.GroupID, SelfID: scope.SelfID}
 	if err := m.validateClaimEvidence(ctx, scope, claims); err != nil {

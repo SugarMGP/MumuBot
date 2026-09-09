@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// LockKnowledgeGroup serializes knowledge writes and recalls before row locks.
+// LockKnowledgeGroup 在获取行锁前串行化同群的知识写入与消息撤回
 func LockKnowledgeGroup(tx *gorm.DB, groupID int64) error {
 	if groupID <= 0 {
 		return fmt.Errorf("invalid knowledge group")
@@ -162,7 +162,7 @@ func saveKnowledgeItem(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeItemInp
 		} else if err != nil {
 			return item, err
 		}
-		// A replay may add evidence but must not undo an existing review decision.
+		// 重放可以补充证据，但不能撤销已有的审核决定
 		if _, read := batch.ExpectedItems[item.ID]; !read && item.Status != "candidate" {
 			input.Status = item.Status
 		}
@@ -286,7 +286,7 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 	if err := tx.Model(&relation).Update("status", input.Status).Error; err != nil {
 		return relation, err
 	}
-	// Touch both endpoints so a later reviewer detects changed relation state.
+	// 更新两个端点的时间，使后续审核能检测到关系状态变化
 	if err := tx.Model(&KnowledgeItem{}).Where("id IN ?", []uint{source.ID, target.ID}).Update("updated_at", time.Now()).Error; err != nil {
 		return relation, err
 	}

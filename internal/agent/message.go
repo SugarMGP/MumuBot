@@ -3,13 +3,14 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
+	"time"
+
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/utils"
-	"slices"
-	"strings"
-	"time"
 
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
@@ -28,7 +29,7 @@ type recallCommit struct {
 }
 
 // commitItem 提交队列项：消息、戳一戳、撤回统一按群内到达序号重排提交；
-// skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用群），避免重排器死等。
+// skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用群），避免重排器死等
 type commitItem struct {
 	groupID     int64
 	seq         uint64
@@ -90,9 +91,9 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg, isMentioned: isMentioned})
 }
 
-// enqueueCommit 把解析完成的消息、撤回或跳过项投入该群提交队列。
-// 序号为 0 的项（Agent 内部消息，如本地发言）不参与重排，直接提交。
-// 提交队列满时背压等待，不静默丢弃；关闭后由 ctx 退出。
+// enqueueCommit 把解析完成的消息、撤回或跳过项投入该群提交队列
+// 序号为 0 的项（Agent 内部消息，如本地发言）不参与重排，直接提交
+// 提交队列满时背压等待，不静默丢弃；关闭后由 ctx 退出
 func (a *Agent) enqueueCommit(item commitItem) {
 	if item.seq == 0 {
 		a.commitOne(item)
@@ -114,16 +115,16 @@ func (a *Agent) enqueueCommit(item commitItem) {
 	}
 }
 
-// enqueueCommitSkip 消费一个不会产生实际处理的到达序号。
+// enqueueCommitSkip 消费一个不会产生实际处理的到达序号
 func (a *Agent) enqueueCommitSkip(groupID int64, seq uint64) {
 	a.enqueueCommit(commitItem{groupID: groupID, seq: seq, skip: true})
 }
 
 // commitWorker 每群一个提交协程：解析乱序完成后，按到达序号重排提交，
-// 保证落库、撤回、入缓冲和思考调度的顺序与事件到达顺序一致。
-// 视觉等慢解析已在提交前并行完成，提交阶段只做快操作。
+// 保证落库、撤回、入缓冲和思考调度的顺序与事件到达顺序一致
+// 视觉等慢解析已在提交前并行完成，提交阶段只做快操作
 // 乱序窗口（pending）有上限：超限时丢弃等待队列中最接近水位的项并把水位推进越过它，
-// 被越过的序号（含仍在解析中的）到达时自然被跳过，不记录、不留下永久缺口，内存有界。
+// 被越过的序号（含仍在解析中的）到达时自然被跳过，不记录、不留下永久缺口，内存有界
 func (a *Agent) commitWorker(queue <-chan commitItem) {
 	defer a.commitWG.Done()
 	next := uint64(1)
@@ -178,7 +179,7 @@ func (a *Agent) commitOne(item commitItem) {
 
 // commitRecall 按到达顺序执行撤回：正常事件顺序下，同群序号更小的消息已落库并入缓冲，
 // 撤回总能命中数据库记录并在缓冲中找到对应消息。若原消息尚未落库（重连窗口、上游丢失或
-// 事件乱序），登记待补偿记录，待消息落库后补记撤回。
+// 事件乱序），登记待补偿记录，待消息落库后补记撤回
 func (a *Agent) commitRecall(recall *recallCommit) {
 	log, changed, err := a.memory.MarkMessageRecalled(recall.groupID, recall.messageID)
 	if err != nil {
@@ -186,7 +187,7 @@ func (a *Agent) commitRecall(recall *recallCommit) {
 		return
 	}
 	if !changed {
-		// 原消息尚未落库（重连窗口、上游丢失或事件乱序），登记待补偿。
+		// 原消息尚未落库（重连窗口、上游丢失或事件乱序），登记待补偿
 		zap.L().Debug("撤回时原消息未落库，登记待补偿", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID))
 		a.recallMu.Lock()
 		if a.pendingRecalls[recall.groupID] == nil {
@@ -200,7 +201,7 @@ func (a *Agent) commitRecall(recall *recallCommit) {
 	zap.L().Info("群消息已撤回", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID), zap.Int64("operator_id", recall.operatorID))
 }
 
-// applyPendingRecall 消息落库后检查待补偿撤回记录，命中则补记撤回并同步缓冲展示。
+// applyPendingRecall 消息落库后检查待补偿撤回记录，命中则补记撤回并同步缓冲展示
 func (a *Agent) applyPendingRecall(msg *onebot.GroupMessage) {
 	a.recallMu.Lock()
 	groupRecalls := a.pendingRecalls[msg.GroupID]
@@ -228,7 +229,7 @@ func (a *Agent) applyPendingRecall(msg *onebot.GroupMessage) {
 	a.syncRecalledMessage(log)
 }
 
-// recallPruneLoop 定期清理过期的待补偿撤回记录，防止永不落库的消息 ID 持续积累。
+// recallPruneLoop 定期清理过期的待补偿撤回记录，防止永不落库的消息 ID 持续积累
 func (a *Agent) recallPruneLoop() {
 	defer a.wg.Done()
 	ticker := time.NewTicker(recallPendingTTL / 2)
@@ -259,7 +260,7 @@ func (a *Agent) prunePendingRecalls() {
 	}
 }
 
-// onRecall 撤回事件入口：带到达序号进入提交队列，与同群消息保持顺序。
+// onRecall 撤回事件入口：带到达序号进入提交队列，与同群消息保持顺序
 func (a *Agent) onRecall(groupID, messageID, operatorID int64, arrivalSeq uint64) {
 	if groupID <= 0 || messageID == 0 || !config.Get().IsGroupEnabled(groupID) {
 		a.enqueueCommitSkip(groupID, arrivalSeq)
@@ -292,10 +293,10 @@ func (a *Agent) commitMessage(item commitItem) {
 			return
 		}
 		if a.ctx.Err() != nil {
-			// 停机排空阶段：OneBot 已关闭，不再执行标已读和画像更新。
+			// 停机排空阶段：OneBot 已关闭，不再执行标已读和画像更新
 			return
 		}
-		// 只有确实落库成功且非机器人自身的消息，才执行标已读和画像更新。
+		// 只有确实落库成功且非机器人自身的消息，才执行标已读和画像更新
 		a.wg.Add(1)
 		go func(messageID int64) {
 			defer a.wg.Done()
@@ -322,7 +323,7 @@ func (a *Agent) resolveBufferedReplyInfo(msg *onebot.GroupMessage) {
 	}
 }
 
-// onInteractionMessage 只构造戳一戳的展示内容，返回是否有效；缓冲和思考调度由提交队列统一处理。
+// onInteractionMessage 只构造戳一戳的展示内容，返回是否有效；缓冲和思考调度由提交队列统一处理
 func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) bool {
 	if msg.UserID <= 0 || len(msg.AtList) == 0 || msg.AtList[0] <= 0 {
 		return false
@@ -434,7 +435,7 @@ func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 	if bufSize <= 0 {
 		bufSize = 30
 	}
-	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可。
+	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可
 	messages := append(a.buffers[msg.GroupID], msg)
 	if len(messages) > bufSize {
 		messages = slices.Delete(messages, 0, len(messages)-bufSize)

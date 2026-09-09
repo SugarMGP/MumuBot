@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
-	"mumu-bot/internal/memory"
-	"mumu-bot/internal/web/views"
 	neturl "net/url"
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/llm"
+	"mumu-bot/internal/memory"
+	"mumu-bot/internal/web/views"
 
 	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
@@ -54,13 +55,8 @@ func (a *App) systemSections() []views.SystemSection {
 	}
 	groupFields = append(groupFields,
 		views.SystemField{Label: "群聊整理", Value: fmt.Sprintf("满 %d 条或等待 %d 分钟后排队", cfg.Learning.BatchSize, cfg.Learning.MaxWaitMinutes)},
-		views.SystemField{Label: "整理间隔", Value: fmt.Sprintf("同群至少 %d 分钟，请求至少 %d 秒", cfg.Learning.IntervalMinutes, cfg.Learning.RequestIntervalSeconds)},
+		views.SystemField{Label: "整理间隔", Value: fmt.Sprintf("同群至少 %d 分钟，单轮最多 %d 秒", cfg.Learning.IntervalMinutes, cfg.Learning.TimeoutSeconds)},
 	)
-	culture := "未开启"
-	if cfg.Learning.Enabled {
-		culture = "已开启"
-	}
-	groupFields = append(groupFields, views.SystemField{Label: "群文化学习", Value: culture})
 
 	modelFields := make([]views.SystemField, 0, 8)
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierHigh), cfg.ModelTiers.High.Model)

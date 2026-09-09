@@ -13,7 +13,7 @@ const (
 	contextTextThreshold         = 0.1
 )
 
-// HybridQuery is one fixed-snapshot semantic query shared by topic and memory retrieval.
+// HybridQuery 是基于固定消息快照构造的语义查询，由话题和记忆检索共用
 type HybridQuery struct {
 	fragments []string
 	embedding pgvector.Vector

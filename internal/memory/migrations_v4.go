@@ -37,7 +37,7 @@ func migrateV4(db *gorm.DB, selfID int64, dimensions int) error {
 	if err := migratePendingKnowledge(db, selfID); err != nil {
 		return err
 	}
-	// Keep discarded profile data recoverable until a deployment backup and acceptance are complete.
+	// 暂存不再使用的画像数据，待部署备份与验收完成后再清理
 	for _, sql := range []string{
 		`ALTER TABLE member_traits RENAME TO legacy_member_traits`,
 		`ALTER TABLE member_trait_evidence RENAME TO legacy_member_trait_evidence`,

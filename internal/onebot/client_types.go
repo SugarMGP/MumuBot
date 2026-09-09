@@ -118,7 +118,7 @@ type GroupMemberInfo struct {
 	UserID       int64  `json:"user_id"`
 	Nickname     string `json:"nickname"`
 	Card         string `json:"card"`
-	Role         string `json:"role"` // owner/admin/member
+	Role         string `json:"role"` // 群主（owner）、管理员（admin）或成员（member）
 	JoinTime     int64  `json:"join_time"`
 	LastSentTime int64  `json:"last_sent_time"`
 	Level        string `json:"level"`

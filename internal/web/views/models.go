@@ -104,7 +104,6 @@ type DashboardPageData struct {
 	OneBotConnected   bool
 	SelfID            int64
 	MCPToolCount      int
-	LearningEnabled   bool
 	CurrentMood       *memory.MoodState
 	Flash             *FlashMessage
 }
