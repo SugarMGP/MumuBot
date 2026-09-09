@@ -4,45 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"mumu-bot/internal/memory"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"go.uber.org/zap"
 )
-
-func (s *AdminService) UpdateStyleCardStatus(ctx context.Context, id uint, raw string) error {
-	status := strings.TrimSpace(raw)
-	if err := s.validateStatus(status, string(memory.StylePatternStatusCandidate), string(memory.StylePatternStatusActive), string(memory.StylePatternStatusRejected)); err != nil {
-		return err
-	}
-	return s.memory.UpdateStylePatternStatus(ctx, id, memory.StylePatternStatus(status))
-}
-
-func (s *AdminService) UpdateJargonStatus(ctx context.Context, id uint, raw string) error {
-	status := strings.TrimSpace(raw)
-	if err := s.validateStatus(status, string(memory.CultureStatusCandidate), string(memory.CultureStatusActive), string(memory.CultureStatusRejected)); err != nil {
-		return err
-	}
-	if err := s.memory.UpdateJargonStatus(ctx, id, memory.CultureStatus(status)); err != nil {
-		return err
-	}
-	if s.reloadJargons != nil {
-		s.reloadJargons()
-	}
-	return nil
-}
-
-func (s *AdminService) DeleteMemory(ctx context.Context, id uint) error {
-	return s.memory.DeleteMemory(ctx, id)
-}
-func (s *AdminService) ArchiveMemory(ctx context.Context, id uint) error {
-	return s.memory.ArchiveMemory(ctx, id)
-}
-func (s *AdminService) RestoreMemoryToCandidate(ctx context.Context, id uint) error {
-	return s.memory.RestoreMemory(ctx, id)
-}
 
 func (s *AdminService) DeleteSticker(ctx context.Context, id uint) error {
 	item, err := s.memory.DeleteSticker(ctx, id)

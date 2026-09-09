@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 3
+const latestSchemaVersion = 6
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -93,14 +93,6 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 	if err != nil {
 		return err
 	}
-	for _, table := range v1BusinessTables {
-		if !tables[table] {
-			return fmt.Errorf("schema 版本表存在，但缺少业务表 %s", table)
-		}
-	}
-	if !tables["model_call_hourly"] {
-		return fmt.Errorf("schema 版本表存在，但缺少模型调用统计表 model_call_hourly")
-	}
 	var versions []SchemaMigration
 	if err := db.Order("version ASC").Find(&versions).Error; err != nil {
 		return err
@@ -114,7 +106,7 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		if item.Version > latestSchemaVersion {
 			return fmt.Errorf("数据库 schema v%d 高于程序支持的 v%d", item.Version, latestSchemaVersion)
 		}
-		expectedName := map[int]string{1: "v1_schema", 2: "drop_forward_payload", 3: "normalize_message_display_content"}[item.Version]
+		expectedName := map[int]string{1: "v1_schema", 2: "drop_forward_payload", 3: "normalize_message_display_content", 4: "unified_knowledge", 5: "knowledge_review_repair", 6: "unified_conversation"}[item.Version]
 		if expectedName == "" {
 			return fmt.Errorf("schema 版本号无效：v%d", item.Version)
 		}
@@ -125,6 +117,16 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 	}
 	if current < 1 {
 		return fmt.Errorf("schema 版本表存在但没有有效版本记录，拒绝猜测迁移")
+	}
+	if current < 4 {
+		for _, table := range append(append([]string{}, v1BusinessTables...), "model_call_hourly") {
+			if !tables[table] {
+				return fmt.Errorf("schema v%d 缺少业务表 %s", current, table)
+			}
+		}
+		if err := validateV1Schema(db, dimensions); err != nil {
+			return err
+		}
 	}
 	if current < 2 {
 		if err := migrateV2(db); err != nil {
@@ -142,7 +144,31 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 			return err
 		}
 	}
-	if err := validateV1Schema(db, dimensions); err != nil {
+	if current < 4 {
+		if err := migrateV4(db, selfID, dimensions); err != nil {
+			return err
+		}
+		if err := recordSchemaVersion(db, 4, "unified_knowledge"); err != nil {
+			return err
+		}
+	}
+	if current < 5 {
+		if err := migrateV5(db); err != nil {
+			return err
+		}
+		if err := recordSchemaVersion(db, 5, "knowledge_review_repair"); err != nil {
+			return err
+		}
+	}
+	if current < 6 {
+		if err := migrateV6(db); err != nil {
+			return err
+		}
+		if err := recordSchemaVersion(db, 6, "unified_conversation"); err != nil {
+			return err
+		}
+	}
+	if err := validateV4Schema(db, dimensions); err != nil {
 		return err
 	}
 	return validateCurrentSchema(db)

@@ -66,7 +66,6 @@ require (
 )
 
 require (
-	github.com/RealAlexandreAI/json-repair v0.0.17
 	github.com/a-h/templ v0.3.1020
 	github.com/bytedance/sonic v1.15.2
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260527130239-95019b303cc6
@@ -79,7 +78,6 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/mark3labs/mcp-go v0.54.1
-	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745
 	github.com/spf13/viper v1.21.0
 	go.uber.org/zap v1.28.0
 )

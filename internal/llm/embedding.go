@@ -26,6 +26,7 @@ func NewEmbeddingClient() (*EmbeddingClient, error) {
 	ctx := context.Background()
 
 	embedder, err := openai.NewEmbedder(ctx, &openai.EmbeddingConfig{
+		HTTPClient: rateLimitedClient(),
 		BaseURL:    cfg.Embedding.BaseURL,
 		APIKey:     cfg.Embedding.APIKey,
 		Model:      cfg.Embedding.Model,

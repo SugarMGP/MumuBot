@@ -67,46 +67,56 @@ func stickerFileURL(fileName string) string {
 }
 
 func memorySubjectText(subjectUserID, selfID int64) string {
-	switch memory.SubjectLabel(subjectUserID, selfID) {
-	case "group":
+	switch {
+	case subjectUserID == 0:
 		return "群组"
-	case "self":
+	case subjectUserID == selfID && selfID > 0:
 		return "自身"
 	default:
 		return "成员"
 	}
 }
 
-func memoryKindText(kind memory.MemoryKind) string {
+func memoryKindText(kind string) string {
 	switch kind {
-	case memory.MemoryKindFact:
+	case "fact":
 		return "事实"
-	case memory.MemoryKindEpisode:
+	case "episode":
 		return "经历"
-	case memory.MemoryKindPreference:
+	case "preference":
 		return "偏好"
-	case memory.MemoryKindConstraint:
+	case "constraint":
 		return "约束"
-	case memory.MemoryKindGoal:
+	case "goal":
 		return "目标"
+	case "term":
+		return "群术语"
+	case "expression":
+		return "表达方式"
+	case "alias":
+		return "别名"
 	default:
 		return "未归类"
 	}
 }
 
-func memoryStatusText(status memory.MemoryStatus) string {
+func memoryStatusText(status string) string {
 	switch status {
-	case memory.MemoryStatusArchived:
+	case "archived":
 		return "已归档"
+	case "candidate":
+		return "待确认"
 	default:
 		return "生效中"
 	}
 }
 
-func memoryStatusClass(status memory.MemoryStatus) string {
+func memoryStatusClass(status string) string {
 	switch status {
-	case memory.MemoryStatusArchived:
+	case "archived":
 		return "badge badge-ghost badge-sm"
+	case "candidate":
+		return "badge badge-warning badge-soft badge-sm"
 	default:
 		return "badge badge-success badge-soft badge-sm"
 	}
@@ -138,19 +148,6 @@ func memberGroupCards(profile services.MemberProfileView, limit int) []string {
 	return items
 }
 
-func memberTraits(profile services.MemberProfileView, kind string, limit int) []string {
-	items := make([]string, 0, len(profile.Traits))
-	for _, trait := range profile.Traits {
-		if trait.Kind == kind {
-			items = append(items, trait.Value)
-		}
-	}
-	if limit > 0 && len(items) > limit {
-		return items[:limit]
-	}
-	return items
-}
-
 func rowActionClass(action RowAction) string {
 	switch action.Kind {
 	case "danger":
@@ -162,28 +159,8 @@ func rowActionClass(action RowAction) string {
 	}
 }
 
-func styleCardActionDialogHref(id uint, status string) string {
-	return adminActionDialogHref("style-card-status", id, map[string]string{"status": status})
-}
-
-func jargonActionDialogHref(id uint, status string) string {
-	return adminActionDialogHref("jargon-status", id, map[string]string{"status": status})
-}
-
 func stickerDeleteDialogHref(id uint) string {
 	return adminActionDialogHref("sticker-delete", id, nil)
-}
-
-func memoryDeleteDialogHref(id uint) string {
-	return adminActionDialogHref("memory-delete", id, nil)
-}
-
-func memoryArchiveDialogHref(id uint) string {
-	return adminActionDialogHref("memory-archive", id, nil)
-}
-
-func memoryRestoreDialogHref(id uint) string {
-	return adminActionDialogHref("memory-restore", id, nil)
 }
 
 func adminActionDialogHref(kind string, id uint, extra map[string]string) string {
@@ -314,94 +291,6 @@ func equalTrimmed(left string, right string) bool {
 	return strings.TrimSpace(left) == strings.TrimSpace(right)
 }
 
-func styleCardActions(status memory.StylePatternStatus) []RowAction {
-	switch status {
-	case memory.StylePatternStatusActive:
-		return []RowAction{
-			{Label: "设为拒绝", Value: string(memory.StylePatternStatusRejected), Kind: "danger", BusyLabel: "处理中", ConfirmText: "确认将这张风格卡片设为拒绝状态？"},
-		}
-	case memory.StylePatternStatusRejected:
-		return []RowAction{
-			{Label: "重新启用", Value: string(memory.StylePatternStatusActive), Kind: "approve", BusyLabel: "启用中", ConfirmText: "确认重新启用这张风格卡片？"},
-		}
-	default:
-		return []RowAction{
-			{Label: "通过", Value: string(memory.StylePatternStatusActive), Kind: "approve", BusyLabel: "通过中", ConfirmText: "确认通过这张候选风格卡片？"},
-			{Label: "拒绝", Value: string(memory.StylePatternStatusRejected), Kind: "danger", BusyLabel: "拒绝中", ConfirmText: "确认拒绝这张候选风格卡片？"},
-		}
-	}
-}
-
-func jargonActions(status string) []RowAction {
-	switch strings.TrimSpace(status) {
-	case string(memory.CultureStatusActive):
-		return []RowAction{
-			{Label: "设为拒绝", Value: string(memory.CultureStatusRejected), Kind: "danger", BusyLabel: "处理中", ConfirmText: "确认将这条黑话改为拒绝状态？"},
-		}
-	case "rejected":
-		return []RowAction{
-			{Label: "重新通过", Value: string(memory.CultureStatusActive), Kind: "approve", BusyLabel: "处理中", ConfirmText: "确认重新通过这条黑话？"},
-		}
-	default:
-		return []RowAction{
-			{Label: "通过", Value: string(memory.CultureStatusActive), Kind: "approve", BusyLabel: "通过中", ConfirmText: "确认通过这条黑话？"},
-			{Label: "拒绝", Value: string(memory.CultureStatusRejected), Kind: "danger", BusyLabel: "拒绝中", ConfirmText: "确认拒绝这条黑话？"},
-		}
-	}
-}
-
-func StyleCardActionDialogData(item memory.StylePattern, targetStatus string, returnTo string) (AdminActionDialogContentData, bool) {
-	for _, action := range styleCardActions(item.Status) {
-		if strings.TrimSpace(action.Value) != strings.TrimSpace(targetStatus) {
-			continue
-		}
-		return AdminActionDialogContentData{
-			Title:       action.Label,
-			Body:        action.ConfirmText,
-			SubmitLabel: action.Label,
-			SubmitClass: modalActionClass(action),
-			BusyLabel:   action.BusyLabel,
-			Spotlight:   "“" + item.Expression + "”",
-			Chips: []AdminActionChip{
-				{Label: "场景：" + item.Situation, Kind: "cyan"},
-			},
-			Hidden: []AdminActionHiddenField{
-				{Name: "action_kind", Value: "style-card-status"},
-				{Name: "action_id", Value: strconv.FormatUint(uint64(item.ID), 10)},
-				{Name: "status", Value: action.Value},
-			},
-			ReturnTo: returnTo,
-		}, true
-	}
-	return AdminActionDialogContentData{}, false
-}
-
-func JargonActionDialogData(item memory.Jargon, targetStatus string, returnTo string) (AdminActionDialogContentData, bool) {
-	for _, action := range jargonActions(jargonStatusValue(item)) {
-		if strings.TrimSpace(action.Value) != strings.TrimSpace(targetStatus) {
-			continue
-		}
-		return AdminActionDialogContentData{
-			Title:       action.Label,
-			Body:        action.ConfirmText,
-			SubmitLabel: action.Label,
-			SubmitClass: modalActionClass(action),
-			BusyLabel:   action.BusyLabel,
-			Fields: []AdminActionField{
-				{Label: "术语", Value: item.Term},
-				{Label: "释义", Value: item.Meaning},
-			},
-			Hidden: []AdminActionHiddenField{
-				{Name: "action_kind", Value: "jargon-status"},
-				{Name: "action_id", Value: strconv.FormatUint(uint64(item.ID), 10)},
-				{Name: "status", Value: action.Value},
-			},
-			ReturnTo: returnTo,
-		}, true
-	}
-	return AdminActionDialogContentData{}, false
-}
-
 func StickerDeleteDialogData(item memory.Sticker, returnTo string) AdminActionDialogContentData {
 	action := RowAction{Kind: "danger", BusyLabel: "删除中"}
 	return AdminActionDialogContentData{
@@ -415,66 +304,6 @@ func StickerDeleteDialogData(item memory.Sticker, returnTo string) AdminActionDi
 		},
 		Hidden: []AdminActionHiddenField{
 			{Name: "action_kind", Value: "sticker-delete"},
-			{Name: "action_id", Value: strconv.FormatUint(uint64(item.ID), 10)},
-		},
-		ReturnTo: returnTo,
-	}
-}
-
-func MemoryDeleteDialogData(item memory.Memory, selfID int64, returnTo string) AdminActionDialogContentData {
-	action := RowAction{Kind: "danger", BusyLabel: "删除中"}
-	return AdminActionDialogContentData{
-		Title:       "删除记忆",
-		Body:        "删除后将无法再查看这条记忆。",
-		SubmitLabel: "确认删除",
-		SubmitClass: modalActionClass(action),
-		BusyLabel:   action.BusyLabel,
-		Fields: []AdminActionField{
-			{Label: "记忆内容", Value: item.Content},
-			{Label: "主体", Value: memorySubjectText(item.SubjectUserID, selfID)},
-		},
-		Hidden: []AdminActionHiddenField{
-			{Name: "action_kind", Value: "memory-delete"},
-			{Name: "action_id", Value: strconv.FormatUint(uint64(item.ID), 10)},
-		},
-		ReturnTo: returnTo,
-	}
-}
-
-func MemoryArchiveDialogData(item memory.Memory, returnTo string) AdminActionDialogContentData {
-	action := RowAction{Kind: "ghost", BusyLabel: "归档中"}
-	return AdminActionDialogContentData{
-		Title:       "归档记忆",
-		Body:        "归档后不再参与召回，但仍保留在历史里，之后可以直接恢复。",
-		SubmitLabel: "确认归档",
-		SubmitClass: modalActionClass(action),
-		BusyLabel:   action.BusyLabel,
-		Fields: []AdminActionField{
-			{Label: "记忆内容", Value: item.Content},
-			{Label: "当前状态", Value: memoryStatusText(item.Status)},
-		},
-		Hidden: []AdminActionHiddenField{
-			{Name: "action_kind", Value: "memory-archive"},
-			{Name: "action_id", Value: strconv.FormatUint(uint64(item.ID), 10)},
-		},
-		ReturnTo: returnTo,
-	}
-}
-
-func MemoryRestoreDialogData(item memory.Memory, returnTo string) AdminActionDialogContentData {
-	action := RowAction{Kind: "approve", BusyLabel: "恢复中"}
-	return AdminActionDialogContentData{
-		Title:       "恢复记忆",
-		Body:        "恢复后会重新参与召回；如已有完全相同的生效记忆，证据会自动合并。",
-		SubmitLabel: "确认恢复",
-		SubmitClass: modalActionClass(action),
-		BusyLabel:   action.BusyLabel,
-		Fields: []AdminActionField{
-			{Label: "记忆内容", Value: item.Content},
-			{Label: "当前状态", Value: memoryStatusText(item.Status)},
-		},
-		Hidden: []AdminActionHiddenField{
-			{Name: "action_kind", Value: "memory-restore"},
 			{Name: "action_id", Value: strconv.FormatUint(uint64(item.ID), 10)},
 		},
 		ReturnTo: returnTo,

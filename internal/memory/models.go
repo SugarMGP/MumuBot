@@ -17,13 +17,6 @@ const (
 	MemoryKindGoal       MemoryKind = "goal"
 )
 
-type MemoryStatus string
-
-const (
-	MemoryStatusActive   MemoryStatus = "active"
-	MemoryStatusArchived MemoryStatus = "archived"
-)
-
 const SubjectSelfInputID int64 = -1
 
 type RawMemoryClaim struct {
@@ -40,30 +33,9 @@ type MemoryClaim struct {
 	EvidenceMessageIDs []int64    `json:"evidence_message_ids"`
 }
 
-type Memory struct {
-	ID            uint            `gorm:"primaryKey" json:"id"`
-	GroupID       int64           `gorm:"not null;index" json:"group_id"`
-	SubjectUserID int64           `gorm:"not null;default:0;index" json:"subject_user_id"`
-	Kind          MemoryKind      `gorm:"type:text;not null;index" json:"kind"`
-	Status        MemoryStatus    `gorm:"type:text;not null;index" json:"status"`
-	Content       string          `gorm:"type:text;not null" json:"content"`
-	Embedding     pgvector.Vector `gorm:"type:vector;not null" json:"-"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-}
-
-func (Memory) TableName() string { return "memories" }
-
 func NormalizeContent(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
-
-type MemoryEvidence struct {
-	MemoryID     uint `gorm:"primaryKey" json:"memory_id"`
-	MessageLogID uint `gorm:"primaryKey" json:"message_log_id"`
-}
-
-func (MemoryEvidence) TableName() string { return "memory_evidence" }
 
 type MessageLog struct {
 	ID               uint       `gorm:"primaryKey" json:"id"`
@@ -109,7 +81,6 @@ type TopicSummary struct {
 	Version      int                `json:"version"`
 	Title        string             `json:"title"`
 	Gist         string             `json:"gist"`
-	Claims       []MemoryClaim      `json:"claims"`
 	Participants []TopicParticipant `json:"participants"`
 	OpenLoops    []string           `json:"open_loops"`
 	RecentTurns  []string           `json:"recent_turns"`
@@ -117,70 +88,14 @@ type TopicSummary struct {
 }
 
 type TopicSummaryRecord struct {
-	ID                       uint            `gorm:"primaryKey" json:"id"`
-	ThroughTopicAssignmentID uint            `gorm:"uniqueIndex;not null" json:"through_topic_assignment_id"`
-	SummaryJSON              string          `gorm:"type:jsonb;not null" json:"summary_json"`
-	Embedding                pgvector.Vector `gorm:"type:vector;not null" json:"-"`
-	MemoryProcessed          bool            `gorm:"not null;default:false" json:"memory_processed"`
-	CreatedAt                time.Time       `json:"created_at"`
+	ID                       uint             `gorm:"primaryKey" json:"id"`
+	ThroughTopicAssignmentID uint             `gorm:"uniqueIndex;not null" json:"through_topic_assignment_id"`
+	SummaryJSON              string           `gorm:"type:jsonb;not null" json:"summary_json"`
+	Embedding                *pgvector.Vector `gorm:"type:vector" json:"-"`
+	CreatedAt                time.Time        `json:"created_at"`
 }
 
 func (TopicSummaryRecord) TableName() string { return "topic_summaries" }
-
-type StylePatternStatus string
-
-const (
-	StylePatternStatusCandidate StylePatternStatus = "candidate"
-	StylePatternStatusActive    StylePatternStatus = "active"
-	StylePatternStatusRejected  StylePatternStatus = "rejected"
-)
-
-type StylePattern struct {
-	ID         uint               `gorm:"primaryKey" json:"id"`
-	GroupID    int64              `gorm:"index;not null" json:"group_id"`
-	Situation  string             `gorm:"type:text;not null" json:"situation"`
-	Expression string             `gorm:"type:text;not null" json:"expression"`
-	Status     StylePatternStatus `gorm:"type:text;not null;index" json:"status"`
-	Embedding  pgvector.Vector    `gorm:"type:vector;not null" json:"-"`
-	CreatedAt  time.Time          `json:"created_at"`
-	UpdatedAt  time.Time          `json:"updated_at"`
-}
-
-func (StylePattern) TableName() string { return "style_patterns" }
-
-type StylePatternEvidence struct {
-	StylePatternID uint `gorm:"primaryKey" json:"style_pattern_id"`
-	MessageLogID   uint `gorm:"primaryKey" json:"message_log_id"`
-}
-
-func (StylePatternEvidence) TableName() string { return "style_pattern_evidence" }
-
-type CultureStatus string
-
-const (
-	CultureStatusCandidate CultureStatus = "candidate"
-	CultureStatusActive    CultureStatus = "active"
-	CultureStatusRejected  CultureStatus = "rejected"
-)
-
-type Jargon struct {
-	ID        uint          `gorm:"primaryKey" json:"id"`
-	GroupID   int64         `gorm:"index;not null" json:"group_id"`
-	Term      string        `gorm:"type:text;not null" json:"term"`
-	Meaning   string        `gorm:"type:text;not null" json:"meaning"`
-	Status    CultureStatus `gorm:"type:text;not null;index" json:"status"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
-}
-
-func (Jargon) TableName() string { return "jargons" }
-
-type JargonEvidence struct {
-	JargonID     uint `gorm:"primaryKey" json:"jargon_id"`
-	MessageLogID uint `gorm:"primaryKey" json:"message_log_id"`
-}
-
-func (JargonEvidence) TableName() string { return "jargon_evidence" }
 
 type MemberProfile struct {
 	UserID       int64     `gorm:"primaryKey" json:"user_id"`
@@ -200,35 +115,9 @@ type MemberName struct {
 
 func (MemberName) TableName() string { return "member_names" }
 
-type MemberTrait struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	UserID    int64     `gorm:"index;not null" json:"user_id"`
-	Kind      string    `gorm:"type:text;not null" json:"kind"`
-	Value     string    `gorm:"type:text;not null" json:"value"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (MemberTrait) TableName() string { return "member_traits" }
-
-type MemberTraitEvidence struct {
-	MemberTraitID uint `gorm:"primaryKey" json:"member_trait_id"`
-	MessageLogID  uint `gorm:"primaryKey" json:"message_log_id"`
-}
-
-func (MemberTraitEvidence) TableName() string { return "member_trait_evidence" }
-
-type LearningKind string
-
-const (
-	LearningKindCulture       LearningKind = "culture"
-	LearningKindMemberProfile LearningKind = "member_profile"
-)
-
 type LearningState struct {
-	GroupID          int64        `gorm:"primaryKey" json:"group_id"`
-	Kind             LearningKind `gorm:"primaryKey;type:text" json:"kind"`
-	LastMessageLogID uint         `gorm:"not null" json:"last_message_log_id"`
+	GroupID          int64 `gorm:"primaryKey" json:"group_id"`
+	LastMessageLogID uint  `gorm:"not null" json:"last_message_log_id"`
 }
 
 func (LearningState) TableName() string { return "learning_states" }

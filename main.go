@@ -63,13 +63,7 @@ func main() {
 		zap.L().Fatal("Embedding 客户端创建失败", zap.Error(err))
 	}
 
-	mergeModel, err := llm.NewClientForTier(llm.TierLow)
-	if err != nil {
-		_ = botClient.Close()
-		zap.L().Fatal("记忆合并模型创建失败", zap.Error(err))
-	}
-
-	memoryMgr, err := memory.NewManager(db, embeddingClient, mergeModel)
+	memoryMgr, err := memory.NewManager(db, embeddingClient)
 	if err != nil {
 		_ = botClient.Close()
 		zap.L().Fatal("记忆管理器创建失败", zap.Error(err))
@@ -86,7 +80,7 @@ func main() {
 	mumuAgent.Start()
 
 	stickerDir := cfg.Sticker.StoragePath
-	adminService := services.NewAdminService(memoryMgr, stickerDir, mumuAgent.ReloadJargons, mumuAgent.BotSelfID)
+	adminService := services.NewAdminService(memoryMgr, stickerDir, mumuAgent.BotSelfID)
 	app := webapp.New(cfg, adminService, memoryMgr, mumuAgent)
 	httpServer := app.Server()
 	botClient.ReleaseEventGate()

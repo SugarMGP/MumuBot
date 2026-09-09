@@ -45,17 +45,14 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 	}
 	for _, groupID := range groups {
 		var states []LearningState
-		if err := m.db.Where("group_id = ? AND kind IN ?", groupID, []LearningKind{LearningKindCulture, LearningKindMemberProfile}).Find(&states).Error; err != nil {
+		if err := m.db.Where("group_id = ?", groupID).Find(&states).Error; err != nil {
 			zap.L().Warn("读取消息清理学习状态失败", zap.Int64("group_id", groupID), zap.Error(err))
 			continue
 		}
-		if len(states) != 2 {
+		if len(states) != 1 {
 			continue
 		}
 		watermark := states[0].LastMessageLogID
-		if states[1].LastMessageLogID < watermark {
-			watermark = states[1].LastMessageLogID
-		}
 		if watermark == 0 {
 			continue
 		}
@@ -72,10 +69,7 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 			SELECT ml.id FROM message_logs ml
 			WHERE ml.group_id = ? AND ml.id <= ? AND ml.id < ?
 			AND NOT EXISTS (SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id = ml.id AND ta.topic_id IS NOT NULL)
-			AND NOT EXISTS (SELECT 1 FROM memory_evidence e WHERE e.message_log_id = ml.id)
-			AND NOT EXISTS (SELECT 1 FROM style_pattern_evidence e WHERE e.message_log_id = ml.id)
-			AND NOT EXISTS (SELECT 1 FROM jargon_evidence e WHERE e.message_log_id = ml.id)
-			AND NOT EXISTS (SELECT 1 FROM member_trait_evidence e WHERE e.message_log_id = ml.id)
+			AND NOT EXISTS (SELECT 1 FROM knowledge_evidence_messages e WHERE e.message_log_id = ml.id)
 			ORDER BY ml.id LIMIT 500
 		) DELETE FROM message_logs WHERE id IN (SELECT id FROM deletable)`, groupID, watermark, keepFloor)
 		if result.Error != nil {

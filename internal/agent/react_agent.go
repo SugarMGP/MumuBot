@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"mumu-bot/internal/config"
-	"mumu-bot/internal/jargon"
 	"mumu-bot/internal/learning"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/mcp"
@@ -45,8 +44,7 @@ type Agent struct {
 	mcpMgr         *mcp.Manager
 	concurrencyMgr *ConcurrencyManager
 
-	jargonMgr *jargon.Manager
-	learner   *learning.Learner
+	learner *learning.Learner
 
 	replyCache  *ttlcache.Cache[int64, onebot.ReplyInfo]
 	visionCache *ttlcache.Cache[string, string]
@@ -94,11 +92,6 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		return nil, fmt.Errorf("创建 LLM 客户端失败: %w", err)
 	}
 
-	topicModel, err := llm.NewClientForTier(llm.TierLow)
-	if err != nil {
-		return nil, fmt.Errorf("创建话题摘要模型失败: %w", err)
-	}
-
 	visionClient, err := llm.NewVisionClient()
 	if err != nil {
 		return nil, fmt.Errorf("创建视觉模型客户端失败: %w", err)
@@ -122,7 +115,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		replyCache:      newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
 		visionCache:     newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
-	a.topicMgr = topic.NewManager(rootCtx, topic.NewDBStore(mem.GetDB(), mem.EmbeddingProvider(), mem, botClient.GetSelfID), topicModel)
+	a.topicMgr = topic.NewManager(topic.NewDBStore(mem.GetDB()))
 	constructed := false
 	defer func() {
 		if constructed {
@@ -135,15 +128,9 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 
 	a.concurrencyMgr = NewConcurrencyManager(a.ctx, cfg.Agent.MaxCoroutine, a.think)
 
-	a.jargonMgr = jargon.New(mem)
-
-	if cfg.Learning.Enabled {
-		learner, err := learning.New(mem, a.jargonMgr, botClient.GetSelfID)
-		if err != nil {
-			zap.L().Error("初始化后台学习系统失败", zap.Error(err))
-		} else {
-			a.learner = learner
-		}
+	a.learner, err = learning.New(mem, botClient.GetSelfID)
+	if err != nil {
+		return nil, fmt.Errorf("初始化记忆复核失败: %w", err)
 	}
 
 	a.mcpMgr = mcp.NewMCPManager()
@@ -168,9 +155,8 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 func (a *Agent) initTools() error {
 	toolBuilders := []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewQueryMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchJargonTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchExpressionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewSaveWorkingNoteTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -208,7 +194,7 @@ func (a *Agent) initReact() error {
 	cfg := config.Get()
 	maxStep := cfg.Agent.MaxStep
 	if maxStep <= 0 {
-		maxStep = 12
+		maxStep = 13
 	}
 	argumentsHandler, err := tools.NewToolArgumentsHandler(a.ctx, a.tools)
 	if err != nil {
@@ -233,7 +219,6 @@ func (a *Agent) initReact() error {
 }
 
 func (a *Agent) Start() {
-	cfg := config.Get()
 	a.bot.OnMessage(a.onMessage)
 	a.bot.OnRecall(a.onRecall)
 	if a.learner != nil {
@@ -242,13 +227,6 @@ func (a *Agent) Start() {
 	}
 
 	a.loadBuffersFromDB()
-	groupIDs := make([]int64, 0, len(cfg.Groups))
-	for _, group := range cfg.Groups {
-		if group.Enabled {
-			groupIDs = append(groupIDs, group.GroupID)
-		}
-	}
-	a.topicMgr.RecoverPendingAssignments(groupIDs)
 	a.wg.Add(1)
 	go a.thinkLoop()
 	zap.L().Info("Agent 已启动")
@@ -350,9 +328,6 @@ func (a *Agent) shutdown() {
 	if a.learner != nil {
 		a.learner.Stop()
 	}
-	if a.topicMgr != nil {
-		a.topicMgr.Close()
-	}
 	if a.mcpMgr != nil {
 		a.mcpMgr.Close()
 	}
@@ -391,11 +366,4 @@ func (a *Agent) MCPToolCount() int {
 		return 0
 	}
 	return len(a.mcpMgr.GetTools())
-}
-
-func (a *Agent) ReloadJargons() {
-	if a == nil || a.jargonMgr == nil {
-		return
-	}
-	a.jargonMgr.Reload()
 }

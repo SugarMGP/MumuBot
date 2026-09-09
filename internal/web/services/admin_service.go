@@ -1,8 +1,6 @@
 package services
 
 import (
-	"context"
-	"fmt"
 	"mumu-bot/internal/memory"
 	"strings"
 	"time"
@@ -45,37 +43,22 @@ func (t TopicThreadView) LatestSummary() *memory.TopicSummaryRecord {
 
 type MemberProfileView struct {
 	memory.MemberProfile
-	Names  []memory.MemberName
-	Traits []memory.MemberTrait
-}
-
-type StylePatternView struct {
-	memory.StylePattern
-	Evidence []memory.MessageLog
-}
-
-type JargonView struct {
-	memory.Jargon
-	Evidence []memory.MessageLog
-}
-
-type MemoryView struct {
-	memory.Memory
-	Evidence []memory.MessageLog
+	Names              []memory.MemberName
+	KnowledgeCount     int64
+	ParticipationCount int64
 }
 
 type AdminService struct {
-	db            *gorm.DB
-	memory        *memory.Manager
-	stickerDir    string
-	reloadJargons func()
-	selfID        func() int64
+	db         *gorm.DB
+	memory     *memory.Manager
+	stickerDir string
+	selfID     func() int64
 }
 
-type OverviewStats struct{ MemoryCount, MemberCount, JargonCount, StyleCardCount, StickerCount int64 }
+type OverviewStats struct{ MemoryCount, MemberCount, CandidateCount, RelationCount, StickerCount int64 }
 
-func NewAdminService(memoryManager *memory.Manager, stickerDir string, reloadJargons func(), selfID func() int64) *AdminService {
-	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir, reloadJargons: reloadJargons, selfID: selfID}
+func NewAdminService(memoryManager *memory.Manager, stickerDir string, selfID func() int64) *AdminService {
+	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir, selfID: selfID}
 }
 func (s *AdminService) StickerDir() string { return s.stickerDir }
 
@@ -111,12 +94,6 @@ func normalizeSort(rawSort, rawOrder, fallback string, allowed ...string) (strin
 	return sortKey, order
 }
 
-func NormalizeStyleCardSort(s, o string) (string, string) {
-	return normalizeSort(s, o, "updated", "updated", "created")
-}
-func NormalizeJargonSort(s, o string) (string, string) {
-	return normalizeSort(s, o, "updated", "updated", "created", "group")
-}
 func NormalizeMemorySort(s, o string) (string, string) {
 	return normalizeSort(s, o, "updated", "updated", "created")
 }
@@ -147,14 +124,17 @@ func (s *AdminService) OverviewStats() (OverviewStats, error) {
 		model any
 		count *int64
 	}{
-		{&memory.Memory{}, &out.MemoryCount}, {&memory.MemberProfile{}, &out.MemberCount},
-		{&memory.Jargon{}, &out.JargonCount}, {&memory.StylePattern{}, &out.StyleCardCount},
+		{&memory.KnowledgeItem{}, &out.MemoryCount}, {&memory.MemberProfile{}, &out.MemberCount},
+		{&memory.KnowledgeRelation{}, &out.RelationCount},
 		{&memory.Sticker{}, &out.StickerCount},
 	}
 	for _, item := range items {
 		if err := s.db.Model(item.model).Count(item.count).Error; err != nil {
 			return out, err
 		}
+	}
+	if err := s.db.Model(&memory.KnowledgeItem{}).Where("status = ?", "candidate").Count(&out.CandidateCount).Error; err != nil {
+		return out, err
 	}
 	return out, nil
 }
@@ -170,175 +150,6 @@ func paginate[T any](q *gorm.DB, page, size int, items *[]T) (Page[T], error) {
 	}
 	out.Items = *items
 	return out, nil
-}
-
-func (s *AdminService) ListStyleCards(f ListFilter) (Page[StylePatternView], error) {
-	var items []memory.StylePattern
-	q := s.db.Model(&memory.StylePattern{})
-	if f.GroupID > 0 {
-		q = q.Where("group_id = ?", f.GroupID)
-	}
-	if f.Status != "" {
-		q = q.Where("status = ?", f.Status)
-	}
-	if k := strings.TrimSpace(f.Keyword); k != "" {
-		p := "%" + k + "%"
-		q = q.Where("situation ILIKE ? OR expression ILIKE ?", p, p)
-	}
-	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "default": "updated_at"})
-	page, err := paginate(q, f.Page, f.PageSize, &items)
-	if err != nil {
-		return Page[StylePatternView]{}, err
-	}
-	evidence, err := s.stylePatternEvidence(items)
-	if err != nil {
-		return Page[StylePatternView]{}, err
-	}
-	views := make([]StylePatternView, 0, len(items))
-	for _, item := range items {
-		views = append(views, StylePatternView{StylePattern: item, Evidence: evidence[item.ID]})
-	}
-	return Page[StylePatternView]{Items: views, Total: page.Total, Page: page.Page, PageSize: page.PageSize}, nil
-}
-
-func (s *AdminService) GetStyleCard(id uint) (memory.StylePattern, error) {
-	var v memory.StylePattern
-	return v, s.db.First(&v, id).Error
-}
-
-func (s *AdminService) ListJargons(f ListFilter) (Page[JargonView], error) {
-	var items []memory.Jargon
-	q := s.db.Model(&memory.Jargon{})
-	if f.GroupID > 0 {
-		q = q.Where("group_id = ?", f.GroupID)
-	}
-	if f.Status != "" {
-		q = q.Where("status = ?", f.Status)
-	}
-	if k := strings.TrimSpace(f.Keyword); k != "" {
-		p := "%" + k + "%"
-		q = q.Where("term ILIKE ? OR meaning ILIKE ?", p, p)
-	}
-	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "group": "group_id", "default": "updated_at"})
-	page, err := paginate(q, f.Page, f.PageSize, &items)
-	if err != nil {
-		return Page[JargonView]{}, err
-	}
-	evidence, err := s.jargonEvidence(items)
-	if err != nil {
-		return Page[JargonView]{}, err
-	}
-	views := make([]JargonView, 0, len(items))
-	for _, item := range items {
-		views = append(views, JargonView{Jargon: item, Evidence: evidence[item.ID]})
-	}
-	return Page[JargonView]{Items: views, Total: page.Total, Page: page.Page, PageSize: page.PageSize}, nil
-}
-
-func (s *AdminService) GetJargon(id uint) (memory.Jargon, error) {
-	var v memory.Jargon
-	return v, s.db.First(&v, id).Error
-}
-
-func (s *AdminService) stylePatternEvidence(items []memory.StylePattern) (map[uint][]memory.MessageLog, error) {
-	ids := make([]uint, 0, len(items))
-	for _, item := range items {
-		ids = append(ids, item.ID)
-	}
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	var rows []struct {
-		StylePatternID uint
-		memory.MessageLog
-	}
-	err := s.db.Table("style_pattern_evidence e").Select("e.style_pattern_id, ml.*").
-		Joins("JOIN message_logs ml ON ml.id = e.message_log_id").Where("e.style_pattern_id IN ?", ids).
-		Order("e.style_pattern_id, ml.message_time, ml.id").Scan(&rows).Error
-	result := make(map[uint][]memory.MessageLog, len(ids))
-	for _, row := range rows {
-		result[row.StylePatternID] = append(result[row.StylePatternID], row.MessageLog)
-	}
-	return result, err
-}
-
-func (s *AdminService) jargonEvidence(items []memory.Jargon) (map[uint][]memory.MessageLog, error) {
-	ids := make([]uint, 0, len(items))
-	for _, item := range items {
-		ids = append(ids, item.ID)
-	}
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	var rows []struct {
-		JargonID uint
-		memory.MessageLog
-	}
-	err := s.db.Table("jargon_evidence e").Select("e.jargon_id, ml.*").
-		Joins("JOIN message_logs ml ON ml.id = e.message_log_id").Where("e.jargon_id IN ?", ids).
-		Order("e.jargon_id, ml.message_time, ml.id").Scan(&rows).Error
-	result := make(map[uint][]memory.MessageLog, len(ids))
-	for _, row := range rows {
-		result[row.JargonID] = append(result[row.JargonID], row.MessageLog)
-	}
-	return result, err
-}
-
-func (s *AdminService) ListMemories(f MemoryFilter) (Page[MemoryView], error) {
-	var items []memory.Memory
-	q := s.db.Model(&memory.Memory{})
-	if f.GroupID > 0 {
-		q = q.Where("group_id = ?", f.GroupID)
-	}
-	if f.Subject != "" {
-		selfID := int64(0)
-		if s.selfID != nil {
-			selfID = s.selfID()
-		}
-		switch f.Subject {
-		case "group":
-			q = q.Where("subject_user_id=0")
-		case "self":
-			if selfID <= 0 {
-				q = q.Where("1=0")
-			} else {
-				q = q.Where("subject_user_id=?", selfID)
-			}
-		case "member":
-			q = q.Where("subject_user_id<>0")
-			if selfID > 0 {
-				q = q.Where("subject_user_id<>?", selfID)
-			}
-		}
-	}
-	if f.Kind != "" {
-		q = q.Where("kind = ?", f.Kind)
-	}
-	if f.Status != "" {
-		q = q.Where("status = ?", f.Status)
-	}
-	if k := strings.TrimSpace(f.Keyword); k != "" {
-		q = q.Where("content ILIKE ?", "%"+k+"%")
-	}
-	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "default": "updated_at"})
-	page, err := paginate(q, f.Page, f.PageSize, &items)
-	if err != nil {
-		return Page[MemoryView]{}, err
-	}
-	views := make([]MemoryView, 0, len(items))
-	for _, item := range items {
-		evidence, evidenceErr := s.memory.ListMemoryEvidence(context.Background(), item.ID)
-		if evidenceErr != nil {
-			return Page[MemoryView]{}, evidenceErr
-		}
-		views = append(views, MemoryView{Memory: item, Evidence: evidence})
-	}
-	return Page[MemoryView]{Items: views, Total: page.Total, Page: page.Page, PageSize: page.PageSize}, nil
-}
-
-func (s *AdminService) GetMemory(id uint) (memory.Memory, error) {
-	var v memory.Memory
-	return v, s.db.First(&v, id).Error
 }
 
 func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], error) {
@@ -418,7 +229,7 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 	q := s.db.Model(&memory.MemberProfile{})
 	if k := strings.TrimSpace(f.Keyword); k != "" {
 		p := "%" + k + "%"
-		q = q.Where("nickname ILIKE ? OR CAST(user_id AS TEXT) ILIKE ? OR EXISTS (SELECT 1 FROM member_traits mt WHERE mt.user_id=member_profiles.user_id AND mt.value ILIKE ?)", p, p, p)
+		q = q.Where("nickname ILIKE ? OR CAST(user_id AS TEXT) ILIKE ? OR EXISTS (SELECT 1 FROM member_names mn WHERE mn.user_id=member_profiles.user_id AND mn.value ILIKE ?)", p, p, p)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -439,7 +250,10 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 		if err := s.db.Where("user_id = ?", p.UserID).Order("updated_at DESC").Find(&v.Names).Error; err != nil {
 			return Page[MemberProfileView]{}, err
 		}
-		if err := s.db.Where("user_id = ?", p.UserID).Order("updated_at DESC").Find(&v.Traits).Error; err != nil {
+		if err := s.db.Model(&memory.KnowledgeItem{}).Where("subject_user_id = ?", p.UserID).Count(&v.KnowledgeCount).Error; err != nil {
+			return Page[MemberProfileView]{}, err
+		}
+		if err := s.db.Model(&memory.KnowledgeItem{}).Where(knowledgeParticipationSQL, p.UserID).Count(&v.ParticipationCount).Error; err != nil {
 			return Page[MemberProfileView]{}, err
 		}
 		items = append(items, v)
@@ -460,13 +274,4 @@ func (s *AdminService) ListStickers(f ListFilter) (Page[memory.Sticker], error) 
 func (s *AdminService) GetSticker(id uint) (memory.Sticker, error) {
 	var v memory.Sticker
 	return v, s.db.First(&v, id).Error
-}
-
-func (s *AdminService) validateStatus(raw string, allowed ...string) error {
-	for _, v := range allowed {
-		if raw == v {
-			return nil
-		}
-	}
-	return fmt.Errorf("invalid status: %s", raw)
 }

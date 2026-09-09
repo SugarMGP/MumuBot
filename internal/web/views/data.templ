@@ -2,7 +2,6 @@ package views
 
 import (
 	"fmt"
-	"mumu-bot/internal/memory"
 )
 
 templ StickerListPage(data StickerListPageData, currentPath string) {
@@ -69,92 +68,18 @@ templ StickerPreviewOverlayBody() {
 	<div class="space-y-5"><div class="flex items-start justify-between"><div><h3 id="admin-sticker-preview-dialog-title" class="text-xl font-semibold">表情包预览</h3><p class="mt-1 text-sm text-base-content/55">正在载入图片和文件信息。</p></div>@DialogCloseButton("#admin-sticker-preview-dialog")</div><div class="skeleton h-80 w-full"></div></div>
 }
 
-templ MemoryListPage(data MemoryListPageData, currentPath string) {
-	@Layout(LayoutData{Title: "长期记忆", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, MemoryListBody(data))
-}
-
-templ MemoryListBody(data MemoryListPageData) {
-	<div class="space-y-6">
-		@PageHeader("长期记忆", "查看机器人保存的稳定事实与目标状态。", "")
-		@FilterPanel("memory-filters", "筛选条件", MemoryFilterControls(data), true, MemoryFilterForm(data))
-		@SortToolbar(data.Sort)
-		if len(data.Items) == 0 {
-			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无长期记忆</div></div>
-		}
-		if len(data.Items) > 0 {
-			<div class="grid grid-cols-2 gap-4">
-				for _, item := range data.Items {
-					<article class="admin-record-card card border border-base-300 bg-base-100 shadow-sm" data-tone={ ternaryString(item.Status == memory.MemoryStatusArchived, "neutral", "primary") }>
-						<div class="card-body gap-4 p-5 pl-6">
-							<div class="flex items-start justify-between gap-4">
-								<div class="flex flex-wrap gap-2"><span class="badge badge-info badge-soft badge-sm">{ memorySubjectText(item.SubjectUserID, data.SelfID) }</span><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span><span class="badge badge-ghost badge-sm">{ memoryKindText(item.Kind) }</span></div>
-								<div class="flex gap-2">
-									if item.Status == memory.MemoryStatusArchived {
-										<button class="btn btn-success btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ memoryRestoreDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">恢复</button>
-									} else {
-										<button class="btn btn-ghost btn-xs border-base-300" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ memoryArchiveDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">归档</button>
-									}
-									<button class="btn btn-error btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ memoryDeleteDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">删除</button>
-								</div>
-							</div>
-							<p class="admin-quote line-clamp-4 rounded-xl p-4 text-sm leading-7 text-base-content/78" title={ item.Content }>{ item.Content }</p>
-							<div class="flex items-center justify-between text-xs text-base-content/58">
-								<span>
-									群 { fmt.Sprintf("%d", item.GroupID) }
-									if item.SubjectUserID != 0 {
-										<span> · 用户 { fmt.Sprintf("%d", item.SubjectUserID) }</span>
-									}
-								</span>
-								<time datetime={ formatTimeAttr(item.UpdatedAt) }>更新于 { formatTime(item.UpdatedAt) }</time>
-								</div>
-								if len(item.Evidence) > 0 {
-									<details class="rounded-lg border border-base-300 bg-base-200/30 px-3 py-2">
-										<summary class="cursor-pointer text-xs font-medium text-base-content/65">查看证据（{ fmt.Sprintf("%d", len(item.Evidence)) }）</summary>
-										<div class="mt-3 space-y-2">
-											for _, evidence := range item.Evidence {
-												<div class="rounded-md bg-base-100 px-3 py-2 text-xs leading-5"><div class="text-base-content/50">#{ fmt.Sprintf("%d", evidence.OneBotMessageID) } · { evidence.Nickname } · { formatTime(evidence.MessageTime) }</div><div class="mt-1 text-base-content/75">{ displayText(evidence.TextContent, "该证据消息已撤回") }</div></div>
-											}
-										</div>
-									</details>
-								}
-						</div>
-					</article>
-				}
-			</div>
-		}
-		@ListFooter(data.Meta)
-	</div>
-}
-
-templ MemoryFilterControls(data MemoryListPageData) {
-	<div class="flex flex-col items-end gap-2">
-		@ChoiceFilterGroupForForm("memory-filter-form", "subject", data.Subject, []FilterChoice{{Label: "全部主体", Value: ""}, {Label: "群组", Value: "group"}, {Label: "自身", Value: "self"}, {Label: "成员", Value: "member"}})
-		@ChoiceFilterGroupForForm("memory-filter-form", "status", data.Status, []FilterChoice{{Label: "全部状态", Value: ""}, {Label: "生效中", Value: "active"}, {Label: "已归档", Value: "archived"}})
-	</div>
-}
-
-templ MemoryFilterForm(data MemoryListPageData) {
-	<form id="memory-filter-form" class="grid grid-cols-[minmax(240px,1fr)_150px_150px_auto] items-center gap-3" method="get" action="/admin/memories" hx-get="/admin/memories" hx-trigger="change from:input[form='memory-filter-form'], submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索记忆内容" aria-label="搜索记忆内容"/>
-		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号" aria-label="群号"/>
-		<select class="select w-full border-base-300" name="kind" aria-label="记忆归类"><option value="">全部归类</option><option value="fact" selected?={ data.Kind == "fact" }>属性/关系</option><option value="episode" selected?={ data.Kind == "episode" }>经历</option><option value="preference" selected?={ data.Kind == "preference" }>偏好</option><option value="constraint" selected?={ data.Kind == "constraint" }>约束</option><option value="goal" selected?={ data.Kind == "goal" }>目标</option></select>
-		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
-	</form>
-}
-
 templ MemberListPage(data MemberListPageData, currentPath string) {
-	@Layout(LayoutData{Title: "成员画像", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, MemberListBody(data))
+	@Layout(LayoutData{Title: "成员管理", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, MemberListBody(data))
 }
 
 templ MemberListBody(data MemberListPageData) {
 	<div class="space-y-6">
-		@PageHeader("成员画像", "查看群成员的身份变化、说话风格与群聊表达特征。", "")
+		@PageHeader("成员管理", "查看成员身份、相关知识与参与记录。", "")
 		@FilterPanel("member-filters", "筛选条件", EmptyComponent(), false, MemberFilterForm(data))
 		@SortToolbar(data.Sort)
 		<div class="space-y-4">
 			if len(data.Items) == 0 {
-				<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无成员画像</div></div>
+				<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无成员</div></div>
 			}
 			for _, item := range data.Items {
 				<article class="card border border-base-300 bg-base-100 shadow-sm">
@@ -168,9 +93,9 @@ templ MemberListBody(data MemberListPageData) {
 								}
 							</div>
 						</section>
-						<section class="grid grid-cols-3 gap-4 text-sm">
-							@MemberTraitGroup("说话风格", memberTraits(item, "speaking", 3), "badge badge-success badge-soft badge-sm")
-							@MemberTraitGroup("常用词", memberTraits(item, "phrase", 3), "badge badge-warning badge-soft badge-sm")
+						<section class="grid grid-cols-2 gap-4 text-sm">
+							<a class="link link-primary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?user_id=%d",item.UserID)) }>关于他的知识 ({ fmt.Sprintf("%d",item.KnowledgeCount) })</a>
+							<a class="link link-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?author_id=%d",item.UserID)) }>参与的讨论 ({ fmt.Sprintf("%d",item.ParticipationCount) })</a>
 						</section>
 						<section class="border-l border-base-300 pl-6"><div class="text-xs text-base-content/58">发言数</div><div class="admin-number mt-1 text-xl font-semibold">{ fmt.Sprintf("%d", item.MessageCount) }</div><div class="mt-3 text-xs text-base-content/58">最后活跃</div><time class="mt-1 block text-xs" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time></section>
 					</div>
@@ -178,20 +103,6 @@ templ MemberListBody(data MemberListPageData) {
 			}
 		</div>
 		@ListFooter(data.Meta)
-	</div>
-}
-
-templ MemberTraitGroup(label string, tags []string, badgeClass string) {
-	<div>
-		<div class="text-xs font-medium text-base-content/58">{ label }</div>
-		<div class="mt-2 flex flex-wrap gap-1">
-			if len(tags) == 0 {
-				<span class="italic text-base-content/30">暂无</span>
-			}
-			for _, tag := range tags {
-				<span class={ badgeClass }>{ tag }</span>
-			}
-		</div>
 	</div>
 }
 

@@ -30,8 +30,8 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		EnabledGroupCount: snapshot.EnabledGroups,
 		MemoryCount:       stats.MemoryCount,
 		MemberCount:       stats.MemberCount,
-		JargonCount:       stats.JargonCount,
-		StyleCardCount:    stats.StyleCardCount,
+		CandidateCount:    stats.CandidateCount,
+		RelationCount:     stats.RelationCount,
 		StickerCount:      stats.StickerCount,
 		OneBotConnected:   snapshot.Connected,
 		SelfID:            snapshot.SelfID,
@@ -42,26 +42,6 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}, r.URL.Path))
 }
 
-func (a *App) handleStyleCards(w http.ResponseWriter, r *http.Request) {
-	data, err := a.styleCardPageData(r.URL, a.flashFromRequest(r))
-	if err != nil {
-		http.Error(w, "风格卡片列表加载失败，请稍后再试。", http.StatusInternalServerError)
-		return
-	}
-
-	a.renderPageResponse(w, r, views.StyleCardListPage(data, r.URL.Path), views.PageContent(views.StyleCardListBody(data)))
-}
-
-func (a *App) handleJargons(w http.ResponseWriter, r *http.Request) {
-	data, err := a.jargonPageData(r.URL, a.flashFromRequest(r))
-	if err != nil {
-		http.Error(w, "黑话列表加载失败，请稍后再试。", http.StatusInternalServerError)
-		return
-	}
-
-	a.renderPageResponse(w, r, views.JargonListPage(data, r.URL.Path), views.PageContent(views.JargonListBody(data)))
-}
-
 func (a *App) handleStickers(w http.ResponseWriter, r *http.Request) {
 	data, err := a.stickerPageData(r.URL, a.flashFromRequest(r))
 	if err != nil {
@@ -70,16 +50,6 @@ func (a *App) handleStickers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.renderPageResponse(w, r, views.StickerListPage(data, r.URL.Path), views.PageContent(views.StickerListBody(data)))
-}
-
-func (a *App) handleMemories(w http.ResponseWriter, r *http.Request) {
-	data, err := a.memoryPageData(r.URL, a.flashFromRequest(r))
-	if err != nil {
-		http.Error(w, "记忆列表加载失败，请稍后再试。", http.StatusInternalServerError)
-		return
-	}
-
-	a.renderPageResponse(w, r, views.MemoryListPage(data, r.URL.Path), views.PageContent(views.MemoryListBody(data)))
 }
 
 func (a *App) handleTopics(w http.ResponseWriter, r *http.Request) {
@@ -207,30 +177,6 @@ func (a *App) handleActionDialogFragment(w http.ResponseWriter, r *http.Request)
 	returnTo := a.dialogReturnTo(r, "/admin")
 
 	switch kind {
-	case "style-card-status":
-		item, err := a.admin.GetStyleCard(id)
-		if err != nil {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "风格卡片无法加载", "这条记录可能已经被处理。"))
-			return
-		}
-		data, ok := views.StyleCardActionDialogData(item, r.URL.Query().Get("status"), returnTo)
-		if !ok {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "操作无法继续", "当前状态下不能执行这次操作。"))
-			return
-		}
-		a.render(w, views.AdminActionDialogContent(data))
-	case "jargon-status":
-		item, err := a.admin.GetJargon(id)
-		if err != nil {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "黑话记录无法加载", "这条记录可能已经被处理。"))
-			return
-		}
-		data, ok := views.JargonActionDialogData(item, r.URL.Query().Get("status"), returnTo)
-		if !ok {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "操作无法继续", "当前状态下不能执行这次操作。"))
-			return
-		}
-		a.render(w, views.AdminActionDialogContent(data))
 	case "sticker-delete":
 		item, err := a.admin.GetSticker(id)
 		if err != nil {
@@ -238,27 +184,6 @@ func (a *App) handleActionDialogFragment(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		a.render(w, views.AdminActionDialogContent(views.StickerDeleteDialogData(item, returnTo)))
-	case "memory-delete":
-		item, err := a.admin.GetMemory(id)
-		if err != nil {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "记忆无法加载", "这条记忆可能已经被删除。"))
-			return
-		}
-		a.render(w, views.AdminActionDialogContent(views.MemoryDeleteDialogData(item, a.runtimeSnapshot().SelfID, returnTo)))
-	case "memory-archive":
-		item, err := a.admin.GetMemory(id)
-		if err != nil {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "记忆无法加载", "这条记忆可能已经不存在。"))
-			return
-		}
-		a.render(w, views.AdminActionDialogContent(views.MemoryArchiveDialogData(item, returnTo)))
-	case "memory-restore":
-		item, err := a.admin.GetMemory(id)
-		if err != nil {
-			a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "记忆无法加载", "这条记忆可能已经不存在。"))
-			return
-		}
-		a.render(w, views.AdminActionDialogContent(views.MemoryRestoreDialogData(item, returnTo)))
 	default:
 		a.renderStatus(w, http.StatusOK, views.DialogErrorContent("admin-action-dialog", "操作无法继续", "未识别这次操作。"))
 	}
@@ -278,66 +203,6 @@ func (a *App) handleStickerPreviewDialogFragment(w http.ResponseWriter, r *http.
 	}
 
 	a.render(w, views.StickerPreviewDialog(views.StickerPreviewDialogDataForItem(item)))
-}
-
-func (a *App) styleCardPageData(current *neturl.URL, flash *views.FlashMessage) (views.StyleCardListPageData, error) {
-	sortKey, order := services.NormalizeStyleCardSort(current.Query().Get("sort"), current.Query().Get("order"))
-	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
-	filter := services.ListFilter{
-		GroupID:  parseInt64Query(current.Query().Get("group_id")),
-		Status:   strings.TrimSpace(current.Query().Get("status")),
-		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
-		Sort:     sortKey,
-		Order:    order,
-		Page:     page,
-		PageSize: pageSize,
-	}
-
-	result, err := a.admin.ListStyleCards(filter)
-	if err != nil {
-		return views.StyleCardListPageData{}, err
-	}
-
-	return views.StyleCardListPageData{
-		GroupID: current.Query().Get("group_id"),
-		Status:  filter.Status,
-		Keyword: filter.Keyword,
-		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}}),
-		Items:   result.Items,
-		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
-		Flash:   flash,
-	}, nil
-}
-
-func (a *App) jargonPageData(current *neturl.URL, flash *views.FlashMessage) (views.JargonListPageData, error) {
-	sortKey, order := services.NormalizeJargonSort(current.Query().Get("sort"), current.Query().Get("order"))
-	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
-	filter := services.ListFilter{
-		GroupID:  parseInt64Query(current.Query().Get("group_id")),
-		Status:   strings.TrimSpace(current.Query().Get("status")),
-		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
-		Sort:     sortKey,
-		Order:    order,
-		Page:     page,
-		PageSize: pageSize,
-	}
-
-	result, err := a.admin.ListJargons(filter)
-	if err != nil {
-		return views.JargonListPageData{}, err
-	}
-
-	return views.JargonListPageData{
-		GroupID: current.Query().Get("group_id"),
-		Status:  filter.Status,
-		Keyword: filter.Keyword,
-		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}, {Key: "group", Label: "群号"}}),
-		Items:   result.Items,
-		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
-		Flash:   flash,
-	}, nil
 }
 
 func (a *App) stickerPageData(current *neturl.URL, flash *views.FlashMessage) (views.StickerListPageData, error) {
@@ -361,41 +226,6 @@ func (a *App) stickerPageData(current *neturl.URL, flash *views.FlashMessage) (v
 		Keyword: filter.Keyword,
 		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "use", Label: "使用次数"}, {Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}}),
 		Items:   result.Items,
-		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
-		Flash:   flash,
-	}, nil
-}
-
-func (a *App) memoryPageData(current *neturl.URL, flash *views.FlashMessage) (views.MemoryListPageData, error) {
-	sortKey, order := services.NormalizeMemorySort(current.Query().Get("sort"), current.Query().Get("order"))
-	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
-	filter := services.MemoryFilter{
-		GroupID:  parseInt64Query(current.Query().Get("group_id")),
-		Subject:  strings.TrimSpace(current.Query().Get("subject")),
-		Status:   strings.TrimSpace(current.Query().Get("status")),
-		Kind:     strings.TrimSpace(current.Query().Get("kind")),
-		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
-		Sort:     sortKey,
-		Order:    order,
-		Page:     page,
-		PageSize: pageSize,
-	}
-
-	result, err := a.admin.ListMemories(filter)
-	if err != nil {
-		return views.MemoryListPageData{}, err
-	}
-
-	return views.MemoryListPageData{
-		GroupID: current.Query().Get("group_id"),
-		Subject: filter.Subject,
-		Status:  filter.Status,
-		Kind:    filter.Kind,
-		Keyword: filter.Keyword,
-		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}}),
-		Items:   result.Items,
-		SelfID:  a.runtimeSnapshot().SelfID,
 		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
 		Flash:   flash,
 	}, nil

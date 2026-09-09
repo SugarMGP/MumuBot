@@ -28,18 +28,3 @@ func (m *Manager) LatestMemberGroupCard(userID, groupID int64) (string, error) {
 	}
 	return row.Value, err
 }
-
-func (m *Manager) ListMemberTraits(userID int64) ([]MemberTrait, error) {
-	var rows []MemberTrait
-	err := m.db.Where("user_id = ?", userID).Order("kind, updated_at DESC").Find(&rows).Error
-	return rows, err
-}
-
-func (m *Manager) ListMemberTraitsByUsers(userIDs []int64) ([]MemberTrait, error) {
-	if len(userIDs) == 0 {
-		return nil, nil
-	}
-	var rows []MemberTrait
-	err := m.db.Where("user_id IN ?", userIDs).Order("user_id, kind, updated_at DESC").Find(&rows).Error
-	return rows, err
-}

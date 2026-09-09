@@ -35,13 +35,13 @@ Core capabilities of this project:
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
 - 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
 - 🧵 **Topic Working Memory** — Continuously tracks current topics, summaries, participants, and open threads; can recall archived topics
-- 🧩 **Rich Toolset** — 18 built-in tools for speaking, staying quiet, poking, emoji reactions, stickers, group information, and web browsing, with more available through MCP
-- 📝 **Long-term Memory** — Stores and retrieves facts, experiences, preferences, constraints, and goals with PostgreSQL, pgvector, and pg_trgm
-- 👤 **Member Profiles** — Records evidence-backed aliases, speaking habits, interests, and common phrases for each member
+- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, unified memory search, working notes, poking, emoji reactions, stickers, group information, and web browsing, with more available through MCP
+- 📝 **Long-term Memory** — Unifies facts, experiences, preferences, group terms, and expressions with PostgreSQL, pgvector, and pg_trgm, including evidence-backed relationships
+- 👤 **Member Profiles** — Shows evidence-backed member knowledge and participation; a background memory agent investigates historical context
 - 🎭 **Emotion System** — Three-dimensional mood (valence, energy, sociability) shifts naturally during conversation, affecting tone and activity
 - 👀 **Multimodal Understanding** — Vision model recognizes image and video content
 - 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
-- 📖 **Continuous Learning** — Learns group chat atmosphere and popular memes, materializing into reviewable community culture data
+- 📖 **Unified Consolidation** — One background Memory Agent batches topic assignment, summaries, and knowledge maintenance with per-group cooldowns, round-robin scheduling, and shared request pacing
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Overview, learning review, topic/memory/sticker management, and member profile browsing
@@ -57,7 +57,7 @@ Core capabilities of this project:
 | Node.js 22+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors |
 | NapCat | OneBot 11 protocol implementation |
-| LLM API | OpenAI-compatible; must support tool calling and structured output |
+| LLM API | OpenAI-compatible; both high and low tiers must support tool calling; JSON object output mode is no longer required |
 
 ### Docker Compose
 

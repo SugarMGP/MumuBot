@@ -6,15 +6,15 @@
 
 - MumuBot 是运行在 QQ 群里的智能体：通过 OneBot 11 接收群消息，使用 ReAct（观察、思考、行动循环）决定是否回复、调用工具或保持沉默。
 - 主链路由 `main.go` 启动：配置加载、模型客户端、记忆系统、聊天 agent、管理后台和退出清理都在这里串起来。
-- 语义能力分成几条边界清楚的链路：话题工作记忆负责当前对话脉络，长期记忆负责稳定事实，learner 只学习群文化，后台负责查看、审核和管理。
+- 语义能力分成几条边界清楚的链路：话题工作记忆保存对话脉络，统一 Memory Agent 负责话题归属、摘要和长期知识维护，后台负责查看、审核和管理。
 
 ## 目录地图
 
 - `internal/agent/`：运行编排层，连接 OneBot、话题、学习、工具、模型和思考循环。
 - `internal/onebot/`：napcat-sdk 接入、OneBot 11 Adapter、消息事件解析和发送 API。
-- `internal/topic/`：话题工作记忆、话题归属、摘要刷新、归档检索和提示词上下文。
+- `internal/topic/`：话题工作记忆读取、消息持久化、归档检索和提示词上下文；没有独立模型任务。
 - `internal/memory/`：PostgreSQL 数据模型、pgvector/pg_trgm 检索、长期记忆、消息日志、成员画像。
-- `internal/learning/`：群文化学习，只处理黑话、表达方式和成员画像。
+- `internal/learning/`：统一 Memory Agent、群间轮转、批处理、冷却与请求限速。
 - `internal/tools/`：暴露给 ReAct agent 和学习审核流程使用的工具。
 - `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务。
 - `config/`：运行配置、人格提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
@@ -26,8 +26,8 @@
 | 看启动顺序 | `main.go` |
 | 看消息如何进入 bot | `internal/onebot/client.go`、`internal/agent/message.go` |
 | 看回复决策 | `internal/agent/think.go` |
-| 看话题分配和摘要 | `internal/topic/manager.go`、`internal/topic/assignment.go` |
-| 看长期记忆入库 | `internal/memory/memory_ingest.go`、`internal/memory/merge_decider.go` |
+| 看话题分配和摘要 | `internal/learning/investigate.go`、`internal/memory/conversation.go` |
+| 看长期记忆入库 | `internal/memory/knowledge_commit.go`、`internal/memory/conversation.go` |
 | 看数据库启动迁移 | `internal/memory/migrations_v1.go`、`main.go` |
 | 看群文化学习 | `internal/learning/learner.go` |
 | 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
@@ -145,18 +145,20 @@ go vet ./...
 - 停机时 Adapter 关闭不清零机器人账号，Agent 排空提交队列期间仍按真实账号识别机器人自身消息；账号仅在首次连接成功前处于未就绪状态，断线重连期间保留账号供后台任务继续按真实身份工作。
 - 消息触发的思考防抖从当前进程收到 OneBot 事件的时间开始计算；消息解析完成后按剩余窗口调度思考，解析耗时超过窗口时立即调度。思考仍使用开始时取得的固定消息快照。
 - 人格提示词只做增量调整；保留 `config/persona.prompt` 中 B站、贴吧、知乎和微博四个平台的参考原句，不恢复已删除的成组矫正案例。
-- 学习系统只负责群文化学习：黑话、表达方式、成员画像。学习系统不承担自动长期记忆写入职责。
-- 自动长期记忆下沉只由话题摘要链路触发；显式工具调用（如 `saveMemory`）与该自动链路分开考虑，不要把 learner 扩展成长期记忆写入宿主。
-- 话题归属以数据库 pending 为唯一水位：正常累计到 20 条时调度，启动和现有 180 秒恢复扫描强制排空不足 20 条的尾批；每批额外读取之前 10 条已处理消息及其归属、时间和回复关系，不维护第二套内存计数。
+- 后台 Memory Agent 在同一上下文中完成话题归属、摘要、稳定知识、群文化与候选复核；不再启动独立话题模型或重复提取任务。
+- 自动知识由统一整理提交；显式 saveMemory 仍独立提交候选，两者共用知识存储及证据校验。
+- learning_states 每群仅保存一个统一整理水位。按数据库连续原文批次整理；默认同群至少5分钟，满50条或等待15分钟后可调度。启动和恢复扫描也遵守冷却与全局请求间隔，不强制连续排空。
 - 长期记忆主体只保存 `subject_user_id`：`0` 为群组、运行时 `self_id` 为自身、其他正数为成员；数据库不保存 `scope`。模型和工具输入用 `-1` 表示自身，必须在写库前解析，任何负数主体都不能进入持久化模型。
-- `saveMemory` 和话题摘要直接提交同一个结构化 claim：必填主体、`fact/episode/preference/constraint/goal` 类型、包含当前昵称的自然语言正文和 1-8 条原始消息证据；服务端不拼昵称、不二次调用 claim 分类模型、不用 open loop 强制猜目标。
-- 话题摘要和 `saveMemory` 必须共用 memory 包中的 claim 规则；每条 claim 只能用自己的证据验证成员主体及回复目标，禁止借用同批其他 claim 的证据通过校验。
-- 长期记忆只保留 `active/archived`。验证通过直接生效，验证失败明确拒绝；管理员恢复归档记忆时先做 active 精确去重并合并证据。
-- 长期记忆证据只关联 `message_logs`，不把 TopicSummary 当证据；证据必须同群、未撤回且不晚于固定快照或话题 assignment 上界。最后一条有效证据撤回时自动归档记忆。
-- 成员画像只学习 `alias/speaking/phrase`；成员兴趣和偏好统一由长期记忆 `preference` 负责，禁止恢复 `interest` 双写。
-- learner 的消费应由话题系统决定，只消费“话题系统已处理完成”的消息；不要让 learner 与话题摘要重复扫描同一批未判定原文。
+- saveMemory 提交带主体、类型、完整正文和1-8条原文证据的 claim；统一 Agent 直接提交 knowledge items 及1-16条消息的证据组，不在摘要重复保存 claims。不拼昵称、不二次分类、不猜测目标。
+- 所有知识共用 memory 包的提交校验；只能用自己的证据验证主体，禁止借用其他条目的证据。
+- 知识统一保存为 `knowledge_items`，状态为 `candidate/active/archived`；正文语义变化新增条目，明确关联存为双端点 `knowledge_relations`。显式保存进入候选；统一调查可在证据充分时生效，否则保留候选。
+- 知识及关系证据通过 `knowledge_evidence_sets/knowledge_evidence_messages` 关联原始消息；每组是完整独立证明，任一必要消息撤回使整组失效，没有其他完整证明时转候选并退出正常召回。不以摘要或模型推理作证据。
+- 不再学习成员常用词、泛化说话风格；成员页聚合知识主体及原文参与情况，禁止恢复 `speaking/phrase/interest` 双写。
+- 统一 Agent 直接消费原文，不以前置 assignment 为门槛；一次 finish 原子保存所有归属、摘要、知识、证据与水位。
 - 成员画像保持全局 `user_id` 维度，不引入 `group_id` 维度，除非用户明确提出新的画像隔离需求。
-- 表达方式由 learner 保存为群级 `situation + expression` 和直接原始消息证据，主 ReAct 只在需要时通过工具查询；不自动注入每轮提示词，不新增冗余示例字段或跨群共享。
+- 表达方式以包含语境与用法的统一知识正文保存，通过 `searchMemory` 与其他知识一起查询，不设专用表达或黑话存储。
+- Memory Agent 群间轮转、单轮最多6次模型响应和6次读取；每个后台推理及向量请求共享间隔。429遵循 Retry-After；异常不推进水位，历史读取限于本群固定消息上界。
+- `group_agent_states` 每群只保存 note 与更新时间，`saveWorkingNote` 空值清除；便签不算群行动，不独立推进失败轮次的已读水位。
 
 ## 数据与检索边界
 

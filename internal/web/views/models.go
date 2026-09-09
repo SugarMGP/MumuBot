@@ -98,8 +98,8 @@ type DashboardPageData struct {
 	EnabledGroupCount int
 	MemoryCount       int64
 	MemberCount       int64
-	JargonCount       int64
-	StyleCardCount    int64
+	CandidateCount    int64
+	RelationCount     int64
 	StickerCount      int64
 	OneBotConnected   bool
 	SelfID            int64
@@ -117,26 +117,6 @@ type ListMeta struct {
 	NextURL  string
 }
 
-type StyleCardListPageData struct {
-	GroupID string
-	Status  string
-	Keyword string
-	Sort    SortToolbarData
-	Items   []services.StylePatternView
-	Meta    ListMeta
-	Flash   *FlashMessage
-}
-
-type JargonListPageData struct {
-	GroupID string
-	Status  string
-	Keyword string
-	Sort    SortToolbarData
-	Items   []services.JargonView
-	Meta    ListMeta
-	Flash   *FlashMessage
-}
-
 type StickerListPageData struct {
 	Keyword string
 	Sort    SortToolbarData
@@ -145,17 +125,20 @@ type StickerListPageData struct {
 	Flash   *FlashMessage
 }
 
-type MemoryListPageData struct {
-	GroupID string
-	Subject string
-	Status  string
-	Kind    string
-	Keyword string
-	Sort    SortToolbarData
-	Items   []services.MemoryView
-	SelfID  int64
-	Meta    ListMeta
-	Flash   *FlashMessage
+type KnowledgeListPageData struct {
+	GroupID  string
+	Subject  string
+	UserID   string
+	AuthorID string
+	Note     *memory.GroupAgentState
+	Status   string
+	Kind     string
+	Keyword  string
+	Sort     SortToolbarData
+	Items    []memory.KnowledgeItem
+	SelfID   int64
+	Meta     ListMeta
+	Flash    *FlashMessage
 }
 
 type TopicListPageData struct {
@@ -221,8 +204,6 @@ type TopicSummaryChangeView struct {
 	CurrentGist      string
 	PreviousGist     string
 	GistDiff         TopicTextDiffView
-	AddedClaims      []string
-	RemovedClaims    []string
 	AddedOpenLoops   []string
 	RemovedOpenLoops []string
 	Changed          bool

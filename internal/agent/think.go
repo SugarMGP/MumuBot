@@ -248,6 +248,11 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		GroupID: groupID,
 	}
 	promptCtx.GroupInfo = a.buildGroupContext(groupID)
+	if note, err := a.memory.GetWorkingNote(ctx, groupID); err != nil {
+		zap.L().Warn("读取工作便签失败", zap.Error(err))
+	} else {
+		promptCtx.WorkingNote = note
+	}
 
 	if !semanticCurrent {
 		if !hasCurrentContext {
@@ -271,9 +276,8 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 			} else {
 				promptCtx.TopicMemory = topicPrompt
 			}
+			promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences, promptCtx.MemoryRelations = a.buildMemoryContext(ctx, groupID, buffer, retrievalQuery, snapshotLog.ID)
 		}
-
-		promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences = a.buildMemoryContext(ctx, groupID, buffer, retrievalQuery)
 		promptCtx.SelfID = selfID
 		promptCtx.MemorySubjectNames = a.memorySubjectNames(promptCtx.RelatedMemories, promptCtx.CrossGroupExperiences)
 	}
@@ -286,9 +290,6 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		}
 	}
 
-	if semanticCurrent && a.jargonMgr != nil {
-		promptCtx.JargonMatches = a.jargonMgr.Match(groupID, collectTextContext(currentMessages))
-	}
 	recentPeople := a.buildRecentPeopleContext(buffer, groupID)
 
 	systemPrompt := a.persona.GetSystemPrompt()

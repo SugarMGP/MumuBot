@@ -52,12 +52,15 @@ func (a *App) systemSections() []views.SystemSection {
 	if cfg.Agent.ThinkDebounceMS > 0 {
 		groupFields = append(groupFields, views.SystemField{Label: "聚合窗口", Value: fmt.Sprintf("%d 毫秒", cfg.Agent.ThinkDebounceMS)})
 	}
+	groupFields = append(groupFields,
+		views.SystemField{Label: "群聊整理", Value: fmt.Sprintf("满 %d 条或等待 %d 分钟后排队", cfg.Learning.BatchSize, cfg.Learning.MaxWaitMinutes)},
+		views.SystemField{Label: "整理间隔", Value: fmt.Sprintf("同群至少 %d 分钟，请求至少 %d 秒", cfg.Learning.IntervalMinutes, cfg.Learning.RequestIntervalSeconds)},
+	)
+	culture := "未开启"
 	if cfg.Learning.Enabled {
-		groupFields = append(groupFields, views.SystemField{Label: "自动学习", Value: fmt.Sprintf("每 %d 分钟整理 %d 条消息", cfg.Learning.IntervalMinutes, cfg.Learning.BatchSize)})
-		if cfg.Learning.ReviewIntervalMinutes > 0 {
-			groupFields = append(groupFields, views.SystemField{Label: "审核节奏", Value: fmt.Sprintf("每 %d 分钟整理一次待审内容", cfg.Learning.ReviewIntervalMinutes)})
-		}
+		culture = "已开启"
 	}
+	groupFields = append(groupFields, views.SystemField{Label: "群文化学习", Value: culture})
 
 	modelFields := make([]views.SystemField, 0, 8)
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierHigh), cfg.ModelTiers.High.Model)
@@ -257,26 +260,6 @@ func joinOrDash(values []string) string {
 		return "-"
 	}
 	return strings.Join(values, "、")
-}
-
-func styleCardActionErrorText(err error) string {
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "这张风格卡片不存在或已经被处理。"
-	}
-	if strings.Contains(strings.ToLower(err.Error()), "invalid") {
-		return "这次状态变更无效，请刷新列表后重试。"
-	}
-	return "更新失败，请稍后再试。"
-}
-
-func jargonActionErrorText(err error) string {
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "这条黑话不存在或已经被处理。"
-	}
-	if strings.Contains(strings.ToLower(err.Error()), "invalid") {
-		return "这次状态变更无效，请刷新列表后重试。"
-	}
-	return "更新失败，请稍后再试。"
 }
 
 func deleteActionErrorText(err error) string {

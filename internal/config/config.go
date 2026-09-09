@@ -100,12 +100,12 @@ type TimeRuleConfig struct {
 
 // LearningConfig 学习系统配置
 type LearningConfig struct {
-	Enabled               bool `mapstructure:"enabled"`                 // 是否启用
-	IntervalMinutes       int  `mapstructure:"interval_minutes"`        // 学习任务间隔（分钟）
-	ReviewIntervalMinutes int  `mapstructure:"review_interval_minutes"` // 审核任务间隔（分钟）
-	RecoveryInterval      int  `mapstructure:"recovery_interval"`       // 后台恢复扫描间隔（秒）
-	BatchSize             int  `mapstructure:"batch_size"`              // 每次学习的消息数量限制
-	MinMsgCount           int  `mapstructure:"min_msg_count"`           // 触发学习的最少消息数量
+	Enabled                bool `mapstructure:"enabled"`           // 是否学习群文化；话题和稳定知识整理始终运行
+	IntervalMinutes        int  `mapstructure:"interval_minutes"`  // 学习任务间隔（分钟）
+	RecoveryInterval       int  `mapstructure:"recovery_interval"` // 后台恢复扫描间隔（秒）
+	BatchSize              int  `mapstructure:"batch_size"`        // 每次学习的消息数量限制
+	MaxWaitMinutes         int  `mapstructure:"max_wait_minutes"`
+	RequestIntervalSeconds int  `mapstructure:"request_interval_seconds"`
 }
 
 // ModelConfig 对话模型配置
@@ -243,19 +243,22 @@ func validate(c *Config) error {
 		c.Sticker.StoragePath = "./stickers"
 	}
 	if c.Learning.BatchSize == 0 {
-		c.Learning.BatchSize = 100
+		c.Learning.BatchSize = 50
 	}
-	if c.Learning.MinMsgCount == 0 {
-		c.Learning.MinMsgCount = 15
+	if c.Learning.IntervalMinutes == 0 {
+		c.Learning.IntervalMinutes = 5
 	}
-	if c.Learning.BatchSize < 0 {
-		return fmt.Errorf("learning.batch_size 不能小于 0")
+	if c.Learning.MaxWaitMinutes == 0 {
+		c.Learning.MaxWaitMinutes = 15
 	}
-	if c.Learning.MinMsgCount < 0 {
-		return fmt.Errorf("learning.min_msg_count 不能小于 0")
+	if c.Learning.RequestIntervalSeconds == 0 {
+		c.Learning.RequestIntervalSeconds = 20
 	}
-	if c.Learning.BatchSize < c.Learning.MinMsgCount {
-		return fmt.Errorf("learning.batch_size 不能小于 learning.min_msg_count")
+	if c.Learning.IntervalMinutes < 1 || c.Learning.MaxWaitMinutes < c.Learning.IntervalMinutes || c.Learning.RequestIntervalSeconds < 1 {
+		return fmt.Errorf("整理间隔和请求间隔必须为正，最大等待时间不能短于整理间隔")
+	}
+	if c.Learning.BatchSize < 1 || c.Learning.BatchSize > 100 {
+		return fmt.Errorf("learning.batch_size 必须在1到100之间")
 	}
 	if c.OneBot.ReconnectInterval <= 0 {
 		return fmt.Errorf("onebot.reconnect_interval 必须大于 0")

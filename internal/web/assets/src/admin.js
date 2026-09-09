@@ -1,11 +1,11 @@
 import htmx from "htmx.org";
 import Toastify from "toastify-js";
 import * as echarts from "echarts/core";
-import { PieChart, BarChart, LineChart } from "echarts/charts";
+import { PieChart, BarChart, LineChart, GraphChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TitleComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TitleComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([PieChart, BarChart, LineChart, GraphChart, GridComponent, LegendComponent, TitleComponent, TooltipComponent, CanvasRenderer]);
 
 window.htmx = htmx;
 
@@ -159,6 +159,7 @@ function bootAdminPage() {
   followAdminLogs();
   syncLogDownloadURL();
   renderModelStats();
+  renderKnowledgeGraph();
 }
 
 function followAdminLogs() {
@@ -270,6 +271,25 @@ function chartFor(target) {
   return echarts.init(target);
 }
 
+function renderKnowledgeGraph() {
+  document.querySelectorAll("[data-knowledge-graph]").forEach((target) => {
+    if (echarts.getInstanceByDom(target)) return;
+    const data = JSON.parse(target.dataset.knowledgeGraph);
+    const chart = chartFor(target);
+    chart.setOption({ animation: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      tooltip: { renderMode: "richText", formatter: (entry) => entry.dataType === "node" ? `${entry.data.name}\n${entry.data.status}` : "" },
+      series: [{ type: "graph", layout: "circular", roam: true, symbolSize: 48,
+        data: data.nodes, links: data.edges, label: { show: true, position: "bottom", width: 110, overflow: "truncate" },
+        edgeSymbol: ["none", "arrow"], edgeSymbolSize: 8, itemStyle: { color: "#e85d75" },
+        lineStyle: { color: "#159a8c", width: 2, curveness: 0.1 }, edgeLabel: { fontSize: 11 } }],
+    });
+    chart.on("click", (entry) => { if (entry.dataType === "node" && entry.data.url) window.location.assign(entry.data.url); });
+  });
+}
+
+document.addEventListener("htmx:afterSwap", renderKnowledgeGraph);
+window.addEventListener("resize", () => document.querySelectorAll("[data-knowledge-graph]").forEach((node) => echarts.getInstanceByDom(node)?.resize()));
+
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootAdminPage, { once: true });
 else queueMicrotask(bootAdminPage);
 
@@ -293,6 +313,13 @@ document.addEventListener("submit", (event) => {
   if (form.dataset.submitting === "true") {
     event.preventDefault();
     return;
+  }
+  if (event.submitter?.name) {
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = event.submitter.name;
+    field.value = event.submitter.value;
+    form.appendChild(field);
   }
   markFormSubmitting(form, event.submitter instanceof HTMLButtonElement ? event.submitter : null);
 }, true);

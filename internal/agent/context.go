@@ -47,9 +47,9 @@ func (a *Agent) buildGroupContext(groupID int64) string {
 	return strings.Join(parts, "\n")
 }
 
-func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot []*onebot.GroupMessage, query memory.HybridQuery) ([]memory.Memory, []memory.Memory) {
+func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot []*onebot.GroupMessage, query memory.HybridQuery, upper uint) ([]memory.KnowledgeItem, []memory.KnowledgeItem, []memory.KnowledgeRelation) {
 	if query.Empty() {
-		return nil, nil
+		return nil, nil, nil
 	}
 	selfID := a.bot.GetSelfID()
 	related := make([]int64, 0, len(snapshot)*2)
@@ -64,14 +64,64 @@ func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot 
 			related = append(related, msg.Reply.SenderID)
 		}
 	}
-	local, cross, err := a.memory.RecallContext(ctx, groupID, selfID, related, query)
+	related = append(related, 0, selfID)
+	local, err := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: groupID, SubjectIDs: related, Prepared: &query, ThroughID: upper, Limit: 6})
+	direct := local
+	// Reserve two slots for neighbors, then refill unused slots from direct matches.
+	if len(local) > 4 {
+		local = append([]memory.KnowledgeItem(nil), local[:4]...)
+	}
+	var cross []memory.KnowledgeItem
+	if err == nil && len(local) < 2 {
+		found, e := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: groupID, SelfID: selfID, SubjectUserID: &selfID, Prepared: &query, ThroughID: upper, Limit: 3})
+		if e != nil {
+			err = e
+		} else {
+			for _, item := range found {
+				if item.GroupID != groupID {
+					cross = append(cross, item)
+				}
+			}
+		}
+	}
 	if err != nil {
 		zap.L().Warn("主动记忆检索失败", zap.Int64("group_id", groupID), zap.Error(err))
 	}
-	return local, cross
+	var relations []memory.KnowledgeRelation
+	var seeds []uint
+	for _, item := range local {
+		seeds = append(seeds, item.ID)
+	}
+	if graph, e := a.memory.GetKnowledgeNeighborhood(ctx, groupID, seeds, 1, false, memory.KnowledgeGraphOptions{ThroughID: upper, SubjectIDs: related}); e != nil {
+		zap.L().Warn("关联记忆检索失败", zap.Error(e))
+		local = direct
+	} else {
+		seen := map[uint]bool{}
+		for _, item := range local {
+			seen[item.ID] = true
+		}
+		for _, item := range graph.Items {
+			if !seen[item.ID] && len(local) < 6 {
+				local = append(local, item)
+				seen[item.ID] = true
+			}
+		}
+		for _, item := range direct {
+			if !seen[item.ID] && len(local) < 6 {
+				local = append(local, item)
+				seen[item.ID] = true
+			}
+		}
+		for _, rel := range graph.Relations {
+			if seen[rel.SourceItemID] && seen[rel.TargetItemID] && len(relations) < 8 {
+				relations = append(relations, rel)
+			}
+		}
+	}
+	return local, cross, relations
 }
 
-func (a *Agent) memorySubjectNames(groups ...[]memory.Memory) map[int64]string {
+func (a *Agent) memorySubjectNames(groups ...[]memory.KnowledgeItem) map[int64]string {
 	result := make(map[int64]string)
 	selfID := a.bot.GetSelfID()
 	for _, items := range groups {
@@ -272,15 +322,6 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 			currentGroupName, _ = a.memory.LatestMemberGroupCard(userID, groupID)
 		}
 		displayName := currentGroupName
-		traits, _ := a.memory.ListMemberTraits(userID)
-		if displayName == "" {
-			for _, trait := range traits {
-				if trait.Kind == "alias" {
-					displayName = trait.Value
-					break
-				}
-			}
-		}
 		if displayName == "" {
 			displayName = strings.TrimSpace(nickname)
 		}
@@ -295,11 +336,6 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 		details := make([]string, 0, 4)
 		if originalNickname != "" && originalNickname != displayName {
 			details = append(details, "原昵称: "+originalNickname)
-		}
-		for _, trait := range traits {
-			if trait.Kind == "speaking" || trait.Kind == "phrase" {
-				details = append(details, trait.Kind+": "+trait.Value)
-			}
 		}
 
 		lines = append(lines, fmt.Sprintf("- %s：%s。", displayName, strings.Join(details, "，")))

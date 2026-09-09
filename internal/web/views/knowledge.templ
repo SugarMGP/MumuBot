@@ -1,0 +1,253 @@
+package views
+
+import (
+	"fmt"
+	"mumu-bot/internal/memory"
+)
+
+templ KnowledgeListPage(data KnowledgeListPageData, currentPath string) {
+	@Layout(LayoutData{Title: "统一记忆", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, KnowledgeListBody(data))
+}
+
+templ KnowledgeListBody(data KnowledgeListPageData) {
+	<div class="space-y-6">
+		@PageHeader("统一记忆", "", "")
+		<form class="flex flex-wrap items-center gap-3" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+			<input class="input grow" name="keyword" value={ data.Keyword } placeholder="搜索内容或术语" aria-label="搜索内容或术语"/>
+			<input class="input w-36" name="group_id" value={ data.GroupID } placeholder="群号" aria-label="群号"/>
+			<input class="input w-36" name="user_id" value={ data.UserID } placeholder="关于谁（QQ）" aria-label="知识主体 QQ"/>
+			<input type="hidden" name="author_id" value={ data.AuthorID }/>
+			<select class="select w-32" name="subject" aria-label="主体"><option value="">全部主体</option><option value="group" selected?={ data.Subject=="group" }>群组</option><option value="self" selected?={ data.Subject=="self" }>机器人</option><option value="member" selected?={ data.Subject=="member" }>成员</option></select>
+			<select class="select w-32" name="kind" aria-label="记忆类型">
+				<option value="">全部类型</option>
+				for _,kind:=range []string{"fact","episode","preference","constraint","goal","term","expression","alias"} {
+					<option value={ kind } selected?={ data.Kind==kind }>
+						{ memoryKindText(kind) }
+					</option>
+				}
+			</select>
+			<select class="select w-32" name="status" aria-label="状态">
+				<option value="">全部状态</option>
+				for _,status:=range []string{"candidate","active","archived"} {
+					<option value={ status } selected?={ data.Status==status }>
+						{ memoryStatusText(status) }
+					</option>
+				}
+			</select>
+			<button class="btn btn-primary" type="submit">@AdminIcon("filter", "size-4", "knowledge-filter")
+筛选</button><a class="btn btn-ghost" href="/admin/knowledge">重置</a>
+		</form>
+		if data.AuthorID!="" {
+			<p class="text-sm text-secondary">
+				参与的讨论 · QQ { data.AuthorID }
+			</p>
+		}
+		if data.UserID!="" {
+			<p class="text-sm text-primary">
+				关于他的知识 · QQ { data.UserID }
+			</p>
+		}
+		if data.Note!=nil && data.Note.Note!="" {
+			<section class="flex items-start justify-between gap-6 border-y border-base-300 py-4">
+				<div>
+					<h2 class="text-sm font-semibold">当前群便签</h2>
+					<p class="mt-2 whitespace-pre-wrap text-sm">
+						{ data.Note.Note }
+					</p>
+					<time class="text-xs text-base-content/50">
+						{ formatTime(data.Note.UpdatedAt) }
+					</time>
+				</div>
+				<form method="post" action="/admin/knowledge/actions"><input type="hidden" name="action_kind" value="note-clear"/><input type="hidden" name="group_id" value={ data.GroupID }/><input type="hidden" name="return_to" value={ "/admin/knowledge?group_id=" + data.GroupID }/><button class="btn btn-ghost btn-sm" type="submit">清除便签</button></form>
+			</section>
+		}
+		@SortToolbar(data.Sort)
+		<div class="overflow-x-auto">
+			<table class="table table-fixed w-full">
+				<thead><tr><th class="w-[45%]">内容</th><th>类型</th><th>主体与群</th><th>状态</th><th class="w-36">更新时间</th></tr></thead>
+				<tbody>
+					for _,item:=range data.Items {
+						<tr class="hover:bg-base-200/50">
+							<td>
+								<a class="font-semibold link link-hover text-primary" href={ templ.SafeURL(knowledgeHref(item.ID)) }>
+									{ knowledgeTitle(item) }
+								</a>
+								<p class="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-sm text-base-content/75">
+									{ item.Content }
+								</p>
+							</td>
+							<td>
+								{ memoryKindText(item.Kind) }
+							</td>
+							<td>
+								<div>
+									{ memorySubjectText(item.SubjectUserID,data.SelfID) }
+								</div>
+								<div class="text-xs text-base-content/55">
+									群 { fmt.Sprint(item.GroupID) }
+								</div>
+								if item.SubjectUserID>0 {
+									<a class="link text-xs" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d&user_id=%d", item.GroupID, item.SubjectUserID)) }>
+										QQ { fmt.Sprint(item.SubjectUserID) }
+									</a>
+								}
+							</td>
+							<td>
+								<span class={ memoryStatusClass(item.Status) }>
+									{ memoryStatusText(item.Status) }
+								</span>
+							</td>
+							<td class="text-xs text-base-content/60">
+								{ formatTime(item.UpdatedAt) }
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		if len(data.Items)==0 {
+			<p class="py-16 text-center text-sm text-base-content/50">当前筛选条件下暂无记忆</p>
+		}
+		@ListFooter(data.Meta)
+	</div>
+}
+
+templ KnowledgeDetailPage(data KnowledgeDetailPageData, currentPath string) {
+	@Layout(LayoutData{Title: knowledgeTitle(data.Detail.Item), CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, KnowledgeDetailBody(data))
+}
+
+templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
+	<div class="space-y-6">
+		<a class="link link-hover text-sm text-base-content/60" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d", data.Detail.Item.GroupID)) }>返回群记忆</a>
+		<header class="flex items-start justify-between gap-6">
+			<div>
+				<div class="flex items-center gap-3">
+					<h1 class="text-2xl font-semibold">
+						{ knowledgeTitle(data.Detail.Item) }
+					</h1>
+					<span class={ memoryStatusClass(data.Detail.Item.Status) }>
+						{ memoryStatusText(data.Detail.Item.Status) }
+					</span>
+				</div>
+				<p class="mt-2 text-sm text-base-content/55">
+					{ memoryKindText(data.Detail.Item.Kind) } · 群 { fmt.Sprint(data.Detail.Item.GroupID) } · { memorySubjectText(data.Detail.Item.SubjectUserID,data.SelfID) }
+					if data.Detail.Item.SubjectUserID>0 {
+						<span> QQ { fmt.Sprint(data.Detail.Item.SubjectUserID) }</span>
+					}
+				</p>
+			</div>@KnowledgeStatusForm("knowledge-status", data.Detail.Item.ID, data.Detail.Item.Status, knowledgeHref(data.Detail.Item.ID))
+		</header>
+		<p class="whitespace-pre-wrap break-words border-b border-base-300 pb-6 text-base leading-8">
+			{ data.Detail.Item.Content }
+		</p>
+		if len(data.Detail.Senses)>0 {
+			<section>
+				<h2 class="font-semibold">同词的其他解释</h2>
+				<ul class="mt-3 space-y-2">
+					for _,sense:=range data.Detail.Senses {
+						<li>
+							<a class="link link-primary" href={ templ.SafeURL(knowledgeHref(sense.ID)) }>
+								{ sense.Content }
+							</a>
+							<span class="ml-2 text-xs">
+								{ memoryStatusText(sense.Status) }
+							</span>
+						</li>
+					}
+				</ul>
+			</section>
+		}
+		<div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8">
+			<section class="min-w-0">
+				<h2 class="font-semibold">相关记忆</h2>
+				if len(data.Detail.Graph.Items)>0 {
+					<div class="h-[330px] w-full" data-knowledge-graph={ knowledgeGraphJSON(data.Detail.Graph) } role="img" aria-label="知识关联图"></div>
+				} else {
+					<p class="py-8 text-sm text-base-content/50">暂无可展示的有效关联</p>
+				}
+				if data.Detail.Graph.HasMore {
+					<p class="text-xs text-base-content/55">还有关联未展示，可进入相邻记忆继续查看。</p>
+				}
+				<div class="divide-y divide-base-300">
+					for _,rel:=range data.Detail.Relations {
+						<article class="py-4">
+							<div class="flex flex-wrap items-center gap-2 text-sm">
+								<a class="link link-primary" href={ templ.SafeURL(knowledgeHref(rel.Source.ID)) }>
+									{ knowledgeTitle(rel.Source) }
+								</a>
+								<span>
+									{ relationText(rel.Kind) }
+								</span>
+								<a class="link link-primary" href={ templ.SafeURL(knowledgeHref(rel.Target.ID)) }>
+									{ knowledgeTitle(rel.Target) }
+								</a>
+								<span class={ memoryStatusClass(rel.Status) }>
+									{ memoryStatusText(rel.Status) }
+								</span>
+							</div>
+							<div class="my-3">@KnowledgeStatusForm("relation-status", rel.ID, rel.Status, knowledgeHref(data.Detail.Item.ID))
+</div>@KnowledgeEvidenceGroups(rel.Evidence, data.Detail.Topics)
+						</article>
+					}
+				</div>
+			</section>
+			<section class="min-w-0"><h2 class="mb-4 font-semibold">依据与时间线</h2>@KnowledgeEvidenceGroups(data.Detail.Evidence, data.Detail.Topics)
+</section>
+		</div>
+	</div>
+}
+
+templ KnowledgeStatusForm(kind string, id uint, status string, returnTo string) {
+	<form class="flex gap-2" method="post" action="/admin/knowledge/actions">
+		<input type="hidden" name="action_kind" value={ kind }/><input type="hidden" name="action_id" value={ fmt.Sprint(id) }/><input type="hidden" name="return_to" value={ returnTo }/>
+		if status!="active" {
+			<button class="btn btn-success btn-soft btn-sm" type="submit" name="status" value="active">确认生效</button>
+		}
+		if status!="candidate" {
+			<button class="btn btn-ghost btn-sm" type="submit" name="status" value="candidate">待确认</button>
+		}
+		if status!="archived" {
+			<button class="btn btn-ghost btn-sm" type="submit" name="status" value="archived">归档</button>
+		}
+	</form>
+}
+
+templ KnowledgeEvidenceGroups(sets []memory.KnowledgeEvidence, topics map[uint]uint) {
+	if len(sets)==0 {
+		<p class="py-4 text-sm text-base-content/50">暂无完整依据，待补充确认</p>
+	}
+	for i,set:=range sets {
+		<details class="mb-4 border-l-2 border-base-300 pl-4" open>
+			<summary class="cursor-pointer text-sm font-medium">
+				依据组 { fmt.Sprint(i+1) }
+				<span class={ ternaryString(set.Valid, "text-success", "text-warning") }>
+					{ ternaryString(set.Valid,"完整有效","已失效") }
+				</span>
+			</summary>
+			<div class="mt-3 space-y-4">
+				for _,msg:=range set.Messages {
+					<div class="text-sm">
+						<div class="flex flex-wrap gap-2 text-xs text-base-content/55">
+							<a class="link" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d&author_id=%d", msg.GroupID, msg.UserID)) }>
+								{ displayText(msg.Nickname,fmt.Sprint(msg.UserID)) }
+							</a>
+							<time>
+								{ formatTime(msg.MessageTime) }
+							</time>
+							if topicID:=topics[msg.ID];topicID>0 {
+								<a class="link text-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/topics/%d", topicID)) }>查看话题</a>
+							}
+						</div>
+						if msg.RecalledAt!=nil {
+							<p class="mt-1 text-base-content/40">消息已撤回</p>
+						} else {
+							<p class="mt-1 whitespace-pre-wrap break-words leading-6">
+								{ msg.TextContent }
+							</p>
+						}
+					</div>
+				}
+			</div>
+		</details>
+	}
+}

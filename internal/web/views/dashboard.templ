@@ -27,10 +27,10 @@ templ DashboardBody(data DashboardPageData) {
 		@PageHeader("首页", "查看机器人运行状态与学习概况。", "")
 		<section class="grid grid-cols-3 gap-3 2xl:grid-cols-6">
 			@DashboardMetric("groups", "启用群聊", fmt.Sprintf("%d", data.EnabledGroupCount), "bg-[#eef5ff]")
-			@DashboardMetric("memories", "长期记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
-			@DashboardMetric("members", "成员画像", fmt.Sprintf("%d", data.MemberCount), "bg-[#fff5ee]")
-			@DashboardMetric("jargons", "黑话词典", fmt.Sprintf("%d", data.JargonCount), "bg-[#eff9f4]")
-			@DashboardMetric("style-cards", "风格卡片", fmt.Sprintf("%d", data.StyleCardCount), "bg-[#f5f0ff]")
+			@DashboardMetric("memories", "统一记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
+			@DashboardMetric("members", "成员管理", fmt.Sprintf("%d", data.MemberCount), "bg-[#fff5ee]")
+			@DashboardMetric("jargons", "待确认记忆", fmt.Sprintf("%d", data.CandidateCount), "bg-[#eff9f4]")
+			@DashboardMetric("style-cards", "知识关联", fmt.Sprintf("%d", data.RelationCount), "bg-[#f5f0ff]")
 			@DashboardMetric("stickers", "表情包", fmt.Sprintf("%d", data.StickerCount), "bg-[#fff8e8]")
 		</section>
 		<div class="grid grid-cols-[minmax(0,2fr)_minmax(280px,0.8fr)] gap-4">
@@ -55,7 +55,7 @@ templ DashboardBody(data DashboardPageData) {
 						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">OneBot 连接</span><span class={ ternaryString(data.OneBotConnected, "badge badge-success badge-soft badge-sm", "badge badge-error badge-soft badge-sm") }>{ ConnectionText(data.OneBotConnected) }</span></div>
 						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">机器人账号</span><code class="text-xs">{ fmt.Sprintf("%d", data.SelfID) }</code></div>
 						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">扩展工具</span><span>{ fmt.Sprintf("%d", data.MCPToolCount) }</span></div>
-						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">学习状态</span><span class="badge badge-success badge-soft badge-sm">{ boolText(data.LearningEnabled) }</span></div>
+						<div class="flex items-center justify-between py-3"><span class="text-base-content/58">群文化学习</span><span class="badge badge-success badge-soft badge-sm">{ boolText(data.LearningEnabled) }</span></div>
 					</div>
 				</div>
 			</section>

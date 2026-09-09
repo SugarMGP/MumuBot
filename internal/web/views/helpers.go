@@ -2,7 +2,6 @@ package views
 
 import (
 	"math"
-	"mumu-bot/internal/memory"
 	"strings"
 	"time"
 
@@ -12,12 +11,10 @@ import (
 func NavItems() []NavItem {
 	return []NavItem{
 		{Label: "首页", Href: "/admin"},
-		{Label: "黑话词典", Href: "/admin/jargons"},
-		{Label: "表情包", Href: "/admin/stickers"},
+		{Label: "统一记忆", Href: "/admin/knowledge"},
 		{Label: "话题管理", Href: "/admin/topics"},
-		{Label: "长期记忆", Href: "/admin/memories"},
-		{Label: "成员画像", Href: "/admin/members"},
-		{Label: "风格卡片", Href: "/admin/style-cards"},
+		{Label: "成员管理", Href: "/admin/members"},
+		{Label: "表情包", Href: "/admin/stickers"},
 		{Label: "系统状态", Href: "/admin/system"},
 	}
 }
@@ -92,7 +89,7 @@ func navIconName(href string) string {
 		return "stickers"
 	case "/admin/topics":
 		return "topics"
-	case "/admin/memories":
+	case "/admin/knowledge":
 		return "memories"
 	case "/admin/members":
 		return "members"
@@ -158,7 +155,7 @@ func systemFieldValueClass(field SystemField) string {
 
 func systemFieldNeedsWide(field SystemField) bool {
 	switch strings.TrimSpace(field.Label) {
-	case "已启用群聊", "自动学习", "审核节奏":
+	case "已启用群聊", "群聊整理", "整理间隔":
 		return true
 	}
 	return len([]rune(strings.TrimSpace(field.Value))) > 32
@@ -181,74 +178,6 @@ func sortOrderAriaLabel(label string) string {
 		return "切换排序顺序"
 	}
 	return "切换为" + label
-}
-
-func styleCardStatusText(status memory.StylePatternStatus) string {
-	switch status {
-	case memory.StylePatternStatusActive:
-		return "已启用"
-	case memory.StylePatternStatusRejected:
-		return "已拒绝"
-	default:
-		return "候选"
-	}
-}
-
-func styleCardStatusClass(status memory.StylePatternStatus) string {
-	switch status {
-	case memory.StylePatternStatusActive:
-		return "badge badge-success badge-soft badge-sm"
-	case memory.StylePatternStatusRejected:
-		return "badge badge-error badge-soft badge-sm"
-	default:
-		return "badge badge-warning badge-soft badge-sm"
-	}
-}
-
-func styleCardTone(status memory.StylePatternStatus) string {
-	if status == memory.StylePatternStatusActive {
-		return "success"
-	}
-	if status == memory.StylePatternStatusRejected {
-		return "neutral"
-	}
-	return "primary"
-}
-
-func jargonStatusText(item memory.Jargon) string {
-	switch item.Status {
-	case memory.CultureStatusRejected:
-		return "已拒绝"
-	case memory.CultureStatusActive:
-		return "已通过"
-	default:
-		return "待审核"
-	}
-}
-
-func jargonStatusValue(item memory.Jargon) string {
-	return string(item.Status)
-}
-
-func jargonStatusClass(item memory.Jargon) string {
-	switch jargonStatusValue(item) {
-	case string(memory.CultureStatusActive):
-		return "badge badge-success badge-soft badge-sm"
-	case "rejected":
-		return "badge badge-error badge-soft badge-sm"
-	default:
-		return "badge badge-warning badge-soft badge-sm"
-	}
-}
-
-func jargonTone(item memory.Jargon) string {
-	if item.Status == memory.CultureStatusActive {
-		return "success"
-	}
-	if item.Status == memory.CultureStatusRejected {
-		return "neutral"
-	}
-	return "primary"
 }
 
 func formatTime(ts time.Time) string {
