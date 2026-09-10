@@ -35,13 +35,12 @@ Core capabilities of this project:
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
 - 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
 - 🧵 **Topic Working Memory** — Continuously tracks current topics, summaries, participants, and open threads; can recall archived topics
-- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, unified memory search, working notes, poking, emoji reactions, stickers, group information, and web browsing, with more available through MCP
-- 📝 **Long-term Memory** — Unifies facts, experiences, preferences, group terms, and expressions with PostgreSQL, pgvector, and pg_trgm, including evidence-backed relationships
+- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, poking, stickers, group information, and web browsing, with more available through MCP
+- 📝 **Long-term Memory** — Unifies facts, experiences, preferences, group terms, and expressions with pgvector and pg_trgm
 - 👤 **Member Profiles** — Shows evidence-backed member knowledge and participation; a background memory agent investigates historical context
 - 🎭 **Emotion System** — Three-dimensional mood (valence, energy, sociability) shifts naturally during conversation, affecting tone and activity
 - 👀 **Multimodal Understanding** — Vision model recognizes image and video content
 - 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
-- 📖 **Unified Consolidation** — One background Memory Agent batches topic assignment, summaries, and knowledge maintenance with per-group cooldowns, round-robin scheduling, and shared request pacing
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Overview, learning review, topic/memory/sticker management, and member profile browsing
