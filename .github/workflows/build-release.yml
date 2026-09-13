@@ -83,7 +83,7 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: 0
       run: |
-        go build -v -trimpath -ldflags "-s -w" -o dist/${{ matrix.output_name }} .
+        go build -v -trimpath -ldflags "-s -w -X mumu-bot/internal/version.Build=${GITHUB_REF_NAME}" -o dist/${{ matrix.output_name }} .
 
     - name: Archive
       run: |
@@ -142,6 +142,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=container

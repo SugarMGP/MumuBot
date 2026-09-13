@@ -12,6 +12,8 @@ import (
 )
 
 type SearchMemoryInput struct {
+	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=读取已知知识的依据原文；此时不需要 query"`
+	Offset        int    `json:"offset,omitempty" jsonschema:"description=依据组的分页位置"`
 	Query         string `json:"query"`
 	SubjectUserID *int64 `json:"subject_user_id,omitempty" jsonschema:"description=-1 自身跨群，0 当前群，正数成员"`
 	Kind          string `json:"kind,omitempty" jsonschema:"enum=,enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal,enum=term,enum=expression,enum=alias"`
@@ -21,12 +23,15 @@ type SearchMemoryInput struct {
 func NewSearchMemoryTool() (tool.InvokableTool, error) {
 	return utils.InferTool("searchMemory", "统一查询事实、经历、成员偏好、群术语和表达方式。词义可能随语境不同；关系只表示已获得证据的联系，不能自行补全词源。", func(ctx context.Context, in *SearchMemoryInput) (map[string]any, error) {
 		tc := GetToolContext(ctx)
-		if tc == nil || in == nil || tc.MemoryMgr == nil {
-			return nil, fmt.Errorf("工具未初始化")
+		if tc == nil || in == nil || tc.MemoryMgr == nil || tc.Bot == nil {
+			return nil, NewTerminalToolError(fmt.Errorf("工具未初始化"))
 		}
 		query := strings.TrimSpace(in.Query)
-		if query == "" {
+		if query == "" && in.ItemID == 0 {
 			return nil, fmt.Errorf("查询不能为空")
+		}
+		if in.Offset < 0 {
+			return nil, fmt.Errorf("offset 不得为负数")
 		}
 		upper, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, tc.SnapshotMessageID)
 		if err != nil {
@@ -43,6 +48,38 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 				return nil, fmt.Errorf("无效主体")
 			}
 			subject = &v
+		}
+		if in.ItemID > 0 {
+			items, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: tc.GroupID, SelfID: self, SubjectUserID: subject, ItemID: in.ItemID, IncludeInactive: in.History, ThroughID: upper.ID, Limit: 1})
+			if err != nil {
+				return nil, fmt.Errorf("读取知识失败：%w", err)
+			}
+			if len(items) == 0 {
+				return nil, fmt.Errorf("知识不存在或不在本次查询范围内")
+			}
+			sets, err := tc.MemoryMgr.ListKnowledgeEvidence(ctx, items[0].GroupID, in.ItemID, 0)
+			if err != nil {
+				return nil, fmt.Errorf("读取依据失败：%w", err)
+			}
+			visible := make([]memory.KnowledgeEvidence, 0, len(sets))
+			for _, set := range sets {
+				if !set.Valid {
+					continue
+				}
+				allowed := true
+				for _, msg := range set.Messages {
+					if msg.ID > upper.ID {
+						allowed = false
+						break
+					}
+				}
+				if allowed {
+					visible = append(visible, set)
+				}
+			}
+			start := min(in.Offset, len(visible))
+			end := min(start+5, len(visible))
+			return map[string]any{"item": items[0], "evidence_sets": visible[start:end], "has_more": end < len(visible), "next_offset": end}, nil
 		}
 		prepared, err := tc.MemoryMgr.PrepareHybridQuery(ctx, []string{query})
 		if err != nil {
@@ -108,10 +145,10 @@ func NewSaveWorkingNoteTool() (tool.InvokableTool, error) {
 	return utils.InferTool("saveWorkingNote", "正常结束前更新下一轮工作便签；无待续事项时提交空字符串。便签不能触发发言，不是长期事实。", func(ctx context.Context, in *input) (map[string]any, error) {
 		tc := GetToolContext(ctx)
 		if tc == nil || in == nil || tc.MemoryMgr == nil {
-			return nil, fmt.Errorf("工具未初始化")
+			return nil, NewTerminalToolError(fmt.Errorf("工具未初始化"))
 		}
 		if err := tc.MemoryMgr.SaveWorkingNote(ctx, tc.GroupID, in.Note); err != nil {
-			return map[string]any{"success": false, "message": err.Error()}, nil
+			return nil, NewTerminalToolError(err)
 		}
 		return map[string]any{"success": true}, nil
 	})

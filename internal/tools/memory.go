@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"mumu-bot/internal/memory"
 
@@ -19,24 +20,22 @@ type SaveMemoryInput struct {
 
 type SaveMemoryOutput struct {
 	Success bool   `json:"success"`
-	Status  string `json:"status"`
-	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
 }
 
 func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOutput, error) {
 	if input == nil {
-		return rejectedMemory("invalid_input", "记忆参数不能为空"), nil
+		return nil, fmt.Errorf("记忆参数不能为空")
 	}
 	tc := GetToolContext(ctx)
 	if tc == nil || tc.MemoryMgr == nil {
-		return rejectedMemory("unavailable", "工具上下文未初始化"), nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	evidenceMessageIDs := make([]int64, 0, len(input.EvidenceMessageRefs))
 	for _, ref := range input.EvidenceMessageRefs {
 		messageID, ok := tc.ResolveMessageRef(ref)
 		if !ok {
-			return rejectedMemory("invalid_evidence", "证据中包含不属于当前对话的消息编号"), nil
+			return nil, fmt.Errorf("证据中包含不属于当前对话的消息编号")
 		}
 		evidenceMessageIDs = append(evidenceMessageIDs, messageID)
 	}
@@ -48,29 +47,26 @@ func saveMemoryFunc(ctx context.Context, input *SaveMemoryInput) (*SaveMemoryOut
 	storeCtx := memory.StoreClaimsContext{GroupID: tc.GroupID, SelfID: selfID, SnapshotOneBotMessageID: tc.SnapshotMessageID}
 	claims, err := memory.NormalizeMemoryClaims([]memory.RawMemoryClaim{raw}, selfID)
 	if err != nil {
-		return memoryErrorOutput(err), nil
+		return nil, err
 	}
 	batch, err := tc.MemoryMgr.PrepareClaimBatch(ctx, storeCtx, claims)
 	if err != nil {
-		return memoryErrorOutput(err), nil
+		return nil, classifyMemoryToolError(err)
 	}
 	if _, err = tc.MemoryMgr.CommitKnowledgeBatch(ctx, batch); err != nil {
-		return memoryErrorOutput(err), nil
+		return nil, classifyMemoryToolError(err)
 	}
 	tc.MarkActed()
-	return &SaveMemoryOutput{Success: true, Status: "saved", Message: "已保存；仅审核生效的知识参与正常召回"}, nil
+	return &SaveMemoryOutput{Success: true, Message: "已保存；仅审核生效的知识参与正常召回"}, nil
 }
 
-func rejectedMemory(code, message string) *SaveMemoryOutput {
-	return &SaveMemoryOutput{Success: false, Status: "rejected", Code: code, Message: message}
-}
-
-func memoryErrorOutput(err error) *SaveMemoryOutput {
-	var validation *memory.ClaimValidationError
-	if errors.As(err, &validation) {
-		return rejectedMemory(validation.Code, validation.Error())
+func classifyMemoryToolError(err error) error {
+	var claim *memory.ClaimValidationError
+	var validation *memory.ValidationError
+	if errors.As(err, &claim) || errors.As(err, &validation) || errors.Is(err, memory.ErrSnapshotChanged) {
+		return err
 	}
-	return rejectedMemory("store_failed", err.Error())
+	return NewTerminalToolError(err)
 }
 
 func NewSaveMemoryTool() (tool.InvokableTool, error) {

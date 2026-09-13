@@ -77,6 +77,118 @@
   }
 }
 
+.admin-page .card:not(.modal-box) {
+  border-color: rgb(232 216 225 / 0.9);
+  background: linear-gradient(145deg, rgb(255 255 255 / 0.98), rgb(255 247 251 / 0.94) 58%, rgb(244 252 250 / 0.92));
+  box-shadow: 0 12px 28px rgb(232 93 117 / 0.065), 0 2px 8px rgb(61 48 74 / 0.045), inset 0 1px 0 rgb(255 255 255 / 0.95);
+}
+
+.admin-legend-dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.35rem;
+  border-radius: 999px;
+  vertical-align: 0.05em;
+}
+
+.admin-page .card:not(.modal-box) .card,
+.admin-page .card:not(.modal-box) .bg-base-100 {
+  background: rgb(255 255 255 / 0.72);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95);
+}
+
+.admin-knowledge-page .admin-graph-surface {
+  background: radial-gradient(circle at 12% 0%, rgb(255 255 255 / 0.98), transparent 34%), linear-gradient(145deg, #fff 0%, #fff8fb 68%, #effaf7 100%);
+}
+
+.admin-workspace-header {
+  padding: 1.35rem 1.35rem 1.2rem;
+}
+
+.admin-workspace-header .badge-primary {
+  border-color: rgb(232 93 117 / 0.16);
+  background: rgb(232 93 117 / 0.08);
+  color: #d65378;
+}
+
+.admin-graph-filters .input,
+.admin-graph-filters .select {
+  width: 100%;
+  border-color: #e4e6ef;
+  background: rgb(255 255 255 / 0.78);
+}
+
+.admin-graph-canvas {
+  position: relative;
+  overflow: hidden;
+}
+
+.admin-graph-canvas [data-knowledge-graph] {
+  height: 100%;
+}
+
+.admin-graph-controls {
+  position: absolute;
+  z-index: 2;
+  top: 1rem;
+  right: 1.25rem;
+  border: 1px solid rgb(224 214 225 / 0.9);
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 0.82);
+  box-shadow: 0 5px 16px rgb(61 48 74 / 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.admin-graph-controls .btn {
+  min-height: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  font-size: 1rem;
+}
+
+.admin-legend-separator {
+  width: 1px;
+  height: 1.2rem;
+  background: #e4dfe7;
+}
+
+.admin-legend-line {
+  position: relative;
+  padding-left: 1.15rem;
+}
+
+.admin-legend-line::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0.8rem;
+  border-top: 2px solid currentColor;
+  content: "";
+  transform: translateY(-50%);
+}
+
+.admin-legend-line--pink { color: #ef8ca8; }
+.admin-legend-line--teal { color: #159a8c; }
+.admin-legend-line--gray { color: #9da5b5; }
+.admin-detail-surface { position: sticky; top: 1.25rem; min-height: 42rem; }
+.admin-detail-heading { padding-bottom: 0.9rem; }
+.admin-detail-dot { width: 0.55rem; height: 0.55rem; border-radius: 999px; background: #ef8ca8; box-shadow: 0 0 0 4px rgb(239 140 168 / 0.14); }
+.admin-detail-quote { padding: 1rem; border: 1px solid #e4e8f0; border-radius: 1rem; background: rgb(247 249 252 / 0.82); color: rgb(32 33 45 / 0.76); }
+.admin-detail-section { padding-top: 1rem; }
+.admin-detail-surface details { margin-bottom: 0.65rem; border: 1px solid #e4e8f0; border-radius: 0.85rem; background: rgb(255 255 255 / 0.7); padding: 0.75rem 1rem; }
+.admin-detail-surface details > div { margin-top: 0.75rem; }
+
+.admin-knowledge-page [data-knowledge-graph] {
+  background-image: radial-gradient(circle, rgb(211 224 239 / 0.8) 1px, transparent 1px), radial-gradient(circle at 50% 46%, rgb(255 255 255 / 0.98) 0 18%, rgb(255 247 251 / 0.5) 52%, transparent 72%);
+  background-position: 0 0, 0 0;
+  background-size: 18px 18px, auto;
+}
+
+.admin-detail-body > div:first-child { padding-bottom: 0.5rem; border-bottom: 1px solid rgb(232 216 225 / 0.8); }
+.admin-page h2 { letter-spacing: 0; }
+.admin-page .card-body { padding-block: 1.1rem; }
+
 @layer components {
   .admin-shell {
     display: grid;

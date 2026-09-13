@@ -91,6 +91,7 @@ func (a *App) routes() http.Handler {
 		protected.Get("/admin/topics", a.handleTopics)
 		protected.Get("/admin/topics/{id}", a.handleTopicDetail)
 		protected.Get("/admin/knowledge", a.handleKnowledge)
+		protected.Get("/admin/knowledge/graph-panel", a.handleGraphPanel)
 		protected.Get("/admin/knowledge/{id}", a.handleKnowledgeDetail)
 		protected.Post("/admin/knowledge/actions", a.handleKnowledgeAction)
 		protected.Get("/admin/members", a.handleMembers)

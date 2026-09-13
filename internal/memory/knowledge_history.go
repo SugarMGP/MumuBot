@@ -74,7 +74,7 @@ func (m *Manager) ReadKnowledgeContext(ctx context.Context, groupID int64, upper
 	case "window":
 		q = q.Where(`ml.id IN (SELECT id FROM (SELECT id FROM message_logs WHERE group_id=? AND id<=? ORDER BY id DESC LIMIT 15) before_rows UNION SELECT id FROM (SELECT id FROM message_logs WHERE group_id=? AND id>? ORDER BY id ASC LIMIT 15) after_rows)`, groupID, id, groupID, id)
 	default:
-		return KnowledgeMessagePage{}, fmt.Errorf("context mode 必须为 message/replies/topic/window")
+		return KnowledgeMessagePage{}, fmt.Errorf("读取模式必须为 message、replies、topic 或 window，请修正后重试")
 	}
 	return knowledgeHistoryPage(q, 30)
 }

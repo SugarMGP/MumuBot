@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,13 +47,15 @@ type Agent struct {
 
 	learner *learning.Learner
 
+	toolNames []string
+
 	replyCache  *ttlcache.Cache[int64, onebot.ReplyInfo]
 	visionCache *ttlcache.Cache[string, string]
 	topicMgr    *topic.Manager
 
-	buffers         map[int64][]*onebot.GroupMessage
-	lastReadMessage map[int64]*onebot.GroupMessage
-	buffersMu       sync.RWMutex
+	buffers     map[int64][]*onebot.GroupMessage
+	lastReadSeq map[int64]uint64
+	buffersMu   sync.RWMutex
 
 	commitMu     sync.Mutex
 	commitQueues map[int64]chan commitItem
@@ -100,22 +103,22 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
-		ctx:             rootCtx,
-		cancel:          cancel,
-		persona:         p,
-		memory:          mem,
-		model:           chatModel,
-		vision:          visionClient,
-		bot:             botClient,
-		buffers:         make(map[int64][]*onebot.GroupMessage),
-		commitQueues:    make(map[int64]chan commitItem),
-		pendingRecalls:  make(map[int64]map[int64]time.Time),
-		pendingThinks:   make(map[int64]*pendingThink),
-		lastReadMessage: make(map[int64]*onebot.GroupMessage),
-		replyCache:      newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
-		visionCache:     newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
+		ctx:            rootCtx,
+		cancel:         cancel,
+		persona:        p,
+		memory:         mem,
+		model:          chatModel,
+		vision:         visionClient,
+		bot:            botClient,
+		buffers:        make(map[int64][]*onebot.GroupMessage),
+		commitQueues:   make(map[int64]chan commitItem),
+		pendingRecalls: make(map[int64]map[int64]time.Time),
+		pendingThinks:  make(map[int64]*pendingThink),
+		lastReadSeq:    make(map[int64]uint64),
+		replyCache:     newAgentTTLCache[int64, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
+		visionCache:    newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
-	a.topicMgr = topic.NewManager(topic.NewDBStore(mem.GetDB()))
+	a.topicMgr = topic.NewManager(mem.GetDB())
 	constructed := false
 	defer func() {
 		if constructed {
@@ -186,6 +189,14 @@ func (a *Agent) initTools() error {
 		a.tools = append(a.tools, mcpTools...)
 		zap.L().Info("已加载 MCP 工具", zap.Int("count", len(mcpTools)))
 	}
+	for _, t := range a.tools {
+		info, err := t.Info(a.ctx)
+		if err == nil && info != nil {
+			if name := strings.TrimSpace(info.Name); name != "" {
+				a.toolNames = append(a.toolNames, name)
+			}
+		}
+	}
 
 	return nil
 }
@@ -205,8 +216,9 @@ func (a *Agent) initReact() error {
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools:                a.tools,
 			ExecuteSequentially:  true,
+			UnknownToolsHandler:  tools.UnknownToolHandler,
 			ToolArgumentsHandler: argumentsHandler,
-			ToolCallMiddlewares:  []compose.ToolMiddleware{{Invokable: tools.ToolDedupMiddleware()}},
+			ToolCallMiddlewares:  []compose.ToolMiddleware{{Invokable: tools.ToolErrorMiddleware()}, {Invokable: tools.ToolDedupMiddleware()}},
 		},
 		MaxStep:            maxStep,
 		ToolReturnDirectly: map[string]struct{}{"stayQuiet": {}},
@@ -218,7 +230,10 @@ func (a *Agent) initReact() error {
 	return nil
 }
 
-func (a *Agent) Start() {
+func (a *Agent) Start() error {
+	if err := a.loadBuffersFromDB(); err != nil {
+		return err
+	}
 	a.bot.OnMessage(a.onMessage)
 	a.bot.OnRecall(a.onRecall)
 	if a.learner != nil {
@@ -226,13 +241,13 @@ func (a *Agent) Start() {
 		a.learner.Start(a.ctx)
 	}
 
-	a.loadBuffersFromDB()
 	a.wg.Add(1)
 	go a.thinkLoop()
 	zap.L().Info("Agent 已启动")
+	return nil
 }
 
-func (a *Agent) loadBuffersFromDB() {
+func (a *Agent) loadBuffersFromDB() error {
 	cfg := config.Get()
 	for _, gc := range cfg.Groups {
 		if !gc.Enabled {
@@ -244,7 +259,10 @@ func (a *Agent) loadBuffersFromDB() {
 			bufSize = 30
 		}
 
-		logs := a.memory.GetRecentMessages(gc.GroupID, 0, bufSize, 0)
+		logs, err := a.memory.GetRecentMessages(a.ctx, gc.GroupID, 0, bufSize, 0)
+		if err != nil {
+			return fmt.Errorf("恢复群 %d 消息失败: %w", gc.GroupID, err)
+		}
 		if len(logs) == 0 {
 			continue
 		}
@@ -267,11 +285,12 @@ func (a *Agent) loadBuffersFromDB() {
 		}
 		a.buffersMu.Lock()
 		a.buffers[gc.GroupID] = messages
-		a.lastReadMessage[gc.GroupID] = messages[len(messages)-1]
+		a.lastReadSeq[gc.GroupID] = 0
 		a.buffersMu.Unlock()
 
 		zap.L().Info("已从数据库加载消息历史", zap.Int64("group_id", gc.GroupID), zap.Int("count", len(logs)))
 	}
+	return nil
 }
 
 func messageLogToBufferedGroupMessage(log memory.MessageLog) *onebot.GroupMessage {

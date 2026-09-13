@@ -13,7 +13,6 @@ import (
 	"mumu-bot/internal/config"
 
 	pgvector "github.com/pgvector/pgvector-go"
-	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -78,9 +77,9 @@ func EmbeddingVector(values []float64) (pgvector.Vector, error) {
 	return pgvector.NewVector(result), nil
 }
 
-func (m *Manager) GetRecentMessages(groupID, throughOneBotMessageID int64, limit, offset int) []MessageLog {
+func (m *Manager) GetRecentMessages(ctx context.Context, groupID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {
 	var items []MessageLog
-	q := m.db.Where("group_id = ?", groupID).Order("message_time DESC, id DESC").Limit(limit)
+	q := m.db.WithContext(ctx).Where("group_id = ?", groupID).Order("message_time DESC, id DESC").Limit(limit)
 	if throughOneBotMessageID != 0 {
 		upperBound := m.db.Model(&MessageLog{}).Select("id").
 			Where("group_id = ? AND one_bot_message_id = ?", groupID, throughOneBotMessageID)
@@ -90,13 +89,12 @@ func (m *Manager) GetRecentMessages(groupID, throughOneBotMessageID int64, limit
 		q = q.Offset(offset)
 	}
 	if err := q.Find(&items).Error; err != nil {
-		zap.L().Warn("读取最近消息失败", zap.Int64("group_id", groupID), zap.Error(err))
-		return nil
+		return nil, err
 	}
 	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
 		items[i], items[j] = items[j], items[i]
 	}
-	return items
+	return items, nil
 }
 
 func (m *Manager) GetMessageCountByTime(groupID, userID int64, start time.Time) (int64, error) {
@@ -180,17 +178,6 @@ func (m *Manager) GetMessageLogByID(groupID, messageID int64) (*MessageLog, erro
 		return nil, err
 	}
 	return &item, nil
-}
-
-func SubjectLabel(subjectUserID, selfID int64) string {
-	switch {
-	case subjectUserID == 0:
-		return "group"
-	case selfID > 0 && subjectUserID == selfID:
-		return "self"
-	default:
-		return "member"
-	}
 }
 
 func (m *Manager) SchemaVersion(ctx context.Context) (int, error) {

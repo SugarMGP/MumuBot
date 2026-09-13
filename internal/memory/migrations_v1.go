@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 6
+const latestSchemaVersion = 7
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -89,6 +89,22 @@ func currentTables(db *gorm.DB) (map[string]bool, error) {
 }
 
 func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
+	migrations := []struct {
+		name  string
+		apply func() error
+	}{
+		{"v1_schema", nil},
+		{"drop_forward_payload", func() error { return migrateV2(db) }},
+		{"normalize_message_display_content", func() error { return migrateV3(db) }},
+		{"unified_knowledge", func() error { return migrateV4(db, selfID, dimensions) }},
+		// v5、v6 的改动已随已发布的 v4 执行，这里只补齐连续版本记录
+		{"knowledge_review_repair", nil},
+		{"unified_conversation", nil},
+		{"topic_sources", func() error { return migrateV7(db) }},
+	}
+	if len(migrations) != latestSchemaVersion {
+		return fmt.Errorf("程序迁移定义不完整：声明 v%d，实际 %d 个版本", latestSchemaVersion, len(migrations))
+	}
 	tables, err := currentTables(db)
 	if err != nil {
 		return err
@@ -106,10 +122,10 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		if item.Version > latestSchemaVersion {
 			return fmt.Errorf("数据库 schema v%d 高于程序支持的 v%d", item.Version, latestSchemaVersion)
 		}
-		expectedName := map[int]string{1: "v1_schema", 2: "drop_forward_payload", 3: "normalize_message_display_content", 4: "unified_knowledge", 5: "knowledge_review_repair", 6: "unified_conversation"}[item.Version]
-		if expectedName == "" {
+		if item.Version < 1 || item.Version > len(migrations) {
 			return fmt.Errorf("schema 版本号无效：v%d", item.Version)
 		}
+		expectedName := migrations[item.Version-1].name
 		if item.Name != expectedName {
 			return fmt.Errorf("schema v%d 名称无效：%s", item.Version, item.Name)
 		}
@@ -128,32 +144,22 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 			return err
 		}
 	}
-	if current < 2 {
-		if err := migrateV2(db); err != nil {
-			return err
+	for version := current + 1; version <= len(migrations); version++ {
+		migration := migrations[version-1]
+		if migration.apply != nil {
+			if err := migration.apply(); err != nil {
+				return err
+			}
 		}
-		if err := recordSchemaVersion(db, 2, "drop_forward_payload"); err != nil {
-			return err
-		}
-	}
-	if current < 3 {
-		if err := migrateV3(db); err != nil {
-			return err
-		}
-		if err := recordSchemaVersion(db, 3, "normalize_message_display_content"); err != nil {
-			return err
-		}
-	}
-	if current < 4 {
-		if err := migrateV4(db, selfID, dimensions); err != nil {
-			return err
-		}
-		if err := recordSchemaVersion(db, 4, "unified_knowledge"); err != nil {
+		if err := recordSchemaVersion(db, version, migration.name); err != nil {
 			return err
 		}
 	}
 	if err := validateV4Schema(db, dimensions); err != nil {
 		return err
+	}
+	if err := db.Exec("SELECT summary_id,message_log_id FROM topic_summary_sources LIMIT 0").Error; err != nil {
+		return fmt.Errorf("v7 摘要来源结构不完整: %w", err)
 	}
 	return validateCurrentSchema(db)
 }

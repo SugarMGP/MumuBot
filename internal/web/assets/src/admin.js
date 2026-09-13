@@ -275,18 +275,44 @@ function renderKnowledgeGraph() {
   document.querySelectorAll("[data-knowledge-graph]").forEach((target) => {
     if (echarts.getInstanceByDom(target)) return;
     const data = JSON.parse(target.dataset.knowledgeGraph);
+    const dense = data.nodes.length > 30;
+    const panoramic = Boolean(target.dataset.graphPanel);
     const chart = chartFor(target);
     chart.setOption({ animation: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-      tooltip: { renderMode: "richText", formatter: (entry) => entry.dataType === "node" ? `${entry.data.name}\n${entry.data.status}` : "" },
-      series: [{ type: "graph", layout: "circular", roam: true, symbolSize: 48,
-        data: data.nodes, links: data.edges, label: { show: true, position: "bottom", width: 110, overflow: "truncate" },
-        edgeSymbol: ["none", "arrow"], edgeSymbolSize: 8, itemStyle: { color: "#e85d75" },
-        lineStyle: { color: "#159a8c", width: 2, curveness: 0.1 }, edgeLabel: { fontSize: 11 } }],
+      tooltip: { renderMode: "richText", formatter: (entry) => entry.dataType === "node" ? `${entry.data.name}\n${entry.data.status ?? ""}` : `${entry.data.name ?? "关联"}\n${entry.data.status ?? entry.data.value ?? ""}` },
+      series: [{ type: "graph", layout: panoramic && !dense ? "force" : "circular", force: { repulsion: 520, edgeLength: [110, 190], gravity: 0.05, layoutAnimation: false }, draggable: true, roam: true, symbolSize: dense ? 12 : undefined,
+        emphasis: { focus: "adjacency", scale: 1.18, label: { show: true, fontWeight: 600 } }, data: data.nodes, links: data.edges,
+        label: { show: !panoramic || !dense, position: "bottom", width: 132, overflow: "truncate", color: "#49394d", fontSize: 12, fontWeight: 500, backgroundColor: "rgba(255,255,255,.86)", borderColor: "rgba(224,214,225,.9)", borderWidth: 1, borderRadius: 8, padding: [4, 7] },
+        edgeSymbol: target.dataset.graphPanel ? ["none", "none"] : ["none", "arrow"], edgeSymbolSize: 8,
+        itemStyle: { shadowBlur: 16, shadowColor: "rgba(232,93,117,.18)" }, lineStyle: { color: "#159a8c", width: 2.5, curveness: 0.14, opacity: 0.8 },
+        edgeLabel: { show: panoramic && !dense, formatter: (edge) => edge.data.name ?? "", color: "#7a6578", fontSize: 11, backgroundColor: "rgba(255,255,255,.78)", padding: [3, 6], borderRadius: 8 } }],
     });
-    chart.on("click", (entry) => { if (entry.dataType === "node" && entry.data.url) window.location.assign(entry.data.url); });
+    chart.on("click", (entry) => {
+      if (!entry.data.url) return;
+      if (target.dataset.graphPanel) htmx.ajax("GET", entry.data.url, { target: target.dataset.graphPanel, swap: "innerHTML" });
+      else if (entry.dataType === "node") window.location.assign(entry.data.url);
+    });
   });
 }
 
+document.addEventListener("click", (event) => {
+  const control = event.target instanceof Element ? event.target.closest("[data-graph-command]") : null;
+  if (!(control instanceof HTMLElement)) return;
+  const host = control.closest(".admin-graph-surface");
+  const chartNode = host?.querySelector("[data-knowledge-graph]");
+  const chart = chartNode ? echarts.getInstanceByDom(chartNode) : null;
+  if (!chart || !(chartNode instanceof HTMLElement)) return;
+  const current = Number(chartNode.dataset.graphZoom || 1);
+  const command = control.dataset.graphCommand;
+  const zoom = command === "zoom-in" ? Math.min(2, current + 0.2) : command === "zoom-out" ? Math.max(0.6, current - 0.2) : 1;
+  chartNode.dataset.graphZoom = String(zoom);
+  chart.setOption({ series: [{ zoom, center: ["50%", "50%"] }] });
+});
+
+document.addEventListener("htmx:beforeCleanupElement", (event) => {
+  const element = event.detail.elt;
+  if (element?.matches?.("[data-knowledge-graph]")) echarts.getInstanceByDom(element)?.dispose();
+});
 document.addEventListener("htmx:afterSwap", renderKnowledgeGraph);
 window.addEventListener("resize", () => document.querySelectorAll("[data-knowledge-graph]").forEach((node) => echarts.getInstanceByDom(node)?.resize()));
 

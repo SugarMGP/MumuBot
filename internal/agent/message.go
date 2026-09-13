@@ -79,12 +79,8 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	msg.IsMentioned = isMentioned
 
 	parsedContent := a.parseMessageContent(msg)
-	for _, t := range a.tools {
-		info, err := t.Info(a.ctx)
-		if err != nil || strings.TrimSpace(info.Name) == "" {
-			continue
-		}
-		parsedContent = strings.ReplaceAll(parsedContent, info.Name, "\"危险指令，已屏蔽\"")
+	for _, name := range a.toolNames {
+		parsedContent = strings.ReplaceAll(parsedContent, name, "\"危险指令，已屏蔽\"")
 	}
 	msg.FinalContent = parsedContent
 
@@ -289,7 +285,6 @@ func (a *Agent) commitMessage(item commitItem) {
 		a.applyPendingRecall(msg)
 
 		if msg.UserID == selfID {
-			a.commitReadSnapshot(msg.GroupID, msg)
 			return
 		}
 		if a.ctx.Err() != nil {
@@ -449,10 +444,10 @@ func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
 	return slices.Clone(a.buffers[groupID])
 }
 
-func (a *Agent) getMessageSnapshot(groupID int64) ([]*onebot.GroupMessage, *onebot.GroupMessage) {
+func (a *Agent) getMessageSnapshot(groupID int64) ([]*onebot.GroupMessage, uint64) {
 	a.buffersMu.RLock()
 	defer a.buffersMu.RUnlock()
-	return slices.Clone(a.buffers[groupID]), a.lastReadMessage[groupID]
+	return slices.Clone(a.buffers[groupID]), a.lastReadSeq[groupID]
 }
 
 func (a *Agent) syncRecalledMessage(log *memory.MessageLog) {
@@ -465,10 +460,8 @@ func (a *Agent) syncRecalledMessage(log *memory.MessageLog) {
 			continue
 		}
 		replacement := messageLogToBufferedGroupMessage(*log)
+		replacement.ArrivalSeq = msg.ArrivalSeq
 		a.buffers[log.GroupID][i] = replacement
-		if a.lastReadMessage[log.GroupID] == msg {
-			a.lastReadMessage[log.GroupID] = replacement
-		}
 		break
 	}
 	a.buffersMu.Unlock()

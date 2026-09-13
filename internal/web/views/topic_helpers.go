@@ -15,6 +15,9 @@ func topicSummary(topic services.TopicThreadView) memory.TopicSummary {
 	if latest == nil {
 		return memory.TopicSummary{}
 	}
+	if !latest.SourcesValid {
+		return memory.TopicSummary{}
+	}
 	return topicpkg.ParseSummary(latest.SummaryJSON)
 }
 
@@ -333,7 +336,10 @@ func normalizedTopicSummaryItems(items []string) []string {
 }
 
 func topicTitle(topic services.TopicThreadView) string {
-	title := strings.TrimSpace(topicSummary(topic).Title)
+	var title string
+	if latest := topic.LatestSummary(); latest != nil {
+		title = strings.TrimSpace(topicpkg.ParseSummary(latest.SummaryJSON).Title)
+	}
 	if title != "" {
 		return title
 	}
@@ -341,6 +347,9 @@ func topicTitle(topic services.TopicThreadView) string {
 }
 
 func topicGist(topic services.TopicThreadView) string {
+	if latest := topic.LatestSummary(); latest != nil && !latest.SourcesValid {
+		return "摘要依据已失效，等待后续讨论重新整理。"
+	}
 	gist := strings.TrimSpace(topicSummary(topic).Gist)
 	if gist != "" {
 		return gist
@@ -354,7 +363,10 @@ func topicKeywords(topic services.TopicThreadView) []string {
 
 func topicSummaryProgressText(topic services.TopicThreadView) string {
 	latest := topic.LatestSummary()
-	if latest != nil && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
+	if latest != nil && !latest.SourcesValid {
+		return "摘要依据已失效"
+	}
+	if latest != nil && latest.SourcesValid && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
 		return "摘要已覆盖最新消息"
 	}
 	return "还有新消息待补进摘要"
@@ -362,7 +374,7 @@ func topicSummaryProgressText(topic services.TopicThreadView) string {
 
 func topicSummaryProgressClass(topic services.TopicThreadView) string {
 	latest := topic.LatestSummary()
-	if latest != nil && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
+	if latest != nil && latest.SourcesValid && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
 		return "badge badge-success badge-soft badge-sm"
 	}
 	return "badge badge-warning badge-soft badge-sm"
@@ -370,7 +382,7 @@ func topicSummaryProgressClass(topic services.TopicThreadView) string {
 
 func topicTone(topic services.TopicThreadView) string {
 	latest := topic.LatestSummary()
-	if latest != nil && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
+	if latest != nil && latest.SourcesValid && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
 		return "success"
 	}
 	return "primary"
@@ -381,7 +393,7 @@ func topicSummaryThroughID(topic services.TopicThreadView) uint {
 	if latest == nil {
 		return 0
 	}
-	return latest.ThroughTopicAssignmentID
+	return latest.ID
 }
 
 func topicMessageText(log memory.MessageLog) string {

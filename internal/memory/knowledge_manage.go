@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,7 +22,7 @@ func (m *Manager) GetWorkingNote(ctx context.Context, groupID int64) (*GroupAgen
 func (m *Manager) SaveWorkingNote(ctx context.Context, groupID int64, note string) error {
 	note = strings.TrimSpace(note)
 	if groupID <= 0 || utf8.RuneCountInString(note) > 300 {
-		return fmt.Errorf("working note requires a valid group and at most 300 characters")
+		return invalidKnowledge("群便签需要有效群号且不能超过 300 个字符，请修正后重试")
 	}
 	if note == "" {
 		return m.db.WithContext(ctx).Where("group_id=?", groupID).Delete(&GroupAgentState{}).Error
@@ -34,7 +33,7 @@ func (m *Manager) SaveWorkingNote(ctx context.Context, groupID int64, note strin
 
 func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint, status string) error {
 	if !validKnowledgeStatus(status) {
-		return fmt.Errorf("invalid knowledge status")
+		return invalidKnowledge("知识状态无效，请使用 candidate、active 或 archived")
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := LockKnowledgeGroup(tx, groupID); err != nil {
@@ -45,12 +44,15 @@ func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint
 			return err
 		}
 		if status == "active" {
+			if err := checkKnowledgeActivation(tx, item.ID); err != nil {
+				return err
+			}
 			ok, err := knowledgeHasEvidence(tx, id, 0)
 			if err != nil {
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("knowledge has no complete valid evidence")
+				return invalidKnowledge("知识缺少完整有效依据，暂时不能生效")
 			}
 			var duplicate KnowledgeItem
 			err = tx.Where("group_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND btrim(content)=? AND status='active' AND id<>?", groupID, item.SubjectUserID, item.Kind, item.Label, item.Content, id).First(&duplicate).Error
@@ -87,7 +89,7 @@ func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint
 
 func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64, id uint, status string) error {
 	if !validKnowledgeStatus(status) {
-		return fmt.Errorf("invalid relation status")
+		return invalidKnowledge("关系状态无效，请使用 candidate、active 或 archived")
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := LockKnowledgeGroup(tx, groupID); err != nil {
@@ -102,16 +104,19 @@ func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64,
 			return err
 		}
 		if len(items) != 2 {
-			return fmt.Errorf("relation does not belong to this group")
+			return invalidKnowledge("关系不属于当前群，请刷新后重新选择")
 		}
 		if status == "active" {
+			if err := checkRelationActivation(tx, relation); err != nil {
+				return err
+			}
 			for _, item := range items {
 				ok, err := knowledgeHasEvidence(tx, item.ID, 0)
 				if err != nil {
 					return err
 				}
 				if !ok || (item.Status != "active" && !(relation.Kind == "supersedes" && item.ID == relation.TargetItemID && item.Status == "archived")) {
-					return fmt.Errorf("relation endpoint is not active with valid evidence")
+					return invalidKnowledge("关系端点尚未生效或缺少有效依据，请先处理端点知识")
 				}
 			}
 			ok, err := knowledgeHasEvidence(tx, 0, id)
@@ -119,7 +124,7 @@ func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64,
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("relation lacks complete evidence")
+				return invalidKnowledge("关系缺少完整有效依据，暂时不能生效")
 			}
 		}
 		if err := tx.Model(&relation).Update("status", status).Error; err != nil {
@@ -147,7 +152,7 @@ func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int) error 
 	}
 	if err := m.db.WithContext(ctx).Raw(`SELECT id,kind,content FROM (
  SELECT id,'knowledge' kind,concat_ws(': ',nullif(label,''),content) content,created_at FROM knowledge_items WHERE embedding IS NULL AND status<>'archived'
- UNION ALL SELECT id,'topic' kind,summary_json::text content,created_at FROM topic_summaries WHERE embedding IS NULL
+ UNION ALL SELECT ts.id,'topic' kind,`+TopicSummaryTextSQL+` content,ts.created_at FROM topic_summaries ts WHERE ts.embedding IS NULL
  ) pending ORDER BY created_at,id LIMIT ?`, max(1, min(limit, 10))).Scan(&pending).Error; err != nil {
 		return err
 	}

@@ -36,8 +36,9 @@ templ TopicListBody(data TopicListPageData) {
 								}
 							</div>
 							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/58">
-								<span>摘要覆盖至 #{ fmt.Sprintf("%d", topicSummaryThroughID(item)) }</span>
-								<span class="flex items-center gap-1 font-medium text-primary"><span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")</span>
+								<span>摘要版本 { fmt.Sprintf("%d", topicSummaryThroughID(item)) }</span>
+								<span class="flex items-center gap-1 font-medium text-primary"><span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")
+</span>
 							</div>
 						</div>
 					</a>
@@ -66,7 +67,8 @@ templ TopicDetailBody(data TopicDetailPageData) {
 	<div class="space-y-5">
 		<header class="flex flex-col gap-3">
 			<div class="flex min-w-0 items-center gap-3">
-				<a class="btn btn-ghost btn-circle btn-sm" href="/admin/topics" aria-label="返回话题列表">@AdminIcon("chevron-left", "size-4", "topic-back")</a>
+				<a class="btn btn-ghost btn-circle btn-sm" href="/admin/topics" aria-label="返回话题列表">@AdminIcon("chevron-left", "size-4", "topic-back")
+</a>
 				<h1 class="min-w-0 truncate text-lg font-semibold">{ topicTitle(data.Thread) }</h1>
 			</div>
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-xs text-base-content/50">
@@ -123,15 +125,19 @@ templ TopicDetailBody(data TopicDetailPageData) {
 }
 
 templ TopicCurrentSummary(topic services.TopicThreadView) {
+	if latest:=topic.LatestSummary();latest!=nil && !latest.SourcesValid {
+		<div class="alert alert-warning">摘要依据已失效，等待后续讨论重新整理。历史版本保留供核对。</div>
+	}
 	<section class="card border border-base-300 bg-base-100 shadow-sm">
 		<div class="card-body gap-4 p-5">
-			<div class="flex items-center gap-2 text-primary">@AdminIcon("memories", "size-5", "topic-summary")<h2 class="font-semibold text-base-content">当前摘要</h2></div>
+			<div class="flex items-center gap-2 text-primary">@AdminIcon("memories", "size-5", "topic-summary")
+<h2 class="font-semibold text-base-content">当前摘要</h2></div>
 			<p class="text-sm leading-7 text-base-content/72">{ topicGist(topic) }</p>
 			<div class="divider my-0"></div>
 			<div>
 				<h3 class="text-xs font-semibold text-base-content/52">关键数据</h3>
 				<div class="mt-3 flex flex-wrap gap-2">
-					<span class="badge badge-info badge-soft">消息 #{ fmt.Sprintf("%d", topicSummaryThroughID(topic)) }</span>
+					<span class="badge badge-info badge-soft">版本 { fmt.Sprintf("%d", topicSummaryThroughID(topic)) }</span>
 					for _, keyword := range topicKeywords(topic) {
 						<span class="badge badge-primary badge-soft">{ keyword }</span>
 					}
@@ -147,7 +153,6 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 					</ul>
 				</div>
 			}
-
 		</div>
 	</section>
 }
@@ -174,8 +179,6 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 			if change.GistChanged {
 				@TopicInlineDiff("概括变化", change.GistDiff)
 			}
-
-
 			if len(change.AddedOpenLoops) > 0 {
 				<div>
 					<h4 class="text-xs font-medium text-warning">新增待办</h4>

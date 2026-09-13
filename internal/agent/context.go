@@ -177,19 +177,13 @@ func collectRetrievalTextFragments(readMessages, currentMessages []*onebot.Group
 	return collectTextFragments(messages)
 }
 
-func splitMessageSnapshot(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage) (readMessages, currentMessages []*onebot.GroupMessage) {
-	cursor := -1
-	for i, msg := range buffer {
-		if msg == lastReadMessage {
-			cursor = i
-			break
-		}
-	}
-	for i, msg := range buffer {
+// splitMessageSnapshot 使用本进程到达序号划分快照，不比较 OneBot message_id
+func splitMessageSnapshot(buffer []*onebot.GroupMessage, readSeq uint64, selfID int64) (readMessages, currentMessages []*onebot.GroupMessage) {
+	for _, msg := range buffer {
 		if msg == nil {
 			continue
 		}
-		if i <= cursor {
+		if msg.UserID == selfID || msg.ArrivalSeq <= readSeq {
 			readMessages = append(readMessages, msg)
 		} else {
 			currentMessages = append(currentMessages, msg)
@@ -244,12 +238,12 @@ func (a *Agent) renderModelMessage(message *onebot.GroupMessage, tc *tools.ToolC
 	return fmt.Sprintf("%s[%s] %s(%s): %s%s\n", ref, message.Time.Format("15:04:05"), displayName, userID, reply, strings.TrimSpace(message.FinalContent))
 }
 
-func (a *Agent) renderChatContext(buffer []*onebot.GroupMessage, lastReadMessage *onebot.GroupMessage, tc *tools.ToolContext) string {
+func (a *Agent) renderChatContext(buffer []*onebot.GroupMessage, readSeq uint64, tc *tools.ToolContext) string {
 	if len(buffer) == 0 {
 		return ""
 	}
 
-	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage)
+	readMessages, currentMessages := splitMessageSnapshot(buffer, readSeq, a.bot.GetSelfID())
 	var b strings.Builder
 	for _, message := range readMessages {
 		content := a.renderModelMessage(message, tc)

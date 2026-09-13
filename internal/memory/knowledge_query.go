@@ -8,7 +8,7 @@ import (
 
 func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptions) ([]KnowledgeItem, error) {
 	if opts.GroupID <= 0 {
-		return nil, fmt.Errorf("knowledge queries require a group")
+		return nil, fmt.Errorf("知识查询需要有效群号，请使用当前群后重试")
 	}
 	limit := opts.Limit
 	if limit <= 0 {
@@ -29,7 +29,7 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 	}
 	if opts.SubjectUserID != nil {
 		if *opts.SubjectUserID < 0 {
-			return nil, fmt.Errorf("invalid subject")
+			return nil, fmt.Errorf("知识主体无效，请使用群组、自身或有效成员 QQ 号")
 		}
 		base += " AND ki.subject_user_id=?"
 		args = append(args, *opts.SubjectUserID)
@@ -50,7 +50,7 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 	if opts.ThroughID > 0 {
 		base += " AND ki.reviewed_through_id<=?"
 		args = append(args, opts.ThroughID)
-		base += ` AND ((ki.status='candidate' AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id)) OR EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND (ki.status='candidate' OR (` + validKnowledgeSetSQL + `)) AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?)))`
+		base += ` AND ((ki.status='candidate' AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id)) OR EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND (ki.status='candidate' OR (` + KnowledgeEvidenceSetValiditySQL + `)) AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?)))`
 		args = append(args, opts.ThroughID)
 	}
 	query := strings.TrimSpace(opts.Query)
@@ -145,7 +145,7 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 			q = q.Where("ki.subject_user_id=ANY(?)", int64Array(opts.SubjectIDs))
 		}
 		if upper > 0 {
-			q = q.Where("ki.reviewed_through_id<=?", upper).Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND `+validKnowledgeSetSQL+` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?))`, upper)
+			q = q.Where("ki.reviewed_through_id<=?", upper).Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND `+KnowledgeEvidenceSetValiditySQL+` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?))`, upper)
 		}
 		if includeHistory {
 			q = q.Where("ki.status IN ('active','archived')")
@@ -173,26 +173,32 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 	}
 	for step := 0; step < depth && len(frontier) > 0; step++ {
 		var relations []KnowledgeRelation
-		q := m.db.WithContext(ctx).Table("knowledge_relations kr").Select("kr.*").Joins("JOIN knowledge_items s ON s.id=kr.source_item_id JOIN knowledge_items t ON t.id=kr.target_item_id").Where("s.group_id=? AND t.group_id=? AND (kr.source_item_id IN ? OR kr.target_item_id IN ?)", groupID, groupID, frontier, frontier).Where("kr.status='active'").Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND ` + validKnowledgeSetSQL + `)`)
+		q := m.db.WithContext(ctx).Table("knowledge_relations kr").Select("kr.*").Joins("JOIN knowledge_items s ON s.id=kr.source_item_id JOIN knowledge_items t ON t.id=kr.target_item_id").Where("s.group_id=? AND t.group_id=? AND (kr.source_item_id IN ? OR kr.target_item_id IN ?)", groupID, groupID, frontier, frontier).Where("kr.status='active'").Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND ` + KnowledgeEvidenceSetValiditySQL + `)`)
 		if len(opts.SubjectIDs) > 0 {
 			subjects := int64Array(opts.SubjectIDs)
 			q = q.Where("s.subject_user_id=ANY(?) AND t.subject_user_id=ANY(?)", subjects, subjects)
+		}
+		if upper > 0 {
+			q = q.Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND `+KnowledgeEvidenceSetValiditySQL+` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?))`, upper)
 		}
 		err = q.Order("kr.id").Limit(31).Scan(&relations).Error
 		if err != nil {
 			return nil, err
 		}
 		next := []uint{}
+		endpointIDs := make([]uint, 0, len(relations)*2)
 		for _, relation := range relations {
-			if upper > 0 {
-				var usable int64
-				if err := m.db.WithContext(ctx).Table("knowledge_evidence_sets es").Where("es.relation_id=?", relation.ID).Where(validKnowledgeSetSQL).Where("NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?)", upper).Count(&usable).Error; err != nil {
-					return nil, err
-				}
-				if usable == 0 {
-					continue
-				}
-			}
+			endpointIDs = append(endpointIDs, relation.SourceItemID, relation.TargetItemID)
+		}
+		endpoints, err := load(endpointIDs)
+		if err != nil {
+			return nil, err
+		}
+		byID := make(map[uint]KnowledgeItem, len(endpoints))
+		for _, endpoint := range endpoints {
+			byID[endpoint.ID] = endpoint
+		}
+		for _, relation := range relations {
 			if edges[relation.ID] {
 				continue
 			}
@@ -200,28 +206,28 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 				graph.HasMore = true
 				break
 			}
-			rows, e := load([]uint{relation.SourceItemID, relation.TargetItemID})
-			if e != nil {
-				return nil, e
+			if _, sourceOK := byID[relation.SourceItemID]; !sourceOK {
+				continue
 			}
-			if len(rows) != 2 {
+			if _, targetOK := byID[relation.TargetItemID]; !targetOK {
 				continue
 			}
 			needed := 0
-			for _, row := range rows {
-				if !seen[row.ID] {
-					needed++
-				}
+			if !seen[relation.SourceItemID] {
+				needed++
+			}
+			if !seen[relation.TargetItemID] {
+				needed++
 			}
 			if len(graph.Items)+needed > 20 {
 				graph.HasMore = true
 				continue
 			}
-			for _, row := range rows {
-				if !seen[row.ID] {
-					seen[row.ID] = true
-					graph.Items = append(graph.Items, row)
-					next = append(next, row.ID)
+			for _, id := range []uint{relation.SourceItemID, relation.TargetItemID} {
+				if !seen[id] {
+					seen[id] = true
+					graph.Items = append(graph.Items, byID[id])
+					next = append(next, id)
 				}
 			}
 			edges[relation.ID] = true

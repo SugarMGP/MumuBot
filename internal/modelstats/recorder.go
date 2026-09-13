@@ -267,6 +267,8 @@ func taskLabel(task string) string {
 		return "主对话"
 	case "topic_assignment":
 		return "话题归属"
+	case "memory_agent":
+		return "记忆整理"
 	case "topic_summary":
 		return "话题摘要"
 	case "memory_merge":

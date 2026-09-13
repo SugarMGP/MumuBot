@@ -78,21 +78,36 @@ type TopicParticipant struct {
 }
 
 type TopicSummary struct {
-	Version      int                `json:"version"`
-	Title        string             `json:"title"`
-	Gist         string             `json:"gist"`
-	Participants []TopicParticipant `json:"participants"`
-	OpenLoops    []string           `json:"open_loops"`
-	RecentTurns  []string           `json:"recent_turns"`
-	Keywords     []string           `json:"keywords"`
+	Version       int                `json:"version"`
+	Title         string             `json:"title"`
+	Gist          string             `json:"gist"`
+	Participants  []TopicParticipant `json:"participants"`
+	OpenLoops     []string           `json:"open_loops"`
+	RecentTurns   []string           `json:"recent_turns"`
+	Keywords      []string           `json:"keywords"`
+	RelatedTopics []RelatedTopic     `json:"related_topics"`
 }
+
+type RelatedTopic struct {
+	TopicID          uint   `json:"topic_id"`
+	Reason           string `json:"reason"`
+	SourceMessageIDs []uint `json:"source_message_ids"`
+}
+
+type TopicSummarySource struct {
+	SummaryID    uint `gorm:"primaryKey"`
+	MessageLogID uint `gorm:"primaryKey"`
+}
+
+func (TopicSummarySource) TableName() string { return "topic_summary_sources" }
 
 type TopicSummaryRecord struct {
 	ID                       uint             `gorm:"primaryKey" json:"id"`
-	ThroughTopicAssignmentID uint             `gorm:"uniqueIndex;not null" json:"through_topic_assignment_id"`
+	ThroughTopicAssignmentID uint             `gorm:"index;not null" json:"through_topic_assignment_id"`
 	SummaryJSON              string           `gorm:"type:jsonb;not null" json:"summary_json"`
 	Embedding                *pgvector.Vector `gorm:"type:vector" json:"-"`
 	CreatedAt                time.Time        `json:"created_at"`
+	SourcesValid             bool             `gorm:"column:sources_valid;->;-:migration" json:"sources_valid"`
 }
 
 func (TopicSummaryRecord) TableName() string { return "topic_summaries" }

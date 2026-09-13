@@ -22,17 +22,19 @@ const knowledgeParticipationSQL = `EXISTS (
 )`
 
 type KnowledgeDetail struct {
-	Item      memory.KnowledgeItem
-	Graph     memory.KnowledgeGraph
-	Evidence  []memory.KnowledgeEvidence
-	Relations []KnowledgeRelationView
-	Topics    map[uint]uint
-	Senses    []memory.KnowledgeItem
+	Page          int
+	HasMore       bool
+	SensesHasMore bool
+	Item          memory.KnowledgeItem
+	Graph         memory.KnowledgeGraph
+	Evidence      []memory.KnowledgeEvidence
+	Relations     []KnowledgeRelationView
+	Topics        map[uint]uint
+	Senses        []memory.KnowledgeItem
 }
 type KnowledgeRelationView struct {
 	memory.KnowledgeRelation
 	Source, Target memory.KnowledgeItem
-	Evidence       []memory.KnowledgeEvidence
 }
 
 func (s *AdminService) ListKnowledge(f KnowledgeFilter) (Page[memory.KnowledgeItem], error) {
@@ -78,68 +80,57 @@ func (s *AdminService) GetKnowledge(id uint) (memory.KnowledgeItem, error) {
 	return item, err
 }
 
-func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint) (KnowledgeDetail, error) {
-	var d KnowledgeDetail
+func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint, page int) (KnowledgeDetail, error) {
+	d := KnowledgeDetail{Page: max(1, page)}
+	offset := (d.Page - 1) * 5
 	item, err := s.GetKnowledge(id)
 	if err != nil {
 		return d, err
 	}
 	d.Item = item
-	d.Evidence, err = s.memory.ListKnowledgeEvidence(ctx, item.GroupID, id, 0)
+	d.Evidence, d.HasMore, err = s.memory.ListKnowledgeEvidencePage(ctx, item.GroupID, id, 0, 0, offset, 5)
 	if err != nil {
 		return d, err
-	}
-	graph, err := s.memory.GetKnowledgeNeighborhood(ctx, item.GroupID, []uint{id}, 3, true, memory.KnowledgeGraphOptions{})
-	if err != nil {
-		return d, err
-	}
-	d.Graph = *graph
-	byID := map[uint]memory.KnowledgeItem{}
-	for _, v := range graph.Items {
-		byID[v.ID] = v
 	}
 	var relations []memory.KnowledgeRelation
-	if err = s.db.Where("source_item_id=? OR target_item_id=?", id, id).Order("id").Limit(30).Find(&relations).Error; err != nil {
+	if err = s.db.Where("source_item_id=? OR target_item_id=?", id, id).Order("id").Limit(31).Find(&relations).Error; err != nil {
 		return d, err
 	}
+	relationsHaveMore := len(relations) > 30
+	if relationsHaveMore {
+		relations = relations[:30]
+	}
+	endpointIDs := []uint{id}
 	for _, rel := range relations {
-		src, ok := byID[rel.SourceItemID]
-		if !ok {
-			src, err = s.GetKnowledge(rel.SourceItemID)
-			if err != nil {
-				return d, err
-			}
-		}
-		dst, ok := byID[rel.TargetItemID]
-		if !ok {
-			dst, err = s.GetKnowledge(rel.TargetItemID)
-			if err != nil {
-				return d, err
-			}
-		}
-		evidence, e := s.memory.ListKnowledgeEvidence(ctx, item.GroupID, 0, rel.ID)
-		if e != nil {
-			return d, e
-		}
-		d.Relations = append(d.Relations, KnowledgeRelationView{KnowledgeRelation: rel, Source: src, Target: dst, Evidence: evidence})
+		endpointIDs = append(endpointIDs, rel.SourceItemID, rel.TargetItemID)
+	}
+	var endpoints []memory.KnowledgeItem
+	if err = s.db.Where("group_id=? AND id IN ?", item.GroupID, endpointIDs).Order("id").Find(&endpoints).Error; err != nil {
+		return d, err
+	}
+	byID := map[uint]memory.KnowledgeItem{}
+	for _, endpoint := range endpoints {
+		byID[endpoint.ID] = endpoint
+	}
+	d.Graph = memory.KnowledgeGraph{Items: endpoints, Relations: relations, HasMore: relationsHaveMore}
+	for _, rel := range relations {
+		d.Relations = append(d.Relations, KnowledgeRelationView{KnowledgeRelation: rel, Source: byID[rel.SourceItemID], Target: byID[rel.TargetItemID]})
 	}
 	if item.Kind == "term" {
-		err = s.db.Where("group_id=? AND kind='term' AND label=? AND id<>?", item.GroupID, item.Label, id).Order("id").Limit(20).Find(&d.Senses).Error
+		err = s.db.Where("group_id=? AND kind='term' AND label=? AND id<>?", item.GroupID, item.Label, id).Order("id").Limit(31).Find(&d.Senses).Error
 		if err != nil {
 			return d, err
 		}
 	}
+	d.SensesHasMore = len(d.Senses) > 30
+	if d.SensesHasMore {
+		d.Senses = d.Senses[:30]
+	}
+	d.Graph.HasMore = relationsHaveMore
 	ids := []uint{}
 	for _, set := range d.Evidence {
 		for _, msg := range set.Messages {
 			ids = append(ids, msg.ID)
-		}
-	}
-	for _, rel := range d.Relations {
-		for _, set := range rel.Evidence {
-			for _, msg := range set.Messages {
-				ids = append(ids, msg.ID)
-			}
 		}
 	}
 	d.Topics = map[uint]uint{}
@@ -174,10 +165,4 @@ func (s *AdminService) UpdateRelationStatus(ctx context.Context, id uint, status
 		return err
 	}
 	return s.memory.SetKnowledgeRelationStatus(ctx, item.GroupID, id, strings.TrimSpace(status))
-}
-func (s *AdminService) WorkingNote(ctx context.Context, groupID int64) (*memory.GroupAgentState, error) {
-	return s.memory.GetWorkingNote(ctx, groupID)
-}
-func (s *AdminService) ClearWorkingNote(ctx context.Context, groupID int64) error {
-	return s.memory.SaveWorkingNote(ctx, groupID, "")
 }

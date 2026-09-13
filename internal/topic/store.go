@@ -13,8 +13,6 @@ import (
 
 type DBStore struct{ db *gorm.DB }
 
-func NewDBStore(db *gorm.DB) *DBStore { return &DBStore{db: db} }
-
 func (s *DBStore) PersistMessageLog(ctx context.Context, item memory.MessageLog) (*memory.MessageLog, bool, error) {
 	var stored memory.MessageLog
 	created := false
@@ -76,18 +74,7 @@ func (s *DBStore) ListRecentTopicThreads(ctx context.Context, groupID int64, thr
 
 func (s *DBStore) LatestTopicSummary(ctx context.Context, topicID, throughMessageLogID uint) (*memory.TopicSummaryRecord, error) {
 	var row memory.TopicSummaryRecord
-	query := s.db.WithContext(ctx).Table("topic_summaries ts").Select("ts.*").
-		Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").
-		Where("ta.topic_id = ?", topicID)
-	if throughMessageLogID > 0 {
-		query = query.Where(`NOT EXISTS (
-			SELECT 1 FROM topic_assignments covered
-			WHERE covered.topic_id = ta.topic_id
-				AND covered.id <= ts.through_topic_assignment_id
-				AND covered.message_log_id > ?
-		)`, throughMessageLogID)
-	}
-	err := query.Order("ts.through_topic_assignment_id DESC").First(&row).Error
+	err := memory.LatestTopicSummaries(s.db.WithContext(ctx), 0, throughMessageLogID).Where("ts.topic_id=?", topicID).First(&row).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -115,38 +102,13 @@ func (s *DBStore) SearchTopicHits(ctx context.Context, query memory.HybridQuery,
 	if query.Empty() || limit <= 0 {
 		return nil, nil
 	}
-	latest := `SELECT DISTINCT ON (ta.topic_id) ts.id, ta.topic_id, ts.summary_json, ts.embedding
-		FROM topic_summaries ts JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id
-		JOIN topic_threads tt ON tt.id = ta.topic_id
-		WHERE tt.group_id = ?`
-	latestArgs := []any{groupID}
-	if throughMessageLogID > 0 {
-		latest += ` AND NOT EXISTS (
-			SELECT 1 FROM topic_assignments covered
-			WHERE covered.topic_id = ta.topic_id
-				AND covered.id <= ts.through_topic_assignment_id
-				AND covered.message_log_id > ?
-		)`
-		latestArgs = append(latestArgs, throughMessageLogID)
-	}
-	latest += ` ORDER BY ta.topic_id, ts.through_topic_assignment_id DESC`
+	latest := memory.LatestTopicSummaries(s.db.WithContext(ctx), groupID, throughMessageLogID).Where(memory.TopicSummaryValiditySQL)
 	var vectorRows []struct{ TopicID uint }
-	vectorArgs := append(append([]any(nil), latestArgs...), query.Vector(), query.Vector())
-	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (`+latest+`) latest
-		WHERE 1 - (embedding <=> ?) >= 0.3 ORDER BY embedding <=> ? LIMIT 20`, vectorArgs...).Scan(&vectorRows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("(?) ts", latest).Select("topic_id").Where("1-(embedding <=> ?)>=0.3", query.Vector()).Order(clause.OrderBy{Expression: clause.Expr{SQL: "embedding <=> ?", Vars: []any{query.Vector()}}}).Limit(20).Scan(&vectorRows).Error; err != nil {
 		return nil, err
 	}
 	var textRows []struct{ TopicID uint }
-	textArgs := append([]any{query.FragmentArray()}, latestArgs...)
-	textArgs = append(textArgs, 0.1)
-	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (
-		SELECT topic_id, (SELECT max(greatest(
-			public.word_similarity(fragment, latest.summary_json::text),
-			public.word_similarity(latest.summary_json::text, fragment)
-		))
-			FROM unnest(?::text[]) AS fragments(fragment)) score
-		FROM (`+latest+`) latest
-	) ranked WHERE score >= ? ORDER BY score DESC LIMIT 20`, textArgs...).Scan(&textRows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(`SELECT topic_id FROM (SELECT ts.topic_id,(SELECT max(greatest(public.word_similarity(fragment,`+memory.TopicSummaryTextSQL+`),public.word_similarity(`+memory.TopicSummaryTextSQL+`,fragment))) FROM unnest(?::text[]) AS fragments(fragment)) score FROM (?) ts) ranked WHERE score>=0.1 ORDER BY score DESC,topic_id LIMIT 20`, query.FragmentArray(), latest).Scan(&textRows).Error; err != nil {
 		return nil, err
 	}
 	vectorIDs := make([]uint, len(vectorRows))

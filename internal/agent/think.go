@@ -43,7 +43,7 @@ func (a *Agent) thinkCycle() {
 		if len(msgs) == 0 {
 			continue
 		}
-		_, currentMessages := splitMessageSnapshot(msgs, lastRead)
+		_, currentMessages := splitMessageSnapshot(msgs, lastRead, a.bot.GetSelfID())
 		if len(currentMessages) == 0 {
 			continue
 		}
@@ -215,21 +215,23 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	cfg := config.Get()
 	selfID := a.bot.GetSelfID()
 
-	buffer, lastReadMessage := a.getMessageSnapshot(groupID)
-	readMessages, currentMessages := splitMessageSnapshot(buffer, lastReadMessage)
+	buffer, readSeq := a.getMessageSnapshot(groupID)
+	readMessages, currentMessages := splitMessageSnapshot(buffer, readSeq, selfID)
 	if len(currentMessages) == 0 {
 		return
 	}
 	isMention := a.hasStrongInteraction(currentMessages)
-	var snapshotMessage *onebot.GroupMessage
-	if len(buffer) > 0 {
-		snapshotMessage = buffer[len(buffer)-1]
+	var snapshotSeq uint64
+	for _, msg := range buffer {
+		if msg != nil && msg.UserID != selfID {
+			snapshotSeq = max(snapshotSeq, msg.ArrivalSeq)
+		}
 	}
 	semanticCurrent := collectTextContext(currentMessages) != ""
 	hasCurrentContext := semanticCurrent || hasDisplayContext(currentMessages)
 	if !isMention && !probabilityPassed {
 		if !hasCurrentContext {
-			a.commitReadSnapshot(groupID, snapshotMessage)
+			a.commitReadSnapshot(groupID, snapshotSeq)
 		}
 		return
 	}
@@ -240,7 +242,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	ctx := a.buildToolContext(a.ctx, groupID, snapshotMessageID, buffer)
 	tc := tools.GetToolContext(ctx)
 
-	chatContext := a.renderChatContext(buffer, lastReadMessage, tc)
+	chatContext := a.renderChatContext(buffer, readSeq, tc)
 	if chatContext == "" {
 		return
 	}
@@ -257,7 +259,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 
 	if !semanticCurrent {
 		if !hasCurrentContext {
-			a.commitReadSnapshot(groupID, snapshotMessage)
+			a.commitReadSnapshot(groupID, snapshotSeq)
 			return
 		}
 	}
@@ -313,7 +315,7 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		zap.L().Debug("思考提示词", zap.String("prompt", thinkPrompt))
 	}
 
-	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, time.Duration(config.Get().Agent.ThinkTimeoutSeconds)*time.Second)
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, time.Duration(cfg.Agent.ThinkTimeoutSeconds)*time.Second)
 	defer cancelTimeout()
 
 	opts := make([]flowagent.AgentOption, 0, 2)
@@ -325,18 +327,18 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 	result, err := a.react.Generate(ctxWithTimeout, msgs, opts...)
 	if err != nil {
 		if errors.Is(ctxWithTimeout.Err(), context.DeadlineExceeded) {
-			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Int("timeout_seconds", config.Get().Agent.ThinkTimeoutSeconds))
+			zap.L().Warn("思考超时", zap.Int64("group_id", groupID), zap.Int("timeout_seconds", cfg.Agent.ThinkTimeoutSeconds))
 		} else if errors.Is(ctxWithTimeout.Err(), context.Canceled) || errors.Is(a.ctx.Err(), context.Canceled) {
 			zap.L().Debug("思考已取消", zap.Int64("group_id", groupID))
 		} else {
 			zap.L().Error("思考失败", zap.Int64("group_id", groupID), zap.Error(err))
 		}
 		if shouldCommitReadSnapshot(err, tc != nil && tc.Acted()) {
-			a.commitReadSnapshot(groupID, snapshotMessage)
+			a.commitReadSnapshot(groupID, snapshotSeq)
 		}
 		return
 	}
-	a.commitReadSnapshot(groupID, snapshotMessage)
+	a.commitReadSnapshot(groupID, snapshotSeq)
 
 	if cfg.Debug.ShowThinking && result != nil && result.Content != "" {
 		zap.L().Debug("Agent 输出", zap.Int64("group_id", groupID), zap.String("content", result.Content))
@@ -372,6 +374,7 @@ func (a *Agent) hasStrongInteraction(messages []*onebot.GroupMessage) bool {
 	return false
 }
 
+// latestMessageWithID 按缓冲顺序反向查找，不比较 OneBot message_id
 func latestMessageWithID(messages []*onebot.GroupMessage) *onebot.GroupMessage {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i] != nil && messages[i].MessageID != 0 {
@@ -381,21 +384,10 @@ func latestMessageWithID(messages []*onebot.GroupMessage) *onebot.GroupMessage {
 	return nil
 }
 
-func (a *Agent) commitReadSnapshot(groupID int64, message *onebot.GroupMessage) {
-	if message == nil {
-		return
-	}
+func (a *Agent) commitReadSnapshot(groupID int64, seq uint64) {
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
-	if message.MessageID != 0 {
-		for _, current := range a.buffers[groupID] {
-			if current != nil && current.MessageID == message.MessageID {
-				message = current
-				break
-			}
-		}
-	}
-	a.lastReadMessage[groupID] = message
+	a.lastReadSeq[groupID] = max(a.lastReadSeq[groupID], seq)
 }
 
 func (a *Agent) buildToolContext(ctx context.Context, groupID, snapshotMessageID int64, messages []*onebot.GroupMessage) context.Context {

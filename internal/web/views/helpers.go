@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/version"
+
 	"github.com/bytedance/sonic"
 )
 
@@ -18,6 +20,8 @@ func NavItems() []NavItem {
 		{Label: "系统状态", Href: "/admin/system"},
 	}
 }
+
+func BuildVersion() string { return version.String() }
 
 func joinClasses(parts ...string) string {
 	filtered := make([]string, 0, len(parts))
@@ -41,13 +45,6 @@ func navClass(currentPath string, href string) string {
 		return joinClasses(base, "bg-primary/12 text-primary before:absolute before:-left-3 before:h-7 before:w-1 before:rounded-r-full before:bg-primary")
 	}
 	return joinClasses(base, "text-base-content/68 hover:bg-primary/10 hover:text-primary")
-}
-
-func boolText(v bool) string {
-	if v {
-		return "已启用"
-	}
-	return "未启用"
 }
 
 func moodPercent(kind string, raw float64) int {

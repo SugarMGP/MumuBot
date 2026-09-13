@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -32,8 +33,11 @@ type SearchStickersOutput struct {
 
 func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*SearchStickersOutput, error) {
 	tc := GetToolContext(ctx)
-	if tc == nil {
-		return &SearchStickersOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	if tc == nil || tc.MemoryMgr == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("搜索参数不能为空")
 	}
 
 	limit := input.Limit
@@ -43,7 +47,7 @@ func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*Searc
 
 	stickers, err := tc.MemoryMgr.SearchStickers(input.Keyword, limit)
 	if err != nil {
-		return &SearchStickersOutput{Success: false, Message: "搜索失败: " + err.Error()}, nil
+		return nil, fmt.Errorf("搜索失败: %w", err)
 	}
 
 	if len(stickers) == 0 {
@@ -83,20 +87,20 @@ type SendStickerOutput struct {
 
 func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendStickerOutput, error) {
 	tc := GetToolContext(ctx)
-	if tc == nil {
-		return &SendStickerOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	if tc == nil || tc.MemoryMgr == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.SendStickerCallback == nil {
-		return &SendStickerOutput{Success: false, Message: "发送表情包回调未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("发送表情包回调未初始化"))
 	}
-	if input.StickerID == 0 {
-		return &SendStickerOutput{Success: false, Message: "表情包 ID 不能为空"}, nil
+	if input == nil || input.StickerID == 0 {
+		return nil, fmt.Errorf("表情包 ID 不能为空")
 	}
 
 	// 获取表情包信息
 	sticker, err := tc.MemoryMgr.GetStickerByID(input.StickerID)
 	if err != nil {
-		return &SendStickerOutput{Success: false, Message: "表情包不存在"}, nil
+		return nil, fmt.Errorf("表情包不存在")
 	}
 
 	// 构建文件路径
@@ -104,17 +108,17 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	storagePath := cfg.Sticker.StoragePath
 	filePath, err := filepath.Abs(filepath.Join(storagePath, sticker.FileName))
 	if err != nil {
-		return &SendStickerOutput{Success: false, Message: "获取文件路径失败"}, nil
+		return nil, fmt.Errorf("获取文件路径失败: %w", err)
 	}
 
 	// 检查文件是否存在
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return &SendStickerOutput{Success: false, Message: "表情包文件不存在"}, nil
+	if _, err := os.Stat(filePath); err != nil {
+		return nil, fmt.Errorf("读取表情包文件失败: %w", err)
 	}
 
 	// 发送表情包（使用回调以记录消息）
 	if err := tc.SendStickerCallback(ctx, tc.GroupID, filePath, sticker.Description); err != nil {
-		return &SendStickerOutput{Success: false, Message: err.Error()}, nil
+		return nil, NewTerminalToolError(err)
 	}
 	tc.MarkActed()
 

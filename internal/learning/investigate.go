@@ -2,7 +2,9 @@ package learning
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -14,21 +16,20 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 )
 
 type investigation struct {
-	manager   *memory.Manager
-	batch     memory.KnowledgeBatch
-	seen      map[uint]bool
-	partial   map[uint]int
-	required  []uint
-	textChars int
-	finished  bool
-	rows      []memory.MessageLog
-	topics    memory.ConversationContext
+	manager     *memory.Manager
+	batch       memory.KnowledgeBatch
+	seen        map[uint]bool
+	partial     map[uint]int
+	required    []uint
+	finished    bool
+	finishAlone bool
+	rows        []memory.MessageLog
+	topics      memory.ConversationContext
 }
 
 type finishInput struct {
@@ -60,9 +61,10 @@ type contextInput struct {
 }
 
 func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance bool, rows []memory.MessageLog, candidates []memory.KnowledgeItem) error {
-	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(config.Get().Learning.TimeoutSeconds)*time.Second)
+	cfg := config.Get()
+	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
 	defer cancel()
-	ctx = llm.WithTask(ctx, "memory_agent", config.Get().ModelTiers.Low.Model)
+	ctx = llm.WithTask(ctx, "memory_agent", cfg.ModelTiers.Low.Model)
 	run := &investigation{manager: l.memMgr, batch: memory.KnowledgeBatch{GroupID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: advance, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}
 	run.rows = rows
 	var err error
@@ -80,7 +82,11 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance 
 		run.required = append(run.required, row.ID)
 		validRows = append(validRows, row)
 	}
-	initial, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: validRows}, 0)
+	initialValue, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: validRows}, 0)
+	if err != nil {
+		return err
+	}
+	initial, err := sonic.MarshalString(initialValue)
 	if err != nil {
 		return err
 	}
@@ -99,7 +105,11 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance 
 				previous = append(previous, row)
 			}
 		}
-		history, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: previous}, 0)
+		historyValue, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: previous}, 0)
+		if err != nil {
+			return err
+		}
+		history, err := sonic.MarshalString(historyValue)
 		if err != nil {
 			return err
 		}
@@ -112,30 +122,21 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance 
 	if err != nil {
 		return err
 	}
-	available, err := run.tools()
-	if err != nil {
-		return err
-	}
 	messages := []*schema.Message{schema.SystemMessage(memoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s\n待复核候选：%s", groupID, selfID, after, upper, run.required, initial, candidateText))}
 	topicText, err := sonic.MarshalString(run.topics)
 	if err != nil {
 		return err
 	}
 	messages = append(messages, schema.UserMessage("已有话题及原归属："+topicText))
-	run.textChars = utf8.RuneCountInString(initial) + utf8.RuneCountInString(candidateText) + utf8.RuneCountInString(topicText)
-	if run.textChars > 24000 {
+	textChars := utf8.RuneCountInString(initial) + utf8.RuneCountInString(candidateText) + utf8.RuneCountInString(topicText)
+	if textChars > 24000 {
 		return fmt.Errorf("整理输入超出预算")
 	}
-	agent, err := react.NewAgent(ctx, &react.AgentConfig{
-		ToolCallingModel:   l.model,
-		ToolsConfig:        compose.ToolsNodeConfig{Tools: available, ExecuteSequentially: true, ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: agenttools.ToolDedupMiddleware()}}},
-		MaxStep:            config.Get().Learning.MaxStep,
-		ToolReturnDirectly: map[string]struct{}{"finishMemoryBatch": {}},
-	})
+	agent, err := run.newAgent(ctx, l.model, cfg.Learning.MaxStep)
 	if err != nil {
 		return err
 	}
-	if _, err := agent.Generate(ctx, messages); err != nil {
+	if _, err := agent.Generate(ctx, messages); err != nil && !run.finished {
 		return err
 	}
 	if !run.finished {
@@ -157,7 +158,7 @@ func (r *investigation) tools() ([]tool.BaseTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := utils.InferTool("finishMemoryBatch", "调查结束时单独调用，原子提交知识、关系、完整证据组和复核记录；无结果也需调用。", r.finish)
+	d, err := utils.InferTool("finishMemoryBatch", "调查结束时单独调用，原子提交知识、关系、完整证据组和复核记录；无结果也需调用。", r.finishTool)
 	if err != nil {
 		return nil, err
 	}
@@ -170,10 +171,10 @@ func (r *investigation) tools() ([]tool.BaseTool, error) {
 
 func (r *investigation) searchTopics(ctx context.Context, input *struct {
 	Query string `json:"query"`
-}) (string, error) {
+}) (any, error) {
 	items, err := r.manager.SearchConversationTopics(ctx, r.batch.GroupID, r.batch.ThroughID, input.Query)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, item := range items {
 		found := false
@@ -188,25 +189,24 @@ func (r *investigation) searchTopics(ctx context.Context, input *struct {
 			r.topics.Topics = append(r.topics.Topics, item)
 		}
 	}
-	return sonic.MarshalString(items)
+	return items, nil
 }
 
-func (r *investigation) search(ctx context.Context, input *searchInput) (string, error) {
+func (r *investigation) search(ctx context.Context, input *searchInput) (any, error) {
 	if input.Offset < 0 {
-		return "", fmt.Errorf("offset 不得为负数")
+		return nil, fmt.Errorf("offset 不得为负数")
 	}
 	if input.ItemID != 0 {
 		items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, ItemID: input.ItemID, IncludeInactive: true, ThroughID: r.batch.ThroughID, Limit: 1})
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if len(items) != 1 {
-			return "", fmt.Errorf("知识不存在或不在本轮范围内")
+			return nil, fmt.Errorf("知识不存在或不在本轮范围内")
 		}
-		r.batch.ExpectedItems[input.ItemID] = items[0].UpdatedAt
 		sets, err := r.manager.ListKnowledgeEvidence(ctx, r.batch.GroupID, input.ItemID, 0)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		var groups [][]uint
 		for _, set := range sets {
@@ -224,19 +224,22 @@ func (r *investigation) search(ctx context.Context, input *searchInput) (string,
 		end := min(len(groups), input.Offset+10)
 		var relations []memory.KnowledgeRelation
 		if err := r.manager.GetDB().WithContext(ctx).Table("knowledge_relations kr").Select("kr.*").Joins("JOIN knowledge_items s ON s.id=kr.source_item_id JOIN knowledge_items t ON t.id=kr.target_item_id").Where("s.group_id=? AND t.group_id=? AND s.reviewed_through_id<=? AND t.reviewed_through_id<=? AND (kr.source_item_id=? OR kr.target_item_id=?)", r.batch.GroupID, r.batch.GroupID, r.batch.ThroughID, r.batch.ThroughID, input.ItemID, input.ItemID).Order("kr.id").Offset(input.Offset).Limit(11).Scan(&relations).Error; err != nil {
-			return "", err
+			return nil, err
 		}
 		more := end < len(groups) || len(relations) > 10
 		if len(relations) > 10 {
 			relations = relations[:10]
 		}
-		return sonic.MarshalString(map[string]any{"item": items[0], "evidence_sets": groups[start:end], "relations": relations, "has_more": more, "next_offset": input.Offset + 10, "instruction": "使用 readContext 阅读原文后才能作为本轮证据；用 item_id 直接读取关系另一端"})
+		r.batch.ExpectedItems[input.ItemID] = items[0].UpdatedAt
+		return map[string]any{"item": items[0], "evidence_sets": groups[start:end], "relations": relations, "has_more": more, "next_offset": input.Offset + 10, "instruction": "使用 readContext 阅读原文后才能作为本轮证据；用 item_id 直接读取关系另一端"}, nil
 	}
-	if input.Query != "" {
+	if input.SubjectUserID != nil && *input.SubjectUserID == memory.SubjectSelfInputID {
+		self := r.batch.SelfID
+		input.SubjectUserID = &self
 	}
 	items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, Query: input.Query, SubjectUserID: input.SubjectUserID, IncludeInactive: true, ThroughID: r.batch.ThroughID, Limit: 11, Offset: input.Offset})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	more := len(items) > 10
 	if more {
@@ -245,75 +248,96 @@ func (r *investigation) search(ctx context.Context, input *searchInput) (string,
 	for _, item := range items {
 		r.batch.ExpectedItems[item.ID] = item.UpdatedAt
 	}
-	return sonic.MarshalString(map[string]any{"items": items, "has_more": more, "next_offset": input.Offset + len(items)})
+	return map[string]any{"items": items, "has_more": more, "next_offset": input.Offset + len(items)}, nil
 }
 
-func (r *investigation) searchMessages(ctx context.Context, input *messageInput) (string, error) {
+func (r *investigation) searchMessages(ctx context.Context, input *messageInput) (any, error) {
 	page, err := r.manager.SearchKnowledgeMessages(ctx, memory.KnowledgeMessageQuery{GroupID: r.batch.GroupID, ThroughID: r.batch.ThroughID, AfterID: input.AfterID, Text: input.Text, UserID: input.UserID, ReplyToMessageID: input.ReplyToMessageID, From: input.From, To: input.To, Limit: 30})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	return r.renderMessages(page, 0)
 }
 
-func (r *investigation) readContext(ctx context.Context, input *contextInput) (string, error) {
+func (r *investigation) readContext(ctx context.Context, input *contextInput) (any, error) {
 	if input.Offset < 0 || (input.Offset > 0 && input.Mode != "message") {
-		return "", fmt.Errorf("无效长文位置")
+		return nil, fmt.Errorf("无效长文位置")
 	}
 	page, err := r.manager.ReadKnowledgeContext(ctx, r.batch.GroupID, r.batch.ThroughID, input.MessageID, input.AfterID, input.Mode)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	return r.renderMessages(page, input.Offset)
 }
 
-func (r *investigation) finish(ctx context.Context, input *finishInput) (string, error) {
+func (r *investigation) finish(ctx context.Context, input *finishInput) (any, error) {
+	batch := r.batch
+	batch.ReadMessageIDs = nil
+	batch.Items = slices.Clone(input.Items)
+	batch.Relations = slices.Clone(input.Relations)
+	batch.ReviewedIDs = slices.Clone(input.ReviewedIDs)
+	noTopic := slices.Clone(input.NoTopicIDs)
 	for _, id := range r.required {
 		if !r.seen[id] {
-			return "", fmt.Errorf("本批消息 %d 尚未完整读取", id)
+			return nil, fmt.Errorf("本批消息 %d 尚未完整读取", id)
 		}
 	}
 	for id := range r.seen {
-		r.batch.ReadMessageIDs = append(r.batch.ReadMessageIDs, id)
+		batch.ReadMessageIDs = append(batch.ReadMessageIDs, id)
 	}
-	for i := range input.Items {
-		if input.Items[i].SubjectUserID == memory.SubjectSelfInputID {
-			input.Items[i].SubjectUserID = r.batch.SelfID
+	for i := range batch.Items {
+		if batch.Items[i].SubjectUserID == memory.SubjectSelfInputID {
+			batch.Items[i].SubjectUserID = batch.SelfID
 		}
 	}
-	r.batch.Items = input.Items
-	r.batch.Relations = input.Relations
-	r.batch.ReviewedIDs = input.ReviewedIDs
 	var result *memory.KnowledgeCommitResult
 	var err error
 	if r.batch.AdvanceCursor {
 		for _, row := range r.rows {
 			if row.RecalledAt != nil || row.TextContent == "" {
-				input.NoTopicIDs = append(input.NoTopicIDs, row.ID)
+				noTopic = append(noTopic, row.ID)
 			}
 		}
-		result, err = r.manager.CommitConversation(ctx, r.batch, r.rows, r.topics, input.Topics, input.NoTopicIDs)
+		result, err = r.manager.CommitConversation(ctx, batch, r.rows, r.topics, input.Topics, noTopic)
 	} else {
 		if len(input.Topics) > 0 || len(input.NoTopicIDs) > 0 {
-			return "", fmt.Errorf("复核轮次不能修改话题")
+			return nil, fmt.Errorf("复核轮次不能修改话题")
 		}
-		result, err = r.manager.CommitKnowledgeBatch(ctx, r.batch)
+		result, err = r.manager.CommitKnowledgeBatch(ctx, batch)
 	}
 	if err != nil {
-		return "", err
+		var validation *memory.ValidationError
+		if errors.As(err, &validation) || errors.Is(err, memory.ErrSnapshotChanged) {
+			return nil, err
+		}
+		return nil, agenttools.NewTerminalToolError(err)
 	}
 	r.finished = true
-	return sonic.MarshalString(result)
+	return result, nil
 }
 
-func (r *investigation) renderMessages(page memory.KnowledgeMessagePage, offset int) (string, error) {
+func (r *investigation) finishTool(ctx context.Context, input *finishInput) (any, error) {
+	if !r.finishAlone {
+		return map[string]any{"success": false, "message": "finishMemoryBatch 必须单独调用，请在其他读取完成后再提交"}, nil
+	}
+	result, err := r.finish(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := react.SetReturnDirectly(ctx); err != nil {
+		return nil, agenttools.NewTerminalToolError(err)
+	}
+	return result, nil
+}
+
+func (r *investigation) renderMessages(page memory.KnowledgeMessagePage, offset int) (any, error) {
 	records := make([]map[string]any, 0, len(page.Messages))
 	remaining := 6500
 	next := uint(0)
 	for i, row := range page.Messages {
 		text := []rune(row.TextContent)
 		if offset > len(text) {
-			return "", fmt.Errorf("读取位置超出原文长度")
+			return nil, fmt.Errorf("读取位置超出原文长度")
 		}
 		if remaining < 500 {
 			page.HasMore = true
@@ -335,5 +359,5 @@ func (r *investigation) renderMessages(page memory.KnowledgeMessagePage, offset 
 			break
 		}
 	}
-	return sonic.MarshalString(map[string]any{"messages": records, "has_more": page.HasMore, "next_id": next})
+	return map[string]any{"messages": records, "has_more": page.HasMore, "next_id": next}, nil
 }

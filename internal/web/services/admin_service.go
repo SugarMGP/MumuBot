@@ -179,13 +179,9 @@ func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], er
 	if err := base.Offset((page - 1) * size).Limit(size).Find(&threads).Error; err != nil {
 		return Page[TopicThreadView]{}, err
 	}
-	items := make([]TopicThreadView, 0, len(threads))
-	for _, thread := range threads {
-		view, err := s.loadTopicThread(thread)
-		if err != nil {
-			return Page[TopicThreadView]{}, err
-		}
-		items = append(items, view)
+	items, err := s.loadTopicThreads(threads)
+	if err != nil {
+		return Page[TopicThreadView]{}, err
 	}
 	return Page[TopicThreadView]{Items: items, Total: total, Page: page, PageSize: size}, nil
 }
@@ -195,11 +191,54 @@ func (s *AdminService) loadTopicThread(thread memory.TopicThread) (TopicThreadVi
 	if err := s.db.Model(&memory.TopicAssignment{}).Where("topic_id = ?", thread.ID).Select("COALESCE(MAX(id), 0)").Scan(&view.LastAssignmentID).Error; err != nil {
 		return view, err
 	}
-	err := s.db.Table("topic_summaries ts").Select("ts.*").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id = ?", thread.ID).Order("ts.through_topic_assignment_id ASC").Scan(&view.Summaries).Error
+	err := s.db.Table("topic_summaries ts").Select("ts.*, ("+memory.TopicSummaryValiditySQL+") AS sources_valid").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id = ?", thread.ID).Order("ts.id ASC").Scan(&view.Summaries).Error
 	if err == nil && len(view.Summaries) > 0 {
 		view.UpdatedAt = view.Summaries[len(view.Summaries)-1].CreatedAt
 	}
 	return view, err
+}
+
+func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicThreadView, error) {
+	if len(threads) == 0 {
+		return []TopicThreadView{}, nil
+	}
+	ids := make([]uint, len(threads))
+	for i, thread := range threads {
+		ids[i] = thread.ID
+	}
+	var assignments []struct {
+		TopicID          uint
+		LastAssignmentID uint
+	}
+	if err := s.db.Model(&memory.TopicAssignment{}).Select("topic_id, COALESCE(MAX(id), 0) AS last_assignment_id").Where("topic_id IN ?", ids).Group("topic_id").Scan(&assignments).Error; err != nil {
+		return nil, err
+	}
+	lastByTopic := make(map[uint]uint, len(assignments))
+	for _, row := range assignments {
+		lastByTopic[row.TopicID] = row.LastAssignmentID
+	}
+	var summaries []struct {
+		memory.TopicSummaryRecord
+		TopicID uint
+	}
+	if err := s.db.Table("topic_summaries ts").Select("ts.*, ta.topic_id, ("+memory.TopicSummaryValiditySQL+") AS sources_valid").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id IN ?", ids).Order("ts.id ASC").Scan(&summaries).Error; err != nil {
+		return nil, err
+	}
+	summariesByTopic := make(map[uint][]memory.TopicSummaryRecord, len(ids))
+	for _, summary := range summaries {
+		if summary.TopicID != 0 {
+			summariesByTopic[summary.TopicID] = append(summariesByTopic[summary.TopicID], summary.TopicSummaryRecord)
+		}
+	}
+	items := make([]TopicThreadView, 0, len(threads))
+	for _, thread := range threads {
+		view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt, LastAssignmentID: lastByTopic[thread.ID], Summaries: summariesByTopic[thread.ID]}
+		if len(view.Summaries) > 0 {
+			view.UpdatedAt = view.Summaries[len(view.Summaries)-1].CreatedAt
+		}
+		items = append(items, view)
+	}
+	return items, nil
 }
 
 func (s *AdminService) GetTopicThread(id uint) (TopicThreadView, error) {
@@ -245,19 +284,48 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 	if err := q.Offset((page - 1) * size).Limit(size).Find(&profiles).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
+	if len(profiles) == 0 {
+		return Page[MemberProfileView]{Items: []MemberProfileView{}, Total: total, Page: page, PageSize: size}, nil
+	}
+	userIDs := make([]int64, len(profiles))
+	for i, p := range profiles {
+		userIDs[i] = p.UserID
+	}
+	var names []memory.MemberName
+	if err := s.db.Where("user_id IN ?", userIDs).Order("updated_at DESC").Find(&names).Error; err != nil {
+		return Page[MemberProfileView]{}, err
+	}
+	namesByUser := make(map[int64][]memory.MemberName, len(userIDs))
+	for _, name := range names {
+		namesByUser[name.UserID] = append(namesByUser[name.UserID], name)
+	}
+	var knowledgeCounts []struct {
+		UserID int64
+		Count  int64
+	}
+	if err := s.db.Model(&memory.KnowledgeItem{}).Select("subject_user_id AS user_id, COUNT(*) AS count").Where("subject_user_id IN ?", userIDs).Group("subject_user_id").Scan(&knowledgeCounts).Error; err != nil {
+		return Page[MemberProfileView]{}, err
+	}
+	knowledgeByUser := make(map[int64]int64, len(knowledgeCounts))
+	for _, row := range knowledgeCounts {
+		knowledgeByUser[row.UserID] = row.Count
+	}
+	var participationCounts []struct {
+		UserID int64
+		Count  int64
+	}
+	participationSQL := strings.ReplaceAll(knowledgeParticipationSQL, "knowledge_items.id", "ki.id")
+	participationSQL = strings.Replace(participationSQL, "ml.user_id=?", "ml.user_id=ki.subject_user_id", 1)
+	if err := s.db.Table("knowledge_items ki").Select("ki.subject_user_id AS user_id, COUNT(*) AS count").Where("ki.subject_user_id IN ?", userIDs).Where(participationSQL).Group("ki.subject_user_id").Scan(&participationCounts).Error; err != nil {
+		return Page[MemberProfileView]{}, err
+	}
+	participationByUser := make(map[int64]int64, len(participationCounts))
+	for _, row := range participationCounts {
+		participationByUser[row.UserID] = row.Count
+	}
 	items := make([]MemberProfileView, 0, len(profiles))
 	for _, p := range profiles {
-		v := MemberProfileView{MemberProfile: p}
-		if err := s.db.Where("user_id = ?", p.UserID).Order("updated_at DESC").Find(&v.Names).Error; err != nil {
-			return Page[MemberProfileView]{}, err
-		}
-		if err := s.db.Model(&memory.KnowledgeItem{}).Where("subject_user_id = ?", p.UserID).Count(&v.KnowledgeCount).Error; err != nil {
-			return Page[MemberProfileView]{}, err
-		}
-		if err := s.db.Model(&memory.KnowledgeItem{}).Where(knowledgeParticipationSQL, p.UserID).Count(&v.ParticipationCount).Error; err != nil {
-			return Page[MemberProfileView]{}, err
-		}
-		items = append(items, v)
+		items = append(items, MemberProfileView{MemberProfile: p, Names: namesByUser[p.UserID], KnowledgeCount: knowledgeByUser[p.UserID], ParticipationCount: participationByUser[p.UserID]})
 	}
 	return Page[MemberProfileView]{Items: items, Total: total, Page: page, PageSize: size}, nil
 }

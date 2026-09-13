@@ -149,17 +149,6 @@ func memberGroupCards(profile services.MemberProfileView, limit int) []string {
 	return items
 }
 
-func rowActionClass(action RowAction) string {
-	switch action.Kind {
-	case "danger":
-		return "btn btn-error btn-soft btn-sm"
-	case "ghost":
-		return "btn btn-ghost btn-sm border-base-300"
-	default:
-		return "btn btn-success btn-sm"
-	}
-}
-
 func stickerDeleteDialogHref(id uint) string {
 	return adminActionDialogHref("sticker-delete", id, nil)
 }

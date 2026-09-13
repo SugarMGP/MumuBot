@@ -37,20 +37,3 @@ func FirstNonEmpty(candidates ...string) string {
 	}
 	return ""
 }
-
-// UniqueIDs 去重 []uint，跳过零值，保持插入顺序
-func UniqueIDs(ids []uint) []uint {
-	seen := make(map[uint]struct{}, len(ids))
-	result := make([]uint, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
-}

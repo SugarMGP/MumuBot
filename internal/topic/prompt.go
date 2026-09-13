@@ -34,17 +34,8 @@ func renderMessageTail(messages []memory.MessageLog, limit int) string {
 	for _, item := range messages {
 		text := strings.TrimSpace(item.TextContent)
 		if text != "" {
-			lines = append(lines, item.Nickname+"："+text)
+			lines = append(lines, item.MessageTime.Format("2006-01-02 15:04")+" "+item.Nickname+"："+text)
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func renderTopicSummaryForAssignment(summary memory.TopicSummary) string {
-	parts := []string{strings.TrimSpace(summary.Title), strings.TrimSpace(summary.Gist)}
-
-	if len(summary.OpenLoops) > 0 {
-		parts = append(parts, "未完事项："+strings.Join(summary.OpenLoops, "；"))
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
 }

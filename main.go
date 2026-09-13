@@ -78,7 +78,10 @@ func main() {
 		_ = botClient.Close()
 		zap.L().Fatal("Agent 创建失败", zap.Error(err))
 	}
-	mumuAgent.Start()
+	if err := mumuAgent.Start(); err != nil {
+		mumuAgent.Stop()
+		zap.L().Fatal("恢复聊天上下文失败", zap.Error(err))
+	}
 
 	stickerDir := cfg.Sticker.StoragePath
 	adminService := services.NewAdminService(memoryMgr, stickerDir, mumuAgent.BotSelfID)

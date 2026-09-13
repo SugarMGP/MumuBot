@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +14,7 @@ import (
 // LockKnowledgeGroup 在获取行锁前串行化同群的知识写入与消息撤回
 func LockKnowledgeGroup(tx *gorm.DB, groupID int64) error {
 	if groupID <= 0 {
-		return fmt.Errorf("invalid knowledge group")
+		return invalidKnowledge("知识所属群无效，请使用当前群号")
 	}
 	return tx.Exec("SELECT pg_advisory_xact_lock(?)", groupID).Error
 }
@@ -23,7 +22,7 @@ func LockKnowledgeGroup(tx *gorm.DB, groupID int64) error {
 func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch) (*KnowledgeCommitResult, error) {
 	result := &KnowledgeCommitResult{ItemIDs: map[string]uint{}}
 	if batch.GroupID <= 0 || batch.SelfID <= 0 || batch.ThroughID == 0 {
-		return nil, fmt.Errorf("invalid knowledge scope")
+		return nil, invalidKnowledge("知识批次范围无效，请使用本轮固定消息范围")
 	}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := LockKnowledgeGroup(tx, batch.GroupID); err != nil {
@@ -34,11 +33,11 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 			return err
 		}
 		if upperCount != 1 {
-			return fmt.Errorf("snapshot upper bound is not a group message")
+			return invalidKnowledge("固定范围上界不是当前群消息，请在后续批次重新调查")
 		}
 		if batch.AdvanceCursor {
 			if batch.ThroughID <= batch.AfterID {
-				return fmt.Errorf("invalid scan bounds")
+				return invalidKnowledge("整理范围起止位置无效，请在后续批次重新调查")
 			}
 			if err := tx.Exec("INSERT INTO learning_states(group_id,last_message_log_id) VALUES (?,0) ON CONFLICT DO NOTHING", batch.GroupID).Error; err != nil {
 				return err
@@ -48,14 +47,14 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 				return err
 			}
 			if cursor != batch.AfterID {
-				return fmt.Errorf("knowledge scan changed")
+				return ErrSnapshotChanged
 			}
 			var pending int64
 			if err := tx.Raw(`SELECT count(*) FROM message_logs ml WHERE ml.group_id=? AND ml.id>? AND ml.id<=? AND NOT EXISTS(SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id=ml.id)`, batch.GroupID, batch.AfterID, batch.ThroughID).Scan(&pending).Error; err != nil {
 				return err
 			}
 			if pending != 0 {
-				return fmt.Errorf("batch contains unassigned messages")
+				return invalidKnowledge("本批仍有未归属消息，请补全话题归属后重试")
 			}
 		}
 		messages, err := lockKnowledgeEvidence(tx, batch)
@@ -74,11 +73,11 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 				return err
 			}
 			if len(rows) != len(ids) {
-				return fmt.Errorf("knowledge references changed")
+				return ErrSnapshotChanged
 			}
 			for _, row := range rows {
 				if !row.UpdatedAt.Equal(batch.ExpectedItems[row.ID]) {
-					return fmt.Errorf("knowledge item %d changed", row.ID)
+					return ErrSnapshotChanged
 				}
 				existing[row.ID] = row
 			}
@@ -90,7 +89,7 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 			}
 			if input.Key != "" {
 				if _, ok := result.ItemIDs[input.Key]; ok {
-					return fmt.Errorf("duplicate temporary key")
+					return invalidKnowledge("新话题临时编号重复，请为每个新话题使用不同编号")
 				}
 				result.ItemIDs[input.Key] = item.ID
 			}
@@ -105,7 +104,7 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 		}
 		for _, id := range batch.ReviewedIDs {
 			if _, ok := batch.ExpectedItems[id]; !ok {
-				return fmt.Errorf("unread reviewed item")
+				return invalidKnowledge("待复核知识 %d 尚未读取，请先用 searchKnowledge 获取后重试", id)
 			}
 			if err := tx.Model(&KnowledgeItem{}).Where("id=? AND group_id=?", id, batch.GroupID).Updates(map[string]any{"reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,?)", batch.ThroughID), "updated_at": time.Now()}).Error; err != nil {
 				return err
@@ -138,22 +137,22 @@ func saveKnowledgeItem(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeItemInp
 	input.Label = strings.TrimSpace(input.Label)
 	input.Content = strings.TrimSpace(input.Content)
 	if input.SubjectUserID < 0 || !validKnowledgeKind(input.Kind) || !validKnowledgeStatus(input.Status) || input.Content == "" || (input.Kind == "term" && input.Label == "") {
-		return item, fmt.Errorf("invalid knowledge item")
+		return item, invalidKnowledge("知识主体、类型或正文无效，请补全必要字段后重试")
 	}
 	if input.ID != 0 {
 		var ok bool
 		item, ok = existing[input.ID]
 		if !ok {
-			return item, fmt.Errorf("unread knowledge item")
+			return item, invalidKnowledge("知识 %d 尚未在本轮读取，请先用 searchKnowledge 获取后重试", input.ID)
 		}
 		if item.SubjectUserID != input.SubjectUserID || item.Kind != input.Kind || item.Label != input.Label || item.Content != input.Content {
-			return item, fmt.Errorf("changed meaning requires a new item")
+			return item, invalidKnowledge("知识正文语义已变化，请新建知识并用关系表达修正")
 		}
 	} else {
 		err := tx.Where("group_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND btrim(content)=?", batch.GroupID, input.SubjectUserID, input.Kind, input.Label, input.Content).Order("id").First(&item).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if len(input.EvidenceSets) == 0 {
-				return item, fmt.Errorf("new knowledge requires source evidence, even while pending")
+				return item, invalidKnowledge("新知识即使待审核也必须提供原文依据，请补充后重试")
 			}
 			item = KnowledgeItem{GroupID: batch.GroupID, SubjectUserID: input.SubjectUserID, Kind: input.Kind, Label: input.Label, Content: input.Content, Status: "candidate"}
 			if err = tx.Create(&item).Error; err != nil {
@@ -176,15 +175,18 @@ func saveKnowledgeItem(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeItemInp
 		}
 	}
 	if input.Status == "active" {
+		if err := checkKnowledgeActivation(tx, item.ID); err != nil {
+			return item, err
+		}
 		if item.Status != "active" && len(input.EvidenceSets) == 0 {
-			return item, fmt.Errorf("activation requires a complete evidence group read in this run")
+			return item, invalidKnowledge("知识生效前必须在本轮完整读取一组有效依据，请先读取后重试")
 		}
 		ok, err := knowledgeHasEvidence(tx, item.ID, 0)
 		if err != nil {
 			return item, err
 		}
 		if !ok {
-			return item, fmt.Errorf("active knowledge requires complete evidence")
+			return item, invalidKnowledge("生效知识必须具有完整有效依据，请补充证据或改为待审核")
 		}
 	}
 	item.Status = input.Status
@@ -213,30 +215,33 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 	source, sok := items[input.SourceID]
 	target, tok := items[input.TargetID]
 	if !sok || !tok || source.ID == target.ID || source.GroupID != batch.GroupID || target.GroupID != batch.GroupID || !validKnowledgeStatus(input.Status) {
-		return relation, fmt.Errorf("invalid relation endpoints")
+		return relation, invalidKnowledge("关系两端必须是当前群中两个不同的知识，请修正后重试")
 	}
 	switch input.Kind {
 	case "variant_of":
 		if source.Kind != "term" || target.Kind != "term" {
-			return relation, fmt.Errorf("variants require term endpoints")
+			return relation, invalidKnowledge("变体关系两端都必须是术语义项，请修正知识类型或关系")
 		}
 	case "part_of":
 		if target.Kind != "episode" {
-			return relation, fmt.Errorf("part_of target must be an episode")
+			return relation, invalidKnowledge("属于关系的目标必须是经历，请修正目标或关系类型")
 		}
 	case "supersedes":
 		if source.SubjectUserID != target.SubjectUserID || source.Kind != target.Kind {
-			return relation, fmt.Errorf("replacement must share subject and kind")
+			return relation, invalidKnowledge("修正替代关系两端必须具有相同主体和类型，请修正后重试")
 		}
 	case "contradicts":
 		if source.ID > target.ID {
 			input.SourceID, input.TargetID = input.TargetID, input.SourceID
 		}
 	default:
-		return relation, fmt.Errorf("invalid relation kind")
+		return relation, invalidKnowledge("关系类型无效，请使用允许的关系类型后重试")
 	}
 	err := tx.Where("source_item_id=? AND target_item_id=? AND kind=?", input.SourceID, input.TargetID, input.Kind).First(&relation).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if len(input.EvidenceSets) == 0 {
+			return relation, invalidKnowledge("新关联必须提供独立的原文证据")
+		}
 		relation = KnowledgeRelation{SourceItemID: input.SourceID, TargetItemID: input.TargetID, Kind: input.Kind, Status: "candidate"}
 		if err = tx.Create(&relation).Error; err != nil {
 			return relation, err
@@ -254,7 +259,7 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 		}
 		for _, id := range set {
 			if _, ok := messages[id]; !ok {
-				return relation, fmt.Errorf("unread relation evidence")
+				return relation, invalidKnowledge("关系依据尚未完整读取，请先用 readContext 读取后重试")
 			}
 		}
 		if err := saveKnowledgeEvidence(tx, nil, &relation.ID, set); err != nil {
@@ -262,8 +267,11 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 		}
 	}
 	if input.Status == "active" {
+		if err := checkRelationActivation(tx, relation); err != nil {
+			return relation, err
+		}
 		if source.Status != "active" || (target.Status != "active" && !(input.Kind == "supersedes" && target.Status == "archived")) {
-			return relation, fmt.Errorf("active relation requires active endpoints")
+			return relation, invalidKnowledge("关系生效前两端知识都必须生效，请先处理知识状态")
 		}
 		for _, id := range []uint{source.ID, target.ID} {
 			ok, err := knowledgeHasEvidence(tx, id, 0)
@@ -271,7 +279,7 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 				return relation, err
 			}
 			if !ok {
-				return relation, fmt.Errorf("endpoint has no valid evidence")
+				return relation, invalidKnowledge("关系端点缺少有效依据，请先补充端点知识的证据")
 			}
 		}
 		ok, err := knowledgeHasEvidence(tx, 0, relation.ID)
@@ -279,7 +287,7 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 			return relation, err
 		}
 		if !ok {
-			return relation, fmt.Errorf("relation requires independent evidence")
+			return relation, invalidKnowledge("关系需要自己的独立原文依据，请补充后重试")
 		}
 	}
 	relation.Status = input.Status

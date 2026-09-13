@@ -18,7 +18,8 @@ COPY --from=assets /src/internal/web/assets/dist/ internal/web/assets/dist/
 RUN templ generate ./internal/web/views
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/mumu-bot .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X mumu-bot/internal/version.Build=${VERSION}" -o /out/mumu-bot .
 
 FROM alpine:3.23
 ENV TZ=Asia/Shanghai

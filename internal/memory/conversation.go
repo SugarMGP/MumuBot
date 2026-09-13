@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -12,15 +11,19 @@ import (
 )
 
 type ConversationTopic struct {
-	ID         uint         `json:"id" jsonschema:"description=已有话题 ID，新话题填0"`
-	MessageIDs []uint       `json:"message_ids" jsonschema:"description=本批归入此话题的原始消息 ID，不重复分配历史消息"`
-	Summary    TopicSummary `json:"summary" jsonschema:"description=保留旧摘要仍有效内容后的完整更新；title 和 gist 必填，不包含 claims"`
+	ID               uint         `json:"id" jsonschema:"description=已有话题 ID，新话题填0"`
+	MessageIDs       []uint       `json:"message_ids" jsonschema:"description=本批归入此话题的原始消息 ID，不重复分配历史消息"`
+	SourceMessageIDs []uint       `json:"source_message_ids" jsonschema:"description=完整支持摘要的已读取原文，包括仍然成立的历史依据"`
+	Summary          TopicSummary `json:"summary" jsonschema:"description=保留旧摘要仍有效内容后的完整更新；title 和 gist 必填，不包含 claims"`
 }
 
 type TopicContext struct {
-	ID        uint         `json:"id"`
-	SummaryID uint         `json:"-"`
-	Summary   TopicSummary `json:"summary"`
+	ID               uint         `json:"id"`
+	SummaryID        uint         `json:"-"`
+	Summary          TopicSummary `json:"summary"`
+	SourceMessageIDs []uint       `json:"source_message_ids"`
+	SourcesValid     bool         `json:"sources_valid"`
+	LatestID         uint         `json:"-"`
 }
 
 type ConversationContext struct {
@@ -74,10 +77,10 @@ func (m *Manager) ConversationContext(ctx context.Context, groupID int64, upper 
 
 func (m *Manager) SearchConversationTopics(ctx context.Context, groupID int64, upper uint, query string) ([]TopicContext, error) {
 	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("topic query cannot be empty")
+		return nil, invalidKnowledge("话题查询不能为空，请提供关键词后重试")
 	}
 	var ids []uint
-	if err := m.db.WithContext(ctx).Raw(`SELECT ta.topic_id FROM topic_summaries ts JOIN topic_assignments ta ON ta.id=ts.through_topic_assignment_id JOIN topic_threads tt ON tt.id=ta.topic_id WHERE tt.group_id=? AND NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.topic_id=ta.topic_id AND a.id<=ts.through_topic_assignment_id AND a.message_log_id>?) AND strpos(lower(ts.summary_json::text),lower(?))>0 GROUP BY ta.topic_id ORDER BY max(ts.id) DESC LIMIT 6`, groupID, upper, query).Scan(&ids).Error; err != nil {
+	if err := LatestTopicSummaries(m.db.WithContext(ctx), groupID, upper).Select("ts.topic_id").Where(TopicSummaryValiditySQL).Where("strpos(lower("+TopicSummaryTextSQL+"),lower(?))>0", query).Order("ts.id DESC").Limit(6).Scan(&ids).Error; err != nil {
 		return nil, err
 	}
 	return m.topicContexts(ctx, groupID, upper, ids)
@@ -86,17 +89,29 @@ func (m *Manager) SearchConversationTopics(ctx context.Context, groupID int64, u
 func (m *Manager) topicContexts(ctx context.Context, groupID int64, upper uint, topicIDs []uint) ([]TopicContext, error) {
 	result := []TopicContext{}
 	for _, id := range topicIDs {
-		var record TopicSummaryRecord
-		err := m.db.WithContext(ctx).Table("topic_summaries ts").Select("ts.*").Joins("JOIN topic_assignments ta ON ta.id=ts.through_topic_assignment_id JOIN topic_threads tt ON tt.id=ta.topic_id").Where("tt.group_id=? AND ta.topic_id=?", groupID, id).Where("NOT EXISTS(SELECT 1 FROM topic_assignments a WHERE a.topic_id=ta.topic_id AND a.id<=ts.through_topic_assignment_id AND a.message_log_id>?)", upper).Order("ts.through_topic_assignment_id DESC").Limit(1).Find(&record).Error
-		if err != nil {
-			return result, err
+		var record struct {
+			ID, LatestID uint
+			SummaryJSON  string
+			SourcesValid bool
 		}
-		item := TopicContext{ID: id, SummaryID: record.ID}
-		if err := m.db.WithContext(ctx).Raw(`SELECT COALESCE(max(ts.id),0) FROM topic_summaries ts JOIN topic_assignments ta ON ta.id=ts.through_topic_assignment_id JOIN topic_threads tt ON tt.id=ta.topic_id WHERE tt.group_id=? AND ta.topic_id=?`, groupID, id).Scan(&item.SummaryID).Error; err != nil {
-			return result, err
+		db := m.db.WithContext(ctx)
+		visible := LatestTopicSummaries(db, groupID, upper).Where("ts.topic_id=?", id)
+		// 可见版本与全局版本必须来自同一数据库快照，后者只用于检测变化
+		read := db.Table("topic_threads tt").Select(`COALESCE(v.id,0) id,COALESCE(v.summary_json::text,'') summary_json,COALESCE(v.sources_valid,false) sources_valid,
+		 (SELECT COALESCE(max(s.id),0) FROM topic_summaries s JOIN topic_assignments a ON a.id=s.through_topic_assignment_id WHERE a.topic_id=tt.id) latest_id`).
+			Joins("LEFT JOIN (?) v ON v.topic_id=tt.id", visible).Where("tt.group_id=? AND tt.id=?", groupID, id).Scan(&record)
+		if read.Error != nil {
+			return result, read.Error
 		}
-		if record.ID > 0 {
+		if read.RowsAffected == 0 {
+			continue
+		}
+		item := TopicContext{ID: id, SummaryID: record.ID, LatestID: record.LatestID, SourcesValid: record.SourcesValid}
+		if record.ID > 0 && record.SourcesValid {
 			if err := sonic.UnmarshalString(record.SummaryJSON, &item.Summary); err != nil {
+				return result, err
+			}
+			if err := m.db.WithContext(ctx).Model(&TopicSummarySource{}).Where("summary_id=?", record.ID).Order("message_log_id").Pluck("message_log_id", &item.SourceMessageIDs).Error; err != nil {
 				return result, err
 			}
 		}
@@ -117,7 +132,7 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 			return err
 		}
 		if len(current) != len(rows) {
-			return fmt.Errorf("conversation batch changed")
+			return ErrSnapshotChanged
 		}
 		readIDs := slices.Clone(batch.ReadMessageIDs)
 		slices.Sort(readIDs)
@@ -128,24 +143,24 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 				return err
 			}
 			if len(valid) != len(readIDs) {
-				return fmt.Errorf("read context changed before commit")
+				return ErrSnapshotChanged
 			}
 		}
 		pending := map[uint]MessageLog{}
 		for i, r := range current {
 			if r.ID != rows[i].ID || r.TextContent != rows[i].TextContent || (r.RecalledAt == nil) != (rows[i].RecalledAt == nil) {
-				return fmt.Errorf("conversation source changed")
+				return ErrSnapshotChanged
 			}
 			pending[r.ID] = r
 		}
 		assigned := map[uint]bool{}
 		assign := func(id uint, topicID *uint) (uint, error) {
 			if _, ok := pending[id]; !ok || assigned[id] {
-				return 0, fmt.Errorf("unknown or duplicate message assignment")
+				return 0, invalidKnowledge("消息归属缺失或重复，请确保每条消息只提交一次")
 			}
 			assigned[id] = true
 			if r := pending[id]; topicID != nil && (r.RecalledAt != nil || strings.TrimSpace(r.TextContent) == "") {
-				return 0, fmt.Errorf("unusable topic source")
+				return 0, invalidKnowledge("话题来源原文不可用，请改用本轮已完整读取且未撤回的原文")
 			}
 			var old TopicAssignment
 			if err := tx.Where("message_log_id=?", id).Limit(1).Find(&old).Error; err != nil {
@@ -156,7 +171,7 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 					return old.ID, nil
 				}
 				if (old.TopicID == nil) != (topicID == nil) || (topicID != nil && *old.TopicID != *topicID) {
-					return 0, fmt.Errorf("existing assignment cannot be rewritten")
+					return 0, invalidKnowledge("原有消息归属不能改写，请只提交尚未归属的消息")
 				}
 				return old.ID, nil
 			}
@@ -173,11 +188,12 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 		}
 		seenTopics := map[uint]bool{}
 		for _, input := range topics {
-			if len(input.MessageIDs) == 0 || strings.TrimSpace(input.Summary.Title) == "" || strings.TrimSpace(input.Summary.Gist) == "" {
-				return fmt.Errorf("topic requires messages, title and gist")
+			if (input.ID == 0 && len(input.MessageIDs) == 0) || strings.TrimSpace(input.Summary.Title) == "" || strings.TrimSpace(input.Summary.Gist) == "" {
+				return invalidKnowledge("话题必须包含原文、标题和概括，请补全后重试")
 			}
 			id := input.ID
 			var latest uint
+			var newer bool
 			if id == 0 {
 				row := TopicThread{GroupID: batch.GroupID}
 				if err := tx.Create(&row).Error; err != nil {
@@ -186,27 +202,31 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 				id = row.ID
 			} else {
 				if seenTopics[id] {
-					return fmt.Errorf("duplicate topic update")
+					return invalidKnowledge("同一话题不能在一次提交中重复更新，请合并后重试")
 				}
 				var count int64
 				if err := tx.Model(&TopicThread{}).Where("group_id=? AND id=?", batch.GroupID, id).Count(&count).Error; err != nil {
 					return err
 				}
 				if count != 1 {
-					return fmt.Errorf("topic is outside group")
+					return invalidKnowledge("话题不属于当前群，请改用本群话题或创建新话题")
 				}
 				if err := tx.Raw(`SELECT COALESCE(max(ts.id),0) FROM topic_summaries ts JOIN topic_assignments ta ON ta.id=ts.through_topic_assignment_id WHERE ta.topic_id=?`, id).Scan(&latest).Error; err != nil {
 					return err
 				}
 				read := false
 				for _, old := range observed.Topics {
-					if old.ID == id && old.SummaryID == latest {
+					if old.ID == id {
+						if old.LatestID != latest {
+							return ErrSnapshotChanged
+						}
 						read = true
+						newer = old.SummaryID != latest
 						break
 					}
 				}
 				if !read {
-					return fmt.Errorf("topic was not read or summary changed")
+					return invalidKnowledge("话题未在本轮读取或摘要版本已变化，请重新查询后再提交")
 				}
 			}
 			seenTopics[id] = true
@@ -225,24 +245,33 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 				}
 			}
 			// 迁移后的消息可能已有较新的摘要，不能用较早批次覆盖
-			if through <= existingThrough {
+			if newer || (through > 0 && through < existingThrough) {
 				continue
 			}
-			input.Summary.Version = 1
+			through = max(through, existingThrough)
+			if through == 0 {
+				return invalidKnowledge("话题尚无可用归属")
+			}
+			input.Summary.Version = 2
 			input.Summary.Participants = append([]TopicParticipant{}, input.Summary.Participants...)
 			input.Summary.OpenLoops = append([]string{}, input.Summary.OpenLoops...)
 			input.Summary.RecentTurns = append([]string{}, input.Summary.RecentTurns...)
 			input.Summary.Keywords = append([]string{}, input.Summary.Keywords...)
+			input.Summary.RelatedTopics = append([]RelatedTopic{}, input.Summary.RelatedTopics...)
 			body, err := sonic.MarshalString(input.Summary)
 			if err != nil {
 				return err
 			}
-			if err := tx.Create(&TopicSummaryRecord{ThroughTopicAssignmentID: through, SummaryJSON: body}).Error; err != nil {
+			record := TopicSummaryRecord{ThroughTopicAssignmentID: through, SummaryJSON: body}
+			if err := tx.Create(&record).Error; err != nil {
+				return err
+			}
+			if err := saveTopicSources(ctx, tx, batch, id, input, &record); err != nil {
 				return err
 			}
 		}
 		if len(assigned) != len(pending) {
-			return fmt.Errorf("not every batch message has an assignment")
+			return invalidKnowledge("本批仍有消息没有归属，请为每条消息指定话题或无话题")
 		}
 		batch.RequireAssigned = true
 		var err error

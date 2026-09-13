@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,18 +183,18 @@ type GetGroupMemberDetailOutput struct {
 func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailInput) (*GetGroupMemberDetailOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &GetGroupMemberDetailOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &GetGroupMemberDetailOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
 	}
-	if input.UserID == 0 {
-		return &GetGroupMemberDetailOutput{Success: false, Message: "用户 ID 不能为空"}, nil
+	if input == nil || input.UserID == 0 {
+		return nil, fmt.Errorf("用户 ID 不能为空")
 	}
 
 	info, err := tc.Bot.GetGroupMemberInfo(ctx, tc.GroupID, input.UserID, false)
 	if err != nil {
-		return &GetGroupMemberDetailOutput{Success: false, Message: err.Error()}, nil
+		return nil, err
 	}
 
 	output := &GetGroupMemberDetailOutput{
@@ -240,8 +241,11 @@ type GetRecentMessagesOutput struct {
 
 func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (*GetRecentMessagesOutput, error) {
 	tc := GetToolContext(ctx)
-	if tc == nil {
-		return &GetRecentMessagesOutput{Success: false, Message: "工具上下文未初始化"}, nil
+	if tc == nil || tc.MemoryMgr == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("读取参数不能为空")
 	}
 
 	limit := input.Limit
@@ -249,7 +253,10 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 		limit = 40
 	}
 
-	messages := tc.MemoryMgr.GetRecentMessages(tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
+	messages, err := tc.MemoryMgr.GetRecentMessages(ctx, tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("读取最近消息失败：%w", err)
+	}
 	results := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
 		messageRef := tc.RegisterMessage(m.OneBotMessageID)
@@ -308,15 +315,18 @@ type GetGroupNoticesOutput struct {
 func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*GetGroupNoticesOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &GetGroupNoticesOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &GetGroupNoticesOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("公告查询参数不能为空")
 	}
 
 	notices, err := tc.Bot.GetGroupNotice(ctx, tc.GroupID)
 	if err != nil {
-		return &GetGroupNoticesOutput{Success: false, Message: "获取群公告失败: " + err.Error()}, nil
+		return nil, fmt.Errorf("获取群公告失败: %w", err)
 	}
 
 	limit := input.Limit
@@ -371,15 +381,18 @@ type GetEssenceMessagesOutput struct {
 func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput) (*GetEssenceMessagesOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &GetEssenceMessagesOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &GetEssenceMessagesOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("精华消息查询参数不能为空")
 	}
 
 	messages, err := tc.Bot.GetEssenceMessages(ctx, tc.GroupID)
 	if err != nil {
-		return &GetEssenceMessagesOutput{Success: false, Message: "获取群精华消息失败: " + err.Error()}, nil
+		return nil, fmt.Errorf("获取群精华消息失败: %w", err)
 	}
 
 	limit := input.Limit
@@ -432,19 +445,22 @@ type GetMessageReactionsOutput struct {
 func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInput) (*GetMessageReactionsOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &GetMessageReactionsOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &GetMessageReactionsOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("表情回应查询参数不能为空")
 	}
 	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
 	if !ok {
-		return &GetMessageReactionsOutput{Success: false, Message: "消息编号不是当前对话中的消息"}, nil
+		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
 	}
 
 	reactions, err := tc.Bot.GetMessageReactions(ctx, messageID)
 	if err != nil {
-		return &GetMessageReactionsOutput{Success: false, Message: "获取表情回应失败: " + err.Error()}, nil
+		return nil, fmt.Errorf("获取表情回应失败: %w", err)
 	}
 
 	if len(reactions) == 0 {

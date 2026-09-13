@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -34,10 +35,13 @@ type UpdateMoodOutput struct {
 func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (*UpdateMoodOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &UpdateMoodOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.MemoryMgr == nil {
-		return &UpdateMoodOutput{Success: false, Message: "记忆管理器未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("记忆管理器未初始化"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("情绪参数不能为空")
 	}
 
 	// 限制单次变化量，防止极端变化
@@ -47,7 +51,7 @@ func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (*UpdateMoodOut
 
 	mood, err := tc.MemoryMgr.UpdateMoodState(valenceDelta, energyDelta, sociabilityDelta, input.Reason)
 	if err != nil {
-		return &UpdateMoodOutput{Success: false, Message: "更新情绪失败: " + err.Error()}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("更新情绪失败: %w", err))
 	}
 	tc.MarkActed()
 

@@ -12,7 +12,9 @@ templ KnowledgeListPage(data KnowledgeListPageData, currentPath string) {
 templ KnowledgeListBody(data KnowledgeListPageData) {
 	<div class="space-y-6">
 		@PageHeader("统一记忆", "", "")
+		<a class="btn btn-soft btn-sm" href={ templ.SafeURL("/admin/knowledge?group_id=" + data.GroupID) }>查看图谱</a>
 		<form class="flex flex-wrap items-center gap-3" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+			<input type="hidden" name="view" value="list"/>
 			<input class="input grow" name="keyword" value={ data.Keyword } placeholder="搜索内容或术语" aria-label="搜索内容或术语"/>
 			<input class="input w-36" name="group_id" value={ data.GroupID } placeholder="群号" aria-label="群号"/>
 			<input class="input w-36" name="user_id" value={ data.UserID } placeholder="关于谁（QQ）" aria-label="知识主体 QQ"/>
@@ -34,8 +36,10 @@ templ KnowledgeListBody(data KnowledgeListPageData) {
 					</option>
 				}
 			</select>
-			<button class="btn btn-primary" type="submit">@AdminIcon("filter", "size-4", "knowledge-filter")
-筛选</button><a class="btn btn-ghost" href="/admin/knowledge">重置</a>
+			<button class="btn btn-primary" type="submit">
+				@AdminIcon("filter", "size-4", "knowledge-filter")
+				筛选
+			</button><a class="btn btn-ghost" href="/admin/knowledge">重置</a>
 		</form>
 		if data.AuthorID!="" {
 			<p class="text-sm text-secondary">
@@ -132,7 +136,7 @@ templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
 				<p class="mt-2 text-sm text-base-content/55">
 					{ memoryKindText(data.Detail.Item.Kind) } · 群 { fmt.Sprint(data.Detail.Item.GroupID) } · { memorySubjectText(data.Detail.Item.SubjectUserID,data.SelfID) }
 					if data.Detail.Item.SubjectUserID>0 {
-						<span> QQ { fmt.Sprint(data.Detail.Item.SubjectUserID) }</span>
+						<span>QQ { fmt.Sprint(data.Detail.Item.SubjectUserID) }</span>
 					}
 				</p>
 			</div>@KnowledgeStatusForm("knowledge-status", data.Detail.Item.ID, data.Detail.Item.Status, knowledgeHref(data.Detail.Item.ID))
@@ -157,11 +161,14 @@ templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
 				</ul>
 			</section>
 		}
+		if data.Detail.SensesHasMore {
+			<p class="text-xs text-base-content/55">同词解释超过展示上限，请从筛选结果继续查看。</p>
+		}
 		<div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8">
 			<section class="min-w-0">
 				<h2 class="font-semibold">相关记忆</h2>
 				if len(data.Detail.Graph.Items)>0 {
-					<div class="h-[330px] w-full" data-knowledge-graph={ knowledgeGraphJSON(data.Detail.Graph) } role="img" aria-label="知识关联图"></div>
+					<div class="h-[330px] w-full" data-knowledge-graph={ knowledgeGraphJSON(data.Detail.Graph, data.SelfID) } role="img" aria-label="知识关联图"></div>
 				} else {
 					<p class="py-8 text-sm text-base-content/50">暂无可展示的有效关联</p>
 				}
@@ -185,14 +192,24 @@ templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
 									{ memoryStatusText(rel.Status) }
 								</span>
 							</div>
-							<div class="my-3">@KnowledgeStatusForm("relation-status", rel.ID, rel.Status, knowledgeHref(data.Detail.Item.ID))
-</div>@KnowledgeEvidenceGroups(rel.Evidence, data.Detail.Topics)
+							<div class="my-3">
+								@KnowledgeStatusForm("relation-status", rel.ID, rel.Status, knowledgeHref(data.Detail.Item.ID))
+							</div><a class="link link-primary text-sm" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d&selected_kind=relation&selected_id=%d", data.Detail.Item.GroupID, rel.ID)) }>查看这条关联的依据</a>
 						</article>
 					}
 				</div>
 			</section>
-			<section class="min-w-0"><h2 class="mb-4 font-semibold">依据与时间线</h2>@KnowledgeEvidenceGroups(data.Detail.Evidence, data.Detail.Topics)
-</section>
+			<section class="min-w-0">
+				<h2 class="mb-4 font-semibold">依据与时间线</h2>@KnowledgeEvidenceGroups(data.Detail.Evidence, data.Detail.Topics)
+			</section>
+		</div>
+		<div class="flex items-center justify-between">
+			if data.Detail.Page>1 {
+				<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge/%d?page=%d", data.Detail.Item.ID, data.Detail.Page-1)) }>上一页依据</a>
+			}
+			if data.Detail.HasMore {
+				<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge/%d?page=%d", data.Detail.Item.ID, data.Detail.Page+1)) }>下一页依据</a>
+			}
 		</div>
 	</div>
 }
@@ -217,7 +234,7 @@ templ KnowledgeEvidenceGroups(sets []memory.KnowledgeEvidence, topics map[uint]u
 		<p class="py-4 text-sm text-base-content/50">暂无完整依据，待补充确认</p>
 	}
 	for i,set:=range sets {
-		<details class="mb-4 border-l-2 border-base-300 pl-4" open>
+		<details class="mb-4 border-l-2 border-base-300 pl-4" open?={i==0}>
 			<summary class="cursor-pointer text-sm font-medium">
 				依据组 { fmt.Sprint(i+1) }
 				<span class={ ternaryString(set.Valid, "text-success", "text-warning") }>

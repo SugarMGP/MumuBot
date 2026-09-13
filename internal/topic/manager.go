@@ -6,11 +6,13 @@ import (
 
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
+
+	"gorm.io/gorm"
 )
 
 type Manager struct{ store *DBStore }
 
-func NewManager(store *DBStore) *Manager { return &Manager{store: store} }
+func NewManager(db *gorm.DB) *Manager { return &Manager{store: &DBStore{db: db}} }
 
 func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, isMentioned bool) (*memory.MessageLog, bool, error) {
 	if msg == nil || msg.MessageID == 0 || msg.GroupID == 0 {
@@ -35,78 +37,70 @@ func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, 
 
 func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query memory.HybridQuery, throughMessageLogID uint, replyMessageIDs []int64) (string, error) {
 	const maxPromptTopics = 3
-
-	seen := make(map[uint]struct{})
-	topics := make([]memory.TopicThread, 0, maxPromptTopics)
-	addTopic := func(topic memory.TopicThread) {
-		if topic.ID == 0 || len(topics) >= maxPromptTopics {
-			return
+	seen := map[uint]bool{}
+	sections := []string{}
+	add := func(id uint) error {
+		if id == 0 || seen[id] || len(sections) >= maxPromptTopics {
+			return nil
 		}
-		if _, ok := seen[topic.ID]; ok {
-			return
+		seen[id] = true
+		record, err := m.store.LatestTopicSummary(ctx, id, throughMessageLogID)
+		if err != nil {
+			return err
 		}
-		seen[topic.ID] = struct{}{}
-		topics = append(topics, topic)
+		summary := EmptySummary()
+		if record != nil && record.SourcesValid {
+			summary = ParseSummary(record.SummaryJSON)
+		}
+		tail, err := m.store.ListRecentTopicMessages(ctx, id, throughMessageLogID, 4)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(summary.Gist) == "" && renderMessageTail(tail, 4) == "" {
+			return nil
+		}
+		sections = append(sections, renderTopicPromptSection(memory.TopicThread{ID: id, GroupID: groupID}, summary, tail))
+		return nil
 	}
 	for _, messageID := range replyMessageIDs {
-		topicID, _, err := m.store.TopicRefForOneBotMessage(ctx, groupID, messageID)
+		id, _, err := m.store.TopicRefForOneBotMessage(ctx, groupID, messageID)
 		if err != nil {
 			return "", err
 		}
-		if topicID == 0 {
-			continue
+		if err := add(id); err != nil {
+			return "", err
 		}
-		addTopic(memory.TopicThread{ID: topicID, GroupID: groupID})
-		if len(topics) >= maxPromptTopics {
+		if len(sections) >= maxPromptTopics {
 			break
 		}
 	}
-	if len(topics) < maxPromptTopics {
-		recent, err := m.store.ListRecentTopicThreads(ctx, groupID, throughMessageLogID, 4)
-		if err != nil {
-			return "", err
-		}
-		for _, topic := range recent {
-			addTopic(topic)
-			if len(topics) >= maxPromptTopics {
-				break
-			}
-		}
-	}
-	if len(topics) < maxPromptTopics && !query.Empty() {
+	if len(sections) < maxPromptTopics && !query.Empty() {
 		hits, err := m.store.SearchTopicHits(ctx, query, groupID, throughMessageLogID, 6)
 		if err != nil {
 			return "", err
 		}
 		for _, hit := range hits {
-			addTopic(hit)
-			if len(topics) >= maxPromptTopics {
+			if err := add(hit.ID); err != nil {
+				return "", err
+			}
+			if len(sections) >= maxPromptTopics {
 				break
 			}
 		}
 	}
-	var prompt strings.Builder
-	for _, topic := range topics {
-		record, err := m.store.LatestTopicSummary(ctx, topic.ID, throughMessageLogID)
+	if len(sections) < maxPromptTopics {
+		recent, err := m.store.ListRecentTopicThreads(ctx, groupID, throughMessageLogID, 4)
 		if err != nil {
 			return "", err
 		}
-		summary := EmptySummary()
-		if record != nil {
-			summary = ParseSummary(record.SummaryJSON)
+		for _, topic := range recent {
+			if err := add(topic.ID); err != nil {
+				return "", err
+			}
+			if len(sections) >= maxPromptTopics {
+				break
+			}
 		}
-		tail, err := m.store.ListRecentTopicMessages(ctx, topic.ID, throughMessageLogID, 4)
-		if err != nil {
-			return "", err
-		}
-		section := strings.TrimSpace(renderTopicPromptSection(topic, summary, tail))
-		if section == "" {
-			continue
-		}
-		if prompt.Len() > 0 {
-			prompt.WriteString("\n\n")
-		}
-		prompt.WriteString(section)
 	}
-	return prompt.String(), nil
+	return strings.Join(sections, "\n\n"), nil
 }

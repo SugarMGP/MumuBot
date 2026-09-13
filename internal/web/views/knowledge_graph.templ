@@ -1,0 +1,121 @@
+package views
+
+import (
+	"fmt"
+	"mumu-bot/internal/web/services"
+)
+
+type KnowledgeGraphPageData struct {
+	Graph  services.GroupKnowledgeGraph
+	Groups []int64
+	Filter services.KnowledgeFilter
+	Flash  *FlashMessage
+	Panel  GraphPanelData
+}
+
+templ KnowledgeGraphPage(data KnowledgeGraphPageData, currentPath string) {
+	@Layout(LayoutData{Title: "记忆图谱", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, KnowledgeGraphBody(data))
+}
+
+templ KnowledgeGraphBody(data KnowledgeGraphPageData) {
+	<div class="admin-knowledge-page space-y-5">
+		<section class="card admin-workspace-header">
+			<div class="flex items-start justify-between gap-5">
+				@PageHeader("记忆图谱", "群聊交流生成的结构化认知节点与溯源证据链", "双向关联引擎")
+				<div class="join admin-view-toggle"><a class="btn btn-primary btn-sm join-item" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d", data.Filter.GroupID)) }>图谱视图</a><a class="btn btn-ghost btn-sm join-item" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?view=list&group_id=%d", data.Filter.GroupID)) }>列表明细</a></div>
+			</div>
+			<form class="admin-graph-filters mt-5 grid grid-cols-[1.1fr_1.4fr_0.8fr_0.8fr_auto] items-center gap-3" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+			<select class="select w-48" name="group_id" aria-label="群聊">
+				if len(data.Groups)==0 {
+					<option value="">暂无群聊记录</option>
+				}
+				for _,id:=range data.Groups {
+					<option value={ fmt.Sprint(id) } selected?={ id==data.Filter.GroupID }>群 { fmt.Sprint(id) }</option>
+				}
+			</select>
+			<input class="input flex-1" name="keyword" aria-label="搜索记忆与话题" placeholder="搜索记忆与话题" value={ data.Filter.Keyword }/>
+			<select class="select w-32" name="kind" aria-label="类型">
+				<option value="">全部类型</option><option value="topic" selected?={ data.Filter.Kind=="topic" }>话题</option>
+				for _,kind:=range []string{"fact","episode","preference","constraint","goal","term","expression","alias"} {
+					<option value={ kind } selected?={ data.Filter.Kind==kind }>{ memoryKindText(kind) }</option>
+				}
+			</select>
+			<select class="select w-40" name="status" aria-label="知识状态">
+				<option value="">生效与待确认</option>
+				<option value="all" selected?={ data.Filter.Status=="all" }>全部状态与历史</option>
+				for _,status:=range []string{"active","candidate","archived"} {
+					<option value={ status } selected?={ data.Filter.Status==status }>{ memoryStatusText(status) }</option>
+				}
+			</select><button class="btn btn-primary" type="submit">筛选</button>
+			</form>
+		</section>
+		<div class="grid grid-cols-[minmax(0,1fr)_390px] gap-5 items-start">
+			<section class="card admin-graph-surface overflow-hidden">
+				<div class="admin-graph-toolbar flex flex-wrap items-center justify-between gap-3 px-5 pt-5"><div class="admin-graph-legend flex flex-wrap items-center gap-4 text-xs text-base-content/65"><span><i class="admin-legend-dot bg-success"></i>生效</span><span><i class="admin-legend-dot bg-primary"></i>待审</span><span><i class="admin-legend-dot bg-base-300"></i>归档</span><span class="admin-legend-separator"></span><span class="admin-legend-line admin-legend-line--pink">知识定向关联</span><span class="admin-legend-line admin-legend-line--teal">话题延展</span><span class="admin-legend-line admin-legend-line--gray">溯源证据</span></div><div class="join admin-graph-controls"><button class="btn btn-ghost btn-xs join-item" type="button" data-graph-command="zoom-in" aria-label="放大图谱">+</button><button class="btn btn-ghost btn-xs join-item" type="button" data-graph-command="zoom-out" aria-label="缩小图谱">−</button><button class="btn btn-ghost btn-xs join-item" type="button" data-graph-command="reset" aria-label="重置视角">↗</button></div></div>
+				if len(data.Graph.Items)+len(data.Graph.Topics)>0 {
+					<div class="admin-graph-canvas h-[560px] w-full"><div class="h-full w-full" data-knowledge-graph={ groupKnowledgeGraphJSON(data) } data-graph-panel="#knowledge-graph-panel" role="img" aria-label="群聊记忆与话题关系图"></div></div>
+				} else {
+					<div class="h-[560px] grid place-content-center text-center text-base-content/50"><p class="font-medium">暂时没有匹配的记忆或话题</p><p class="mt-2 text-sm">试试其他群聊或筛选条件</p></div>
+				}
+				<div class="flex items-center justify-between border-t border-base-300 px-5 py-4">
+					<div class="text-sm text-base-content/60">
+						显示 { fmt.Sprint(len(data.Graph.Items)+len(data.Graph.Topics)) } / { fmt.Sprint(data.Graph.Total) } 条
+						if int64(len(data.Graph.Items)+len(data.Graph.Topics))<data.Graph.Total {
+							<p class="mt-1 text-xs">部分节点未显示，可缩小范围或聚焦查看</p>
+						}
+					</div><a class="btn btn-ghost btn-sm" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d", data.Filter.GroupID)) }>重置</a>
+				</div>
+				<details class="border-t border-base-300 px-5 py-3">
+					<summary class="cursor-pointer text-sm">选择节点</summary>
+					<div class="flex flex-wrap gap-2 pt-3">
+						for _,item:=range data.Graph.Items {
+							<button class="btn btn-ghost btn-xs" hx-get={ graphPanelURL(data.Filter.GroupID, "knowledge", item.ID, 0) } hx-target="#knowledge-graph-panel" hx-swap="innerHTML">{ knowledgeTitle(item) }</button>
+						}
+						for _,topic:=range data.Graph.Topics {
+							<button class="btn btn-ghost btn-xs" hx-get={ graphPanelURL(data.Filter.GroupID, "topic", topic.TopicID, 0) } hx-target="#knowledge-graph-panel" hx-swap="innerHTML">{ graphTopicTitle(topic) }</button>
+						}
+					</div>
+				</details>
+			</section>
+			<aside id="knowledge-graph-panel" class="card admin-detail-surface min-w-0" aria-live="polite">
+				@KnowledgeGraphPanel(data.Panel)
+			</aside>
+		</div>
+	</div>
+}
+
+templ KnowledgeGraphPanel(data GraphPanelData) {
+	<div class="card-body p-5 gap-4 admin-detail-body">
+		if data.Title=="" {
+			<h2 class="font-semibold">选择一条记忆或关联</h2>
+			<p class="text-sm text-base-content/55 leading-6">点击图中的节点或连线，查看内容、原文依据及审核状态。</p>
+		} else {
+			<div class="admin-detail-heading"><div class="flex items-center gap-2"><span class="admin-detail-dot"></span><p class="text-xs text-secondary">{ data.KindLabel }</p></div><h2 class="mt-2 text-lg font-semibold break-words">{ data.Title }</h2></div>
+			if data.Status!="" {
+				<span class={ memoryStatusClass(data.Status) }>{ memoryStatusText(data.Status) }</span>
+			}
+			if data.Content!=data.Title {
+				<div class="admin-detail-quote"><p class="text-sm leading-7 whitespace-pre-wrap break-words">{ data.Content }</p></div>
+			}
+			if data.ActionKind!="" {
+				@KnowledgeStatusForm(data.ActionKind, data.ID, data.Status, data.ReturnTo)
+			}
+			if data.DetailURL!="" {
+				<a class="link link-primary text-sm" href={ templ.SafeURL(data.DetailURL) }>查看完整详情</a>
+			}
+			if data.FocusURL!="" {
+				<div class="admin-detail-section"><div class="flex items-center justify-between"><h3 class="text-sm font-semibold">关联图谱拓扑</h3><span class="text-xs text-base-content/45">邻近节点</span></div><a class="btn btn-soft btn-sm mt-3 w-full" href={ templ.SafeURL(data.FocusURL) }>聚焦关联</a></div>
+			}
+			<h3 class="admin-detail-section border-t border-base-300 pt-4 font-semibold text-sm">原文依据</h3>
+			@KnowledgeEvidenceGroups(data.Evidence, nil)
+			<div class="flex justify-between">
+				if data.PreviousURL!="" {
+					<button class="btn btn-ghost btn-sm" hx-get={ data.PreviousURL } hx-target="#knowledge-graph-panel" hx-swap="innerHTML">上一页</button>
+				}
+				if data.NextURL!="" {
+					<button class="btn btn-ghost btn-sm" hx-get={ data.NextURL } hx-target="#knowledge-graph-panel" hx-swap="innerHTML">下一页</button>
+				}
+			</div>
+		}
+	</div>
+}

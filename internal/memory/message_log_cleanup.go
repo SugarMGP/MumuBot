@@ -70,6 +70,7 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 			WHERE ml.group_id = ? AND ml.id <= ? AND ml.id < ?
 			AND NOT EXISTS (SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id = ml.id AND ta.topic_id IS NOT NULL)
 			AND NOT EXISTS (SELECT 1 FROM knowledge_evidence_messages e WHERE e.message_log_id = ml.id)
+			AND NOT EXISTS (SELECT 1 FROM topic_summary_sources s WHERE s.message_log_id = ml.id)
 			ORDER BY ml.id LIMIT 500
 		) DELETE FROM message_logs WHERE id IN (SELECT id FROM deletable)`, groupID, watermark, keepFloor)
 		if result.Error != nil {

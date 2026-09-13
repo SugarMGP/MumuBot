@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -32,20 +33,20 @@ type SpeakOutput struct {
 func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &SpeakOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.SpeakCallback == nil {
-		return &SpeakOutput{Success: false, Message: "发言回调未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("发言回调未初始化"))
 	}
 	if input == nil || strings.TrimSpace(input.Content) == "" {
-		return &SpeakOutput{Success: false, Message: "说话内容不能为空"}, nil
+		return nil, fmt.Errorf("说话内容不能为空")
 	}
 	replyTo := int64(0)
 	if input.ReplyTo != "" {
 		var ok bool
 		replyTo, ok = tc.ResolveMessageRef(input.ReplyTo)
 		if !ok {
-			return &SpeakOutput{Success: false, Message: "reply_to 不是当前对话中的消息编号"}, nil
+			return nil, fmt.Errorf("reply_to 不是当前对话中的消息编号")
 		}
 	}
 
@@ -53,7 +54,7 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	seenMentions := make(map[int64]struct{}, len(input.Mentions))
 	for _, userID := range input.Mentions {
 		if userID <= 0 {
-			return &SpeakOutput{Success: false, Message: "包含无效的 mentions"}, nil
+			return nil, fmt.Errorf("包含无效的 mentions")
 		}
 		if _, seen := seenMentions[userID]; seen {
 			continue
@@ -63,10 +64,7 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	}
 
 	if err := tc.SpeakCallback(ctx, tc.GroupID, strings.TrimSpace(input.Content), replyTo, mentions); err != nil {
-		return &SpeakOutput{
-			Success: false,
-			Message: err.Error(),
-		}, nil
+		return nil, NewTerminalToolError(err)
 	}
 	tc.MarkActed()
 
@@ -141,17 +139,17 @@ type PokeOutput struct {
 func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &PokeOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &PokeOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
 	}
-	if input.UserID == 0 {
-		return &PokeOutput{Success: false, Message: "用户 ID 不能为空"}, nil
+	if input == nil || input.UserID == 0 {
+		return nil, fmt.Errorf("用户 ID 不能为空")
 	}
 
 	if err := tc.Bot.GroupPoke(ctx, tc.GroupID, input.UserID); err != nil {
-		return &PokeOutput{Success: false, Message: err.Error()}, nil
+		return nil, NewTerminalToolError(err)
 	}
 	tc.MarkActed()
 
@@ -204,22 +202,25 @@ type ReactToMessageOutput struct {
 func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*ReactToMessageOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &ReactToMessageOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &ReactToMessageOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("消息回应参数不能为空")
 	}
 	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
 	if !ok {
-		return &ReactToMessageOutput{Success: false, Message: "消息编号不是当前对话中的消息"}, nil
+		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
 	}
 	emojiID, ok := messageReactionEmojiIDs[input.Reaction]
 	if !ok {
-		return &ReactToMessageOutput{Success: false, Message: "不支持该表情回应"}, nil
+		return nil, fmt.Errorf("不支持该表情回应")
 	}
 
 	if err := tc.Bot.SetMsgEmojiLike(ctx, messageID, emojiID); err != nil {
-		return &ReactToMessageOutput{Success: false, Message: err.Error()}, nil
+		return nil, NewTerminalToolError(err)
 	}
 	tc.MarkActed()
 
@@ -253,41 +254,44 @@ type RecallMessageOutput struct {
 func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallMessageOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
-		return &RecallMessageOutput{Success: false, Message: "工具上下文未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
 	}
 	if tc.Bot == nil {
-		return &RecallMessageOutput{Success: false, Message: "Bot 未连接"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
+	}
+	if input == nil {
+		return nil, fmt.Errorf("撤回参数不能为空")
 	}
 	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
 	if !ok {
-		return &RecallMessageOutput{Success: false, Message: "消息编号不是当前对话中的消息"}, nil
+		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
 	}
 	if tc.MemoryMgr == nil {
-		return &RecallMessageOutput{Success: false, Message: "记忆管理器未初始化"}, nil
+		return nil, NewTerminalToolError(fmt.Errorf("记忆管理器未初始化"))
 	}
 
 	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, messageID)
 	if err != nil {
-		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
+		return nil, err
 	}
 	if log == nil {
-		return &RecallMessageOutput{Success: false, Message: "未找到该消息记录，无法确认是否还能撤回"}, nil
+		return nil, fmt.Errorf("未找到该消息记录，无法确认是否还能撤回")
 	}
 	if log.GroupID != tc.GroupID {
-		return &RecallMessageOutput{Success: false, Message: "该消息不属于当前群"}, nil
+		return nil, fmt.Errorf("该消息不属于当前群")
 	}
 	if selfID := tc.Bot.GetSelfID(); selfID > 0 && log.UserID != 0 && log.UserID != selfID {
-		return &RecallMessageOutput{Success: false, Message: "只能撤回你自己发的消息"}, nil
+		return nil, fmt.Errorf("只能撤回你自己发的消息")
 	}
 	if log.RecalledAt != nil {
 		return &RecallMessageOutput{Success: true, Message: "消息已撤回"}, nil
 	}
 	if time.Since(log.MessageTime) > 2*time.Minute {
-		return &RecallMessageOutput{Success: false, Message: "消息已超过两分钟，无法撤回"}, nil
+		return nil, fmt.Errorf("消息已超过两分钟，无法撤回")
 	}
 
 	if err := tc.Bot.DeleteMsg(ctx, messageID); err != nil {
-		return &RecallMessageOutput{Success: false, Message: err.Error()}, nil
+		return nil, NewTerminalToolError(err)
 	}
 	tc.MarkActed()
 	recalled, changed, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, messageID)

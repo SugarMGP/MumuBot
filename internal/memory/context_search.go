@@ -65,11 +65,3 @@ func int64Array(values []int64) pgtype.Array[int64] {
 		Valid:    true,
 	}
 }
-
-func uintIDArray(values []uint) pgtype.Array[int64] {
-	elements := make([]int64, len(values))
-	for i, value := range values {
-		elements[i] = int64(value)
-	}
-	return int64Array(elements)
-}

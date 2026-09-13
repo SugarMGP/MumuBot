@@ -3,8 +3,11 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+
+	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
 	cb "github.com/cloudwego/eino/callbacks"
@@ -24,6 +27,25 @@ type toolLogState struct {
 type duplicateToolOutput struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+}
+
+type toolErrorOutput struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// TerminalToolError 标记必须结束当前 Agent 轮次的错误
+type TerminalToolError struct{ error }
+
+// NewTerminalToolError 标记必须结束当前 Agent 轮次的错误
+func NewTerminalToolError(err error) error { return &TerminalToolError{error: err} }
+
+// UnknownToolHandler 将模型调用的未知工具转成可纠正结果
+func UnknownToolHandler(ctx context.Context, name, _ string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return sonic.MarshalString(&toolErrorOutput{Message: fmt.Sprintf("没有工具 %s，请使用已提供的工具名称", name)})
 }
 
 var sortedJSONAPI = sonic.Config{SortMapKeys: true, UseNumber: true}.Froze()
@@ -47,7 +69,11 @@ func NewToolArgumentsHandler(ctx context.Context, toolList []einotool.BaseTool) 
 	}
 
 	return func(_ context.Context, name, arguments string) (string, error) {
-		return canonicalizeToolArguments(arguments, schemas[name])
+		canonical, err := canonicalizeToolArguments(arguments, schemas[name])
+		if err != nil {
+			return arguments, nil
+		}
+		return canonical, nil
 	}, nil
 }
 
@@ -148,6 +174,27 @@ func ToolDedupMiddleware() compose.InvokableToolMiddleware {
 				tc.MarkToolCallSucceeded(input.Name, input.Arguments)
 			}
 			return output, err
+		}
+	}
+}
+
+// ToolErrorMiddleware 将可恢复工具错误转成 JSON 结果，让 Eino 继续循环
+func ToolErrorMiddleware() compose.InvokableToolMiddleware {
+	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
+		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+			output, err := next(ctx, input)
+			if err == nil {
+				return output, nil
+			}
+			var terminal *TerminalToolError
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, memory.ErrSnapshotChanged) || errors.As(err, &terminal) {
+				return nil, err
+			}
+			result, encodeErr := sonic.MarshalString(&toolErrorOutput{Message: err.Error()})
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			return &compose.ToolOutput{Result: result}, nil
 		}
 	}
 }
