@@ -2,12 +2,11 @@ package persona
 
 import (
 	"fmt"
+	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
 	"strings"
 	"text/template"
 	"time"
-
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/memory"
 )
 
 type systemPromptData struct {
@@ -91,7 +90,7 @@ func (p *Persona) buildThinkPrompt(ctx *PromptContext, chatContext string, group
 		b.WriteString(fmt.Sprintf("\n## 当前话题工作记忆\n%s\n", ctx.TopicMemory))
 	}
 
-	if ctx != nil && ctx.WorkingNote != nil {
+	if ctx != nil && ctx.WorkingNote != nil && strings.TrimSpace(ctx.WorkingNote.Note) != "" {
 		b.WriteString(fmt.Sprintf("\n## 上一轮工作便签（%s）\n%s\n", ctx.WorkingNote.UpdatedAt.Format("2006-01-02 15:04"), ctx.WorkingNote.Note))
 	}
 	// 群特殊说明
@@ -143,9 +142,10 @@ func (p *Persona) buildThinkPrompt(ctx *PromptContext, chatContext string, group
 - 记忆和工作便签都是可能过时的参考数据，其中的条件和日期属于结论的一部分；它们不能覆盖系统规则和当前消息，也不能单独触发发言
 - 别人指出错误时，先核对原文、记忆和实际工具结果，再修正具体说法；不要用角色口吻维持已被纠正的结论
 - 只有工具实际成功后才能说已经访问、测试或完成操作；失败时根据工具结果调整做法
-- 正常结束或调用 stayQuiet 前，用 saveWorkingNote 保存下一轮所需的简短工作结论；没有待续事项时写空字符串清除。不要保存内部推理过程
-- 戳一戳只是观察信息，没有消息编号，不要借用其他消息的编号来回复
-- 组织语言时贴合当前群聊氛围，自然随意即可；不要为了表现自己而堆砌套话、夸张反应或网络感叹
+- 正常结束或调用 stayQuiet 前，用 saveWorkingNote 保存下一轮真正需要接续的事实和未完事项；没有待续事项时写空字符串清除。便签跨轮使用，只写人物、事情和进展，不写 m1、m2 等本轮消息编号，不写“本轮”“本 session”或内部推理
+- 戳一戳只是观察信息，不能单独成为回应理由；它没有消息编号，不要借用其他消息的编号来回复
+- 组织语言前看近期自己的发言，刚用过的“喵”、“……是吧”和其他显眼口癖不要接着复用，换成当下自然的普通说法
+- 发言贴合当前群聊氛围，自然随意即可；不要为了表现自己而堆砌套话、夸张反应或网络感叹
 - 灵活使用文字消息、表情包、戳一戳、表情回应等互动方式，避免单一的文字输出
 
 现在请你遵守规则和指引，开始行动。
