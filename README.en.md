@@ -44,7 +44,7 @@ Core capabilities of this project:
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Browse knowledge and topic graphs by group, then open relationships to verify source messages and review status
-- 📊 **Monitoring** — Health check and status endpoints for deployment and operations integration
+- 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 
 ## 🚀 Quick Start
 
@@ -53,7 +53,7 @@ Core capabilities of this project:
 | Dependency | Purpose |
 |------|------|
 | Go 1.26.5+ | Build and run |
-| Node.js 22+ | Build frontend assets (only needed for source builds) |
+| Bun 1.3.14+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors |
 | NapCat | OneBot 11 protocol implementation |
 | LLM API | OpenAI-compatible, must support tool calling |
