@@ -127,8 +127,23 @@ func memberDisplayName(value string) string {
 	return displayText(value, "未填写昵称")
 }
 
+func memberInitial(value string) string {
+	for _, r := range strings.TrimSpace(value) {
+		return string(r)
+	}
+	return "?"
+}
+
 func memberPrimaryName(profile services.MemberProfileView) string {
-	return profile.Nickname
+	if name := strings.TrimSpace(profile.Nickname); name != "" {
+		return name
+	}
+	for _, record := range profile.Names {
+		if strings.TrimSpace(record.Value) != "" {
+			return record.Value
+		}
+	}
+	return fmt.Sprintf("QQ %d", profile.UserID)
 }
 
 func memberGroupCards(profile services.MemberProfileView, limit int) []string {
@@ -136,7 +151,12 @@ func memberGroupCards(profile services.MemberProfileView, limit int) []string {
 		return nil
 	}
 	items := make([]string, 0, len(profile.Names))
+	seen := map[int64]bool{}
 	for _, record := range profile.Names {
+		if seen[record.GroupID] || strings.TrimSpace(record.Value) == "" {
+			continue
+		}
+		seen[record.GroupID] = true
 		label := record.Value
 		if record.GroupID > 0 {
 			label = fmt.Sprintf("%s · 群 %d", label, record.GroupID)

@@ -10,17 +10,17 @@ templ TopicListPage(data TopicListPageData, currentPath string) {
 }
 
 templ TopicListBody(data TopicListPageData) {
-	<div class="space-y-6">
-		@PageHeader("话题管理", "查看群聊话题、摘要与未完事项。", "")
+	<div class="admin-memory-page space-y-5">
+		@PageHeader("话题管理", "查看当前摘要、未完事项与原文依据。", "")
 		@FilterPanel("topic-filters", "筛选条件", EmptyComponent(), false, TopicFilterForm(data))
-		@SortToolbar(data.Sort)
 		if len(data.Items) == 0 {
 			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无话题</div></div>
 		}
 		if len(data.Items) > 0 {
 			<div class="grid grid-cols-2 gap-4">
 				for _, item := range data.Items {
-					<a href={ fmt.Sprintf("/admin/topics/%d", item.ID) } class="admin-record-card card border border-base-300 bg-base-100 shadow-sm transition-colors hover:border-primary/35 hover:shadow-md" data-tone={ topicTone(item) }>
+					{{ keywords := topicKeywords(item) }}
+					<a href={ templ.SafeURL(WithQuery(fmt.Sprintf("/admin/topics/%d", item.ID), "return_to", data.CurrentURL)) } class="admin-record-card card border border-base-300 bg-base-100 shadow-sm transition-colors hover:border-primary/35 hover:shadow-md" data-tone={ topicTone(item) }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
@@ -29,16 +29,17 @@ templ TopicListBody(data TopicListPageData) {
 								</div>
 								<span class={ joinClasses("shrink-0", topicSummaryProgressClass(item)) }>{ topicSummaryProgressText(item) }</span>
 							</div>
-							<p class="admin-quote line-clamp-3 rounded-xl p-4 text-sm leading-7 text-base-content/70" title={ topicGist(item) }>{ topicGist(item) }</p>
+							<p class="line-clamp-3 text-sm leading-7 text-base-content/75" title={ topicGist(item) }>{ topicGist(item) }</p>
 							<div class="flex flex-wrap gap-2">
-								for _, keyword := range topicKeywords(item) {
+								for _, keyword := range keywords[:min(3,len(keywords))] {
 									<span class="badge badge-primary badge-soft badge-sm">{ keyword }</span>
 								}
 							</div>
 							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/58">
-								<span>摘要版本 { fmt.Sprintf("%d", topicSummaryThroughID(item)) }</span>
-								<span class="flex items-center gap-1 font-medium text-primary"><span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")
-</span>
+								<span>{ topicUpdatedTime(item) } · 待续 { fmt.Sprint(len(topicSummary(item).OpenLoops)) } 项</span>
+								<span class="flex items-center gap-1 font-medium text-primary">
+									<span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")
+								</span>
 							</div>
 						</div>
 					</a>
@@ -51,10 +52,13 @@ templ TopicListBody(data TopicListPageData) {
 
 templ TopicFilterForm(data TopicListPageData) {
 	<form id="topic-filter-form" class="grid grid-cols-[180px_minmax(280px,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/>
-		<input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
-		<input class="input w-full border-base-300 focus:border-primary" type="text" name="group_id" value={ data.GroupID } placeholder="群号 / 群名" aria-label="群号 / 群名"/>
-		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词" aria-label="话题关键词"/>
+		<select class="select w-full" name="group_id" aria-label="群聊">
+			<option value="">全部群聊</option>
+			for _,id:=range data.Groups {
+				<option value={ fmt.Sprint(id) } selected?={ fmt.Sprint(id)==data.GroupID }>群 { fmt.Sprint(id) }</option>
+			}
+		</select>
+		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词…" aria-label="话题关键词"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
 	</form>
 }
@@ -64,17 +68,18 @@ templ TopicDetailPage(data TopicDetailPageData, currentPath string) {
 }
 
 templ TopicDetailBody(data TopicDetailPageData) {
-	<div class="space-y-5">
+	<div class="admin-memory-page space-y-5">
 		<header class="flex flex-col gap-3">
 			<div class="flex min-w-0 items-center gap-3">
-				<a class="btn btn-ghost btn-circle btn-sm" href="/admin/topics" aria-label="返回话题列表">@AdminIcon("chevron-left", "size-4", "topic-back")
-</a>
+				<a class="btn btn-ghost btn-circle btn-sm" href={ templ.SafeURL(displayText(data.ReturnTo, "/admin/topics")) } aria-label="返回话题列表">
+					@AdminIcon("chevron-left", "size-4", "topic-back")
+				</a>
 				<h1 class="min-w-0 truncate text-lg font-semibold">{ topicTitle(data.Thread) }</h1>
 			</div>
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-xs text-base-content/50">
 				<span class="badge badge-ghost badge-sm">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span>
 				<span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span>
-				<span>更新于 { formatTime(data.Thread.UpdatedAt) }</span>
+				<span>更新于 { topicUpdatedTime(data.Thread) }</span>
 			</div>
 		</header>
 		<div class="grid grid-cols-[minmax(0,1fr)_300px] items-start gap-4">
@@ -82,7 +87,13 @@ templ TopicDetailBody(data TopicDetailPageData) {
 				@TopicCurrentSummary(data.Thread)
 				<section class="card border border-base-300 bg-base-100 shadow-sm">
 					<div class="card-body p-5">
-						<div><h2 class="font-semibold">话题消息溯源</h2><p class="mt-1 text-xs text-base-content/58">按时间顺序展示最近关联消息</p></div>
+						<div>
+							<h2 class="font-semibold">最近关联消息</h2>
+							<p class="mt-1 text-xs text-base-content/58">按时间顺序排列</p>
+							if len(data.Messages)>=80 {
+								<p class="mt-1 text-xs text-warning">当前展示最近 80 条，可能还有更早记录</p>
+							}
+						</div>
 						if len(data.Messages) == 0 {
 							<div class="py-10 text-center text-sm text-base-content/40">暂无关联消息</div>
 						}
@@ -130,14 +141,16 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 	}
 	<section class="card border border-base-300 bg-base-100 shadow-sm">
 		<div class="card-body gap-4 p-5">
-			<div class="flex items-center gap-2 text-primary">@AdminIcon("memories", "size-5", "topic-summary")
-<h2 class="font-semibold text-base-content">当前摘要</h2></div>
+			<div class="flex items-center gap-2 text-primary">
+				@AdminIcon("memories", "size-5", "topic-summary")
+				<h2 class="font-semibold text-base-content">当前摘要</h2>
+			</div>
 			<p class="text-sm leading-7 text-base-content/72">{ topicGist(topic) }</p>
 			<div class="divider my-0"></div>
 			<div>
-				<h3 class="text-xs font-semibold text-base-content/52">关键数据</h3>
+				<h3 class="text-xs font-semibold text-base-content/52">相关关键词</h3>
 				<div class="mt-3 flex flex-wrap gap-2">
-					<span class="badge badge-info badge-soft">版本 { fmt.Sprintf("%d", topicSummaryThroughID(topic)) }</span>
+					<span class="text-xs text-base-content/60">{ topicUpdatedTime(topic) }</span>
 					for _, keyword := range topicKeywords(topic) {
 						<span class="badge badge-primary badge-soft">{ keyword }</span>
 					}
@@ -158,7 +171,7 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 }
 
 templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
-	<details class="admin-topic-change-card" open?={ change.InitiallyOpen }>
+	<details class="admin-topic-change-card">
 		<summary class="admin-topic-change-card__summary">
 			<span class="admin-topic-change-card__rail" aria-hidden="true"></span>
 			<div class="min-w-0 flex-1">

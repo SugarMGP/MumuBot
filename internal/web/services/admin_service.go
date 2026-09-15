@@ -22,9 +22,9 @@ type ListFilter struct {
 }
 
 type MemoryFilter struct {
-	GroupID                                     int64
-	Subject, Kind, Status, Keyword, Sort, Order string
-	Page, PageSize                              int
+	GroupID                            int64
+	Kind, Status, Keyword, Sort, Order string
+	Page, PageSize                     int
 }
 
 type TopicThreadView struct {
@@ -53,13 +53,12 @@ type AdminService struct {
 	db         *gorm.DB
 	memory     *memory.Manager
 	stickerDir string
-	selfID     func() int64
 }
 
 type OverviewStats struct{ MemoryCount, MemberCount, CandidateCount, RelationCount, StickerCount int64 }
 
-func NewAdminService(memoryManager *memory.Manager, stickerDir string, selfID func() int64) *AdminService {
-	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir, selfID: selfID}
+func NewAdminService(memoryManager *memory.Manager, stickerDir string) *AdminService {
+	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir}
 }
 func (s *AdminService) StickerDir() string { return s.stickerDir }
 
@@ -97,9 +96,6 @@ func normalizeSort(rawSort, rawOrder, fallback string, allowed ...string) (strin
 
 func NormalizeMemorySort(s, o string) (string, string) {
 	return normalizeSort(s, o, "updated", "updated", "created")
-}
-func NormalizeTopicSort(s, o string) (string, string) {
-	return normalizeSort(s, o, "recent", "recent", "created", "group")
 }
 func NormalizeStickerSort(s, o string) (string, string) {
 	return normalizeSort(s, o, "use", "use", "updated", "created")
@@ -166,15 +162,9 @@ func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], er
 	if err := base.Count(&total).Error; err != nil {
 		return Page[TopicThreadView]{}, err
 	}
-	if f.Sort == "group" {
-		base = base.Order("group_id " + strings.ToUpper(f.Order))
-	} else if f.Sort == "recent" {
-		direction := strings.ToUpper(f.Order)
-		base = base.Order("(SELECT MAX(ml.message_time) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) " + direction + " NULLS LAST").
-			Order("(SELECT MAX(ml.id) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) " + direction + " NULLS LAST")
-	} else {
-		base = base.Order("id " + strings.ToUpper(f.Order))
-	}
+	base = base.Order("(SELECT MAX(ml.message_time) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) DESC NULLS LAST").
+		Order("(SELECT MAX(ml.id) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) DESC NULLS LAST").
+		Order("id DESC")
 	var threads []memory.TopicThread
 	if err := base.Offset((page - 1) * size).Limit(size).Find(&threads).Error; err != nil {
 		return Page[TopicThreadView]{}, err
@@ -188,13 +178,18 @@ func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], er
 
 func (s *AdminService) loadTopicThread(thread memory.TopicThread) (TopicThreadView, error) {
 	view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt}
-	if err := s.db.Model(&memory.TopicAssignment{}).Where("topic_id = ?", thread.ID).Select("COALESCE(MAX(id), 0)").Scan(&view.LastAssignmentID).Error; err != nil {
+	var activity struct {
+		LastAssignmentID uint
+		UpdatedAt        *time.Time
+	}
+	if err := s.db.Table("topic_assignments ta").Select("COALESCE(MAX(ta.id), 0) AS last_assignment_id, MAX(ml.message_time) AS updated_at").Joins("JOIN message_logs ml ON ml.id=ta.message_log_id").Where("ta.topic_id = ?", thread.ID).Scan(&activity).Error; err != nil {
 		return view, err
 	}
-	err := s.db.Table("topic_summaries ts").Select("ts.*, ("+memory.TopicSummaryValiditySQL+") AS sources_valid").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id = ?", thread.ID).Order("ts.id ASC").Scan(&view.Summaries).Error
-	if err == nil && len(view.Summaries) > 0 {
-		view.UpdatedAt = view.Summaries[len(view.Summaries)-1].CreatedAt
+	view.LastAssignmentID = activity.LastAssignmentID
+	if activity.UpdatedAt != nil {
+		view.UpdatedAt = *activity.UpdatedAt
 	}
+	err := s.db.Table("topic_summaries ts").Select("ts.*, ("+memory.TopicSummaryValiditySQL+") AS sources_valid").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id = ?", thread.ID).Order("ts.id ASC").Scan(&view.Summaries).Error
 	return view, err
 }
 
@@ -206,16 +201,18 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicTh
 	for i, thread := range threads {
 		ids[i] = thread.ID
 	}
-	var assignments []struct {
+	type activityRow struct {
 		TopicID          uint
 		LastAssignmentID uint
+		UpdatedAt        *time.Time
 	}
-	if err := s.db.Model(&memory.TopicAssignment{}).Select("topic_id, COALESCE(MAX(id), 0) AS last_assignment_id").Where("topic_id IN ?", ids).Group("topic_id").Scan(&assignments).Error; err != nil {
+	var assignments []activityRow
+	if err := s.db.Table("topic_assignments ta").Select("ta.topic_id, COALESCE(MAX(ta.id), 0) AS last_assignment_id, MAX(ml.message_time) AS updated_at").Joins("JOIN message_logs ml ON ml.id=ta.message_log_id").Where("ta.topic_id IN ?", ids).Group("ta.topic_id").Scan(&assignments).Error; err != nil {
 		return nil, err
 	}
-	lastByTopic := make(map[uint]uint, len(assignments))
+	activityByTopic := make(map[uint]activityRow, len(assignments))
 	for _, row := range assignments {
-		lastByTopic[row.TopicID] = row.LastAssignmentID
+		activityByTopic[row.TopicID] = row
 	}
 	var summaries []struct {
 		memory.TopicSummaryRecord
@@ -232,9 +229,10 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicTh
 	}
 	items := make([]TopicThreadView, 0, len(threads))
 	for _, thread := range threads {
-		view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt, LastAssignmentID: lastByTopic[thread.ID], Summaries: summariesByTopic[thread.ID]}
-		if len(view.Summaries) > 0 {
-			view.UpdatedAt = view.Summaries[len(view.Summaries)-1].CreatedAt
+		activity := activityByTopic[thread.ID]
+		view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt, LastAssignmentID: activity.LastAssignmentID, Summaries: summariesByTopic[thread.ID]}
+		if activity.UpdatedAt != nil {
+			view.UpdatedAt = *activity.UpdatedAt
 		}
 		items = append(items, view)
 	}
@@ -314,9 +312,10 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 		UserID int64
 		Count  int64
 	}
-	participationSQL := strings.ReplaceAll(knowledgeParticipationSQL, "knowledge_items.id", "ki.id")
-	participationSQL = strings.Replace(participationSQL, "ml.user_id=?", "ml.user_id=ki.subject_user_id", 1)
-	if err := s.db.Table("knowledge_items ki").Select("ki.subject_user_id AS user_id, COUNT(*) AS count").Where("ki.subject_user_id IN ?", userIDs).Where(participationSQL).Group("ki.subject_user_id").Scan(&participationCounts).Error; err != nil {
+	participationSQL := strings.Replace(knowledgeParticipationSQL, "ml.user_id=?", "ml.user_id=mp.user_id", 1)
+	if err := s.db.Table("member_profiles mp").Select("mp.user_id, COUNT(DISTINCT ki.id) AS count").
+		Joins("JOIN knowledge_items ki ON "+participationSQL).Where("mp.user_id IN ?", userIDs).
+		Group("mp.user_id").Scan(&participationCounts).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
 	participationByUser := make(map[int64]int64, len(participationCounts))

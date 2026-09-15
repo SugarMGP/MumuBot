@@ -5,14 +5,13 @@ import (
 
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/web/services"
-
-	"github.com/bytedance/sonic"
 )
 
 type KnowledgeDetailPageData struct {
-	Detail services.KnowledgeDetail
-	SelfID int64
-	Flash  *FlashMessage
+	ReturnTo, CurrentURL string
+	Detail               services.KnowledgeDetail
+	SelfID               int64
+	Flash                *FlashMessage
 }
 
 func knowledgeHref(id uint) string { return fmt.Sprintf("/admin/knowledge/%d", id) }
@@ -47,42 +46,10 @@ func knowledgeNodeStyle(status string) map[string]any {
 	color := "#159a8c"
 	border := "solid"
 	if status == "candidate" {
-		color = "#ef8ca8"
+		color = "#d59a22"
 		border = "dashed"
 	} else if status == "archived" {
 		color = "#b7b4bc"
 	}
 	return map[string]any{"color": color, "borderColor": color, "borderWidth": 2, "borderType": border, "shadowBlur": 14, "shadowColor": "rgba(21,154,140,.18)"}
-}
-
-func knowledgeGraphJSON(graph memory.KnowledgeGraph, selfID int64) string {
-	nodes := []map[string]any{}
-	edges := []map[string]any{}
-	seen := map[string]bool{}
-	for _, item := range graph.Items {
-		nodes = append(nodes, map[string]any{"id": fmt.Sprint(item.ID), "name": knowledgeTitle(item), "value": item.Content, "status": memoryStatusText(item.Status), "url": knowledgeHref(item.ID), "symbol": "circle", "symbolSize": 34, "itemStyle": knowledgeNodeStyle(item.Status)})
-		key := fmt.Sprintf("group-%d", item.GroupID)
-		name := fmt.Sprintf("群 %d", item.GroupID)
-		url := fmt.Sprintf("/admin/knowledge?group_id=%d", item.GroupID)
-		label := "本群知识"
-		if item.SubjectUserID > 0 {
-			key = fmt.Sprintf("member-%d", item.SubjectUserID)
-			name = fmt.Sprintf("成员 %d", item.SubjectUserID)
-			if item.SubjectUserID == selfID {
-				name = "机器人自身"
-			}
-			url += fmt.Sprintf("&user_id=%d", item.SubjectUserID)
-			label = "关于"
-		}
-		if !seen[key] {
-			nodes = append(nodes, map[string]any{"id": key, "name": name, "status": "主体", "url": url, "symbol": "diamond", "symbolSize": 30, "itemStyle": map[string]any{"color": "#159a8c", "shadowBlur": 12, "shadowColor": "rgba(21,154,140,.18)"}})
-			seen[key] = true
-		}
-		edges = append(edges, map[string]any{"source": key, "target": fmt.Sprint(item.ID), "label": map[string]any{"show": true, "formatter": label}, "lineStyle": map[string]any{"type": "dashed"}})
-	}
-	for _, rel := range graph.Relations {
-		edges = append(edges, map[string]any{"source": fmt.Sprint(rel.SourceItemID), "target": fmt.Sprint(rel.TargetItemID), "label": map[string]any{"show": true, "formatter": relationText(rel.Kind)}})
-	}
-	raw, _ := sonic.MarshalString(map[string]any{"nodes": nodes, "edges": edges})
-	return raw
 }

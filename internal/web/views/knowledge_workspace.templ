@@ -1,0 +1,67 @@
+package views
+
+import "fmt"
+
+templ KnowledgeWorkspace(data KnowledgeWorkspaceData) {
+	<header class="flex items-start justify-between gap-4">
+		@PageHeader("统一记忆", "查看已记住的内容，核对原文依据。", "")
+		<div class="join shrink-0" aria-label="记忆视图">
+			<a class={ joinClasses("btn btn-sm join-item", ternaryString(data.View == "list", "btn-primary", "btn-ghost")) } href={ templ.SafeURL(workspaceViewURL(data, "list")) } title={ ternaryString(data.Filter.Kind == "topic", "返回记忆列表，移除仅话题筛选", "记忆列表") }>列表</a>
+			<a class={ joinClasses("btn btn-sm join-item", ternaryString(data.View == "graph", "btn-primary", "btn-ghost")) } href={ templ.SafeURL(workspaceViewURL(data, "graph")) }>图谱</a>
+		</div>
+	</header>
+	<form class="admin-memory-filters" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+		<input type="hidden" name="view" value={ data.View }/>
+		<input type="hidden" name="sort" value={ data.Filter.Sort }/>
+		<input type="hidden" name="order" value={ data.Filter.Order }/>
+		if data.Filter.UserID>0 {
+			<input type="hidden" name="user_id" value={ fmt.Sprint(data.Filter.UserID) }/>
+		}
+		if data.Filter.AuthorID>0 {
+			<input type="hidden" name="author_id" value={ fmt.Sprint(data.Filter.AuthorID) }/>
+		}
+		<div class="grid grid-cols-[160px_minmax(160px,1fr)_130px_130px_auto] gap-3">
+			<select class="select w-full" name="group_id" aria-label="群聊">
+				<option value="">{ ternaryString(data.View=="graph","请选择群聊","全部群聊") }</option>
+				for _,id:=range data.Groups {
+					<option value={ fmt.Sprint(id) } selected?={ id==data.Filter.GroupID }>群 { fmt.Sprint(id) }</option>
+				}
+			</select>
+			<input class="input w-full" type="search" name="keyword" aria-label="搜索内容" placeholder="搜索内容或术语…" value={ data.Filter.Keyword }/>
+			<select class="select w-full" name="status" aria-label="状态">
+				<option value="">全部状态</option>
+				for _,status:=range []string{"candidate","active","archived"} {
+					<option value={ status } selected?={ data.Filter.Status==status }>{ memoryStatusText(status) }</option>
+				}
+			</select>
+			<select class="select w-full" name="kind" aria-label="类型">
+				<option value="">全部类型</option>
+				if data.View=="graph" {
+					<option value="topic" selected?={ data.Filter.Kind=="topic" }>仅话题</option>
+				}
+				for _,kind:=range []string{"fact","episode","preference","constraint","goal","term","expression","alias"} {
+					<option value={ kind } selected?={ data.Filter.Kind==kind }>{ memoryKindText(kind) }</option>
+				}
+			</select>
+			<button class="btn btn-primary" type="submit">@AdminIcon("filter", "size-4", "memory-filter")
+<span>筛选</span></button>
+		</div>
+		if data.Filter.UserID>0 || data.Filter.AuthorID>0 {
+			<div class="mt-3 flex items-center gap-2">
+			if data.Filter.UserID>0 {
+				<a class="badge badge-soft badge-primary h-auto py-1" href={ templ.SafeURL(WithQuery(data.CurrentURL, "user_id", "", "page", "1")) } aria-label="清除关于谁筛选">关于 { fmt.Sprint(data.Filter.UserID) } ×</a>
+			}
+			if data.Filter.AuthorID>0 {
+				<a class="badge badge-soft badge-secondary h-auto py-1" href={ templ.SafeURL(WithQuery(data.CurrentURL, "author_id", "", "page", "1")) } aria-label="清除依据提供人筛选">依据提供人 { fmt.Sprint(data.Filter.AuthorID) } ×</a>
+			}
+			</div>
+		}
+	</form>
+	if data.Note!=nil && data.Note.Note!="" {
+		<details class="admin-memory-note">
+			<summary class="text-sm">当前群便签 <time class="ml-2 text-xs text-base-content/50">{ formatTime(data.Note.UpdatedAt) }</time></summary>
+			<p class="my-3 whitespace-pre-wrap text-sm leading-6">{ data.Note.Note }</p>
+			<form method="post" action="/admin/knowledge/actions"><input type="hidden" name="action_kind" value="note-clear"/><input type="hidden" name="group_id" value={ fmt.Sprint(data.Filter.GroupID) }/><input type="hidden" name="return_to" value={ data.CurrentURL }/><button class="btn btn-ghost btn-xs" type="submit">清除便签</button></form>
+		</details>
+	}
+}

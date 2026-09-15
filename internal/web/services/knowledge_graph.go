@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
@@ -125,11 +124,13 @@ type GraphSource struct {
 }
 
 type GroupKnowledgeGraph struct {
-	Items     []memory.KnowledgeItem
-	Relations []memory.KnowledgeRelation
-	Topics    []GraphTopic
-	Sources   []GraphSource
-	Total     int64
+	Items          []memory.KnowledgeItem
+	Relations      []memory.KnowledgeRelation
+	Topics         []GraphTopic
+	Sources        []GraphSource
+	Total          int64
+	KnowledgeTotal int64
+	TopicTotal     int64
 }
 
 func (s *AdminService) KnowledgeGroups(ctx context.Context) ([]int64, error) {
@@ -144,29 +145,8 @@ func (s *AdminService) GroupKnowledgeGraph(ctx context.Context, f KnowledgeFilte
 		return g, nil
 	}
 	db := s.db.WithContext(ctx)
-	kq := db.Table("knowledge_items ki").Where("ki.group_id=?", f.GroupID)
-	if f.Status == "" {
-		kq = kq.Where("ki.status IN ('active','candidate')")
-	} else if f.Status != "all" {
-		kq = kq.Where("ki.status=?", f.Status)
-	}
-	if f.Kind != "" {
-		kq = kq.Where("ki.kind=?", f.Kind)
-	}
-	if f.UserID > 0 {
-		kq = kq.Where("ki.subject_user_id=?", f.UserID)
-	}
-	if f.AuthorID > 0 {
-		kq = kq.Where(strings.ReplaceAll(knowledgeParticipationSQL, "knowledge_items.id", "ki.id"), f.AuthorID)
-	}
+	kq := s.filterKnowledge(db.Table("knowledge_items ki"), f)
 	tq := memory.LatestTopicSummaries(db, f.GroupID, 0)
-	if f.Kind != "" && f.Kind != "topic" {
-		tq = tq.Where("false")
-	}
-	if f.Keyword != "" {
-		kq = kq.Where("ki.label ILIKE ? OR ki.content ILIKE ?", "%"+f.Keyword+"%", "%"+f.Keyword+"%")
-		tq = tq.Where(memory.TopicSummaryTextSQL+" ILIKE ?", "%"+f.Keyword+"%")
-	}
 	if focusID > 0 {
 		switch focusKind {
 		case "knowledge":
@@ -176,12 +156,28 @@ func (s *AdminService) GroupKnowledgeGraph(ctx context.Context, f KnowledgeFilte
 			kq = kq.Where(`ki.id IN(SELECT es.item_id FROM knowledge_evidence_sets es JOIN knowledge_evidence_messages em ON em.evidence_set_id=es.id JOIN topic_assignments a ON a.message_log_id=em.message_log_id WHERE a.topic_id=? AND `+memory.KnowledgeEvidenceSetValiditySQL+`)`, focusID)
 			tq = tq.Where(`ts.topic_id=? OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(ts.summary_json->'related_topics','[]'::jsonb)) r WHERE r->>'topic_id'=?) OR ts.topic_id::text IN(SELECT r->>'topic_id' FROM (?) f CROSS JOIN LATERAL jsonb_array_elements(COALESCE(f.summary_json->'related_topics','[]'::jsonb)) r WHERE f.topic_id=?)`, focusID, fmt.Sprint(focusID), memory.LatestTopicSummaries(db, f.GroupID, 0), focusID)
 		}
+	} else {
+		linkedTopics := `ts.topic_id IN (SELECT a.topic_id FROM knowledge_evidence_sets es JOIN knowledge_evidence_messages em ON em.evidence_set_id=es.id JOIN topic_assignments a ON a.message_log_id=em.message_log_id WHERE es.item_id IN (?) AND ` + memory.KnowledgeEvidenceSetValiditySQL + `)`
+		knowledgeFilterActive := f.Kind != "" || f.Status != "" || f.UserID > 0 || f.AuthorID > 0
+		switch {
+		case f.Kind == "topic" && f.Keyword != "":
+			tq = tq.Where(memory.TopicSummaryTextSQL+" ILIKE ?", "%"+f.Keyword+"%")
+		case f.Kind == "topic":
+		case knowledgeFilterActive:
+			tq = tq.Where(linkedTopics, kq.Session(&gorm.Session{}).Select("ki.id"))
+		case f.Keyword != "":
+			tq = tq.Where("("+memory.TopicSummaryTextSQL+" ILIKE ? OR "+linkedTopics+")", "%"+f.Keyword+"%", kq.Session(&gorm.Session{}).Select("ki.id"))
+		}
 	}
 	krows := kq.Select("ki.id,'knowledge' kind,ki.updated_at changed")
 	trows := tq.Select("ts.topic_id id,'topic' kind,ts.created_at changed")
-	if err := db.Raw("SELECT count(*) FROM ((?) UNION ALL (?)) nodes", krows, trows).Scan(&g.Total).Error; err != nil {
+	if err := db.Raw("SELECT count(*) FROM (?) nodes", krows).Scan(&g.KnowledgeTotal).Error; err != nil {
 		return g, err
 	}
+	if err := db.Raw("SELECT count(*) FROM (?) nodes", trows).Scan(&g.TopicTotal).Error; err != nil {
+		return g, err
+	}
+	g.Total = g.KnowledgeTotal + g.TopicTotal
 	var selected []struct {
 		ID   uint
 		Kind string
@@ -202,9 +198,7 @@ func (s *AdminService) GroupKnowledgeGraph(ctx context.Context, f KnowledgeFilte
 			return g, err
 		}
 		q := db.Where("source_item_id IN ? AND target_item_id IN ?", kids, kids)
-		if f.Status == "" {
-			q = q.Where("status IN ('active','candidate')")
-		} else if f.Status != "all" {
+		if f.Status != "" && f.Status != "all" {
 			q = q.Where("status=?", f.Status)
 		}
 		if err := q.Order("id").Find(&g.Relations).Error; err != nil {

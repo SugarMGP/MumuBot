@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"mumu-bot/internal/memory"
+
+	"gorm.io/gorm"
 )
 
 type KnowledgeFilter struct {
@@ -17,20 +19,20 @@ const knowledgeParticipationSQL = `EXISTS (
  JOIN knowledge_evidence_messages em ON em.evidence_set_id=es.id
  JOIN message_logs ml ON ml.id=em.message_log_id
  LEFT JOIN knowledge_relations kr ON kr.id=es.relation_id
- WHERE (es.item_id=knowledge_items.id OR kr.source_item_id=knowledge_items.id OR kr.target_item_id=knowledge_items.id)
- AND ml.user_id=? AND ml.recalled_at IS NULL
+ WHERE (es.item_id=ki.id OR kr.source_item_id=ki.id OR kr.target_item_id=ki.id)
+ AND ml.user_id=? AND ` + memory.KnowledgeEvidenceSetValiditySQL + `
 )`
 
 type KnowledgeDetail struct {
-	Page          int
-	HasMore       bool
-	SensesHasMore bool
-	Item          memory.KnowledgeItem
-	Graph         memory.KnowledgeGraph
-	Evidence      []memory.KnowledgeEvidence
-	Relations     []KnowledgeRelationView
-	Topics        map[uint]uint
-	Senses        []memory.KnowledgeItem
+	Page              int
+	HasMore           bool
+	SensesHasMore     bool
+	RelationsHaveMore bool
+	Item              memory.KnowledgeItem
+	Evidence          []memory.KnowledgeEvidence
+	Relations         []KnowledgeRelationView
+	Topics            map[uint]uint
+	Senses            []memory.KnowledgeItem
 }
 type KnowledgeRelationView struct {
 	memory.KnowledgeRelation
@@ -39,39 +41,58 @@ type KnowledgeRelationView struct {
 
 func (s *AdminService) ListKnowledge(f KnowledgeFilter) (Page[memory.KnowledgeItem], error) {
 	var items []memory.KnowledgeItem
-	q := s.db.Model(&memory.KnowledgeItem{})
+	q := s.filterKnowledge(s.db.Table("knowledge_items ki"), f)
+	q = order(q, f.Sort, f.Order, map[string]string{"updated": "ki.updated_at", "created": "ki.created_at", "default": "ki.updated_at"})
+	return paginate(q, f.Page, f.PageSize, &items)
+}
+
+func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
 	if f.GroupID > 0 {
-		q = q.Where("group_id=?", f.GroupID)
+		q = q.Where("ki.group_id=?", f.GroupID)
 	}
 	if f.UserID > 0 {
-		q = q.Where("subject_user_id=?", f.UserID)
+		q = q.Where("ki.subject_user_id=?", f.UserID)
 	}
 	if f.AuthorID > 0 {
 		q = q.Where(knowledgeParticipationSQL, f.AuthorID)
 	}
-	selfID := int64(0)
-	if s.selfID != nil {
-		selfID = s.selfID()
-	}
-	switch f.Subject {
-	case "group":
-		q = q.Where("subject_user_id=0")
-	case "self":
-		q = q.Where("subject_user_id=? AND subject_user_id>0", selfID)
-	case "member":
-		q = q.Where("subject_user_id>0 AND subject_user_id<>?", selfID)
-	}
 	if f.Kind != "" {
-		q = q.Where("kind=?", f.Kind)
+		q = q.Where("ki.kind=?", f.Kind)
 	}
-	if f.Status != "" {
-		q = q.Where("status=?", f.Status)
+	if f.Status != "" && f.Status != "all" {
+		q = q.Where("ki.status=?", f.Status)
 	}
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		q = q.Where("label ILIKE ? OR content ILIKE ?", "%"+k+"%", "%"+k+"%")
+		q = q.Where("ki.label ILIKE ? OR ki.content ILIKE ?", "%"+k+"%", "%"+k+"%")
 	}
-	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "created": "created_at", "default": "updated_at"})
-	return paginate(q, f.Page, f.PageSize, &items)
+	return q
+}
+
+type KnowledgeMetadata struct {
+	ID           uint
+	Name         string
+	Total, Valid int64
+}
+
+func (s *AdminService) KnowledgeMetadata(ctx context.Context, items []memory.KnowledgeItem) (map[uint]KnowledgeMetadata, error) {
+	out := map[uint]KnowledgeMetadata{}
+	if len(items) == 0 {
+		return out, nil
+	}
+	ids := make([]uint, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	var rows []KnowledgeMetadata
+	err := s.db.WithContext(ctx).Table("knowledge_items ki").Select(`ki.id,
+	 COALESCE(NULLIF(btrim(mp.nickname),''),(SELECT mn.value FROM member_names mn WHERE mn.user_id=ki.subject_user_id AND btrim(mn.value)<>'' ORDER BY (mn.group_id=ki.group_id) DESC,mn.updated_at DESC LIMIT 1),'') name,
+	 (SELECT count(*) FROM knowledge_evidence_sets es WHERE es.item_id=ki.id) total,
+	 (SELECT count(*) FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND `+memory.KnowledgeEvidenceSetValiditySQL+`) valid`).
+		Joins("LEFT JOIN member_profiles mp ON mp.user_id=ki.subject_user_id").Where("ki.id IN ?", ids).Scan(&rows).Error
+	for _, row := range rows {
+		out[row.ID] = row
+	}
+	return out, err
 }
 
 func (s *AdminService) GetKnowledge(id uint) (memory.KnowledgeItem, error) {
@@ -112,7 +133,6 @@ func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint, page int) (
 	for _, endpoint := range endpoints {
 		byID[endpoint.ID] = endpoint
 	}
-	d.Graph = memory.KnowledgeGraph{Items: endpoints, Relations: relations, HasMore: relationsHaveMore}
 	for _, rel := range relations {
 		d.Relations = append(d.Relations, KnowledgeRelationView{KnowledgeRelation: rel, Source: byID[rel.SourceItemID], Target: byID[rel.TargetItemID]})
 	}
@@ -126,7 +146,7 @@ func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint, page int) (
 	if d.SensesHasMore {
 		d.Senses = d.Senses[:30]
 	}
-	d.Graph.HasMore = relationsHaveMore
+	d.RelationsHaveMore = relationsHaveMore
 	ids := []uint{}
 	for _, set := range d.Evidence {
 		for _, msg := range set.Messages {

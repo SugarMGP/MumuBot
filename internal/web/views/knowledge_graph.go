@@ -13,7 +13,7 @@ import (
 type GraphPanelData struct {
 	Title, Content, KindLabel, Status, ActionKind       string
 	NodeKind                                            string
-	ID                                                  uint
+	ID, Related                                         uint
 	Evidence                                            []memory.KnowledgeEvidence
 	DetailURL, FocusURL, ReturnTo, PreviousURL, NextURL string
 }
@@ -39,12 +39,7 @@ func groupKnowledgeGraphJSON(data KnowledgeGraphPageData) string {
 		seen[id] = true
 		itemStyle := knowledgeNodeStyle(item.Status)
 		size := 34
-		if data.Panel.NodeKind == "knowledge" && item.ID == data.Panel.ID {
-			itemStyle["borderWidth"] = 4
-			itemStyle["shadowBlur"] = 28
-			itemStyle["shadowColor"] = "rgba(232,93,117,.32)"
-			size = 58
-		}
+
 		nodes = append(nodes, map[string]any{"id": id, "name": knowledgeTitle(item), "status": memoryStatusText(item.Status), "value": item.Content, "url": graphPanelURL(item.GroupID, "knowledge", item.ID, 0), "symbol": "circle", "symbolSize": size, "itemStyle": itemStyle})
 	}
 	for _, topic := range data.Graph.Topics {
@@ -54,17 +49,16 @@ func groupKnowledgeGraphJSON(data KnowledgeGraphPageData) string {
 		if !topic.SourcesValid {
 			status = "话题 · 依据已失效"
 		}
-		itemStyle := map[string]any{"color": "#159a8c", "shadowBlur": 14, "shadowColor": "rgba(21,154,140,.2)"}
-		size := 34
-		if data.Panel.NodeKind == "topic" && topic.TopicID == data.Panel.ID {
-			itemStyle["borderColor"] = "#0e766b"
-			itemStyle["borderWidth"] = 4
-			size = 50
+		itemStyle := map[string]any{"color": "#159a8c"}
+		if !topic.SourcesValid {
+			itemStyle["color"] = "#9ca3af"
 		}
-		nodes = append(nodes, map[string]any{"id": id, "name": graphTopicTitle(topic), "status": status, "url": graphPanelURL(data.Filter.GroupID, "topic", topic.TopicID, 0), "symbol": "diamond", "symbolSize": size, "itemStyle": itemStyle})
+		size := 34
+
+		nodes = append(nodes, map[string]any{"id": id, "name": graphTopicTitle(topic), "status": status, "url": graphPanelURL(data.Workspace.Filter.GroupID, "topic", topic.TopicID, 0), "symbol": "diamond", "symbolSize": size, "itemStyle": itemStyle})
 	}
 	for _, rel := range data.Graph.Relations {
-		edges = append(edges, map[string]any{"source": fmt.Sprintf("k:%d", rel.SourceItemID), "target": fmt.Sprintf("k:%d", rel.TargetItemID), "name": relationText(rel.Kind), "status": memoryStatusText(rel.Status), "symbol": []string{"none", "arrow"}, "url": graphPanelURL(data.Filter.GroupID, "relation", rel.ID, 0), "lineStyle": map[string]any{"color": "#ef8ca8", "type": ternaryString(rel.Status == "candidate", "dashed", "solid")}})
+		edges = append(edges, map[string]any{"source": fmt.Sprintf("k:%d", rel.SourceItemID), "target": fmt.Sprintf("k:%d", rel.TargetItemID), "name": relationText(rel.Kind), "status": memoryStatusText(rel.Status), "symbol": []string{"none", "arrow"}, "url": graphPanelURL(data.Workspace.Filter.GroupID, "relation", rel.ID, 0), "lineStyle": map[string]any{"color": "#ef8ca8", "type": ternaryString(rel.Status == "candidate", "dashed", "solid")}})
 	}
 	for _, topic := range data.Graph.Topics {
 		if !topic.SourcesValid {
@@ -79,18 +73,18 @@ func groupKnowledgeGraphJSON(data KnowledgeGraphPageData) string {
 			if !seen[target] {
 				continue
 			}
-			edges = append(edges, map[string]any{"source": fmt.Sprintf("t:%d", topic.TopicID), "target": target, "name": "话题关联", "value": related.Reason, "url": graphPanelURL(data.Filter.GroupID, "topic", topic.TopicID, 0) + fmt.Sprintf("&related=%d", related.TopicID), "lineStyle": map[string]any{"color": "#159a8c"}})
+			edges = append(edges, map[string]any{"source": fmt.Sprintf("t:%d", topic.TopicID), "target": target, "name": "话题关联", "value": related.Reason, "url": graphPanelURL(data.Workspace.Filter.GroupID, "topic", topic.TopicID, 0) + fmt.Sprintf("&related=%d", related.TopicID), "lineStyle": map[string]any{"color": "#159a8c"}})
 		}
 	}
 	for _, source := range data.Graph.Sources {
-		edges = append(edges, map[string]any{"source": fmt.Sprintf("k:%d", source.ItemID), "target": fmt.Sprintf("t:%d", source.TopicID), "name": "原文归属", "value": "依据原文参与了该话题，不代表两个知识结论相互证明", "url": graphPanelURL(data.Filter.GroupID, "knowledge", source.ItemID, 0) + fmt.Sprintf("&related=%d", source.TopicID), "lineStyle": map[string]any{"color": "#adb5bd", "type": "dashed"}})
+		edges = append(edges, map[string]any{"source": fmt.Sprintf("k:%d", source.ItemID), "target": fmt.Sprintf("t:%d", source.TopicID), "name": "原文归属", "value": "依据原文参与了该话题，不代表两个知识结论相互证明", "url": graphPanelURL(data.Workspace.Filter.GroupID, "knowledge", source.ItemID, 0) + fmt.Sprintf("&related=%d", source.TopicID), "lineStyle": map[string]any{"color": "#adb5bd", "type": "dashed"}})
 	}
 	raw, _ := sonic.MarshalString(map[string]any{"nodes": nodes, "edges": edges})
 	return raw
 }
 
 func GraphPanel(selection services.GraphSelection, groupID, selfID int64, kind string, id, related uint, offset int) GraphPanelData {
-	d := GraphPanelData{NodeKind: kind, ID: id, Evidence: selection.Evidence, ReturnTo: fmt.Sprintf("/admin/knowledge?group_id=%d&selected_kind=%s&selected_id=%d", groupID, kind, id)}
+	d := GraphPanelData{NodeKind: kind, ID: id, Related: related, Evidence: selection.Evidence, ReturnTo: fmt.Sprintf("/admin/knowledge?group_id=%d&selected_kind=%s&selected_id=%d", groupID, kind, id)}
 	if selection.Item != nil {
 		item := selection.Item
 		d.Title = knowledgeTitle(*item)

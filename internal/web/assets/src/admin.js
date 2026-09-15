@@ -271,29 +271,106 @@ function chartFor(target) {
   return echarts.init(target);
 }
 
+let namesCloseTimer;
+function showMemberNames(wrapper) {
+  const panel = wrapper.querySelector(".admin-names-popover");
+  const trigger = wrapper.querySelector("button");
+  if (!panel || !trigger) return;
+  clearTimeout(namesCloseTimer);
+  panel.showPopover();
+  const rect = trigger.getBoundingClientRect();
+  const height = panel.offsetHeight;
+  panel.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - panel.offsetWidth - 12)) + "px";
+  const top = rect.bottom + height + 8 < window.innerHeight ? rect.bottom + 8 : rect.top - height - 8;
+  panel.style.top = Math.max(12, Math.min(top, window.innerHeight - height - 12)) + "px";
+}
+
+for (const eventName of ["pointerover", "focusin"]) {
+  document.addEventListener(eventName, event => {
+    const wrapper = event.target instanceof Element ? event.target.closest("[data-member-names]") : null;
+    if (wrapper && !wrapper.contains(event.relatedTarget)) showMemberNames(wrapper);
+  });
+}
+for (const eventName of ["pointerout", "focusout"]) {
+  document.addEventListener(eventName, event => {
+    const wrapper = event.target instanceof Element ? event.target.closest("[data-member-names]") : null;
+    if (!wrapper || wrapper.contains(event.relatedTarget)) return;
+    namesCloseTimer = window.setTimeout(() => {
+      if (!wrapper.matches(":hover") && !wrapper.contains(document.activeElement)) wrapper.querySelector(".admin-names-popover")?.hidePopover();
+    }, 150);
+  });
+}
+
 function renderKnowledgeGraph() {
   document.querySelectorAll("[data-knowledge-graph]").forEach((target) => {
     if (echarts.getInstanceByDom(target)) return;
     const data = JSON.parse(target.dataset.knowledgeGraph);
     const dense = data.nodes.length > 30;
-    const panoramic = Boolean(target.dataset.graphPanel);
     const chart = chartFor(target);
     chart.setOption({ animation: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
       tooltip: { renderMode: "richText", formatter: (entry) => entry.dataType === "node" ? `${entry.data.name}\n${entry.data.status ?? ""}` : `${entry.data.name ?? "关联"}\n${entry.data.status ?? entry.data.value ?? ""}` },
-      series: [{ type: "graph", layout: panoramic && !dense ? "force" : "circular", force: { repulsion: 520, edgeLength: [110, 190], gravity: 0.05, layoutAnimation: false }, draggable: true, roam: true, symbolSize: dense ? 12 : undefined,
+      series: [{ type: "graph", left: 65, right: 65, top: 50, bottom: 60, layout: dense ? "circular" : "force", force: { repulsion: 520, edgeLength: [110, 190], gravity: 0.05, layoutAnimation: false }, draggable: true, roam: true, symbolSize: dense ? 12 : undefined,
         emphasis: { focus: "adjacency", scale: 1.18, label: { show: true, fontWeight: 600 } }, data: data.nodes, links: data.edges,
-        label: { show: !panoramic || !dense, position: "bottom", width: 132, overflow: "truncate", color: "#49394d", fontSize: 12, fontWeight: 500, backgroundColor: "rgba(255,255,255,.86)", borderColor: "rgba(224,214,225,.9)", borderWidth: 1, borderRadius: 8, padding: [4, 7] },
-        edgeSymbol: target.dataset.graphPanel ? ["none", "none"] : ["none", "arrow"], edgeSymbolSize: 8,
-        itemStyle: { shadowBlur: 16, shadowColor: "rgba(232,93,117,.18)" }, lineStyle: { color: "#159a8c", width: 2.5, curveness: 0.14, opacity: 0.8 },
-        edgeLabel: { show: panoramic && !dense, formatter: (edge) => edge.data.name ?? "", color: "#7a6578", fontSize: 11, backgroundColor: "rgba(255,255,255,.78)", padding: [3, 6], borderRadius: 8 } }],
+        label: { show: data.nodes.length <= 8, position: "bottom", width: 132, overflow: "truncate", color: "#49394d", fontSize: 12, fontWeight: 500, backgroundColor: "rgba(255,255,255,.86)", borderColor: "rgba(224,214,225,.9)", borderWidth: 1, borderRadius: 8, padding: [4, 7] },
+        edgeSymbol: ["none", "none"], edgeSymbolSize: 8,
+        itemStyle: { shadowBlur: 0 }, lineStyle: { color: "#159a8c", width: 2.5, curveness: 0.14, opacity: 0.8 },
+        edgeLabel: { show: false, formatter: (edge) => edge.data.name ?? "", color: "#7a6578", fontSize: 11, backgroundColor: "rgba(255,255,255,.78)", padding: [3, 6], borderRadius: 8 } }],
     });
+    syncGraphSelection();
     chart.on("click", (entry) => {
       if (!entry.data.url) return;
-      if (target.dataset.graphPanel) htmx.ajax("GET", entry.data.url, { target: target.dataset.graphPanel, swap: "innerHTML" });
-      else if (entry.dataType === "node") window.location.assign(entry.data.url);
+      const url = new URL(entry.data.url, window.location.origin);
+      url.searchParams.set("return_to", target.dataset.graphReturn || window.location.pathname + window.location.search);
+      htmx.ajax("GET", url.pathname + url.search, { target: target.dataset.graphPanel, swap: "innerHTML" });
     });
   });
 }
+
+function syncGraphSelection() {
+  const panel = document.querySelector("#knowledge-graph-panel [data-selected-kind]");
+  const target = document.querySelector("[data-graph-panel]");
+  if (!panel || !target) return;
+  const chart = echarts.getInstanceByDom(target);
+  if (!chart) return;
+  const data = JSON.parse(target.dataset.knowledgeGraph);
+  const kind = panel.dataset.selectedKind;
+  const related = panel.dataset.selectedRelated;
+  const nodeID = kind === "knowledge" ? "k:" + panel.dataset.selectedId : kind === "topic" ? "t:" + panel.dataset.selectedId : "";
+  const selectedEdge = kind === "relation" || related !== "0" ? data.edges.find(edge => {
+    const query = new URL(edge.url, window.location.origin).searchParams;
+    return query.get("kind") === kind && query.get("id") === panel.dataset.selectedId && (related === "0" || query.get("related") === related);
+  }) : null;
+  const visible = new Set(selectedEdge ? [selectedEdge.source, selectedEdge.target] : [nodeID]);
+  for (const edge of data.edges) {
+    if (edge.source === nodeID) visible.add(edge.target);
+    if (edge.target === nodeID) visible.add(edge.source);
+  }
+  chart.setOption({ series: [{ links: data.edges.map(edge => ({ ...edge, lineStyle: { ...edge.lineStyle, width: edge === selectedEdge ? 4 : 2 } })), data: data.nodes.map(node => ({
+    ...node, label: { show: visible.has(node.id) },
+    itemStyle: { ...node.itemStyle, borderColor: node.id === nodeID ? "#e85d75" : node.itemStyle?.color, borderWidth: node.id === nodeID ? 4 : 2 }
+  })) }] });
+}
+
+function syncGraphSelectionURL() {
+  const panel = document.querySelector("#knowledge-graph-panel [data-selected-kind]");
+  const target = document.querySelector("[data-graph-panel]");
+  if (!panel || !target || !panel.dataset.selectedKind || panel.dataset.selectedId === "0") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", "graph");
+  url.searchParams.set("selected_kind", panel.dataset.selectedKind);
+  url.searchParams.set("selected_id", panel.dataset.selectedId);
+  if (panel.dataset.selectedRelated === "0") url.searchParams.delete("selected_related");
+  else url.searchParams.set("selected_related", panel.dataset.selectedRelated);
+  window.history.replaceState({}, "", url);
+  target.dataset.graphReturn = url.pathname + url.search;
+}
+
+document.addEventListener("htmx:afterSwap", (event) => {
+  if (event.detail.target?.id === "knowledge-graph-panel") {
+    syncGraphSelection();
+    syncGraphSelectionURL();
+  }
+});
 
 document.addEventListener("click", (event) => {
   const control = event.target instanceof Element ? event.target.closest("[data-graph-command]") : null;

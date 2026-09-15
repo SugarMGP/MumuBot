@@ -125,32 +125,27 @@ type StickerListPageData struct {
 }
 
 type KnowledgeListPageData struct {
-	GroupID  string
-	Subject  string
-	UserID   string
-	AuthorID string
-	Note     *memory.GroupAgentState
-	Status   string
-	Kind     string
-	Keyword  string
-	Sort     SortToolbarData
-	Items    []memory.KnowledgeItem
-	SelfID   int64
-	Meta     ListMeta
-	Flash    *FlashMessage
+	Workspace KnowledgeWorkspaceData
+	Metadata  map[uint]services.KnowledgeMetadata
+	Sort      SortToolbarData
+	Items     []memory.KnowledgeItem
+	SelfID    int64
+	Meta      ListMeta
+	Flash     *FlashMessage
 }
 
 type TopicListPageData struct {
-	GroupID string
-	Status  string
-	Keyword string
-	Sort    SortToolbarData
-	Items   []services.TopicThreadView
-	Meta    ListMeta
-	Flash   *FlashMessage
+	Groups     []int64
+	CurrentURL string
+	GroupID    string
+	Keyword    string
+	Items      []services.TopicThreadView
+	Meta       ListMeta
+	Flash      *FlashMessage
 }
 
 type TopicDetailPageData struct {
+	ReturnTo       string
 	Thread         services.TopicThreadView
 	SummaryChanges []TopicSummaryChangeView
 	Messages       []memory.MessageLog
@@ -193,15 +188,10 @@ type TopicSummaryChangeView struct {
 	CapturedAtValue  string
 	Headline         string
 	Badges           []TopicSummaryChangeBadgeView
-	InitiallyOpen    bool
 	InitialSnapshot  bool
 	TitleChanged     bool
-	CurrentTitle     string
-	PreviousTitle    string
 	TitleDiff        TopicTextDiffView
 	GistChanged      bool
-	CurrentGist      string
-	PreviousGist     string
 	GistDiff         TopicTextDiffView
 	AddedOpenLoops   []string
 	RemovedOpenLoops []string
@@ -214,13 +204,8 @@ type TopicSummaryChangeBadgeView struct {
 }
 
 type TopicTextDiffView struct {
-	PreviousSegments    []TopicTextDiffSegmentView
-	CurrentSegments     []TopicTextDiffSegmentView
-	InlineSegments      []TopicTextDiffSegmentView
-	PreviousPlaceholder string
-	CurrentPlaceholder  string
-	PreviousEmpty       bool
-	CurrentEmpty        bool
+	InlineSegments     []TopicTextDiffSegmentView
+	CurrentPlaceholder string
 }
 
 type TopicTextDiffSegmentView struct {

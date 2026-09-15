@@ -35,12 +35,13 @@ templ LayoutWithOverlay(data LayoutData, content templ.Component, overlay templ.
 	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead(data.Title, data.Flash)
 		<body class="font-sans antialiased selection:bg-primary/20">
+			<a class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-base-100 focus:px-4 focus:py-2 focus:shadow-lg" href="#admin-main">跳到主要内容</a>
 			<div class="admin-shell">
 				<aside class="admin-sidebar">
 					@SidebarPanel(data)
 				</aside>
 				<div class="min-w-0">
-					<main class="admin-page">
+					<main id="admin-main" class="admin-page">
 						@PageContent(content)
 					</main>
 				</div>
@@ -138,7 +139,7 @@ templ ListFooter(meta ListMeta) {
 			if meta.PrevURL != "" {
 				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="上一页">@AdminIcon("chevron-left", "size-4", "page-prev")</a>
 			}
-			<button class="btn btn-primary btn-sm join-item" type="button" aria-current="page">{ fmt.Sprintf("%d", meta.Page) }</button>
+			<span class="btn btn-primary btn-sm join-item pointer-events-none" aria-current="page">{ fmt.Sprintf("%d", meta.Page) }</span>
 			if meta.NextURL != "" {
 				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页">@AdminIcon("chevron-right", "size-4", "page-next")</a>
 			}

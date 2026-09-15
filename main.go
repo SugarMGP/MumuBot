@@ -84,7 +84,7 @@ func main() {
 	}
 
 	stickerDir := cfg.Sticker.StoragePath
-	adminService := services.NewAdminService(memoryMgr, stickerDir, mumuAgent.BotSelfID)
+	adminService := services.NewAdminService(memoryMgr, stickerDir)
 	app := webapp.New(cfg, adminService, memoryMgr, mumuAgent)
 	httpServer := app.Server()
 	botClient.ReleaseEventGate()

@@ -55,9 +55,6 @@ func TopicSummaryChanges(topic services.TopicThreadView) []TopicSummaryChangeVie
 	for left, right := 0, len(changes)-1; left < right; left, right = left+1, right-1 {
 		changes[left], changes[right] = changes[right], changes[left]
 	}
-	if len(changes) > 0 {
-		changes[0].InitiallyOpen = true
-	}
 	return changes
 }
 
@@ -67,8 +64,6 @@ func buildTopicSummaryChangeView(prev *topicSummarySnapshot, current topicSummar
 	view := TopicSummaryChangeView{
 		CapturedAtLabel: formatRFC3339Time(current.CapturedAt),
 		CapturedAtValue: formatRFC3339TimeAttr(current.CapturedAt),
-		CurrentTitle:    currentTitle,
-		CurrentGist:     currentGist,
 	}
 
 	if prev == nil {
@@ -77,8 +72,8 @@ func buildTopicSummaryChangeView(prev *topicSummarySnapshot, current topicSummar
 		view.GistChanged = currentGist != ""
 		view.AddedOpenLoops = normalizedTopicSummaryItems(current.Summary.OpenLoops)
 		view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedOpenLoops) > 0
-		view.TitleDiff = buildAddedTextDiffView(currentTitle, "之前没有标题", "现在没有标题")
-		view.GistDiff = buildAddedTextDiffView(currentGist, "之前没有概括", "现在没有概括")
+		view.TitleDiff = buildAddedTextDiffView(currentTitle, "现在没有标题")
+		view.GistDiff = buildAddedTextDiffView(currentGist, "现在没有概括")
 		view.Headline = topicSummaryChangeHeadline(view)
 		view.Badges = topicSummaryChangeBadges(view)
 		return view
@@ -86,12 +81,10 @@ func buildTopicSummaryChangeView(prev *topicSummarySnapshot, current topicSummar
 
 	prevTitle := strings.TrimSpace(prev.Summary.Title)
 	prevGist := strings.TrimSpace(prev.Summary.Gist)
-	view.PreviousTitle = prevTitle
-	view.PreviousGist = prevGist
 	view.TitleChanged = prevTitle != currentTitle
 	view.GistChanged = prevGist != currentGist
-	view.TitleDiff = buildTopicTextDiffView(prevTitle, currentTitle, "之前没有标题", "现在没有标题")
-	view.GistDiff = buildTopicTextDiffView(prevGist, currentGist, "之前没有概括", "现在没有概括")
+	view.TitleDiff = buildTopicTextDiffView(prevTitle, currentTitle, "现在没有标题")
+	view.GistDiff = buildTopicTextDiffView(prevGist, currentGist, "现在没有概括")
 	view.AddedOpenLoops, view.RemovedOpenLoops = diffStringSet(prev.Summary.OpenLoops, current.Summary.OpenLoops)
 	view.Changed = view.TitleChanged || view.GistChanged || len(view.AddedOpenLoops) > 0 || len(view.RemovedOpenLoops) > 0
 	view.Headline = topicSummaryChangeHeadline(view)
@@ -99,70 +92,44 @@ func buildTopicSummaryChangeView(prev *topicSummarySnapshot, current topicSummar
 	return view
 }
 
-func buildTopicTextDiffView(previous string, current string, previousPlaceholder string, currentPlaceholder string) TopicTextDiffView {
+func buildTopicTextDiffView(previous string, current string, currentPlaceholder string) TopicTextDiffView {
 	previous = strings.TrimSpace(previous)
 	current = strings.TrimSpace(current)
 	if previous == current {
-		segments := diffSegmentsForText(previous, "equal")
-		return TopicTextDiffView{
-			PreviousSegments:    diffSegmentsForText(previous, "equal"),
-			CurrentSegments:     diffSegmentsForText(current, "equal"),
-			InlineSegments:      append([]TopicTextDiffSegmentView(nil), segments...),
-			PreviousPlaceholder: previousPlaceholder,
-			CurrentPlaceholder:  currentPlaceholder,
-			PreviousEmpty:       previous == "",
-			CurrentEmpty:        current == "",
-		}
+		return TopicTextDiffView{InlineSegments: diffSegmentsForText(previous, "equal"), CurrentPlaceholder: currentPlaceholder}
 	}
 
-	diffView := TopicTextDiffView{
-		PreviousPlaceholder: previousPlaceholder,
-		CurrentPlaceholder:  currentPlaceholder,
-		PreviousEmpty:       previous == "",
-		CurrentEmpty:        current == "",
-	}
+	diffView := TopicTextDiffView{CurrentPlaceholder: currentPlaceholder}
 	if previous == "" {
-		diffView.CurrentSegments = diffSegmentsForText(current, "add")
-		diffView.InlineSegments = append(diffView.InlineSegments, TopicTextDiffSegmentView{Text: current, Kind: "add"})
+		diffView.InlineSegments = diffSegmentsForText(current, "add")
 		return diffView
 	}
 	if current == "" {
-		diffView.PreviousSegments = diffSegmentsForText(previous, "remove")
-		diffView.InlineSegments = append(diffView.InlineSegments, TopicTextDiffSegmentView{Text: previous, Kind: "remove"})
+		diffView.InlineSegments = diffSegmentsForText(previous, "remove")
 		return diffView
 	}
 
-	prevPrefix, prevMiddle, prevSuffix, currPrefix, currMiddle, currSuffix := topicCommonTextDiff(previous, current)
-	if prevPrefix != "" {
-		appendDiffSegment(&diffView.PreviousSegments, "equal", prevPrefix)
-		appendDiffSegment(&diffView.CurrentSegments, "equal", currPrefix)
-		appendDiffSegment(&diffView.InlineSegments, "equal", prevPrefix)
+	prefix, previousMiddle, currentMiddle, suffix := topicCommonTextDiff(previous, current)
+	if prefix != "" {
+		appendDiffSegment(&diffView.InlineSegments, "equal", prefix)
 	}
-	if prevMiddle != "" {
-		appendDiffSegment(&diffView.PreviousSegments, "remove", prevMiddle)
-		appendDiffSegment(&diffView.InlineSegments, "remove", prevMiddle)
+	if previousMiddle != "" {
+		appendDiffSegment(&diffView.InlineSegments, "remove", previousMiddle)
 	}
-	if currMiddle != "" {
-		appendDiffSegment(&diffView.CurrentSegments, "add", currMiddle)
-		appendDiffSegment(&diffView.InlineSegments, "add", currMiddle)
+	if currentMiddle != "" {
+		appendDiffSegment(&diffView.InlineSegments, "add", currentMiddle)
 	}
-	if prevSuffix != "" {
-		appendDiffSegment(&diffView.PreviousSegments, "equal", prevSuffix)
-		appendDiffSegment(&diffView.CurrentSegments, "equal", currSuffix)
-		appendDiffSegment(&diffView.InlineSegments, "equal", prevSuffix)
+	if suffix != "" {
+		appendDiffSegment(&diffView.InlineSegments, "equal", suffix)
 	}
 	return diffView
 }
 
-func buildAddedTextDiffView(current string, previousPlaceholder string, currentPlaceholder string) TopicTextDiffView {
+func buildAddedTextDiffView(current string, currentPlaceholder string) TopicTextDiffView {
 	current = strings.TrimSpace(current)
 	return TopicTextDiffView{
-		PreviousPlaceholder: previousPlaceholder,
-		CurrentPlaceholder:  currentPlaceholder,
-		PreviousEmpty:       true,
-		CurrentEmpty:        current == "",
-		CurrentSegments:     diffSegmentsForText(current, "add"),
-		InlineSegments:      diffSegmentsForText(current, "add"),
+		CurrentPlaceholder: currentPlaceholder,
+		InlineSegments:     diffSegmentsForText(current, "add"),
 	}
 }
 
@@ -187,7 +154,7 @@ func appendDiffSegment(target *[]TopicTextDiffSegmentView, kind string, text str
 	*target = append(*target, TopicTextDiffSegmentView{Text: text, Kind: kind})
 }
 
-func topicCommonTextDiff(previous string, current string) (string, string, string, string, string, string) {
+func topicCommonTextDiff(previous string, current string) (string, string, string, string) {
 	prevRunes := []rune(previous)
 	currRunes := []rune(current)
 
@@ -201,7 +168,7 @@ func topicCommonTextDiff(previous string, current string) (string, string, strin
 		suffix++
 	}
 
-	return string(prevRunes[:prefix]), string(prevRunes[prefix : len(prevRunes)-suffix]), string(prevRunes[len(prevRunes)-suffix:]), string(currRunes[:prefix]), string(currRunes[prefix : len(currRunes)-suffix]), string(currRunes[len(currRunes)-suffix:])
+	return string(prevRunes[:prefix]), string(prevRunes[prefix : len(prevRunes)-suffix]), string(currRunes[prefix : len(currRunes)-suffix]), string(prevRunes[len(prevRunes)-suffix:])
 }
 
 func topicSummaryChangeHeadline(change TopicSummaryChangeView) string {
@@ -363,11 +330,14 @@ func topicKeywords(topic services.TopicThreadView) []string {
 
 func topicSummaryProgressText(topic services.TopicThreadView) string {
 	latest := topic.LatestSummary()
-	if latest != nil && !latest.SourcesValid {
+	if latest == nil {
+		return "尚无摘要"
+	}
+	if !latest.SourcesValid {
 		return "摘要依据已失效"
 	}
-	if latest != nil && latest.SourcesValid && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
-		return "摘要已覆盖最新消息"
+	if latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
+		return "已覆盖已归属消息"
 	}
 	return "还有新消息待补进摘要"
 }
@@ -388,12 +358,8 @@ func topicTone(topic services.TopicThreadView) string {
 	return "primary"
 }
 
-func topicSummaryThroughID(topic services.TopicThreadView) uint {
-	latest := topic.LatestSummary()
-	if latest == nil {
-		return 0
-	}
-	return latest.ID
+func topicUpdatedTime(topic services.TopicThreadView) string {
+	return formatTime(topic.UpdatedAt)
 }
 
 func topicMessageText(log memory.MessageLog) string {

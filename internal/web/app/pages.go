@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	neturl "net/url"
@@ -79,6 +80,7 @@ func (a *App) handleTopicDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	data.ReturnTo = a.knowledgeReturn(r, "/admin/topics")
 	a.render(w, views.TopicDetailPage(data, r.URL.Path))
 }
 
@@ -232,14 +234,11 @@ func (a *App) stickerPageData(current *neturl.URL, flash *views.FlashMessage) (v
 }
 
 func (a *App) topicPageData(current *neturl.URL, flash *views.FlashMessage) (views.TopicListPageData, error) {
-	sortKey, order := services.NormalizeTopicSort(current.Query().Get("sort"), current.Query().Get("order"))
 	page := parsePositiveInt(current.Query().Get("page"), 1)
 	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
 	filter := services.ListFilter{
 		GroupID:  parseInt64Query(current.Query().Get("group_id")),
 		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
-		Sort:     sortKey,
-		Order:    order,
 		Page:     page,
 		PageSize: pageSize,
 	}
@@ -249,11 +248,14 @@ func (a *App) topicPageData(current *neturl.URL, flash *views.FlashMessage) (vie
 		return views.TopicListPageData{}, err
 	}
 
+	groups, err := a.admin.KnowledgeGroups(context.Background())
+	if err != nil {
+		return views.TopicListPageData{}, err
+	}
 	return views.TopicListPageData{
+		Groups: groups, CurrentURL: views.WithQuery(current.RequestURI(), "sort", "", "order", ""),
 		GroupID: current.Query().Get("group_id"),
-		Status:  "",
 		Keyword: filter.Keyword,
-		Sort:    buildSortToolbar(current, sortKey, order, []sortOption{{Key: "recent", Label: "最近归属"}, {Key: "created", Label: "创建时间"}, {Key: "group", Label: "群号"}}),
 		Items:   result.Items,
 		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
 		Flash:   flash,
