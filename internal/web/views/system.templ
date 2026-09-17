@@ -44,7 +44,7 @@ templ SystemLogView(data SystemPageData) {
 			<div class="flex items-center gap-3 rounded-box border border-base-300 bg-base-200/45 p-2.5">
 				<form id="admin-log-filter-form" class="contents" hx-get="/admin/system" hx-target="#admin-log-stream" hx-swap="outerHTML" hx-trigger="input delay:250ms, change">
 					<input type="hidden" name="view" value="logs"/><input type="hidden" name="fragment" value="logs-view"/>
-					<label class="input input-sm w-72 border-base-300"><span class="text-base-content/45">搜索</span><input type="search" name="keyword" value={ data.LogKeyword } placeholder="关键词"/></label>
+					<label class="input input-sm w-72 border-base-300"><span class="text-base-content/45">搜索</span><input type="search" name="keyword" value={ data.LogKeyword } placeholder="关键词…"/></label>
 					<select class="select select-sm w-36 border-base-300" name="level" aria-label="最低日志级别"><option value="debug" selected?={ data.LogLevel == "debug" }>DEBUG 以上</option><option value="info" selected?={ data.LogLevel == "info" }>INFO 以上</option><option value="warn" selected?={ data.LogLevel == "warn" }>WARN 以上</option><option value="error" selected?={ data.LogLevel == "error" }>ERROR</option></select>
 				</form>
 				<label class="label ml-auto cursor-pointer gap-2"><input id="admin-log-format" class="toggle toggle-sm toggle-primary" type="checkbox"/><span class="label-text text-sm">格式化</span></label>

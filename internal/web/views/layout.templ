@@ -108,7 +108,7 @@ templ PageHeader(title string, subtitle string, tag string) {
 
 templ SortToolbar(data SortToolbarData) {
 	if len(data.Options) > 0 || len(data.OrderOptions) > 0 {
-		<div class="flex items-center justify-between gap-4 border-t border-base-300 pt-4">
+		<div class="flex items-center justify-between gap-4">
 			<div class="text-sm text-base-content/55">{ data.Summary }</div>
 			<div class="flex items-center gap-2">
 				if len(data.Options) > 0 {
@@ -144,29 +144,6 @@ templ ListFooter(meta ListMeta) {
 				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页">@AdminIcon("chevron-right", "size-4", "page-next")</a>
 			}
 		</div>
-	</div>
-}
-
-templ ChoiceFilterGroup(name string, current string, options []FilterChoice) {
-	@ChoiceFilterGroupForFormAligned("", name, current, options, "")
-}
-
-templ ChoiceFilterGroupForForm(formID string, name string, current string, options []FilterChoice) {
-	@ChoiceFilterGroupForFormAligned(formID, name, current, options, "")
-}
-
-templ ChoiceFilterGroupForFormAligned(formID string, name string, current string, options []FilterChoice, alignClass string) {
-	<div data-admin-choice-group={ name } class={ joinClasses("join", alignClass) }>
-		for _, option := range options {
-			<label class={ joinClasses(filterChoiceClass(equalTrimmed(option.Value, current)), "join-item") }>
-				if formID != "" {
-					<input class="sr-only" type="radio" name={ name } value={ option.Value } form={ formID } checked?={ equalTrimmed(option.Value, current) }/>
-				} else {
-					<input class="sr-only" type="radio" name={ name } value={ option.Value } checked?={ equalTrimmed(option.Value, current) }/>
-				}
-				<span>{ option.Label }</span>
-			</label>
-		}
 	</div>
 }
 

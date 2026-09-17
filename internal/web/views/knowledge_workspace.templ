@@ -10,7 +10,7 @@ templ KnowledgeWorkspace(data KnowledgeWorkspaceData) {
 			<a class={ joinClasses("btn btn-sm join-item", ternaryString(data.View == "graph", "btn-primary", "btn-ghost")) } href={ templ.SafeURL(workspaceViewURL(data, "graph")) }>图谱</a>
 		</div>
 	</header>
-	<form class="admin-memory-filters" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+	<form class="admin-memory-filters card border border-base-300 bg-base-100 p-4 shadow-sm" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="view" value={ data.View }/>
 		<input type="hidden" name="sort" value={ data.Filter.Sort }/>
 		<input type="hidden" name="order" value={ data.Filter.Order }/>

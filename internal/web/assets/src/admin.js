@@ -35,6 +35,7 @@ function markFormSubmitting(form, activeButton) {
 function resetFormSubmitting(form) {
   if (!(form instanceof HTMLFormElement)) return;
   delete form.dataset.submitting;
+  form.querySelectorAll("[data-admin-submitter-field]").forEach((field) => field.remove());
   form.querySelectorAll('button[type="submit"]').forEach((button) => {
     button.disabled = false;
     button.classList.remove("cursor-wait");
@@ -271,36 +272,6 @@ function chartFor(target) {
   return echarts.init(target);
 }
 
-let namesCloseTimer;
-function showMemberNames(wrapper) {
-  const panel = wrapper.querySelector(".admin-names-popover");
-  const trigger = wrapper.querySelector("button");
-  if (!panel || !trigger) return;
-  clearTimeout(namesCloseTimer);
-  panel.showPopover();
-  const rect = trigger.getBoundingClientRect();
-  const height = panel.offsetHeight;
-  panel.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - panel.offsetWidth - 12)) + "px";
-  const top = rect.bottom + height + 8 < window.innerHeight ? rect.bottom + 8 : rect.top - height - 8;
-  panel.style.top = Math.max(12, Math.min(top, window.innerHeight - height - 12)) + "px";
-}
-
-for (const eventName of ["pointerover", "focusin"]) {
-  document.addEventListener(eventName, event => {
-    const wrapper = event.target instanceof Element ? event.target.closest("[data-member-names]") : null;
-    if (wrapper && !wrapper.contains(event.relatedTarget)) showMemberNames(wrapper);
-  });
-}
-for (const eventName of ["pointerout", "focusout"]) {
-  document.addEventListener(eventName, event => {
-    const wrapper = event.target instanceof Element ? event.target.closest("[data-member-names]") : null;
-    if (!wrapper || wrapper.contains(event.relatedTarget)) return;
-    namesCloseTimer = window.setTimeout(() => {
-      if (!wrapper.matches(":hover") && !wrapper.contains(document.activeElement)) wrapper.querySelector(".admin-names-popover")?.hidePopover();
-    }, 150);
-  });
-}
-
 function renderKnowledgeGraph() {
   document.querySelectorAll("[data-knowledge-graph]").forEach((target) => {
     if (echarts.getInstanceByDom(target)) return;
@@ -417,11 +388,13 @@ document.addEventListener("submit", (event) => {
     event.preventDefault();
     return;
   }
+  form.querySelectorAll("[data-admin-submitter-field]").forEach((field) => field.remove());
   if (event.submitter?.name) {
     const field = document.createElement("input");
     field.type = "hidden";
     field.name = event.submitter.name;
     field.value = event.submitter.value;
+    field.dataset.adminSubmitterField = "true";
     form.appendChild(field);
   }
   markFormSubmitting(form, event.submitter instanceof HTMLButtonElement ? event.submitter : null);

@@ -7,9 +7,9 @@ templ DashboardPage(data DashboardPageData, currentPath string) {
 }
 
 templ DashboardMetric(icon string, label string, value string, tone string) {
-	<div class={ joinClasses("card border border-base-300 bg-base-100 shadow-sm", tone) }>
+	<div class="card border border-base-300 bg-base-100 shadow-sm">
 		<div class="card-body flex-row items-center gap-3 p-4">
-			<span class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-base-200 text-base-content/65">@AdminIcon(icon, "size-5", "dashboard-"+icon)</span>
+			<span class={ joinClasses("inline-flex size-10 shrink-0 items-center justify-center rounded-xl text-base-content/65", tone) }>@AdminIcon(icon, "size-5", "dashboard-"+icon)</span>
 			<div><div class="text-xs text-base-content/50">{ label }</div><div class="admin-number mt-1 text-xl font-semibold text-base-content">{ value }</div></div>
 		</div>
 	</div>

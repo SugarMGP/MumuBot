@@ -83,11 +83,6 @@ type SortToolbarData struct {
 	OrderOptions []SortToolbarLink
 }
 
-type FilterChoice struct {
-	Label string
-	Value string
-}
-
 type LoginPageData struct {
 	Enabled bool
 	Error   string

@@ -151,17 +151,14 @@ templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
 }
 
 templ KnowledgeStatusForm(kind string, id uint, status string, returnTo string) {
-	<form class="flex gap-2" method="post" action="/admin/knowledge/actions">
+	<form class="flex items-center gap-2" method="post" action="/admin/knowledge/actions">
 		<input type="hidden" name="action_kind" value={ kind }/><input type="hidden" name="action_id" value={ fmt.Sprint(id) }/><input type="hidden" name="return_to" value={ returnTo }/>
-		if status!="active" {
-			<button class="btn btn-success btn-soft btn-sm" type="submit" name="status" value="active">确认生效</button>
-		}
-		if status!="candidate" {
-			<button class="btn btn-ghost btn-sm" type="submit" name="status" value="candidate">待确认</button>
-		}
-		if status!="archived" {
-			<button class="btn btn-ghost btn-sm" type="submit" name="status" value="archived">归档</button>
-		}
+		<select class="select select-sm border-base-300 bg-base-100" name="status" aria-label="记忆状态">
+			for _, option := range []string{"active", "candidate", "archived"} {
+				<option value={ option } selected?={ status == option }>{ memoryStatusText(option) }</option>
+			}
+		</select>
+		<button class="btn btn-primary btn-sm" type="submit" data-loading-label="更新中">更新状态</button>
 	</form>
 }
 

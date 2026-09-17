@@ -210,14 +210,6 @@ func sortToolbarLinkClass(active bool) string {
 	return joinClasses(base, "btn-ghost border-base-300")
 }
 
-func filterChoiceClass(active bool) string {
-	base := "btn btn-sm"
-	if active {
-		return joinClasses(base, "btn-primary")
-	}
-	return joinClasses(base, "btn-ghost border-transparent")
-}
-
 func dialogChipClass(kind string) string {
 	switch strings.TrimSpace(kind) {
 	case "cyan":
@@ -295,10 +287,6 @@ func modelAverageTokens(row modelstats.AggregateRow) string {
 func modelStatsJSON(snapshot modelstats.Snapshot) string {
 	raw, _ := sonic.MarshalString(snapshot)
 	return raw
-}
-
-func equalTrimmed(left string, right string) bool {
-	return strings.TrimSpace(left) == strings.TrimSpace(right)
 }
 
 func StickerDeleteDialogData(item memory.Sticker, returnTo string) AdminActionDialogContentData {
