@@ -443,19 +443,20 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		}
 	}
 
-	msgID, err := a.bot.SendGroupMessage(ctx, groupID, content, replyTo, mentions)
+	msgID, arrivalSeq, err := a.bot.SendGroupMessage(ctx, groupID, content, replyTo, mentions)
 	if err != nil {
 		zap.L().Error("发言失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return err
 	}
 
 	msg := &onebot.GroupMessage{
-		MessageID: msgID,
-		GroupID:   groupID,
-		UserID:    a.bot.GetSelfID(),
-		Nickname:  a.persona.GetName(),
-		Content:   content,
-		Time:      time.Now(),
+		MessageID:  msgID,
+		GroupID:    groupID,
+		UserID:     a.bot.GetSelfID(),
+		Nickname:   a.persona.GetName(),
+		Content:    content,
+		Time:       time.Now(),
+		ArrivalSeq: arrivalSeq,
 	}
 
 	if replyTo != 0 {
@@ -478,19 +479,20 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 }
 
 func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath string, description string) error {
-	msgID, err := a.bot.SendImageMessage(ctx, groupID, filePath, true)
+	msgID, arrivalSeq, err := a.bot.SendImageMessage(ctx, groupID, filePath, true)
 	if err != nil {
 		zap.L().Error("发送表情包失败", zap.Int64("group_id", groupID), zap.String("path", filePath), zap.Error(err))
 		return err
 	}
 
 	msg := &onebot.GroupMessage{
-		MessageID: msgID,
-		GroupID:   groupID,
-		UserID:    a.bot.GetSelfID(),
-		Nickname:  a.persona.GetName(),
-		Content:   "",
-		Time:      time.Now(),
+		MessageID:  msgID,
+		GroupID:    groupID,
+		UserID:     a.bot.GetSelfID(),
+		Nickname:   a.persona.GetName(),
+		Content:    "",
+		Time:       time.Now(),
+		ArrivalSeq: arrivalSeq,
 		Images: []onebot.ImageInfo{
 			{
 				SubType: 1,

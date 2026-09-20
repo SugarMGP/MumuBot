@@ -205,7 +205,7 @@ func (c *Client) enqueueEvent(raw []byte) {
 	c.dispatchEvent(groupID, groupEvent{event: event, receivedAt: receivedAt})
 }
 
-// nextArrivalSeq 为该群分配递增到达序号，事件入口单线程调用，序号即推送顺序
+// nextArrivalSeq 为收到的群事件和成功发送的群消息分配统一运行时顺序
 func (c *Client) nextArrivalSeq(groupID int64) uint64 {
 	c.seqMu.Lock()
 	defer c.seqMu.Unlock()

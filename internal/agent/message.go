@@ -88,13 +88,8 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 }
 
 // enqueueCommit 把解析完成的消息、撤回或跳过项投入该群提交队列
-// 序号为 0 的项（Agent 内部消息，如本地发言）不参与重排，直接提交
 // 提交队列满时背压等待，不静默丢弃；关闭后由 ctx 退出
 func (a *Agent) enqueueCommit(item commitItem) {
-	if item.seq == 0 {
-		a.commitOne(item)
-		return
-	}
 	a.commitMu.Lock()
 	queue := a.commitQueues[item.groupID]
 	if queue == nil {
@@ -436,6 +431,10 @@ func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
 		messages = slices.Delete(messages, 0, len(messages)-bufSize)
 	}
 	a.buffers[msg.GroupID] = messages
+	if msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID() {
+		// 自身消息是缓冲边界，同序号及此前群事件不再留到下一轮处理
+		a.lastReadSeq[msg.GroupID] = max(a.lastReadSeq[msg.GroupID], msg.ArrivalSeq)
+	}
 }
 
 func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {

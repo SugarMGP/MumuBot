@@ -86,8 +86,8 @@ func messageID(data map[string]interface{}, action string) (int64, error) {
 
 func oneBotID(id int64) string { return strconv.FormatInt(id, 10) }
 
-// SendGroupMessage 发送群消息
-func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) (int64, error) {
+// SendGroupMessage 发送群消息并返回群内运行时顺序序号
+func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) (int64, uint64, error) {
 	// 使用消息段数组格式，更符合 OneBot 11 标准
 	var message []map[string]interface{}
 
@@ -134,18 +134,18 @@ func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content st
 		"message":  message,
 	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return messageIDFromResponse(resp)
+	return c.sentMessageFromResponse(resp, groupID)
 }
 
 // SendImageMessage 发送图片/表情包消息
 // filePath: 本地文件绝对路径
 // isSticker: true 时作为表情包发送 (sub_type=1)
-func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, error) {
+func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, uint64, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return 0, fmt.Errorf("读取待发送图片失败: %w", err)
+		return 0, 0, fmt.Errorf("读取待发送图片失败: %w", err)
 	}
 
 	subType := 0
@@ -168,9 +168,17 @@ func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath s
 		"message":  message,
 	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return messageIDFromResponse(resp)
+	return c.sentMessageFromResponse(resp, groupID)
+}
+
+func (c *Client) sentMessageFromResponse(resp interface{}, groupID int64) (int64, uint64, error) {
+	messageID, err := messageIDFromResponse(resp)
+	if err != nil {
+		return 0, 0, err
+	}
+	return messageID, c.nextArrivalSeq(groupID), nil
 }
 
 func messageIDFromResponse(resp interface{}) (int64, error) {
