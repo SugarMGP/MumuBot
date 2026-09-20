@@ -35,7 +35,7 @@ func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, 
 	return item, created, nil
 }
 
-func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query memory.HybridQuery, throughMessageLogID uint, replyMessageIDs []int64) (string, error) {
+func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query memory.HybridQuery, throughMessageLogID uint, replyMessageIDs, snapshotMessageIDs []int64) (string, error) {
 	const maxPromptTopics = 3
 	seen := map[uint]bool{}
 	sections := []string{}
@@ -59,13 +59,24 @@ func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query m
 		if strings.TrimSpace(summary.Gist) == "" && renderMessageTail(tail, 4) == "" {
 			return nil
 		}
-		sections = append(sections, renderTopicPromptSection(memory.TopicThread{ID: id, GroupID: groupID}, summary, tail))
+		summaryID := uint(0)
+		if record != nil && record.SourcesValid {
+			summaryID = record.ID
+		}
+		from, to, err := m.store.TopicReferencePeriod(ctx, summaryID, tail, throughMessageLogID)
+		if err != nil {
+			return err
+		}
+		sections = append(sections, renderTopicPromptSection(memory.TopicThread{ID: id, GroupID: groupID}, summary, tail, from, to))
 		return nil
 	}
 	for _, messageID := range replyMessageIDs {
-		id, _, err := m.store.TopicRefForOneBotMessage(ctx, groupID, messageID)
+		id, messageLogID, err := m.store.TopicRefForOneBotMessage(ctx, groupID, messageID)
 		if err != nil {
 			return "", err
+		}
+		if messageLogID > throughMessageLogID {
+			continue
 		}
 		if err := add(id); err != nil {
 			return "", err
@@ -89,7 +100,7 @@ func (m *Manager) BuildPromptContext(ctx context.Context, groupID int64, query m
 		}
 	}
 	if len(sections) < maxPromptTopics {
-		recent, err := m.store.ListRecentTopicThreads(ctx, groupID, throughMessageLogID, 4)
+		recent, err := m.store.ListRecentTopicThreads(ctx, groupID, throughMessageLogID, snapshotMessageIDs, 4)
 		if err != nil {
 			return "", err
 		}

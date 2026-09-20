@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	"mumu-bot/internal/memory"
 
@@ -59,12 +60,15 @@ func (s *DBStore) TopicRefForOneBotMessage(ctx context.Context, groupID, message
 	return *row.TopicID, row.MessageLogID, nil
 }
 
-func (s *DBStore) ListRecentTopicThreads(ctx context.Context, groupID int64, throughMessageLogID uint, limit int) ([]memory.TopicThread, error) {
+func (s *DBStore) ListRecentTopicThreads(ctx context.Context, groupID int64, throughMessageLogID uint, snapshotMessageIDs []int64, limit int) ([]memory.TopicThread, error) {
+	if len(snapshotMessageIDs) == 0 {
+		return nil, nil
+	}
 	var rows []memory.TopicThread
 	query := s.db.WithContext(ctx).Table("topic_threads tt").Select("tt.*").
 		Joins("JOIN topic_assignments ta ON ta.topic_id = tt.id").
 		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("tt.group_id = ? AND ml.recalled_at IS NULL", groupID)
+		Where("tt.group_id = ? AND ml.recalled_at IS NULL AND ml.one_bot_message_id IN ?", groupID, snapshotMessageIDs)
 	if throughMessageLogID > 0 {
 		query = query.Where("ml.id <= ?", throughMessageLogID)
 	}
@@ -148,4 +152,30 @@ func fuseTopicRanks(limit int, lists ...[]uint) []uint {
 		items = items[:limit]
 	}
 	return items
+}
+
+// TopicReferencePeriod 使用本次摘要来源和展示原文的发生时间，避免把摘要更新时间当成事件时间
+func (s *DBStore) TopicReferencePeriod(ctx context.Context, summaryID uint, tail []memory.MessageLog, upper uint) (time.Time, time.Time, error) {
+	ids := make([]uint, 0, len(tail))
+	for _, row := range tail {
+		ids = append(ids, row.ID)
+	}
+	var period struct {
+		From *time.Time
+		To   *time.Time
+	}
+	err := s.db.WithContext(ctx).Table("message_logs ml").Select("min(ml.message_time) AS from, max(ml.message_time) AS to").
+		Where("ml.recalled_at IS NULL AND ml.id<=?", upper).
+		Where("ml.id IN ? OR EXISTS(SELECT 1 FROM topic_summary_sources tss WHERE tss.message_log_id=ml.id AND tss.summary_id=?)", ids, summaryID).Scan(&period).Error
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	var from, to time.Time
+	if period.From != nil {
+		from = *period.From
+	}
+	if period.To != nil {
+		to = *period.To
+	}
+	return from, to, nil
 }

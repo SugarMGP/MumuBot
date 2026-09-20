@@ -142,7 +142,7 @@ func NewSaveWorkingNoteTool() (tool.InvokableTool, error) {
 	type input struct {
 		Note string `json:"note" jsonschema:"description=最多300字、可跨轮理解的工作结论；空字符串清除。只写人物、事情和进展，禁止写m1等本轮消息编号、本轮或本session等短期定位、内部推理、秘密和工具轨迹。"`
 	}
-	return utils.InferTool("saveWorkingNote", "正常结束前更新下一轮工作便签；无待续事项时提交空字符串。便签会跨轮读取，必须用人物、原话或事件描述指代对象，禁止保存 m1 等每轮会变化的消息编号。便签不能触发发言，不是长期事实。", func(ctx context.Context, in *input) (map[string]any, error) {
+	return utils.InferTool("saveWorkingNote", "正常结束前更新下一轮工作便签；无待续事项时提交空字符串。便签会跨轮读取，只保留下一轮必需的当前事实或明确未完成请求，已回应的普通闲聊、笑话过程和无人接续的随口追问不复述；跨轮识别人物写当前称呼和 QQ，不同 QQ 不因昵称相似合并，禁止保存 m1 等每轮会变化的消息编号。便签不能触发发言，不是长期事实。", func(ctx context.Context, in *input) (map[string]any, error) {
 		tc := GetToolContext(ctx)
 		if tc == nil || in == nil || tc.MemoryMgr == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("工具未初始化"))

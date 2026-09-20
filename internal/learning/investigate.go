@@ -33,11 +33,10 @@ type investigation struct {
 }
 
 type finishInput struct {
-	Topics      []memory.ConversationTopic      `json:"topics"`
-	NoTopicIDs  []uint                          `json:"no_topic_ids"`
-	Items       []memory.KnowledgeItemInput     `json:"items"`
-	Relations   []memory.KnowledgeRelationInput `json:"relations"`
-	ReviewedIDs []uint                          `json:"reviewed_ids"`
+	Topics     []memory.ConversationTopic      `json:"topics"`
+	NoTopicIDs []uint                          `json:"no_topic_ids"`
+	Items      []memory.KnowledgeItemInput     `json:"items"`
+	Relations  []memory.KnowledgeRelationInput `json:"relations"`
 }
 type searchInput struct {
 	Query         string `json:"query"`
@@ -60,19 +59,17 @@ type contextInput struct {
 	Offset    int    `json:"offset,omitempty" jsonschema:"description=仅 message 模式，续读长原文的字符位置"`
 }
 
-func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance bool, rows []memory.MessageLog, candidates []memory.KnowledgeItem) error {
+func (l *Learner) investigate(groupID, selfID int64, after, upper uint, rows []memory.MessageLog) error {
 	cfg := config.Get()
 	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
 	defer cancel()
 	ctx = llm.WithTask(ctx, "memory_agent", cfg.ModelTiers.Low.Model)
-	run := &investigation{manager: l.memMgr, batch: memory.KnowledgeBatch{GroupID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: advance, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}
+	run := &investigation{manager: l.memMgr, batch: memory.KnowledgeBatch{GroupID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: true, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}
 	run.rows = rows
 	var err error
-	if len(rows) > 0 {
-		run.topics, err = l.memMgr.ConversationContext(ctx, groupID, upper, rows)
-		if err != nil {
-			return err
-		}
+	run.topics, err = l.memMgr.ConversationContext(ctx, groupID, upper, rows)
+	if err != nil {
+		return err
 	}
 	validRows := []memory.MessageLog{}
 	for _, row := range rows {
@@ -90,45 +87,36 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance 
 	if err != nil {
 		return err
 	}
-	if len(validRows) == 0 && len(candidates) == 0 {
+	if len(validRows) == 0 {
 		_, err := run.finish(ctx, &finishInput{})
 		return err
 	}
-	if len(validRows) > 0 {
-		page, err := l.memMgr.ReadKnowledgeContext(ctx, groupID, upper, validRows[0].ID, 0, "window")
-		if err != nil {
-			return err
-		}
-		previous := []memory.MessageLog{}
-		for _, row := range page.Messages {
-			if row.ID < validRows[0].ID {
-				previous = append(previous, row)
-			}
-		}
-		historyValue, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: previous}, 0)
-		if err != nil {
-			return err
-		}
-		history, err := sonic.MarshalString(historyValue)
-		if err != nil {
-			return err
-		}
-		initial += "\n仅供上下文，不重新分配：" + history
-	}
-	for _, item := range candidates {
-		run.batch.ExpectedItems[item.ID] = item.UpdatedAt
-	}
-	candidateText, err := sonic.MarshalString(candidates)
+	page, err := l.memMgr.ReadKnowledgeContext(ctx, groupID, upper, validRows[0].ID, 0, "window")
 	if err != nil {
 		return err
 	}
-	messages := []*schema.Message{schema.SystemMessage(memoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s\n待复核候选：%s", groupID, selfID, after, upper, run.required, initial, candidateText))}
+	previous := []memory.MessageLog{}
+	for _, row := range page.Messages {
+		if row.ID < validRows[0].ID {
+			previous = append(previous, row)
+		}
+	}
+	historyValue, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: previous}, 0)
+	if err != nil {
+		return err
+	}
+	history, err := sonic.MarshalString(historyValue)
+	if err != nil {
+		return err
+	}
+	initial += "\n仅供上下文，不重新分配：" + history
+	messages := []*schema.Message{schema.SystemMessage(memoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s", groupID, selfID, after, upper, run.required, initial))}
 	topicText, err := sonic.MarshalString(run.topics)
 	if err != nil {
 		return err
 	}
 	messages = append(messages, schema.UserMessage("已有话题及原归属："+topicText))
-	textChars := utf8.RuneCountInString(initial) + utf8.RuneCountInString(candidateText) + utf8.RuneCountInString(topicText)
+	textChars := utf8.RuneCountInString(initial) + utf8.RuneCountInString(topicText)
 	if textChars > 24000 {
 		return fmt.Errorf("整理输入超出预算")
 	}
@@ -146,7 +134,7 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, advance 
 }
 
 func (r *investigation) tools() ([]tool.BaseTool, error) {
-	a, err := utils.InferTool("searchKnowledge", "查本群知识，包含候选和历史状态；offset 分页。", r.search)
+	a, err := utils.InferTool("searchKnowledge", "查本群知识，包含归档及原文已失效的历史记录；offset 分页。", r.search)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +146,7 @@ func (r *investigation) tools() ([]tool.BaseTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := utils.InferTool("finishMemoryBatch", "调查结束时单独调用，原子提交知识、关系、完整证据组和复核记录；无结果也需调用。", r.finishTool)
+	d, err := utils.InferTool("finishMemoryBatch", "调查结束时单独调用，原子提交知识、关系、完整证据组和话题归属；无结果也需调用。", r.finishTool)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +185,7 @@ func (r *investigation) search(ctx context.Context, input *searchInput) (any, er
 		return nil, fmt.Errorf("offset 不得为负数")
 	}
 	if input.ItemID != 0 {
-		items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, ItemID: input.ItemID, IncludeInactive: true, ThroughID: r.batch.ThroughID, Limit: 1})
+		items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, ItemID: input.ItemID, ForMaintenance: true, ThroughID: r.batch.ThroughID, Limit: 1})
 		if err != nil {
 			return nil, err
 		}
@@ -231,13 +219,13 @@ func (r *investigation) search(ctx context.Context, input *searchInput) (any, er
 			relations = relations[:10]
 		}
 		r.batch.ExpectedItems[input.ItemID] = items[0].UpdatedAt
-		return map[string]any{"item": items[0], "evidence_sets": groups[start:end], "relations": relations, "has_more": more, "next_offset": input.Offset + 10, "instruction": "使用 readContext 阅读原文后才能作为本轮证据；用 item_id 直接读取关系另一端"}, nil
+		return map[string]any{"item": items[0], "evidence_sets": groups[start:end], "has_valid_evidence": len(groups) > 0, "relations": relations, "has_more": more, "next_offset": input.Offset + 10, "instruction": "使用 readContext 阅读原文后才能作为本轮证据；用 item_id 直接读取关系另一端"}, nil
 	}
 	if input.SubjectUserID != nil && *input.SubjectUserID == memory.SubjectSelfInputID {
 		self := r.batch.SelfID
 		input.SubjectUserID = &self
 	}
-	items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, Query: input.Query, SubjectUserID: input.SubjectUserID, IncludeInactive: true, ThroughID: r.batch.ThroughID, Limit: 11, Offset: input.Offset})
+	items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, Query: input.Query, SubjectUserID: input.SubjectUserID, ForMaintenance: true, ThroughID: r.batch.ThroughID, Limit: 11, Offset: input.Offset})
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +263,6 @@ func (r *investigation) finish(ctx context.Context, input *finishInput) (any, er
 	batch.ReadMessageIDs = nil
 	batch.Items = slices.Clone(input.Items)
 	batch.Relations = slices.Clone(input.Relations)
-	batch.ReviewedIDs = slices.Clone(input.ReviewedIDs)
 	noTopic := slices.Clone(input.NoTopicIDs)
 	for _, id := range r.required {
 		if !r.seen[id] {
@@ -290,21 +277,12 @@ func (r *investigation) finish(ctx context.Context, input *finishInput) (any, er
 			batch.Items[i].SubjectUserID = batch.SelfID
 		}
 	}
-	var result *memory.KnowledgeCommitResult
-	var err error
-	if r.batch.AdvanceCursor {
-		for _, row := range r.rows {
-			if row.RecalledAt != nil || row.TextContent == "" {
-				noTopic = append(noTopic, row.ID)
-			}
+	for _, row := range r.rows {
+		if row.RecalledAt != nil || row.TextContent == "" {
+			noTopic = append(noTopic, row.ID)
 		}
-		result, err = r.manager.CommitConversation(ctx, batch, r.rows, r.topics, input.Topics, noTopic)
-	} else {
-		if len(input.Topics) > 0 || len(input.NoTopicIDs) > 0 {
-			return nil, fmt.Errorf("复核轮次不能修改话题")
-		}
-		result, err = r.manager.CommitKnowledgeBatch(ctx, batch)
 	}
+	result, err := r.manager.CommitConversation(ctx, batch, r.rows, r.topics, input.Topics, noTopic)
 	if err != nil {
 		var validation *memory.ValidationError
 		if errors.As(err, &validation) || errors.Is(err, memory.ErrSnapshotChanged) {

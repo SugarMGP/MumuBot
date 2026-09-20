@@ -33,7 +33,7 @@ func (m *Manager) SaveWorkingNote(ctx context.Context, groupID int64, note strin
 
 func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint, status string) error {
 	if !validKnowledgeStatus(status) {
-		return invalidKnowledge("知识状态无效，请使用 candidate、active 或 archived")
+		return invalidKnowledge("知识状态无效，请选择启用或归档")
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := LockKnowledgeGroup(tx, groupID); err != nil {
@@ -52,7 +52,7 @@ func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint
 				return err
 			}
 			if !ok {
-				return invalidKnowledge("知识缺少完整有效依据，暂时不能生效")
+				return invalidKnowledge("知识缺少完整有效依据，暂时不能启用")
 			}
 			var duplicate KnowledgeItem
 			err = tx.Where("group_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND btrim(content)=? AND status='active' AND id<>?", groupID, item.SubjectUserID, item.Kind, item.Label, item.Content, id).First(&duplicate).Error
@@ -70,26 +70,29 @@ func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint
 						return err
 					}
 				}
-				if err := tx.Model(&duplicate).Update("updated_at", time.Now()).Error; err != nil {
+				if err := tx.Model(&duplicate).Updates(map[string]any{"updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,?,(SELECT COALESCE(max(id),0) FROM message_logs WHERE group_id=?))", item.ReviewedThroughID, groupID)}).Error; err != nil {
 					return err
 				}
-				return tx.Model(&item).Updates(map[string]any{"status": "archived", "updated_at": time.Now()}).Error
+				if err := tx.Model(&item).Updates(map[string]any{"status": "archived", "updated_at": time.Now()}).Error; err != nil {
+					return err
+				}
+				return archiveInvalidKnowledgeRelations(tx, groupID)
 			}
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
 		}
-		updates := map[string]any{"status": status, "updated_at": time.Now()}
-		if status == "candidate" {
-			updates["reviewed_through_id"] = 0
+		updates := map[string]any{"status": status, "updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,(SELECT COALESCE(max(id),0) FROM message_logs WHERE group_id=?))", groupID)}
+		if err := tx.Model(&item).Updates(updates).Error; err != nil {
+			return err
 		}
-		return tx.Model(&item).Updates(updates).Error
+		return archiveInvalidKnowledgeRelations(tx, groupID)
 	})
 }
 
 func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64, id uint, status string) error {
 	if !validKnowledgeStatus(status) {
-		return invalidKnowledge("关系状态无效，请使用 candidate、active 或 archived")
+		return invalidKnowledge("关系状态无效，请选择启用或归档")
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := LockKnowledgeGroup(tx, groupID); err != nil {
@@ -116,7 +119,7 @@ func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64,
 					return err
 				}
 				if !ok || (item.Status != "active" && !(relation.Kind == "supersedes" && item.ID == relation.TargetItemID && item.Status == "archived")) {
-					return invalidKnowledge("关系端点尚未生效或缺少有效依据，请先处理端点知识")
+					return invalidKnowledge("关系端点尚未启用或缺少有效依据，请先处理端点知识")
 				}
 			}
 			ok, err := knowledgeHasEvidence(tx, 0, id)
@@ -124,23 +127,22 @@ func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64,
 				return err
 			}
 			if !ok {
-				return invalidKnowledge("关系缺少完整有效依据，暂时不能生效")
+				return invalidKnowledge("关系缺少完整有效依据，暂时不能启用")
 			}
 		}
 		if err := tx.Model(&relation).Update("status", status).Error; err != nil {
 			return err
 		}
-		updates := map[string]any{"updated_at": time.Now()}
-		if status == "candidate" {
-			updates["reviewed_through_id"] = 0
-		}
+		updates := map[string]any{"updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,(SELECT COALESCE(max(id),0) FROM message_logs WHERE group_id=?))", groupID)}
 		if err := tx.Model(&KnowledgeItem{}).Where("id IN ?", []uint{relation.SourceItemID, relation.TargetItemID}).Updates(updates).Error; err != nil {
 			return err
 		}
 		if status == "active" && relation.Kind == "supersedes" {
-			return tx.Model(&KnowledgeItem{}).Where("id=?", relation.TargetItemID).Updates(map[string]any{"status": "archived", "updated_at": time.Now()}).Error
+			if err := tx.Model(&KnowledgeItem{}).Where("id=?", relation.TargetItemID).Updates(map[string]any{"status": "archived", "updated_at": time.Now()}).Error; err != nil {
+				return err
+			}
 		}
-		return nil
+		return archiveInvalidKnowledgeRelations(tx, groupID)
 	})
 }
 
@@ -151,7 +153,7 @@ func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int) error 
 		Content string
 	}
 	if err := m.db.WithContext(ctx).Raw(`SELECT id,kind,content FROM (
- SELECT id,'knowledge' kind,concat_ws(': ',nullif(label,''),content) content,created_at FROM knowledge_items WHERE embedding IS NULL AND status<>'archived'
+ SELECT id,'knowledge' kind,concat_ws(': ',nullif(label,''),content) content,created_at FROM knowledge_items WHERE embedding IS NULL AND status='active'
  UNION ALL SELECT ts.id,'topic' kind,`+TopicSummaryTextSQL+` content,ts.created_at FROM topic_summaries ts WHERE ts.embedding IS NULL
  ) pending ORDER BY created_at,id LIMIT ?`, max(1, min(limit, 10))).Scan(&pending).Error; err != nil {
 		return err

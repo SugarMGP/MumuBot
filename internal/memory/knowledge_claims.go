@@ -30,7 +30,7 @@ func (m *Manager) PrepareClaimBatch(ctx context.Context, scope StoreClaimsContex
 		}
 		ids := messageLogIDs(rows)
 		batch.ReadMessageIDs = append(batch.ReadMessageIDs, ids...)
-		batch.Items = append(batch.Items, KnowledgeItemInput{Key: fmt.Sprintf("claim%d", i), SubjectUserID: claim.SubjectUserID, Kind: string(claim.Kind), Content: claim.Content, Status: "candidate", EvidenceSets: [][]uint{ids}})
+		batch.Items = append(batch.Items, KnowledgeItemInput{Key: fmt.Sprintf("claim%d", i), SubjectUserID: claim.SubjectUserID, Kind: string(claim.Kind), Content: claim.Content, Status: "active", EvidenceSets: [][]uint{ids}})
 	}
 	return batch, nil
 }

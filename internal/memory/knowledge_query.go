@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptions) ([]KnowledgeItem, error) {
@@ -41,16 +43,23 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 		base += " AND ki.kind=?"
 		args = append(args, opts.Kind)
 	}
-	if !opts.IncludeInactive {
-		base += " AND ki.status='active' AND " + knowledgeEvidenceSQL("item_id")
+	if !opts.IncludeInactive && !opts.ForMaintenance {
+		base += " AND ki.status='active'"
 	} else if opts.Status != "" {
 		base += " AND ki.status=?"
 		args = append(args, opts.Status)
 	}
+	if !opts.ForMaintenance {
+		base += " AND " + knowledgeItemEvidenceSQL
+	}
 	if opts.ThroughID > 0 {
 		base += " AND ki.reviewed_through_id<=?"
 		args = append(args, opts.ThroughID)
-		base += ` AND ((ki.status='candidate' AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id)) OR EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND (ki.status='candidate' OR (` + KnowledgeEvidenceSetValiditySQL + `)) AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?)))`
+		if opts.ForMaintenance {
+			base += ` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_sets es JOIN knowledge_evidence_messages em ON em.evidence_set_id=es.id WHERE es.item_id=ki.id AND em.message_log_id>?)`
+		} else {
+			base += ` AND EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND ` + KnowledgeEvidenceSetValiditySQL + ` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?))`
+		}
 		args = append(args, opts.ThroughID)
 	}
 	query := strings.TrimSpace(opts.Query)
@@ -74,7 +83,7 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 	}
 	var vectors, texts, labels []rankedIDRow
 	poolLimit := " LIMIT 30"
-	if opts.IncludeInactive {
+	if opts.IncludeInactive || opts.ForMaintenance {
 		poolLimit = ""
 	}
 	if len(prepared.embedding.Slice()) > 0 {
@@ -138,21 +147,22 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 	upper := opts.ThroughID
 	seen := map[uint]bool{}
 	edges := map[uint]bool{}
-	load := func(ids []uint) ([]KnowledgeItem, error) {
-		var rows []KnowledgeItem
-		q := m.db.WithContext(ctx).Table("knowledge_items ki").Where("ki.group_id=? AND ki.id IN ?", groupID, ids).Where(knowledgeEvidenceSQL("item_id"))
+	visibleItems := func() *gorm.DB {
+		q := m.db.WithContext(ctx).Table("knowledge_items ki").Where("ki.group_id=?", groupID).Where(knowledgeItemEvidenceSQL)
 		if len(opts.SubjectIDs) > 0 {
 			q = q.Where("ki.subject_user_id=ANY(?)", int64Array(opts.SubjectIDs))
 		}
 		if upper > 0 {
 			q = q.Where("ki.reviewed_through_id<=?", upper).Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND `+KnowledgeEvidenceSetValiditySQL+` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?))`, upper)
 		}
-		if includeHistory {
-			q = q.Where("ki.status IN ('active','archived')")
-		} else {
+		if !includeHistory {
 			q = q.Where("ki.status='active'")
 		}
-		err := q.Order("ki.id").Find(&rows).Error
+		return q
+	}
+	load := func(ids []uint) ([]KnowledgeItem, error) {
+		var rows []KnowledgeItem
+		err := visibleItems().Where("ki.id IN ?", ids).Order("ki.id").Find(&rows).Error
 		return rows, err
 	}
 	seeds, err := load(seedIDs)
@@ -173,10 +183,13 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 	}
 	for step := 0; step < depth && len(frontier) > 0; step++ {
 		var relations []KnowledgeRelation
-		q := m.db.WithContext(ctx).Table("knowledge_relations kr").Select("kr.*").Joins("JOIN knowledge_items s ON s.id=kr.source_item_id JOIN knowledge_items t ON t.id=kr.target_item_id").Where("s.group_id=? AND t.group_id=? AND (kr.source_item_id IN ? OR kr.target_item_id IN ?)", groupID, groupID, frontier, frontier).Where("kr.status='active'").Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND ` + KnowledgeEvidenceSetValiditySQL + `)`)
-		if len(opts.SubjectIDs) > 0 {
-			subjects := int64Array(opts.SubjectIDs)
-			q = q.Where("s.subject_user_id=ANY(?) AND t.subject_user_id=ANY(?)", subjects, subjects)
+		// 先过滤两端的状态、主体、证据和快照，再限制关系数，避免无效端点占满名额
+		q := m.db.WithContext(ctx).Table("knowledge_relations kr").Select("kr.*").
+			Where("kr.source_item_id IN ? OR kr.target_item_id IN ?", frontier, frontier).
+			Where("kr.source_item_id IN (?) AND kr.target_item_id IN (?)", visibleItems().Select("ki.id"), visibleItems().Select("ki.id")).
+			Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND ` + KnowledgeEvidenceSetValiditySQL + `)`)
+		if !includeHistory {
+			q = q.Where("kr.status='active'")
 		}
 		if upper > 0 {
 			q = q.Where(`EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND `+KnowledgeEvidenceSetValiditySQL+` AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id AND em.message_log_id>?))`, upper)

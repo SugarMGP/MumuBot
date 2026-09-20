@@ -29,7 +29,7 @@ templ DashboardBody(data DashboardPageData) {
 			@DashboardMetric("groups", "启用群聊", fmt.Sprintf("%d", data.EnabledGroupCount), "bg-[#eef5ff]")
 			@DashboardMetric("memories", "统一记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
 			@DashboardMetric("members", "成员管理", fmt.Sprintf("%d", data.MemberCount), "bg-[#fff5ee]")
-			@DashboardMetric("jargons", "待确认记忆", fmt.Sprintf("%d", data.CandidateCount), "bg-[#eff9f4]")
+			@DashboardMetric("jargons", "启用记忆", fmt.Sprintf("%d", data.ActiveCount), "bg-[#eff9f4]")
 			@DashboardMetric("style-cards", "知识关联", fmt.Sprintf("%d", data.RelationCount), "bg-[#f5f0ff]")
 			@DashboardMetric("stickers", "表情包", fmt.Sprintf("%d", data.StickerCount), "bg-[#fff8e8]")
 		</section>

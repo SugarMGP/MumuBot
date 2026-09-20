@@ -44,7 +44,7 @@ func (r *investigation) newAgent(ctx context.Context, base model.ToolCallingChat
 	}
 	return react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: &memoryChatModel{ToolCallingChatModel: base, run: r},
-		ToolsConfig:      compose.ToolsNodeConfig{Tools: available, ExecuteSequentially: true, UnknownToolsHandler: agenttools.UnknownToolHandler, ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: agenttools.ToolErrorMiddleware()}, {Invokable: agenttools.ToolDedupMiddleware()}}},
+		ToolsConfig:      compose.ToolsNodeConfig{Tools: available, ExecuteSequentially: true, UnknownToolsHandler: agenttools.UnknownToolHandler, ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: agenttools.ToolErrorMiddleware()}}},
 		MaxStep:          maxStep,
 	})
 }

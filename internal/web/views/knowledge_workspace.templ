@@ -30,7 +30,7 @@ templ KnowledgeWorkspace(data KnowledgeWorkspaceData) {
 			<input class="input w-full" type="search" name="keyword" aria-label="搜索内容" placeholder="搜索内容或术语…" value={ data.Filter.Keyword }/>
 			<select class="select w-full" name="status" aria-label="状态">
 				<option value="">全部状态</option>
-				for _,status:=range []string{"candidate","active","archived"} {
+				for _,status:=range []string{"active","archived"} {
 					<option value={ status } selected?={ data.Filter.Status==status }>{ memoryStatusText(status) }</option>
 				}
 			</select>

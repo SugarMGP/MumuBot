@@ -105,10 +105,8 @@ func memoryStatusText(status string) string {
 	switch status {
 	case "archived":
 		return "已归档"
-	case "candidate":
-		return "待确认"
 	default:
-		return "生效中"
+		return "启用"
 	}
 }
 
@@ -116,8 +114,6 @@ func memoryStatusClass(status string) string {
 	switch status {
 	case "archived":
 		return "badge badge-ghost badge-sm"
-	case "candidate":
-		return "badge badge-warning badge-soft badge-sm"
 	default:
 		return "badge badge-success badge-soft badge-sm"
 	}

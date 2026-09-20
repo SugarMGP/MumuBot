@@ -273,7 +273,13 @@ func (a *Agent) think(groupID int64, probabilityPassed bool) {
 		if snapshotErr != nil {
 			zap.L().Warn("读取话题工作记忆快照上界失败", zap.Int64("group_id", groupID), zap.Int64("message_id", snapshotMessageID), zap.Error(snapshotErr))
 		} else {
-			topicPrompt, err := a.topicMgr.BuildPromptContext(ctx, groupID, retrievalQuery, snapshotLog.ID, replyMessageIDs(currentMessages))
+			snapshotIDs := make([]int64, 0, len(buffer))
+			for _, msg := range buffer {
+				if msg != nil && msg.MessageID != 0 {
+					snapshotIDs = append(snapshotIDs, msg.MessageID)
+				}
+			}
+			topicPrompt, err := a.topicMgr.BuildPromptContext(ctx, groupID, retrievalQuery, snapshotLog.ID, replyMessageIDs(currentMessages), snapshotIDs)
 			if err != nil {
 				zap.L().Warn("构建话题工作记忆失败", zap.Int64("group_id", groupID), zap.Error(err))
 			} else {

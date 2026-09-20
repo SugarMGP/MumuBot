@@ -32,7 +32,7 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		EnabledGroupCount: snapshot.EnabledGroups,
 		MemoryCount:       stats.MemoryCount,
 		MemberCount:       stats.MemberCount,
-		CandidateCount:    stats.CandidateCount,
+		ActiveCount:       stats.ActiveCount,
 		RelationCount:     stats.RelationCount,
 		StickerCount:      stats.StickerCount,
 		OneBotConnected:   snapshot.Connected,

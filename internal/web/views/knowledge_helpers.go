@@ -44,12 +44,8 @@ func relationText(kind string) string {
 
 func knowledgeNodeStyle(status string) map[string]any {
 	color := "#159a8c"
-	border := "solid"
-	if status == "candidate" {
-		color = "#d59a22"
-		border = "dashed"
-	} else if status == "archived" {
+	if status == "archived" {
 		color = "#b7b4bc"
 	}
-	return map[string]any{"color": color, "borderColor": color, "borderWidth": 2, "borderType": border, "shadowBlur": 14, "shadowColor": "rgba(21,154,140,.18)"}
+	return map[string]any{"color": color, "borderColor": color, "borderWidth": 2, "borderType": "solid", "shadowBlur": 14, "shadowColor": "rgba(21,154,140,.18)"}
 }

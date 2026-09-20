@@ -58,7 +58,7 @@ func groupKnowledgeGraphJSON(data KnowledgeGraphPageData) string {
 		nodes = append(nodes, map[string]any{"id": id, "name": graphTopicTitle(topic), "status": status, "url": graphPanelURL(data.Workspace.Filter.GroupID, "topic", topic.TopicID, 0), "symbol": "diamond", "symbolSize": size, "itemStyle": itemStyle})
 	}
 	for _, rel := range data.Graph.Relations {
-		edges = append(edges, map[string]any{"source": fmt.Sprintf("k:%d", rel.SourceItemID), "target": fmt.Sprintf("k:%d", rel.TargetItemID), "name": relationText(rel.Kind), "status": memoryStatusText(rel.Status), "symbol": []string{"none", "arrow"}, "url": graphPanelURL(data.Workspace.Filter.GroupID, "relation", rel.ID, 0), "lineStyle": map[string]any{"color": "#ef8ca8", "type": ternaryString(rel.Status == "candidate", "dashed", "solid")}})
+		edges = append(edges, map[string]any{"source": fmt.Sprintf("k:%d", rel.SourceItemID), "target": fmt.Sprintf("k:%d", rel.TargetItemID), "name": relationText(rel.Kind), "status": memoryStatusText(rel.Status), "symbol": []string{"none", "arrow"}, "url": graphPanelURL(data.Workspace.Filter.GroupID, "relation", rel.ID, 0), "lineStyle": map[string]any{"color": "#ef8ca8", "type": ternaryString(rel.Status == "archived", "dashed", "solid")}})
 	}
 	for _, topic := range data.Graph.Topics {
 		if !topic.SourcesValid {
@@ -115,7 +115,7 @@ func GraphPanel(selection services.GraphSelection, groupID, selfID int64, kind s
 		if topic.SourcesValid && sonic.UnmarshalString(topic.SummaryJSON, &summary) == nil {
 			d.Content = summary.Gist
 			if len(summary.OpenLoops) > 0 {
-				d.Content += "\n\n待确认：" + strings.Join(summary.OpenLoops, "；")
+				d.Content += "\n\n未完事项：" + strings.Join(summary.OpenLoops, "；")
 			}
 		} else {
 			d.Content = "原文依据已失效，等待后续讨论重新整理。"

@@ -4,11 +4,11 @@ import "gorm.io/gorm"
 
 func checkKnowledgeActivation(tx *gorm.DB, id uint) error {
 	var count int64
-	if err := tx.Table("knowledge_relations kr").Where("kr.target_item_id=? AND kr.kind='supersedes' AND kr.status='active'", id).Count(&count).Error; err != nil {
+	if err := tx.Table("knowledge_relations kr").Joins("JOIN knowledge_items source ON source.id=kr.source_item_id").Where("kr.target_item_id=? AND kr.kind='supersedes' AND kr.status='active' AND source.status='active'", id).Count(&count).Error; err != nil {
 		return err
 	}
 	if count > 0 {
-		return invalidKnowledge("该知识已有生效的替代解释，请先处理替代关系")
+		return invalidKnowledge("该知识已有启用的替代解释，请先处理替代关系")
 	}
 	return nil
 }

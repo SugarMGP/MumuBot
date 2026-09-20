@@ -133,7 +133,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 
 	a.learner, err = learning.New(mem, botClient.GetSelfID)
 	if err != nil {
-		return nil, fmt.Errorf("初始化记忆复核失败: %w", err)
+		return nil, fmt.Errorf("初始化记忆整理失败: %w", err)
 	}
 
 	a.mcpMgr = mcp.NewMCPManager()

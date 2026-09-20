@@ -8,8 +8,6 @@ import (
 	"github.com/bytedance/sonic"
 )
 
-const TailKeepMessages = 8
-
 func EmptySummary() memory.TopicSummary {
 	return memory.TopicSummary{Version: 1, Participants: []memory.TopicParticipant{}, OpenLoops: []string{}, RecentTurns: []string{}, Keywords: []string{}}
 }

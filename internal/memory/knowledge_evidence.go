@@ -14,9 +14,8 @@ import (
 const KnowledgeEvidenceSetValiditySQL = `(SELECT count(*) FROM knowledge_evidence_messages em WHERE em.evidence_set_id=es.id) BETWEEN 1 AND 16
  AND NOT EXISTS(SELECT 1 FROM knowledge_evidence_messages em JOIN message_logs ml ON ml.id=em.message_log_id WHERE em.evidence_set_id=es.id AND (ml.recalled_at IS NOT NULL OR btrim(ml.text_content)=''))`
 
-func knowledgeEvidenceSQL(column string) string {
-	return `EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.` + column + `=ki.id AND ` + KnowledgeEvidenceSetValiditySQL + `)`
-}
+const knowledgeItemEvidenceSQL = `EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND ` + KnowledgeEvidenceSetValiditySQL + `)`
+
 func knowledgeHasEvidence(tx *gorm.DB, itemID, relationID uint) (bool, error) {
 	var count int64
 	query := tx.Table("knowledge_evidence_sets es").Where(KnowledgeEvidenceSetValiditySQL)
@@ -222,10 +221,21 @@ func (m *Manager) ListKnowledgeEvidencePage(ctx context.Context, groupID int64, 
 
 // InvalidateKnowledgeEvidence 在调用方的同群消息撤回事务中使相关证据失效
 func InvalidateKnowledgeEvidence(tx *gorm.DB, groupID int64) error {
-	if err := tx.Exec(`UPDATE knowledge_items ki SET status='candidate',reviewed_through_id=0,updated_at=now() WHERE ki.group_id=? AND ki.status='active' AND NOT (`+knowledgeEvidenceSQL("item_id")+`)`, groupID).Error; err != nil {
+	if err := tx.Exec(`UPDATE knowledge_items ki SET status='archived',updated_at=now() WHERE ki.group_id=? AND ki.status='active' AND NOT (`+knowledgeItemEvidenceSQL+`)`, groupID).Error; err != nil {
 		return err
 	}
+	return archiveInvalidKnowledgeRelations(tx, groupID)
+}
+
+// archiveInvalidKnowledgeRelations 统一收口失效关系；替代关系的旧端归档是正常状态
+func archiveInvalidKnowledgeRelations(tx *gorm.DB, groupID int64) error {
 	return tx.Exec(`WITH changed AS (
-		UPDATE knowledge_relations kr SET status='candidate' WHERE kr.status='active' AND EXISTS(SELECT 1 FROM knowledge_items ki WHERE ki.id=kr.source_item_id AND ki.group_id=?) AND (NOT EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND `+KnowledgeEvidenceSetValiditySQL+`) OR EXISTS(SELECT 1 FROM knowledge_items ki WHERE ki.id IN(kr.source_item_id,kr.target_item_id) AND ki.status='candidate')) RETURNING source_item_id,target_item_id
-	) UPDATE knowledge_items SET reviewed_through_id=0,updated_at=now() WHERE id IN(SELECT source_item_id FROM changed UNION SELECT target_item_id FROM changed)`, groupID).Error
+		UPDATE knowledge_relations kr SET status='archived'
+		FROM knowledge_items s,knowledge_items t
+		WHERE kr.source_item_id=s.id AND kr.target_item_id=t.id AND s.group_id=? AND kr.status='active'
+		AND (s.status<>'active' OR (t.status<>'active' AND kr.kind<>'supersedes')
+		 OR NOT EXISTS(SELECT 1 FROM knowledge_evidence_sets es WHERE es.relation_id=kr.id AND `+KnowledgeEvidenceSetValiditySQL+`)
+		 OR EXISTS(SELECT 1 FROM knowledge_items ki WHERE ki.id IN(s.id,t.id) AND NOT (`+knowledgeItemEvidenceSQL+`)))
+		RETURNING kr.source_item_id,kr.target_item_id
+	) UPDATE knowledge_items SET updated_at=now() WHERE id IN(SELECT source_item_id FROM changed UNION SELECT target_item_id FROM changed)`, groupID).Error
 }

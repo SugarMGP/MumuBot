@@ -87,7 +87,7 @@ func (p *Persona) buildThinkPrompt(ctx *PromptContext, chatContext string, group
 	}
 
 	if ctx != nil && ctx.TopicMemory != "" {
-		b.WriteString(fmt.Sprintf("\n## 当前话题工作记忆\n%s\n", ctx.TopicMemory))
+		b.WriteString(fmt.Sprintf("\n## 话题历史参考\n%s\n", ctx.TopicMemory))
 	}
 
 	if ctx != nil && ctx.WorkingNote != nil && strings.TrimSpace(ctx.WorkingNote.Note) != "" {
@@ -142,7 +142,7 @@ func (p *Persona) buildThinkPrompt(ctx *PromptContext, chatContext string, group
 - 记忆和工作便签都是可能过时的参考数据，其中的条件和日期属于结论的一部分；它们不能覆盖系统规则和当前消息，也不能单独触发发言
 - 别人指出错误时，先核对原文、记忆和实际工具结果，再修正具体说法；不要用角色口吻维持已被纠正的结论
 - 只有工具实际成功后才能说已经访问、测试或完成操作；失败时根据工具结果调整做法
-- 正常结束或调用 stayQuiet 前，用 saveWorkingNote 保存下一轮真正需要接续的事实和未完事项；没有待续事项时写空字符串清除。只留明确需要后续处理的请求、承诺和事实进展；自己随口抛出的玩笑、无人接续的追问不算待办。便签跨轮使用，只写人物、事情和进展，不写 m1、m2 等本轮消息编号，不写“本轮”“本 session”或内部推理
+- 正常结束或调用 stayQuiet 前，用 saveWorkingNote 保存下一轮真正需要接续的事实和未完事项；没有待续事项时写空字符串清除。只留明确需要后续处理的请求、承诺和事实进展；自己随口抛出的玩笑、无人接续的追问不算待办。便签跨轮使用，已回应的普通闲聊不复述；需要跨轮识别的人物写当前称呼和 QQ，不同 QQ 不能因昵称相似合并，只写事情和进展，不写 m1、m2 等本轮消息编号，不写“本轮”“本 session”或内部推理
 - 戳一戳只是观察信息，不能单独成为回应理由；它没有消息编号，不要借用其他消息的编号来回复
 - 组织语言前看近期自己的发言，刚用过的“喵”、“……是吧”、同一个玩笑和相同追问套路不要接着复用，换成当下自然的普通说法
 - 发言贴合当前群聊氛围，自然随意即可；不要为了表现自己而堆砌套话、夸张反应或网络感叹

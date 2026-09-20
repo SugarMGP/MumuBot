@@ -154,7 +154,7 @@ templ KnowledgeStatusForm(kind string, id uint, status string, returnTo string) 
 	<form class="flex items-center gap-2" method="post" action="/admin/knowledge/actions">
 		<input type="hidden" name="action_kind" value={ kind }/><input type="hidden" name="action_id" value={ fmt.Sprint(id) }/><input type="hidden" name="return_to" value={ returnTo }/>
 		<select class="select select-sm border-base-300 bg-base-100" name="status" aria-label="记忆状态">
-			for _, option := range []string{"active", "candidate", "archived"} {
+			for _, option := range []string{"active", "archived"} {
 				<option value={ option } selected?={ status == option }>{ memoryStatusText(option) }</option>
 			}
 		</select>
@@ -164,7 +164,7 @@ templ KnowledgeStatusForm(kind string, id uint, status string, returnTo string) 
 
 templ KnowledgeEvidenceGroups(sets []memory.KnowledgeEvidence, topics map[uint]uint, returnTo string) {
 	if len(sets)==0 {
-		<p class="py-4 text-sm text-base-content/50">暂无完整依据，待补充确认</p>
+		<p class="py-4 text-sm text-base-content/50">暂无完整原文依据</p>
 	}
 	for i,set:=range sets {
 		<details class="mb-4 border-l-2 border-base-300 pl-4" open?={ firstEvidenceOpen(sets,i) }>

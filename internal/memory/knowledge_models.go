@@ -62,7 +62,7 @@ type KnowledgeItemInput struct {
 	Kind          string   `json:"kind"`
 	Label         string   `json:"label"`
 	Content       string   `json:"content"`
-	Status        string   `json:"status"`
+	Status        string   `json:"status,omitempty" jsonschema:"enum=active,enum=archived,description=新知识默认启用；已有知识省略时保留状态"`
 	EvidenceSets  [][]uint `json:"evidence_sets"`
 }
 type KnowledgeRelationInput struct {
@@ -71,7 +71,7 @@ type KnowledgeRelationInput struct {
 	SourceID     uint     `json:"source_id"`
 	TargetID     uint     `json:"target_id"`
 	Kind         string   `json:"kind"`
-	Status       string   `json:"status"`
+	Status       string   `json:"status,omitempty" jsonschema:"enum=active,enum=archived,description=新关系默认启用；已有关系省略时保留状态"`
 	EvidenceSets [][]uint `json:"evidence_sets"`
 }
 type KnowledgeBatch struct {
@@ -85,11 +85,11 @@ type KnowledgeBatch struct {
 	ExpectedItems   map[uint]time.Time
 	Items           []KnowledgeItemInput
 	Relations       []KnowledgeRelationInput
-	ReviewedIDs     []uint
 }
 type KnowledgeCommitResult struct {
-	ItemIDs     map[string]uint `json:"item_ids"`
-	RelationIDs []uint          `json:"relation_ids"`
+	ItemIDs      map[string]uint   `json:"item_ids"`
+	ItemStatuses map[string]string `json:"item_statuses"`
+	RelationIDs  []uint            `json:"relation_ids"`
 }
 type KnowledgeSearchOptions struct {
 	ItemID          uint
@@ -101,6 +101,7 @@ type KnowledgeSearchOptions struct {
 	Status          string
 	Query           string
 	Prepared        *HybridQuery
+	ForMaintenance  bool // 维护入口可读取缺少有效原文的归档记录
 	IncludeInactive bool
 	ThroughID       uint
 	Limit           int

@@ -55,7 +55,7 @@ type AdminService struct {
 	stickerDir string
 }
 
-type OverviewStats struct{ MemoryCount, MemberCount, CandidateCount, RelationCount, StickerCount int64 }
+type OverviewStats struct{ MemoryCount, MemberCount, ActiveCount, RelationCount, StickerCount int64 }
 
 func NewAdminService(memoryManager *memory.Manager, stickerDir string) *AdminService {
 	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir}
@@ -130,7 +130,7 @@ func (s *AdminService) OverviewStats() (OverviewStats, error) {
 			return out, err
 		}
 	}
-	if err := s.db.Model(&memory.KnowledgeItem{}).Where("status = ?", "candidate").Count(&out.CandidateCount).Error; err != nil {
+	if err := s.db.Model(&memory.KnowledgeItem{}).Where("status = ?", "active").Count(&out.ActiveCount).Error; err != nil {
 		return out, err
 	}
 	return out, nil

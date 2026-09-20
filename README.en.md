@@ -43,7 +43,7 @@ Core capabilities of this project:
 - 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
-- 🖥️ **Admin Dashboard** — Browse knowledge and topic graphs by group, then open relationships to verify source messages and review status
+- 🖥️ **Admin Dashboard** — Browse knowledge and topic graphs by group, then open relationships to verify source messages and active/archived status
 - 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 
 ## 🚀 Quick Start

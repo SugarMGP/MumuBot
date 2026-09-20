@@ -93,7 +93,7 @@ type DashboardPageData struct {
 	EnabledGroupCount int
 	MemoryCount       int64
 	MemberCount       int64
-	CandidateCount    int64
+	ActiveCount       int64
 	RelationCount     int64
 	StickerCount      int64
 	OneBotConnected   bool

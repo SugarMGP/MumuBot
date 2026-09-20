@@ -3,16 +3,20 @@ package topic
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"mumu-bot/internal/memory"
 )
 
-func renderTopicPromptSection(topic memory.TopicThread, summary memory.TopicSummary, tail []memory.MessageLog) string {
+func renderTopicPromptSection(topic memory.TopicThread, summary memory.TopicSummary, tail []memory.MessageLog, from, to time.Time) string {
 	title := strings.TrimSpace(summary.Title)
 	if title == "" {
 		title = fmt.Sprintf("话题 %d", topic.ID)
 	}
 	lines := []string{"### " + title}
+	if !from.IsZero() && !to.IsZero() {
+		lines = append(lines, "原文时间："+from.Format("2006-01-02 15:04")+" — "+to.Format("2006-01-02 15:04"))
+	}
 	if summary.Gist != "" {
 		lines = append(lines, "概况："+summary.Gist)
 	}
