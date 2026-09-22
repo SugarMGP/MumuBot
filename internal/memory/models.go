@@ -117,6 +117,7 @@ type MemberProfile struct {
 	Nickname     string    `gorm:"type:text;not null" json:"nickname"`
 	LastSeenAt   time.Time `gorm:"not null" json:"last_seen_at"`
 	MessageCount int64     `gorm:"not null" json:"message_count"`
+	Intimacy     float64   `gorm:"not null;default:0" json:"intimacy"`
 }
 
 func (MemberProfile) TableName() string { return "member_profiles" }

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/tools"
@@ -328,7 +327,8 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 			originalNickname = strings.TrimSpace(nickname)
 		}
 
-		details := make([]string, 0, 4)
+		details := make([]string, 0, 5)
+		details = append(details, fmt.Sprintf("好感度 %.2f（%d级·%s）", profile.Intimacy, memory.IntimacyLevel(profile.Intimacy), memory.IntimacyLevelName(profile.Intimacy)))
 		if originalNickname != "" && originalNickname != displayName {
 			details = append(details, "原昵称: "+originalNickname)
 		}
@@ -461,115 +461,4 @@ func (a *Agent) summarizeForwardMessages(ctx context.Context, content []interfac
 		return "", err
 	}
 	return a.vision.SummarizeForward(ctx, raw, imageURLs, videoURLs)
-}
-
-func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
-	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
-	defer cancel()
-
-	cfg := config.Get()
-	content := msg.Content
-	if len(msg.AtList) > 0 {
-		mentions := make([]string, 0, len(msg.AtList))
-		for _, userID := range msg.AtList {
-			if userID == onebot.AtAllUserID {
-				mentions = append(mentions, "@全体成员")
-				continue
-			}
-			if userID <= 0 {
-				continue
-			}
-			displayName := a.resolveMentionDisplayName(ctx, msg, userID)
-			mentions = append(mentions, "@"+displayName)
-		}
-		if len(mentions) > 0 {
-			content = strings.Join(mentions, " ") + " " + content
-		}
-	}
-
-	for _, face := range msg.Faces {
-		if face.Name != "" {
-			content += fmt.Sprintf(" [表情:%s]", face.Name)
-		} else if face.ID > 0 {
-			content += fmt.Sprintf(" [表情:%d]", face.ID)
-		} else {
-			content += " [表情]"
-		}
-	}
-
-	for _, img := range msg.Images {
-		if img.SubType == 1 {
-			if img.Desc != "" {
-				content += fmt.Sprintf(" [表情包:%s]", img.Desc)
-				continue
-			}
-			var visionDesc string
-			if d, err := a.describeImageCached(ctx, img); err == nil {
-				visionDesc = d
-			}
-			if img.URL != "" && visionDesc != "" && cfg.Sticker.AutoSave && a.ctx.Err() == nil {
-				a.wg.Add(1)
-				go func(url string, stickerDesc string) {
-					defer a.wg.Done()
-					a.autoSaveSticker(a.ctx, url, stickerDesc)
-				}(img.URL, visionDesc)
-			}
-			if visionDesc != "" {
-				content += fmt.Sprintf(" [表情包:%s]", visionDesc)
-			} else {
-				content += " [表情包]"
-			}
-		} else {
-			if img.Desc != "" {
-				content += fmt.Sprintf(" [图片:%s]", img.Desc)
-				continue
-			}
-			var visionDesc string
-			if d, err := a.describeImageCached(ctx, img); err == nil {
-				visionDesc = d
-			}
-			if visionDesc != "" {
-				content += fmt.Sprintf(" [图片:%s]", visionDesc)
-			} else {
-				content += " [图片]"
-			}
-		}
-	}
-
-	for _, vid := range msg.Videos {
-		if desc, err := a.describeVideoCached(ctx, vid); err == nil && desc != "" {
-			content += fmt.Sprintf(" [视频:%s]", desc)
-		} else {
-			content += " [视频]"
-		}
-	}
-	if msg.HasRecord {
-		content += " [语音]"
-	}
-	for _, fileName := range msg.FileNames {
-		fileName = strings.TrimSpace(fileName)
-		if fileName == "" {
-			content += " [文件]"
-			continue
-		}
-		content += fmt.Sprintf(" [文件:%s]", fileName)
-	}
-	for _, card := range msg.Cards {
-		content += " " + card.Format()
-	}
-	if len(msg.ForwardContent) > 0 {
-		count := len(msg.ForwardContent)
-		summary, err := a.summarizeForwardMessages(ctx, msg.ForwardContent)
-		if err != nil {
-			zap.L().Error("总结合并转发消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-		}
-		msg.ForwardContent = nil
-		if summary != "" {
-			content += fmt.Sprintf(" [合并转发，共%d条:%s]", count, summary)
-		} else {
-			content += fmt.Sprintf(" [合并转发，共%d条]", count)
-		}
-	}
-
-	return strings.TrimSpace(content)
 }

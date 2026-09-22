@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"mumu-bot/internal/memory"
 	"mumu-bot/internal/web/services"
 )
 
@@ -107,7 +108,7 @@ templ MemberListBody(data MemberListPageData) {
 							<a class="admin-member-stat text-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?author_id=%d", item.UserID)) }><span>提供依据的记忆</span><strong>{ fmt.Sprint(item.ParticipationCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-evidence")
 </a>
 						</section>
-						<section class="text-right text-xs text-base-content/60"><p>发言 <strong class="text-base text-base-content">{ fmt.Sprint(item.MessageCount) }</strong> 次</p><time class="mt-2 block" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time><span>最近活跃</span></section>
+						<section class="text-right text-xs text-base-content/60"><p>好感度 <strong class="text-base text-base-content">{ fmt.Sprintf("%.2f", item.Intimacy) }</strong>（{ fmt.Sprintf("%d级·%s", memory.IntimacyLevel(item.Intimacy), memory.IntimacyLevelName(item.Intimacy)) }）</p><p class="mt-1">发言 <strong class="text-base text-base-content">{ fmt.Sprint(item.MessageCount) }</strong> 次</p><time class="mt-2 block" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time><span>最近活跃</span></section>
 					</div>
 				</article>
 			}

@@ -72,6 +72,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 	if !ok {
 		if raw, ok := event["raw_message"].(string); ok {
 			msg.Content = raw
+			msg.MessageParts = []MessagePart{{Kind: "text", Text: raw}}
 		}
 		return true
 	}
@@ -94,6 +95,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 		case "text":
 			if t, ok := data["text"].(string); ok {
 				textParts = append(textParts, t)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "text", Text: t})
 			}
 
 		case "image":
@@ -109,6 +111,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 			if img.URL != "" || img.File != "" {
 				msg.Images = append(msg.Images, img)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 			}
 
 		case "face":
@@ -126,11 +129,13 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 				face.Name = raw
 			}
 			msg.Faces = append(msg.Faces, face)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "face", Index: len(msg.Faces) - 1})
 
 		case "at":
 			qqID, ok := parseAtSegmentForGroup(data)
 			if ok {
 				msg.AtList = append(msg.AtList, qqID)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "at", AtUserID: qqID})
 				if qqID > 0 {
 					if displayName := atDisplayName(data); displayName != "" {
 						if msg.AtNames == nil {
@@ -144,6 +149,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 		case "reply":
 			if replyMsgID, ok := utils.ParseInt64Value(data["id"]); ok {
 				msg.Reply = &ReplyInfo{MessageID: replyMsgID}
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "reply"})
 			}
 
 		case "mface": // 商城表情/魔法表情
@@ -154,10 +160,12 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			img.SubType = 1 // 标记为表情包类型
 			if img.URL != "" {
 				msg.Images = append(msg.Images, img)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 			}
 
 		case "record": // 语音消息
 			msg.HasRecord = true
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "record"})
 
 		case "video": // 视频消息
 			vid := VideoInfo{}
@@ -169,6 +177,7 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 			if vid.URL != "" || vid.File != "" {
 				msg.Videos = append(msg.Videos, vid)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "video", Index: len(msg.Videos) - 1})
 			}
 
 		case "file": // 文件
@@ -177,12 +186,14 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			} else {
 				msg.FileNames = append(msg.FileNames, "")
 			}
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "file", Index: len(msg.FileNames) - 1})
 
 		case "json": // JSON 卡片消息
 			if jsonStr, ok := data["data"].(string); ok {
 				card := parseCardMessage(jsonStr)
 				if card != nil {
 					msg.Cards = append(msg.Cards, *card)
+					msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "card", Index: len(msg.Cards) - 1})
 				}
 			}
 
@@ -191,7 +202,9 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			if !ok {
 				return false
 			}
+			start := len(msg.ForwardContent)
 			msg.ForwardContent = append(msg.ForwardContent, content...)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "forward", Index: start, Count: len(content)})
 		}
 	}
 

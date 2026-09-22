@@ -449,14 +449,24 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		return err
 	}
 
+	parts := make([]onebot.MessagePart, 0, len(mentions)+1)
+	for _, userID := range mentions {
+		if userID > 0 {
+			parts = append(parts, onebot.MessagePart{Kind: "at", AtUserID: userID})
+		}
+	}
+	if content != "" {
+		parts = append(parts, onebot.MessagePart{Kind: "text", Text: content})
+	}
 	msg := &onebot.GroupMessage{
-		MessageID:  msgID,
-		GroupID:    groupID,
-		UserID:     a.bot.GetSelfID(),
-		Nickname:   a.persona.GetName(),
-		Content:    content,
-		Time:       time.Now(),
-		ArrivalSeq: arrivalSeq,
+		MessageID:    msgID,
+		GroupID:      groupID,
+		UserID:       a.bot.GetSelfID(),
+		Nickname:     a.persona.GetName(),
+		Content:      content,
+		MessageParts: parts,
+		Time:         time.Now(),
+		ArrivalSeq:   arrivalSeq,
 	}
 
 	if replyTo != 0 {
@@ -486,13 +496,14 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath strin
 	}
 
 	msg := &onebot.GroupMessage{
-		MessageID:  msgID,
-		GroupID:    groupID,
-		UserID:     a.bot.GetSelfID(),
-		Nickname:   a.persona.GetName(),
-		Content:    "",
-		Time:       time.Now(),
-		ArrivalSeq: arrivalSeq,
+		MessageID:    msgID,
+		GroupID:      groupID,
+		UserID:       a.bot.GetSelfID(),
+		Nickname:     a.persona.GetName(),
+		Content:      "",
+		MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}},
+		Time:         time.Now(),
+		ArrivalSeq:   arrivalSeq,
 		Images: []onebot.ImageInfo{
 			{
 				SubType: 1,

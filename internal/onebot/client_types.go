@@ -7,6 +7,15 @@ import (
 
 const AtAllUserID int64 = -1
 
+// MessagePart 保存消息段的原始顺序和对应分类数据索引
+type MessagePart struct {
+	Kind     string
+	Text     string
+	AtUserID int64
+	Index    int
+	Count    int
+}
+
 // GroupMessage 群消息
 type GroupMessage struct {
 	MessageID      int64            `json:"message_id"`
@@ -15,6 +24,7 @@ type GroupMessage struct {
 	Nickname       string           `json:"nickname"`                // QQ 原始昵称
 	GroupCard      string           `json:"group_card,omitempty"`    // 当前群名片
 	Content        string           `json:"content"`                 // 纯文本内容
+	MessageParts   []MessagePart    `json:"-"`                       // 所有消息段的展示顺序
 	IsMentioned    bool             `json:"is_mentioned"`            // 是否@机器人
 	Time           time.Time        `json:"time"`                    // 消息时间
 	ReceivedAt     time.Time        `json:"-"`                       // 当前进程从 OneBot 收到事件的时间

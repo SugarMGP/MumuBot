@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 8
+const latestSchemaVersion = 9
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -102,6 +102,7 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		{"unified_conversation", nil},
 		{"topic_sources", func() error { return migrateV7(db) }},
 		{"active_knowledge", func() error { return migrateV8(db) }},
+		{"member_intimacy", func() error { return migrateV9(db) }},
 	}
 	if len(migrations) != latestSchemaVersion {
 		return fmt.Errorf("程序迁移定义不完整：声明 v%d，实际 %d 个版本", latestSchemaVersion, len(migrations))
@@ -165,7 +166,10 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 	if err := validateV8Schema(db); err != nil {
 		return err
 	}
-	return validateCurrentSchema(db)
+	if err := validateCurrentSchema(db); err != nil {
+		return err
+	}
+	return validateRelationshipSchema(db)
 }
 
 func recordSchemaVersion(db *gorm.DB, version int, name string) error {

@@ -164,6 +164,7 @@ func (a *Agent) initTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetGroupMemberDetailTool() },
+		func() (tool.BaseTool, error) { return tools.NewUpdateMemberIntimacyTool() },
 		func() (tool.BaseTool, error) { return tools.NewPokeTool() },
 		func() (tool.BaseTool, error) { return tools.NewReactToMessageTool() },
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
