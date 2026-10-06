@@ -12,62 +12,65 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 )
 
-// parseGroupMessage 解析群消息
-func (c *Client) parseGroupMessage(event map[string]interface{}) *GroupMessage {
-	msg := &GroupMessage{}
+// parseGroupMessage 按群目标解析群消息
+func (c *Client) parseGroupMessage(event map[string]interface{}) *ConversationMessage {
+	targetID, _ := utils.ParseInt64Value(event["group_id"])
+	return c.parseConversationMessage(event, "group", targetID)
+}
 
-	// 消息时间
+// parsePrivateMessage 按好友目标解析私聊消息
+func (c *Client) parsePrivateMessage(event map[string]interface{}) *ConversationMessage {
+	return c.parseConversationMessage(event, "private", privateMessageTarget(event, c.GetSelfID()))
+}
+
+// parseConversationMessage 共用字段与消息段解析，进入解析前已确定会话作用域
+func (c *Client) parseConversationMessage(event map[string]interface{}, kind string, targetID int64) *ConversationMessage {
+	if targetID <= 0 {
+		return nil
+	}
+	msg := &ConversationMessage{ConversationKind: kind, TargetID: targetID, IsMentioned: kind == "private"}
 	if t, ok := utils.ParseInt64Value(event["time"]); ok {
 		msg.Time = time.Unix(t, 0)
 	} else {
 		msg.Time = time.Now()
 	}
-
-	// 消息 ID
 	if msgID, ok := utils.ParseInt64Value(event["message_id"]); ok {
 		msg.MessageID = msgID
 	}
-
-	// 群ID
-	if groupID, ok := utils.ParseInt64Value(event["group_id"]); ok {
-		msg.GroupID = groupID
-	}
-
-	// 发送者信息
 	if sender, ok := event["sender"].(map[string]interface{}); ok {
-		if userID, ok := utils.ParseInt64Value(sender["user_id"]); ok {
-			msg.UserID = userID
-		}
-		if nickname, ok := sender["nickname"].(string); ok {
-			msg.Nickname = nickname
-		}
-		if card, ok := sender["card"].(string); ok {
-			msg.GroupCard = card
+		msg.UserID, _ = utils.ParseInt64Value(sender["user_id"])
+		msg.Nickname, _ = sender["nickname"].(string)
+		if kind == "group" {
+			msg.GroupCard, _ = sender["card"].(string)
 		}
 	}
-	if msg.UserID <= 0 {
+	if msg.UserID <= 0 || !c.parseMessageSegments(event, msg) {
 		return nil
 	}
-
-	// 解析消息段，提取各类信息
-	if !c.parseMessageSegments(event, msg) {
-		return nil
-	}
-
-	// 检查是否@机器人
 	selfID := c.GetSelfID()
 	for _, atID := range msg.AtList {
-		if atID == selfID {
+		if selfID > 0 && atID == selfID {
 			msg.IsMentioned = true
 			break
 		}
 	}
-
 	return msg
 }
 
+// privateMessageTarget 优先读取 NapCat 的会话对端，标准入站事件缺省时使用发送者
+func privateMessageTarget(event map[string]interface{}, selfID int64) int64 {
+	if targetID, ok := utils.ParseInt64Value(event["target_id"]); ok && targetID > 0 {
+		return targetID
+	}
+	userID, _ := utils.ParseInt64Value(event["user_id"])
+	if selfID > 0 && userID == selfID {
+		return 0
+	}
+	return userID
+}
+
 // parseMessageSegments 解析消息段，填充消息各字段
-func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMessage) bool {
+func (c *Client) parseMessageSegments(event map[string]interface{}, msg *ConversationMessage) bool {
 	message, ok := event["message"].([]interface{})
 	if !ok {
 		if raw, ok := event["raw_message"].(string); ok {
@@ -164,7 +167,6 @@ func (c *Client) parseMessageSegments(event map[string]interface{}, msg *GroupMe
 			}
 
 		case "record": // 语音消息
-			msg.HasRecord = true
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "record"})
 
 		case "video": // 视频消息
@@ -226,11 +228,6 @@ func parseCardMessage(jsonStr string) *CardMessage {
 	}
 
 	card := &CardMessage{}
-
-	// 获取 app 类型
-	if app, ok := data["app"].(string); ok {
-		card.App = app
-	}
 
 	// 尝试从 meta 中提取信息（常见结构）
 	if meta, ok := data["meta"].(map[string]interface{}); ok {

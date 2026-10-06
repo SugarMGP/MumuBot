@@ -151,7 +151,7 @@ func ToolDedupMiddleware() compose.InvokableToolMiddleware {
 	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
 		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
 			tc := GetToolContext(ctx)
-			if tc == nil {
+			if tc == nil || input.Name == "getNewMessages" {
 				return next(ctx, input)
 			}
 
@@ -178,6 +178,20 @@ func ToolDedupMiddleware() compose.InvokableToolMiddleware {
 	}
 }
 
+// ToolActionMiddleware 在工具成功后记录已发生的会话行动；MCP 工具按只读标注区分是否为副作用
+func ToolActionMiddleware(mcpReadOnly map[string]bool) compose.InvokableToolMiddleware {
+	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
+		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+			output, err := next(ctx, input)
+			mcpWrites := strings.HasPrefix(input.Name, "mcp-") && !mcpReadOnly[input.Name]
+			if err == nil && toolOutputSucceeded(output) && (input.Name == "updateMood" || input.Name == "saveMemory" || mcpWrites) {
+				GetToolContext(ctx).MarkActionSucceeded()
+			}
+			return output, err
+		}
+	}
+}
+
 // ToolErrorMiddleware 将可恢复工具错误转成 JSON 结果，让 Eino 继续循环
 func ToolErrorMiddleware() compose.InvokableToolMiddleware {
 	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
@@ -187,7 +201,7 @@ func ToolErrorMiddleware() compose.InvokableToolMiddleware {
 				return output, nil
 			}
 			var terminal *TerminalToolError
-			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, memory.ErrSnapshotChanged) || errors.As(err, &terminal) {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, memory.ErrSnapshotChanged) || errors.Is(err, memory.ErrConversationUnavailable) || errors.As(err, &terminal) {
 				return nil, err
 			}
 			result, encodeErr := sonic.MarshalString(&toolErrorOutput{Message: err.Error()})

@@ -6,13 +6,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -38,26 +36,11 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 		return nil, fmt.Errorf("创建存储目录失败: %w", err)
 	}
 
-	// 创建 HTTP 客户端
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	// 发起请求
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建下载请求失败: %w", err)
-	}
-
-	resp, err := client.Do(req)
+	resp, err := OpenPublicHTTP(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("下载图片失败: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("下载图片失败: HTTP %d", resp.StatusCode)
-	}
 
 	// 检查文件大小
 	if maxSizeMB > 0 && resp.ContentLength > int64(maxSizeMB)*1024*1024 {
@@ -65,7 +48,7 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 	}
 
 	// 获取文件扩展名
-	ext := getExtensionFromURL(url)
+	ext := getExtensionFromURL(resp.Request.URL.String())
 	if ext == "" {
 		switch ct := resp.Header.Get("Content-Type"); {
 		case strings.Contains(ct, "jpeg"):
@@ -117,6 +100,9 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 	// 再次检查文件大小
 	if maxSizeMB > 0 && written > int64(maxSizeMB)*1024*1024 {
 		return nil, fmt.Errorf("文件大小超过限制")
+	}
+	if written == 0 {
+		return nil, fmt.Errorf("下载内容为空")
 	}
 
 	// 关闭临时文件后再移动，确保内容已刷新

@@ -18,19 +18,6 @@ type FlashMessage struct {
 	Body  string
 }
 
-type RowAction struct {
-	Label       string
-	Value       string
-	Kind        string
-	BusyLabel   string
-	ConfirmText string
-}
-
-type AdminActionChip struct {
-	Label string
-	Kind  string
-}
-
 type AdminActionField struct {
 	Label string
 	Value string
@@ -47,8 +34,6 @@ type AdminActionDialogContentData struct {
 	SubmitLabel string
 	SubmitClass string
 	BusyLabel   string
-	Spotlight   string
-	Chips       []AdminActionChip
 	Fields      []AdminActionField
 	Hidden      []AdminActionHiddenField
 	ReturnTo    string
@@ -153,6 +138,13 @@ type MemberListPageData struct {
 	Items   []services.MemberProfileView
 	Meta    ListMeta
 	Flash   *FlashMessage
+}
+
+type ContactsPageData struct {
+	Groups         []memory.ConversationTarget
+	Friends        []memory.ConversationTarget
+	FriendRequests []memory.FriendRequest
+	Flash          *FlashMessage
 }
 
 type SystemField struct {

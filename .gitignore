@@ -12,6 +12,10 @@ amu.exe
 *_test.go
 *_templ.go
 
+# 由 scripts/generate-icons.mjs 生成的图标资源
+/internal/web/views/icons.templ
+/internal/web/assets/src/icons.generated.js
+
 # 输出
 *.out
 

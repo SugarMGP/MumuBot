@@ -117,10 +117,9 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	}
 
 	// 发送表情包（使用回调以记录消息）
-	if err := tc.SendStickerCallback(ctx, tc.GroupID, filePath, sticker.Description); err != nil {
+	if err := tc.SendStickerCallback(ctx, tc.TargetID, filePath, sticker.Description); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
-	tc.MarkActed()
 
 	// 更新使用记录
 	_ = tc.MemoryMgr.UpdateStickerUsage(input.StickerID)

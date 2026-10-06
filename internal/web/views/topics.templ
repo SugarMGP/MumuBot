@@ -10,22 +10,22 @@ templ TopicListPage(data TopicListPageData, currentPath string) {
 }
 
 templ TopicListBody(data TopicListPageData) {
-	<div class="admin-memory-page space-y-5">
+	<div class="admin-memory-page space-y-6">
 		@PageHeader("话题管理", "查看当前摘要、未完事项与原文依据。", "")
 		@FilterPanel("topic-filters", "筛选条件", EmptyComponent(), false, TopicFilterForm(data))
 		if len(data.Items) == 0 {
-			<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无话题</div></div>
+			<div class="card border-dashed"><div class="card-body items-center py-14 text-sm text-base-content/60">当前筛选条件下暂无话题</div></div>
 		}
 		if len(data.Items) > 0 {
-			<div class="grid grid-cols-2 gap-4">
+			<div class="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-4">
 				for _, item := range data.Items {
 					{{ keywords := topicKeywords(item) }}
-					<a href={ templ.SafeURL(WithQuery(fmt.Sprintf("/admin/topics/%d", item.ID), "return_to", data.CurrentURL)) } class="admin-record-card card border border-base-300 bg-base-100 shadow-sm transition-colors hover:border-primary/35 hover:shadow-md" data-tone={ topicTone(item) }>
+					<a href={ templ.SafeURL(WithQuery(fmt.Sprintf("/admin/topics/%d", item.ID), "return_to", data.CurrentURL)) } class="admin-record-card card bg-base-100 transition-colors" data-tone={ topicTone(item) }>
 						<div class="card-body gap-4 p-5 pl-6">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
-									<h2 class="line-clamp-2 text-lg font-semibold leading-6">{ topicTitle(item) }</h2>
-									<p class="admin-number mt-1 text-xs text-base-content/58">群 { fmt.Sprintf("%d", item.GroupID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p>
+									<h2 class="line-clamp-2 text-lg font-semibold leading-6 text-base-content">{ topicTitle(item) }</h2>
+									<p class="admin-number mt-1 text-xs text-base-content/60">群 { fmt.Sprintf("%d", item.GroupID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p>
 								</div>
 								<span class={ joinClasses("shrink-0", topicSummaryProgressClass(item)) }>{ topicSummaryProgressText(item) }</span>
 							</div>
@@ -35,7 +35,7 @@ templ TopicListBody(data TopicListPageData) {
 									<span class="badge badge-primary badge-soft badge-sm">{ keyword }</span>
 								}
 							</div>
-							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/58">
+							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/60">
 								<span>{ topicUpdatedTime(item) } · 待续 { fmt.Sprint(len(topicSummary(item).OpenLoops)) } 项</span>
 								<span class="flex items-center gap-1 font-medium text-primary">
 									<span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")
@@ -51,7 +51,7 @@ templ TopicListBody(data TopicListPageData) {
 }
 
 templ TopicFilterForm(data TopicListPageData) {
-	<form id="topic-filter-form" class="grid grid-cols-[180px_minmax(280px,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+	<form id="topic-filter-form" class="grid grid-cols-[clamp(150px,24vw,200px)_minmax(0,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<select class="select w-full" name="group_id" aria-label="群聊">
 			<option value="">全部群聊</option>
 			for _,id:=range data.Groups {
@@ -59,7 +59,10 @@ templ TopicFilterForm(data TopicListPageData) {
 			}
 		</select>
 		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词…" aria-label="话题关键词"/>
-		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
+		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">
+			@AdminIcon("filter", "size-4", "topic-filter")
+			<span>筛选</span>
+		</button>
 	</form>
 }
 
@@ -68,34 +71,34 @@ templ TopicDetailPage(data TopicDetailPageData, currentPath string) {
 }
 
 templ TopicDetailBody(data TopicDetailPageData) {
-	<div class="admin-memory-page space-y-5">
+	<div class="admin-memory-page space-y-6">
 		<header class="flex flex-col gap-3">
 			<div class="flex min-w-0 items-center gap-3">
 				<a class="btn btn-ghost btn-circle btn-sm" href={ templ.SafeURL(displayText(data.ReturnTo, "/admin/topics")) } aria-label="返回话题列表">
 					@AdminIcon("chevron-left", "size-4", "topic-back")
 				</a>
-				<h1 class="min-w-0 truncate text-lg font-semibold">{ topicTitle(data.Thread) }</h1>
+				<h1 class="admin-page-title min-w-0 truncate font-semibold">{ topicTitle(data.Thread) }</h1>
 			</div>
-			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-xs text-base-content/50">
+			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-xs text-base-content/60">
 				<span class="badge badge-ghost badge-sm">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span>
 				<span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span>
 				<span>更新于 { topicUpdatedTime(data.Thread) }</span>
 			</div>
 		</header>
-		<div class="grid grid-cols-[minmax(0,1fr)_300px] items-start gap-4">
+		<div class="grid grid-cols-[minmax(0,1fr)_clamp(280px,24vw,340px)] items-start gap-4">
 			<div class="space-y-4">
 				@TopicCurrentSummary(data.Thread)
-				<section class="card border border-base-300 bg-base-100 shadow-sm">
+				<section class="card">
 					<div class="card-body p-5">
 						<div>
-							<h2 class="font-semibold">最近关联消息</h2>
-							<p class="mt-1 text-xs text-base-content/58">按时间顺序排列</p>
+							<h2 class="text-lg font-semibold text-base-content">最近关联消息</h2>
+							<p class="mt-1 text-xs text-base-content/60">按时间顺序排列</p>
 							if len(data.Messages)>=80 {
 								<p class="mt-1 text-xs text-warning">当前展示最近 80 条，可能还有更早记录</p>
 							}
 						</div>
 						if len(data.Messages) == 0 {
-							<div class="py-10 text-center text-sm text-base-content/40">暂无关联消息</div>
+							<div class="py-10 text-center text-sm text-base-content/60">暂无关联消息</div>
 						}
 						if len(data.Messages) > 0 {
 							<div class="mt-2 space-y-3">
@@ -103,14 +106,14 @@ templ TopicDetailBody(data TopicDetailPageData) {
 									<article class={ joinClasses("rounded-xl border p-3", ternaryString(item.RecalledAt != nil, "border-error/25 bg-error/5", "border-base-300 bg-base-200/45")) }>
 										<div class="flex items-center justify-between gap-3">
 											<div class="flex min-w-0 items-center gap-2">
-												<span class="min-w-0 truncate text-xs font-medium text-base-content/70">{ topicMessageSender(item) }</span>
+												<span class="min-w-0 truncate text-xs font-medium text-base-content/75">{ topicMessageSender(item) }</span>
 												if item.RecalledAt != nil {
 													<span class="badge badge-error badge-soft badge-xs shrink-0">已撤回</span>
 												}
 											</div>
-											<time class="shrink-0 text-xs text-base-content/55" datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time>
+											<time class="shrink-0 text-xs text-base-content/60" datetime={ formatTimeAttr(item.MessageTime) }>{ formatTime(item.MessageTime) }</time>
 										</div>
-										<p class={ joinClasses("mt-1 whitespace-pre-wrap break-words text-sm leading-6", ternaryString(item.RecalledAt != nil, "text-error/70", "text-base-content/70")) }>{ topicMessageText(item) }</p>
+										<p class={ joinClasses("mt-1 whitespace-pre-wrap break-words text-sm leading-6", ternaryString(item.RecalledAt != nil, "text-error", "text-base-content/75")) }>{ topicMessageText(item) }</p>
 									</article>
 								}
 							</div>
@@ -118,11 +121,11 @@ templ TopicDetailBody(data TopicDetailPageData) {
 					</div>
 				</section>
 			</div>
-			<aside class="card border border-base-300 bg-base-100 shadow-sm">
+			<aside class="card">
 				<div class="card-body gap-3 p-4">
-					<div><h2 class="font-semibold">摘要生成历史</h2><p class="mt-1 text-xs text-base-content/55">{ topicSummaryChangeCountLabel(data.Thread, data.SummaryChanges) }</p></div>
+					<div><h2 class="text-lg font-semibold text-base-content">摘要生成历史</h2><p class="mt-1 text-xs text-base-content/60">{ topicSummaryChangeCountLabel(data.Thread, data.SummaryChanges) }</p></div>
 					if len(data.SummaryChanges) == 0 {
-						<div class="py-8 text-center text-sm text-base-content/40">还没有摘要快照</div>
+						<div class="py-8 text-center text-sm text-base-content/60">还没有摘要快照</div>
 					}
 					<div class="admin-topic-summary-timeline">
 						for _, change := range data.SummaryChanges {
@@ -139,29 +142,29 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 	if latest:=topic.LatestSummary();latest!=nil && !latest.SourcesValid {
 		<div class="alert alert-warning">摘要依据已失效，等待后续讨论重新整理。历史版本保留供核对。</div>
 	}
-	<section class="card border border-base-300 bg-base-100 shadow-sm">
+	<section class="card">
 		<div class="card-body gap-4 p-5">
 			<div class="flex items-center gap-2 text-primary">
 				@AdminIcon("memories", "size-5", "topic-summary")
-				<h2 class="font-semibold text-base-content">当前摘要</h2>
+				<h2 class="text-lg font-semibold text-base-content">当前摘要</h2>
 			</div>
-			<p class="text-sm leading-7 text-base-content/72">{ topicGist(topic) }</p>
+			<p class="text-sm leading-7 text-base-content/75">{ topicGist(topic) }</p>
 			<div class="divider my-0"></div>
 			<div>
-				<h3 class="text-xs font-semibold text-base-content/52">相关关键词</h3>
+				<h3 class="text-xs font-semibold text-base-content/60">相关关键词</h3>
 				<div class="mt-3 flex flex-wrap gap-2">
 					<span class="text-xs text-base-content/60">{ topicUpdatedTime(topic) }</span>
 					for _, keyword := range topicKeywords(topic) {
-						<span class="badge badge-primary badge-soft">{ keyword }</span>
+						<span class="badge badge-primary badge-soft badge-sm">{ keyword }</span>
 					}
 				</div>
 			</div>
 			if len(topicSummary(topic).OpenLoops) > 0 {
 				<div>
-					<h3 class="text-xs font-semibold text-base-content/52">未完事项</h3>
+					<h3 class="text-xs font-semibold text-base-content/60">未完事项</h3>
 					<ul class="mt-2 space-y-2">
 						for _, item := range topicSummary(topic).OpenLoops {
-							<li class="flex items-start gap-2 text-sm"><span class="mt-2 size-1.5 shrink-0 rounded-full bg-warning"></span><span class="text-base-content/70">{ item }</span></li>
+							<li class="flex items-start gap-2 text-sm"><span class="mt-2 size-1.5 shrink-0 rounded-full bg-warning"></span><span class="text-base-content/75">{ item }</span></li>
 						}
 					</ul>
 				</div>
@@ -175,7 +178,7 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 		<summary class="admin-topic-change-card__summary">
 			<span class="admin-topic-change-card__rail" aria-hidden="true"></span>
 			<div class="min-w-0 flex-1">
-				<time class="text-xs text-base-content/55" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
+				<time class="text-xs text-base-content/60" datetime={ change.CapturedAtValue }>{ change.CapturedAtLabel }</time>
 				<p class="mt-1 text-sm font-medium leading-5">{ change.Headline }</p>
 				<div class="mt-2 flex flex-wrap gap-1">
 					for _, badge := range change.Badges {
@@ -197,7 +200,7 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 					<h4 class="text-xs font-medium text-warning">新增待办</h4>
 					<ul class="mt-1 space-y-1">
 						for _, item := range change.AddedOpenLoops {
-							<li class="text-xs leading-5 text-base-content/65">+ { item }</li>
+							<li class="text-xs leading-5 text-base-content/75">+ { item }</li>
 						}
 					</ul>
 				</div>
@@ -207,7 +210,7 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 					<h4 class="text-xs font-medium text-error">移除待办</h4>
 					<ul class="mt-1 space-y-1">
 						for _, item := range change.RemovedOpenLoops {
-							<li class="text-xs leading-5 text-base-content/65">- { item }</li>
+							<li class="text-xs leading-5 text-base-content/75">- { item }</li>
 						}
 					</ul>
 				</div>
@@ -218,7 +221,7 @@ templ TopicSummaryChangeCard(change TopicSummaryChangeView) {
 
 templ TopicInlineDiff(label string, diff TopicTextDiffView) {
 	<div>
-		<h4 class="mb-2 text-xs font-medium text-base-content/50">{ label }</h4>
+		<h4 class="mb-2 text-xs font-medium text-base-content/60">{ label }</h4>
 		<div class="admin-topic-inline-diff">
 			if len(diff.InlineSegments) == 0 {
 				<span class="admin-topic-inline-diff__placeholder">{ diff.CurrentPlaceholder }</span>

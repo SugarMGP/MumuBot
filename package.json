@@ -4,7 +4,8 @@
   "scripts": {
     "build": "bun run build:css && bun run build:js",
     "build:css": "tailwindcss -i ./internal/web/assets/src/admin.css -o ./internal/web/assets/dist/admin.css --minify",
-    "build:js": "esbuild ./internal/web/assets/src/admin.js --bundle --format=iife --target=es2020 --minify --outfile=./internal/web/assets/dist/admin.js"
+    "build:js": "esbuild ./internal/web/assets/src/admin.js --bundle --format=iife --target=es2020 --minify --outfile=./internal/web/assets/dist/admin.js",
+    "gen:icons": "bun run scripts/generate-icons.mjs"
   },
   "devDependencies": {
     "@tailwindcss/cli": "4.2.2",
@@ -12,6 +13,7 @@
     "echarts": "^6.1.0",
     "esbuild": "0.27.4",
     "htmx.org": "2.0.8",
+    "lucide-static": "1.52.0",
     "tailwindcss": "4.2.2",
     "toastify-js": "^1.12.0"
   }

@@ -1,39 +1,34 @@
 package views
 
 templ LoginPage(data LoginPageData) {
-	<!doctype html>
+	<!DOCTYPE html>
 	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead("后台登录", nil)
 		<body class="font-sans antialiased">
 			<main class="relative flex min-h-screen items-center justify-center px-8 py-12">
-				<section class="card w-[368px] border border-base-300 bg-base-100 shadow-lg shadow-primary/5">
-					<div class="card-body items-center p-8 text-center">
+				<section class="admin-login-card card w-[clamp(320px,26vw,380px)]">
+					<div class="card-body items-center gap-5 p-8 text-center">
 						<div>
 							<h1 class="text-2xl font-semibold text-base-content">MumuBot</h1>
-							<p class="mt-1 text-xs text-base-content/52">管理后台</p>
-						</div>
-						<div class="mt-4 w-full">
-							<h2 class="text-lg font-semibold text-base-content">欢迎回来</h2>
-							<p class="mt-1.5 text-sm text-base-content/55">验证访问密钥后进入管理后台</p>
+							<p class="mt-1 text-xs text-base-content/60">管理后台</p>
 						</div>
 						if data.Error != "" {
-							<div class="alert alert-error alert-soft mt-4 w-full py-3 text-left text-sm" role="alert" aria-live="assertive">{ data.Error }</div>
+							<div class="alert alert-error alert-soft w-full py-3 text-left text-sm" role="alert" aria-live="assertive">{ data.Error }</div>
 						}
 						if data.Enabled {
-							<form class="mt-4 w-full space-y-4" method="post" action="/login">
+							<form class="w-full space-y-4" method="post" action="/login">
 								<label class="sr-only" for="login-username">用户名</label>
 								<input id="login-username" class="sr-only" type="text" name="login_username" value="admin" autocomplete="username" tabindex="-1"/>
 								<label class="input w-full border-base-300 bg-base-100 focus-within:border-primary">
-									<svg class="size-4 text-base-content/45" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+									@AdminIcon("lock", "size-4 text-base-content/45", "login-lock")
 									<input id="admin-key" class="grow" type="password" name="admin_key" placeholder="输入访问密钥…" autocomplete="current-password" aria-label="访问密钥"/>
 									<button class="btn btn-ghost btn-xs" type="button" data-password-target="#admin-key" aria-pressed="false"><span data-password-label>显示</span></button>
 								</label>
 								<button class="btn btn-primary w-full" type="submit" data-loading-label="登录中">登录</button>
 							</form>
 						} else {
-							<div class="alert alert-warning alert-soft mt-4 w-full text-left text-sm" role="alert">管理后台当前暂不可用，请稍后再试。</div>
+							<div class="alert alert-warning alert-soft w-full text-left text-sm" role="alert">管理后台当前暂不可用，请稍后再试。</div>
 						}
-						<p class="mt-3 flex items-center gap-2 text-xs text-base-content/45"><span class="size-1.5 rounded-full bg-base-content/35"></span>仅系统管理员可访问</p>
 					</div>
 				</section>
 			</main>
@@ -42,12 +37,12 @@ templ LoginPage(data LoginPageData) {
 }
 
 templ DisabledPage() {
-	<!doctype html>
+	<!DOCTYPE html>
 	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead("后台未启用", nil)
 		<body class="font-sans antialiased">
 			<main class="flex min-h-screen items-center justify-center px-8">
-				<section class="card w-[440px] border border-base-300 bg-base-100 shadow-lg shadow-primary/5"><div class="card-body items-center text-center"><h1 class="text-2xl font-semibold">管理后台暂不可用</h1><p class="mt-2 text-sm text-base-content/55">当前暂时无法进入后台，请稍后再试。</p></div></section>
+				<section class="admin-login-card card w-[clamp(360px,34vw,460px)]"><div class="card-body items-center text-center"><h1 class="text-2xl font-semibold">管理后台暂不可用</h1><p class="mt-2 text-sm text-base-content/60">当前暂时无法进入后台，请稍后再试。</p></div></section>
 			</main>
 		</body>
 	</html>

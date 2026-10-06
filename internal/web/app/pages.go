@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mumu-bot/internal/logger"
+	"mumu-bot/internal/memory"
 	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/web/services"
 	"mumu-bot/internal/web/views"
@@ -113,6 +114,31 @@ func (a *App) handleMembers(w http.ResponseWriter, r *http.Request) {
 	a.renderPageResponse(w, r, views.MemberListPage(data, r.URL.Path), views.PageContent(views.MemberListBody(data)))
 }
 
+func (a *App) contactsPageData(ctx context.Context, flash *views.FlashMessage) (views.ContactsPageData, error) {
+	groups, err := a.admin.ListConversationTargets(ctx, memory.ConversationKindGroup)
+	if err != nil {
+		return views.ContactsPageData{}, err
+	}
+	friends, err := a.admin.ListConversationTargets(ctx, memory.ConversationKindPrivate)
+	if err != nil {
+		return views.ContactsPageData{}, err
+	}
+	requests, err := a.admin.ListFriendRequests(ctx, "")
+	if err != nil {
+		return views.ContactsPageData{}, err
+	}
+	return views.ContactsPageData{Groups: groups, Friends: friends, FriendRequests: requests, Flash: flash}, nil
+}
+
+func (a *App) handleContacts(w http.ResponseWriter, r *http.Request) {
+	data, err := a.contactsPageData(r.Context(), a.flashFromRequest(r))
+	if err != nil {
+		http.Error(w, "会话列表加载失败，请稍后再试。", http.StatusInternalServerError)
+		return
+	}
+	a.render(w, views.ContactsPage(data, r.URL.Path))
+}
+
 func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 	data := views.SystemPageData{View: r.URL.Query().Get("view"), Sections: a.systemSections(), Flash: a.flashFromRequest(r)}
 	switch data.View {
@@ -210,7 +236,7 @@ func (a *App) handleStickerPreviewDialogFragment(w http.ResponseWriter, r *http.
 func (a *App) stickerPageData(current *neturl.URL, flash *views.FlashMessage) (views.StickerListPageData, error) {
 	sortKey, order := services.NormalizeStickerSort(current.Query().Get("sort"), current.Query().Get("order"))
 	page := parsePositiveInt(current.Query().Get("page"), 1)
-	pageSize := listPageSize(current.Query().Get("page_size"))
+	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
 	filter := services.ListFilter{
 		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
 		Sort:     sortKey,

@@ -10,48 +10,50 @@ templ KnowledgeListPage(data KnowledgeListPageData, currentPath string) {
 }
 
 templ KnowledgeListBody(data KnowledgeListPageData) {
-	<div class="admin-memory-page space-y-5">
+	<div class="admin-memory-page space-y-6">
 		@KnowledgeWorkspace(data.Workspace)
 		@SortToolbar(data.Sort)
-		<div class="overflow-x-auto">
-			<table class="table table-fixed w-full admin-memory-table">
-				<thead><tr><th class="w-[42%]">内容</th><th class="w-[20%]">对象与类型</th><th class="w-[10%]">状态</th><th class="w-[16%]">原文依据</th><th class="w-[12%]">更新时间</th></tr></thead>
-				<tbody>
-					for _,item:=range data.Items {
-						<tr>
-							<td>
-								<a class="block link link-hover font-medium text-base-content" href={ templ.SafeURL(knowledgeDetailURL(item.ID, data.Workspace.CurrentURL)) }>
-									if item.Label!="" {
-										<span class="font-semibold">{ item.Label }</span>
-										<p class="mt-1 line-clamp-3 text-sm font-normal leading-6 text-base-content/70">{ item.Content }</p>
-									} else {
-										<span class="line-clamp-3 leading-6">{ item.Content }</span>
+		<section class="card overflow-hidden">
+			<div class="overflow-x-auto">
+				<table class="table table-fixed w-full admin-memory-table">
+					<thead><tr><th class="w-[42%]">内容</th><th class="w-[20%]">对象与类型</th><th class="w-[10%]">状态</th><th class="w-[16%]">原文依据</th><th class="w-[12%] hidden min-[1200px]:table-cell">更新时间</th></tr></thead>
+					<tbody>
+						for _,item:=range data.Items {
+							<tr>
+								<td>
+									<a class="block link link-hover font-medium text-base-content" href={ templ.SafeURL(knowledgeDetailURL(item.ID, data.Workspace.CurrentURL)) }>
+										if item.Label!="" {
+											<span class="font-semibold">{ item.Label }</span>
+											<p class="mt-1 line-clamp-3 text-sm font-normal leading-6 text-base-content/75">{ item.Content }</p>
+										} else {
+											<span class="line-clamp-3 leading-6">{ item.Content }</span>
+										}
+									</a>
+								</td>
+								<td>
+									<p class="font-medium break-words">{ knowledgeSubject(item,data.SelfID,data.Metadata[item.ID]) }</p>
+									<p class="mt-1 text-xs text-base-content/60">{ memoryKindText(item.Kind) } · { conversationText(item.ConversationKind, item.TargetID) }</p>
+									if item.SubjectUserID>0 {
+										<a class="mt-1 block text-xs link link-hover text-base-content/60" href={ templ.SafeURL(WithQuery(data.Workspace.CurrentURL, "user_id", fmt.Sprint(item.SubjectUserID), "page", "1")) }>QQ { fmt.Sprint(item.SubjectUserID) }</a>
 									}
-								</a>
-							</td>
-							<td>
-								<p class="font-medium break-words">{ knowledgeSubject(item,data.SelfID,data.Metadata[item.ID]) }</p>
-								<p class="mt-1 text-xs text-base-content/60">{ memoryKindText(item.Kind) } · 群 { fmt.Sprint(item.GroupID) }</p>
-								if item.SubjectUserID>0 {
-									<a class="mt-1 block text-xs link link-hover text-base-content/50" href={ templ.SafeURL(WithQuery(data.Workspace.CurrentURL, "user_id", fmt.Sprint(item.SubjectUserID), "page", "1")) }>QQ { fmt.Sprint(item.SubjectUserID) }</a>
-								}
-							</td>
-							<td><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span></td>
-							<td>
-								<span class={ ternaryString(data.Metadata[item.ID].Valid > 0, "text-secondary text-xs", "text-base-content/60 text-xs") }>{ evidenceSummary(data.Metadata[item.ID]) }</span>
-								if data.Metadata[item.ID].Valid>0 && data.Metadata[item.ID].Total>data.Metadata[item.ID].Valid {
-									<p class="mt-1 text-xs text-warning">另有 { fmt.Sprint(data.Metadata[item.ID].Total-data.Metadata[item.ID].Valid) } 组已失效</p>
-								}
-							</td>
-							<td class="text-xs text-base-content/60">{ formatTime(item.UpdatedAt) }</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-		</div>
-		if len(data.Items)==0 {
-			<p class="py-16 text-center text-sm text-base-content/50">当前筛选条件下暂无记忆</p>
-		}
+								</td>
+								<td class="whitespace-nowrap"><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span></td>
+								<td>
+									<span class={ ternaryString(data.Metadata[item.ID].ValidMessages() > 0, "text-secondary text-xs", "text-base-content/60 text-xs") }>{ evidenceSummary(data.Metadata[item.ID]) }</span>
+									if data.Metadata[item.ID].Recalled > 0 && data.Metadata[item.ID].ValidMessages() > 0 {
+										<p class="mt-1 text-xs text-warning">另有 { fmt.Sprint(data.Metadata[item.ID].Recalled) } 条原文已撤回</p>
+									}
+								</td>
+								<td class="hidden whitespace-nowrap text-xs text-base-content/60 min-[1200px]:table-cell">{ formatTime(item.UpdatedAt) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			if len(data.Items)==0 {
+				<p class="py-16 text-center text-sm text-base-content/60">当前筛选条件下暂无记忆</p>
+			}
+		</section>
 		@ListFooter(data.Meta)
 	</div>
 }
@@ -62,83 +64,40 @@ templ KnowledgeDetailPage(data KnowledgeDetailPageData, currentPath string) {
 
 templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
 	<div class="admin-memory-page space-y-6">
-		<a class="inline-flex items-center gap-1 link link-hover text-sm text-base-content/60" href={ templ.SafeURL(data.ReturnTo) }>@AdminIcon("chevron-left", "size-4", "knowledge-back")<span>返回记忆列表</span></a>
+		<a class="inline-flex items-center gap-1 link link-hover text-sm text-base-content/60" href={ templ.SafeURL(data.ReturnTo) }>
+			@AdminIcon("chevron-left", "size-4", "knowledge-back")
+			<span>返回记忆列表</span>
+		</a>
 		<header class="flex items-start justify-between gap-6">
 			<div>
 				<div class="flex items-center gap-3">
-					<h1 class="text-2xl font-semibold">
+					<h1 class="admin-page-title font-semibold">
 						{ knowledgeTitle(data.Detail.Item) }
 					</h1>
 					<span class={ memoryStatusClass(data.Detail.Item.Status) }>
 						{ memoryStatusText(data.Detail.Item.Status) }
 					</span>
 				</div>
-				<p class="mt-2 text-sm text-base-content/55">
-					{ memoryKindText(data.Detail.Item.Kind) } · 群 { fmt.Sprint(data.Detail.Item.GroupID) } · { memorySubjectText(data.Detail.Item.SubjectUserID,data.SelfID) }
+				<p class="mt-2 text-sm text-base-content/60">
+					{ memoryKindText(data.Detail.Item.Kind) } · { conversationText(data.Detail.Item.ConversationKind, data.Detail.Item.TargetID) } · { memorySubjectText(data.Detail.Item.SubjectUserID,data.SelfID) }
 					if data.Detail.Item.SubjectUserID>0 {
 						<span>QQ { fmt.Sprint(data.Detail.Item.SubjectUserID) }</span>
 					}
 				</p>
 			</div>@KnowledgeStatusForm("knowledge-status", data.Detail.Item.ID, data.Detail.Item.Status, data.CurrentURL)
 		</header>
-		<p class="whitespace-pre-wrap break-words border-b border-base-300 pb-6 text-base leading-8">
-			{ data.Detail.Item.Content }
-		</p>
-		if len(data.Detail.Senses)>0 {
-			<section>
-				<h2 class="font-semibold">同词的其他解释</h2>
-				<ul class="mt-3 space-y-2">
-					for _,sense:=range data.Detail.Senses {
-						<li>
-							<a class="link link-primary" href={ templ.SafeURL(knowledgeDetailURL(sense.ID, data.ReturnTo)) }>
-								{ sense.Content }
-							</a>
-							<span class="ml-2 text-xs">
-								{ memoryStatusText(sense.Status) }
-							</span>
-						</li>
-					}
-				</ul>
-			</section>
-		}
-		if data.Detail.SensesHasMore {
-			<p class="text-xs text-base-content/55">同词解释超过展示上限，请从筛选结果继续查看。</p>
-		}
-		<div class="grid grid-cols-[minmax(0,1.35fr)_minmax(320px,0.85fr)] items-start gap-8">
-			<section class="min-w-0">
-				<h2 class="mb-4 font-semibold">依据与时间线</h2>@KnowledgeEvidenceGroups(data.Detail.Evidence, data.Detail.Topics, data.CurrentURL)
-			</section>
-			<section class="min-w-0">
-				<h2 class="font-semibold">相关记忆</h2>
-				<a class="btn btn-ghost btn-sm my-3" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?view=graph&group_id=%d&focus_kind=knowledge&focus_id=%d", data.Detail.Item.GroupID, data.Detail.Item.ID)) }>查看关联图谱</a>
-				if data.Detail.RelationsHaveMore {
-					<p class="text-xs text-base-content/55">还有关联未展示，可进入相邻记忆继续查看。</p>
-				}
-				<div class="divide-y divide-base-300">
-					for _,rel:=range data.Detail.Relations {
-						<article class="py-4">
-							<div class="flex flex-wrap items-center gap-2 text-sm">
-								<a class="link link-primary" href={ templ.SafeURL(knowledgeDetailURL(rel.Source.ID, data.ReturnTo)) }>
-									{ knowledgeTitle(rel.Source) }
-								</a>
-								<span>
-									{ relationText(rel.Kind) }
-								</span>
-								<a class="link link-primary" href={ templ.SafeURL(knowledgeDetailURL(rel.Target.ID, data.ReturnTo)) }>
-									{ knowledgeTitle(rel.Target) }
-								</a>
-								<span class={ memoryStatusClass(rel.Status) }>
-									{ memoryStatusText(rel.Status) }
-								</span>
-							</div>
-							<div class="my-3">
-								@KnowledgeStatusForm("relation-status", rel.ID, rel.Status, data.CurrentURL)
-							</div><a class="link link-primary text-sm" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d&selected_kind=relation&selected_id=%d", data.Detail.Item.GroupID, rel.ID)) }>查看这条关联的依据</a>
-						</article>
-					}
-				</div>
-			</section>
-		</div>
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<p class="whitespace-pre-wrap break-words text-base leading-8">
+					{ data.Detail.Item.Content }
+				</p>
+			</div>
+		</section>
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<h2 class="text-lg font-semibold text-base-content">依据与时间线</h2>@KnowledgeEvidenceGroups(data.Detail.Evidence, data.Detail.Topics, data.CurrentURL)
+			</div>
+		</section>
 		<div class="flex items-center justify-between">
 			if data.Detail.Page>1 {
 				<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(WithQuery(data.CurrentURL, "page", fmt.Sprint(data.Detail.Page-1))) }>上一页依据</a>
@@ -164,32 +123,34 @@ templ KnowledgeStatusForm(kind string, id uint, status string, returnTo string) 
 
 templ KnowledgeEvidenceGroups(sets []memory.KnowledgeEvidence, topics map[uint]uint, returnTo string) {
 	if len(sets)==0 {
-		<p class="py-4 text-sm text-base-content/50">暂无完整原文依据</p>
+		<p class="rounded-xl border border-dashed border-base-300 px-4 py-8 text-center text-sm text-base-content/60">暂无完整原文依据</p>
 	}
 	for i,set:=range sets {
-		<details class="mb-4 border-l-2 border-base-300 pl-4" open?={ firstEvidenceOpen(sets,i) }>
-			<summary class="cursor-pointer text-sm font-medium">
-				依据组 { fmt.Sprint(i+1) }
-				<span class={ ternaryString(set.Valid, "text-success", "text-warning") }>
-					{ ternaryString(set.Valid,"完整有效","已失效") }
-				</span>
+		<details class="mb-3 rounded-xl border border-base-300 bg-base-200/50 px-4 py-3" open?={ firstEvidenceOpen(sets,i) }>
+			<summary class="flex cursor-pointer items-center gap-2 text-sm font-medium">
+				<span>原文依据 · { fmt.Sprint(len(set.Messages)) } 条</span>
+				if set.Valid {
+					<span class="badge badge-success badge-soft badge-sm">有效</span>
+				} else {
+					<span class="badge badge-warning badge-soft badge-sm">已失效</span>
+				}
 			</summary>
 			<div class="mt-3 space-y-4">
 				for _,msg:=range set.Messages {
 					<div class="text-sm">
-						<div class="flex flex-wrap gap-2 text-xs text-base-content/55">
-							<a class="link" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?group_id=%d&author_id=%d", msg.GroupID, msg.UserID)) }>
+						<div class="flex flex-wrap gap-2 text-xs text-base-content/60">
+							<a class="link" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?conversation=%s:%d&author_id=%d", msg.ConversationKind, msg.TargetID, msg.UserID)) }>
 								{ displayText(msg.Nickname,fmt.Sprint(msg.UserID)) }
 							</a>
 							<time>
 								{ formatTime(msg.MessageTime) }
 							</time>
 							if topicID:=topics[msg.ID];topicID>0 {
-								<a class="link text-secondary" href={ templ.SafeURL(WithQuery(fmt.Sprintf("/admin/topics/%d", topicID),"return_to",returnTo)) }>查看话题</a>
+								<a class="link text-secondary" href={ templ.SafeURL(WithQuery(fmt.Sprintf("/admin/topics/%d", topicID), "return_to", returnTo)) }>查看话题</a>
 							}
 						</div>
 						if msg.RecalledAt!=nil {
-							<p class="mt-1 text-base-content/40">消息已撤回</p>
+							<p class="mt-1 text-base-content/60">消息已撤回</p>
 						} else {
 							<p class="mt-1 whitespace-pre-wrap break-words leading-6">
 								{ msg.TextContent }

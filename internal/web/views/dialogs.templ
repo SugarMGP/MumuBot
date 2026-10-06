@@ -6,32 +6,31 @@ templ DialogCloseButton(selector string) {
 	</button>
 }
 
-templ AdminActionDialogContent(data AdminActionDialogContentData) {
-	<div class="space-y-5">
-		<div class="flex items-start justify-between gap-4">
-			<div class="min-w-0">
-				<h3 id="admin-action-dialog-title" class="text-xl font-semibold text-base-content">{ data.Title }</h3>
-				if data.Body != "" {
-					<p class="mt-2 text-sm leading-6 text-base-content/60">{ data.Body }</p>
-				}
-			</div>
-			@DialogCloseButton("#admin-action-dialog")
+// DialogHeader 统一弹层标题、说明和关闭按钮，避免各弹层重复手写同一结构
+templ DialogHeader(title string, body string, titleID string, closeSelector string) {
+	<div class="flex items-start justify-between gap-4">
+		<div class="min-w-0">
+			if titleID != "" {
+				<h3 id={ titleID } class="text-xl font-semibold text-base-content">{ title }</h3>
+			} else {
+				<h3 class="text-xl font-semibold text-base-content">{ title }</h3>
+			}
+			if body != "" {
+				<p class="mt-2 text-sm leading-6 text-base-content/60">{ body }</p>
+			}
 		</div>
-		if data.Spotlight != "" {
-			<div class="admin-quote text-base font-medium leading-7">{ data.Spotlight }</div>
-		}
-		if len(data.Chips) > 0 {
-			<div class="flex flex-wrap gap-2">
-				for _, chip := range data.Chips {
-					<span class={ dialogChipClass(chip.Kind) }>{ chip.Label }</span>
-				}
-			</div>
-		}
+		@DialogCloseButton(closeSelector)
+	</div>
+}
+
+templ AdminActionDialogContent(data AdminActionDialogContentData) {
+	<div class="space-y-6">
+		@DialogHeader(data.Title, data.Body, "admin-action-dialog-title", "#admin-action-dialog")
 		if len(data.Fields) > 0 {
 			<div class={ ternaryString(len(data.Fields) > 1, "grid grid-cols-2 gap-3", "grid gap-3") }>
 				for _, field := range data.Fields {
 					<div class="rounded-box bg-base-200 p-4">
-						<strong class="text-xs font-medium text-base-content/50">{ field.Label }</strong>
+						<strong class="text-xs font-medium text-base-content/60">{ field.Label }</strong>
 						<div class="mt-2 max-h-56 overflow-y-auto whitespace-pre-line break-words text-sm leading-6 text-base-content/75">{ field.Value }</div>
 					</div>
 				}
@@ -51,22 +50,16 @@ templ AdminActionDialogContent(data AdminActionDialogContentData) {
 }
 
 templ StickerPreviewDialog(data StickerPreviewDialogData) {
-	<div class="space-y-5">
-		<div class="flex items-start justify-between gap-4">
-			<div>
-				<h3 id="admin-sticker-preview-dialog-title" class="text-xl font-semibold">表情包预览</h3>
-				<p class="mt-2 text-sm text-base-content/60">查看图片和文件信息。</p>
-			</div>
-			@DialogCloseButton("#admin-sticker-preview-dialog")
-		</div>
+	<div class="space-y-6">
+		@DialogHeader("表情包预览", "查看图片和文件信息。", "admin-sticker-preview-dialog-title", "#admin-sticker-preview-dialog")
 		<div class="flex min-h-80 items-center justify-center rounded-box bg-base-200 p-5">
 			<img class="block max-h-[32rem] max-w-full object-contain" width="960" height="512" src={ data.FileURL } alt={ data.Description } loading="lazy"/>
 		</div>
 		<div class="grid grid-cols-2 gap-3">
-			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">描述</strong><div class="mt-2 text-sm">{ data.Description }</div></div>
-			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">文件名</strong><div class="mt-2 break-all text-sm">{ data.FileName }</div></div>
-			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">哈希</strong><div class="mt-2 break-all text-sm">{ data.FileHash }</div></div>
-			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/50">统计</strong><div class="mt-2 text-sm">{ data.Meta }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/60">描述</strong><div class="mt-2 text-sm">{ data.Description }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/60">文件名</strong><div class="mt-2 break-all text-sm">{ data.FileName }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/60">哈希</strong><div class="mt-2 break-all text-sm">{ data.FileHash }</div></div>
+			<div class="rounded-box bg-base-200 p-4"><strong class="text-xs text-base-content/60">统计</strong><div class="mt-2 text-sm">{ data.Meta }</div></div>
 		</div>
 		<div class="modal-action">
 			<a class="btn btn-success btn-soft" href={ data.FileURL } target="_blank" rel="noreferrer">新窗口打开</a>
@@ -76,11 +69,8 @@ templ StickerPreviewDialog(data StickerPreviewDialogData) {
 }
 
 templ DialogErrorContent(overlayID string, title string, body string) {
-	<div class="space-y-5">
-		<div class="flex items-start justify-between gap-4">
-			<div><h3 class="text-xl font-semibold">{ title }</h3><p class="mt-2 text-sm leading-6 text-base-content/60">{ body }</p></div>
-			@DialogCloseButton("#" + overlayID)
-		</div>
+	<div class="space-y-6">
+		@DialogHeader(title, body, "", "#"+overlayID)
 		<div class="alert alert-error alert-soft text-sm">{ body }</div>
 	</div>
 }

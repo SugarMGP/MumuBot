@@ -1,4 +1,4 @@
-package memory
+package migration
 
 import "gorm.io/gorm"
 

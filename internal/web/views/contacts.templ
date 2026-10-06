@@ -1,0 +1,176 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+
+	"mumu-bot/internal/memory"
+)
+
+templ ContactsPage(data ContactsPageData, currentPath string) {
+	@Layout(LayoutData{Title: "会话管理", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, ContactsBody(data))
+}
+
+templ ContactsBody(data ContactsPageData) {
+	<div class="space-y-6">
+		@PageHeader("会话管理", "统一管理群聊、好友和好友申请。", "联系人中心")
+		@ContactSection("群聊", data.Groups, true)
+		@ContactSection("好友", data.Friends, false)
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<div><h2 class="text-lg font-semibold text-base-content">好友申请</h2><p class="mt-1 text-sm text-base-content/60">处理收到的好友申请。</p></div>
+				<div class="overflow-x-auto">
+					<table class="table">
+						<thead><tr><th>申请人</th><th>附言</th><th>收到时间</th><th>状态</th><th>操作</th></tr></thead>
+						<tbody>
+							for _, request := range data.FriendRequests {
+								<tr>
+									<td><span class="font-medium">{ contactRequestName(request.Nickname) }</span><div class="admin-number text-xs text-base-content/45">{ fmt.Sprintf("%d", request.UserID) }</div></td>
+									<td class="max-w-80 whitespace-normal break-words text-base-content/75">{ contactRequestComment(request.Comment) }</td>
+									<td class="admin-number whitespace-nowrap text-base-content/60">{ request.ReceivedAt.Format("2006-01-02 15:04") }</td>
+									<td class="whitespace-nowrap">
+										@FriendRequestStatusBadge(request.Status)
+									</td>
+									<td>
+										if request.Status == "pending" {
+											<form method="post" action="/admin/contacts/actions" class="flex items-center gap-2" hx-post="/admin/contacts/actions" hx-target="#admin-page-body" hx-swap="outerHTML">
+												<input type="hidden" name="action" value="friend-request"/>
+												<input type="hidden" name="request_id" value={ fmt.Sprint(request.ID) }/>
+												<button class="btn btn-primary btn-xs" type="submit" name="approve" value="true" data-loading-label="处理中">同意</button>
+												<button class="btn btn-ghost btn-xs border-base-300" type="submit" name="approve" value="false" data-loading-label="处理中">拒绝</button>
+											</form>
+										}
+									</td>
+								</tr>
+							}
+							if len(data.FriendRequests) == 0 {
+								<tr><td colspan="5" class="py-8 text-center text-base-content/60">暂无好友申请</td></tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</section>
+	</div>
+}
+
+templ ContactSection(title string, items []memory.ConversationTarget, group bool) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">{ title }</h2><p class="mt-1 text-sm text-base-content/60">{ fmt.Sprintf("共 %d 个", len(items)) }</p></div>
+			<div class="overflow-x-auto">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>名称</th>
+							if group {
+								<th>群提示</th>
+							}
+							<th>状态</th>
+							<th class="text-right">操作</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, item := range items {
+							<tr>
+								<td><span class={ joinClasses("font-medium", ternaryString(item.Active, "", "text-base-content/60")) }>{ contactDisplayName(item) }</span><div class="admin-number text-xs text-base-content/45">{ fmt.Sprintf("%d", item.TargetID) }</div></td>
+								if group {
+									<td>
+										<div class="admin-prompt-editor" data-prompt-editor>
+											<button class="admin-prompt-summary" type="button" data-prompt-edit aria-label={ contactExtraPromptLabel(item) }>
+												if text := strings.TrimSpace(item.ExtraPrompt); text != "" {
+													<span class="admin-prompt-text">{ text }</span>
+												} else {
+													<span class="text-base-content/60">点击添加群提示</span>
+												}
+												@AdminIcon("pencil", "admin-prompt-caret size-3.5", "prompt-caret")
+											</button>
+											<form method="post" action="/admin/contacts/actions" class="admin-prompt-form" data-prompt-form hidden hx-post="/admin/contacts/actions" hx-target="#admin-page-body" hx-swap="outerHTML">
+												<input type="hidden" name="action" value="extra-prompt"/>
+												<input type="hidden" name="target_id" value={ fmt.Sprintf("%d", item.TargetID) }/>
+												<input class="input input-sm w-full border-base-300 text-sm focus:border-primary" name="extra_prompt" value={ item.ExtraPrompt } placeholder="群聊额外提示" aria-label={ contactExtraPromptLabel(item) } data-prompt-input/>
+											</form>
+										</div>
+									</td>
+								}
+								<td class="whitespace-nowrap">
+									<div class="flex flex-wrap items-center gap-1">
+										if !item.Active {
+											if group {
+												<span class="badge badge-ghost badge-sm">已离开</span>
+											} else {
+												<span class="badge badge-ghost badge-sm">已删除</span>
+											}
+										}
+										if item.Blocked {
+											<span class="badge badge-ghost badge-sm">已拉黑</span>
+										} else if item.Active {
+											<span class="badge badge-success badge-sm badge-soft">已放行</span>
+										}
+									</div>
+								</td>
+								<td>
+									<form method="post" action="/admin/contacts/actions" class="flex justify-end" hx-post="/admin/contacts/actions" hx-target="#admin-page-body" hx-swap="outerHTML">
+										<input type="hidden" name="action" value="block"/>
+										<input type="hidden" name="kind" value={ item.ConversationKind }/>
+										<input type="hidden" name="target_id" value={ fmt.Sprintf("%d", item.TargetID) }/>
+										if item.Blocked {
+											<button class="btn btn-success btn-soft btn-xs" type="submit" name="blocked" value="false" data-loading-label="解除中">解除拉黑</button>
+										} else {
+											<button class="btn btn-ghost btn-xs border-base-300" type="submit" name="blocked" value="true" data-loading-label="处理中">拉黑</button>
+										}
+									</form>
+								</td>
+							</tr>
+						}
+						if len(items) == 0 {
+							if group {
+								<tr><td colspan="4" class="py-8 text-center text-base-content/60">暂无群聊</td></tr>
+							} else {
+								<tr><td colspan="3" class="py-8 text-center text-base-content/60">暂无好友</td></tr>
+							}
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</section>
+}
+
+templ FriendRequestStatusBadge(status string) {
+	if status == "approved" {
+		<span class="badge badge-success badge-soft badge-sm">已同意</span>
+	} else if status == "rejected" {
+		<span class="badge badge-ghost badge-sm">已拒绝</span>
+	} else {
+		<span class="badge badge-warning badge-sm badge-soft">待处理</span>
+	}
+}
+
+func contactDisplayName(item memory.ConversationTarget) string {
+	if remark := strings.TrimSpace(item.RemoteRemark); remark != "" {
+		return remark
+	}
+	if name := strings.TrimSpace(item.Name); name != "" {
+		return name
+	}
+	return fmt.Sprintf("%d", item.TargetID)
+}
+
+func contactExtraPromptLabel(item memory.ConversationTarget) string {
+	return contactDisplayName(item) + "的群聊额外提示"
+}
+
+func contactRequestName(nickname string) string {
+	if name := strings.TrimSpace(nickname); name != "" {
+		return name
+	}
+	return "未知申请人"
+}
+
+func contactRequestComment(comment string) string {
+	if text := strings.TrimSpace(comment); text != "" {
+		return text
+	}
+	return "无"
+}

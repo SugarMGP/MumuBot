@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -20,11 +21,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-type investigation struct {
-	manager     *memory.Manager
-	batch       memory.KnowledgeBatch
-	seen        map[uint]bool
-	partial     map[uint]int
+type groupInvestigation struct {
+	knowledgeInvestigation
 	required    []uint
 	finished    bool
 	finishAlone bool
@@ -32,19 +30,13 @@ type investigation struct {
 	topics      memory.ConversationContext
 }
 
-type finishInput struct {
+type groupFinishInput struct {
 	Topics     []memory.ConversationTopic      `json:"topics"`
 	NoTopicIDs []uint                          `json:"no_topic_ids"`
 	Items      []memory.KnowledgeItemInput     `json:"items"`
 	Relations  []memory.KnowledgeRelationInput `json:"relations"`
 }
-type searchInput struct {
-	Query         string `json:"query"`
-	SubjectUserID *int64 `json:"subject_user_id,omitempty"`
-	Offset        int    `json:"offset,omitempty"`
-	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=按知识 ID 读取正文、证据和关系，包括关系另一端；offset 同时分页证据组和关系"`
-}
-type messageInput struct {
+type groupMessageSearchInput struct {
 	Text             string     `json:"text"`
 	UserID           int64      `json:"user_id,omitempty"`
 	AfterID          uint       `json:"after_id,omitempty"`
@@ -52,19 +44,19 @@ type messageInput struct {
 	From             *time.Time `json:"from,omitempty"`
 	To               *time.Time `json:"to,omitempty"`
 }
-type contextInput struct {
+type groupContextInput struct {
 	MessageID uint   `json:"message_id"`
 	Mode      string `json:"mode" jsonschema:"enum=message,enum=replies,enum=topic,enum=window"`
 	AfterID   uint   `json:"after_id,omitempty"`
 	Offset    int    `json:"offset,omitempty" jsonschema:"description=仅 message 模式，续读长原文的字符位置"`
 }
 
-func (l *Learner) investigate(groupID, selfID int64, after, upper uint, rows []memory.MessageLog) error {
+func (l *Learner) investigateGroup(groupID, selfID int64, after, upper uint, rows []memory.MessageLog) error {
 	cfg := config.Get()
 	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
 	defer cancel()
 	ctx = llm.WithTask(ctx, "memory_agent", cfg.ModelTiers.Low.Model)
-	run := &investigation{manager: l.memMgr, batch: memory.KnowledgeBatch{GroupID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: true, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}
+	run := &groupInvestigation{knowledgeInvestigation: knowledgeInvestigation{manager: l.memMgr, batch: memory.KnowledgeBatch{ConversationKind: memory.ConversationKindGroup, TargetID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: true, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}}
 	run.rows = rows
 	var err error
 	run.topics, err = l.memMgr.ConversationContext(ctx, groupID, upper, rows)
@@ -73,7 +65,7 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, rows []m
 	}
 	validRows := []memory.MessageLog{}
 	for _, row := range rows {
-		if row.RecalledAt != nil || row.TextContent == "" {
+		if row.RecalledAt != nil || strings.TrimSpace(row.TextContent) == "" {
 			continue
 		}
 		run.required = append(run.required, row.ID)
@@ -88,7 +80,7 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, rows []m
 		return err
 	}
 	if len(validRows) == 0 {
-		_, err := run.finish(ctx, &finishInput{})
+		_, err := run.finish(ctx, &groupFinishInput{})
 		return err
 	}
 	page, err := l.memMgr.ReadKnowledgeContext(ctx, groupID, upper, validRows[0].ID, 0, "window")
@@ -110,7 +102,7 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, rows []m
 		return err
 	}
 	initial += "\n仅供上下文，不重新分配：" + history
-	messages := []*schema.Message{schema.SystemMessage(memoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s", groupID, selfID, after, upper, run.required, initial))}
+	messages := []*schema.Message{schema.SystemMessage(groupMemoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s", groupID, selfID, after, upper, run.required, initial))}
 	topicText, err := sonic.MarshalString(run.topics)
 	if err != nil {
 		return err
@@ -133,7 +125,7 @@ func (l *Learner) investigate(groupID, selfID int64, after, upper uint, rows []m
 	return nil
 }
 
-func (r *investigation) tools() ([]tool.BaseTool, error) {
+func (r *groupInvestigation) tools() ([]tool.BaseTool, error) {
 	a, err := utils.InferTool("searchKnowledge", "查本群知识，包含归档及原文已失效的历史记录；offset 分页。", r.search)
 	if err != nil {
 		return nil, err
@@ -154,13 +146,28 @@ func (r *investigation) tools() ([]tool.BaseTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.BaseTool{a, b, c, d, e}, nil
+	f, err := agenttools.NewSearchWebTool()
+	if err != nil {
+		return nil, err
+	}
+	h, err := agenttools.NewSearchMemeTool()
+	if err != nil {
+		return nil, err
+	}
+	g, err := agenttools.NewFetchWebTool()
+	if err != nil {
+		return nil, err
+	}
+	return []tool.BaseTool{a, b, c, d, e, f, h, g}, nil
 }
 
-func (r *investigation) searchTopics(ctx context.Context, input *struct {
+func (r *groupInvestigation) searchTopics(ctx context.Context, input *struct {
 	Query string `json:"query"`
 }) (any, error) {
-	items, err := r.manager.SearchConversationTopics(ctx, r.batch.GroupID, r.batch.ThroughID, input.Query)
+	if input == nil {
+		return nil, fmt.Errorf("缺少话题查询参数")
+	}
+	items, err := r.manager.SearchConversationTopics(ctx, r.batch.TargetID, r.batch.ThroughID, input.Query)
 	if err != nil {
 		return nil, err
 	}
@@ -180,85 +187,32 @@ func (r *investigation) searchTopics(ctx context.Context, input *struct {
 	return items, nil
 }
 
-func (r *investigation) search(ctx context.Context, input *searchInput) (any, error) {
-	if input.Offset < 0 {
-		return nil, fmt.Errorf("offset 不得为负数")
+func (r *groupInvestigation) searchMessages(ctx context.Context, input *groupMessageSearchInput) (any, error) {
+	if input == nil {
+		return nil, fmt.Errorf("缺少历史查询参数")
 	}
-	if input.ItemID != 0 {
-		items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, ItemID: input.ItemID, ForMaintenance: true, ThroughID: r.batch.ThroughID, Limit: 1})
-		if err != nil {
-			return nil, err
-		}
-		if len(items) != 1 {
-			return nil, fmt.Errorf("知识不存在或不在本轮范围内")
-		}
-		sets, err := r.manager.ListKnowledgeEvidence(ctx, r.batch.GroupID, input.ItemID, 0)
-		if err != nil {
-			return nil, err
-		}
-		var groups [][]uint
-		for _, set := range sets {
-			var ids []uint
-			for _, row := range set.Messages {
-				if row.ID <= r.batch.ThroughID && row.RecalledAt == nil {
-					ids = append(ids, row.ID)
-				}
-			}
-			if len(ids) == len(set.Messages) && set.Valid {
-				groups = append(groups, ids)
-			}
-		}
-		start := min(len(groups), input.Offset)
-		end := min(len(groups), input.Offset+10)
-		var relations []memory.KnowledgeRelation
-		if err := r.manager.GetDB().WithContext(ctx).Table("knowledge_relations kr").Select("kr.*").Joins("JOIN knowledge_items s ON s.id=kr.source_item_id JOIN knowledge_items t ON t.id=kr.target_item_id").Where("s.group_id=? AND t.group_id=? AND s.reviewed_through_id<=? AND t.reviewed_through_id<=? AND (kr.source_item_id=? OR kr.target_item_id=?)", r.batch.GroupID, r.batch.GroupID, r.batch.ThroughID, r.batch.ThroughID, input.ItemID, input.ItemID).Order("kr.id").Offset(input.Offset).Limit(11).Scan(&relations).Error; err != nil {
-			return nil, err
-		}
-		more := end < len(groups) || len(relations) > 10
-		if len(relations) > 10 {
-			relations = relations[:10]
-		}
-		r.batch.ExpectedItems[input.ItemID] = items[0].UpdatedAt
-		return map[string]any{"item": items[0], "evidence_sets": groups[start:end], "has_valid_evidence": len(groups) > 0, "relations": relations, "has_more": more, "next_offset": input.Offset + 10, "instruction": "使用 readContext 阅读原文后才能作为本轮证据；用 item_id 直接读取关系另一端"}, nil
-	}
-	if input.SubjectUserID != nil && *input.SubjectUserID == memory.SubjectSelfInputID {
-		self := r.batch.SelfID
-		input.SubjectUserID = &self
-	}
-	items, err := r.manager.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: r.batch.GroupID, Query: input.Query, SubjectUserID: input.SubjectUserID, ForMaintenance: true, ThroughID: r.batch.ThroughID, Limit: 11, Offset: input.Offset})
-	if err != nil {
-		return nil, err
-	}
-	more := len(items) > 10
-	if more {
-		items = items[:10]
-	}
-	for _, item := range items {
-		r.batch.ExpectedItems[item.ID] = item.UpdatedAt
-	}
-	return map[string]any{"items": items, "has_more": more, "next_offset": input.Offset + len(items)}, nil
-}
-
-func (r *investigation) searchMessages(ctx context.Context, input *messageInput) (any, error) {
-	page, err := r.manager.SearchKnowledgeMessages(ctx, memory.KnowledgeMessageQuery{GroupID: r.batch.GroupID, ThroughID: r.batch.ThroughID, AfterID: input.AfterID, Text: input.Text, UserID: input.UserID, ReplyToMessageID: input.ReplyToMessageID, From: input.From, To: input.To, Limit: 30})
+	page, err := r.manager.SearchKnowledgeMessages(ctx, memory.KnowledgeMessageQuery{TargetID: r.batch.TargetID, ThroughID: r.batch.ThroughID, AfterID: input.AfterID, Text: input.Text, UserID: input.UserID, ReplyToMessageID: input.ReplyToMessageID, From: input.From, To: input.To, Limit: 30})
 	if err != nil {
 		return nil, err
 	}
 	return r.renderMessages(page, 0)
 }
 
-func (r *investigation) readContext(ctx context.Context, input *contextInput) (any, error) {
-	if input.Offset < 0 || (input.Offset > 0 && input.Mode != "message") {
+func (r *groupInvestigation) readContext(ctx context.Context, input *groupContextInput) (any, error) {
+	if input == nil || input.Offset < 0 || (input.Offset > 0 && input.Mode != "message") {
 		return nil, fmt.Errorf("无效长文位置")
 	}
-	page, err := r.manager.ReadKnowledgeContext(ctx, r.batch.GroupID, r.batch.ThroughID, input.MessageID, input.AfterID, input.Mode)
+	page, err := r.manager.ReadKnowledgeContext(ctx, r.batch.TargetID, r.batch.ThroughID, input.MessageID, input.AfterID, input.Mode)
 	if err != nil {
 		return nil, err
 	}
 	return r.renderMessages(page, input.Offset)
 }
 
-func (r *investigation) finish(ctx context.Context, input *finishInput) (any, error) {
+func (r *groupInvestigation) finish(ctx context.Context, input *groupFinishInput) (any, error) {
+	if input == nil || r.finished {
+		return nil, fmt.Errorf("缺少提交参数或本轮已经提交")
+	}
 	batch := r.batch
 	batch.ReadMessageIDs = nil
 	batch.Items = slices.Clone(input.Items)
@@ -278,7 +232,7 @@ func (r *investigation) finish(ctx context.Context, input *finishInput) (any, er
 		}
 	}
 	for _, row := range r.rows {
-		if row.RecalledAt != nil || row.TextContent == "" {
+		if row.RecalledAt != nil || strings.TrimSpace(row.TextContent) == "" {
 			noTopic = append(noTopic, row.ID)
 		}
 	}
@@ -294,7 +248,7 @@ func (r *investigation) finish(ctx context.Context, input *finishInput) (any, er
 	return result, nil
 }
 
-func (r *investigation) finishTool(ctx context.Context, input *finishInput) (any, error) {
+func (r *groupInvestigation) finishTool(ctx context.Context, input *groupFinishInput) (any, error) {
 	if !r.finishAlone {
 		return map[string]any{"success": false, "message": "finishMemoryBatch 必须单独调用，请在其他读取完成后再提交"}, nil
 	}
@@ -306,36 +260,4 @@ func (r *investigation) finishTool(ctx context.Context, input *finishInput) (any
 		return nil, agenttools.NewTerminalToolError(err)
 	}
 	return result, nil
-}
-
-func (r *investigation) renderMessages(page memory.KnowledgeMessagePage, offset int) (any, error) {
-	records := make([]map[string]any, 0, len(page.Messages))
-	remaining := 6500
-	next := uint(0)
-	for i, row := range page.Messages {
-		text := []rune(row.TextContent)
-		if offset > len(text) {
-			return nil, fmt.Errorf("读取位置超出原文长度")
-		}
-		if remaining < 500 {
-			page.HasMore = true
-			break
-		}
-		end := min(len(text), offset+remaining-300)
-		complete := end == len(text)
-		records = append(records, map[string]any{"id": row.ID, "user_id": row.UserID, "nickname": row.Nickname, "time": row.MessageTime, "onebot_message_id": row.OneBotMessageID, "reply_to_message_id": row.ReplyToMessageID, "text": string(text[offset:end]), "offset": offset, "next_offset": end, "complete": complete})
-		remaining -= end - offset + 300
-		next = row.ID
-		if offset <= r.partial[row.ID] {
-			r.partial[row.ID] = max(r.partial[row.ID], end)
-			if complete {
-				r.seen[row.ID] = true
-			}
-		}
-		if i < len(page.Messages)-1 && remaining < 500 {
-			page.HasMore = true
-			break
-		}
-	}
-	return map[string]any{"messages": records, "has_more": page.HasMore, "next_id": next}, nil
 }

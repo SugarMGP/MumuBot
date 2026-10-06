@@ -11,36 +11,45 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func (m *Manager) GetWorkingNote(ctx context.Context, groupID int64) (*GroupAgentState, error) {
-	var row GroupAgentState
-	err := m.db.WithContext(ctx).First(&row, "group_id=?", groupID).Error
+func (m *Manager) GetWorkingNote(ctx context.Context, groupID int64) (*ConversationAgentState, error) {
+	return m.GetWorkingNoteScope(ctx, ConversationKindGroup, groupID)
+}
+
+func (m *Manager) GetWorkingNoteScope(ctx context.Context, kind string, targetID int64) (*ConversationAgentState, error) {
+	var row ConversationAgentState
+	err := m.db.WithContext(ctx).First(&row, "conversation_kind=? AND target_id=?", kind, targetID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return &GroupAgentState{GroupID: groupID}, nil
+		return &ConversationAgentState{ConversationKind: kind, TargetID: targetID}, nil
 	}
 	return &row, err
 }
 func (m *Manager) SaveWorkingNote(ctx context.Context, groupID int64, note string) error {
-	note = strings.TrimSpace(note)
-	if groupID <= 0 || utf8.RuneCountInString(note) > 300 {
-		return invalidKnowledge("群便签需要有效群号且不能超过 300 个字符，请修正后重试")
-	}
-	if note == "" {
-		return m.db.WithContext(ctx).Where("group_id=?", groupID).Delete(&GroupAgentState{}).Error
-	}
-	row := GroupAgentState{GroupID: groupID, Note: note, UpdatedAt: time.Now()}
-	return m.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "group_id"}}, DoUpdates: clause.AssignmentColumns([]string{"note", "updated_at"})}).Create(&row).Error
+	return m.SaveWorkingNoteScope(ctx, ConversationKindGroup, groupID, note)
 }
 
-func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint, status string) error {
+func (m *Manager) SaveWorkingNoteScope(ctx context.Context, kind string, targetID int64, note string) error {
+	note = strings.TrimSpace(note)
+	if targetID <= 0 || utf8.RuneCountInString(note) > 300 {
+		return invalidKnowledge("便签目标无效或超过 300 个字符，请修正后重试")
+	}
+	if note == "" {
+		return m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID).Delete(&ConversationAgentState{}).Error
+	}
+	row := ConversationAgentState{ConversationKind: kind, TargetID: targetID, Note: note, UpdatedAt: time.Now()}
+	return m.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "conversation_kind"}, {Name: "target_id"}}, DoUpdates: clause.AssignmentColumns([]string{"note", "updated_at"})}).Create(&row).Error
+}
+
+// SetKnowledgeStatusScope 按会话作用域启用或归档知识
+func (m *Manager) SetKnowledgeStatusScope(ctx context.Context, kind string, targetID int64, id uint, status string) error {
 	if !validKnowledgeStatus(status) {
 		return invalidKnowledge("知识状态无效，请选择启用或归档")
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := LockKnowledgeGroup(tx, groupID); err != nil {
+		if err := LockKnowledgeScope(tx, kind, targetID); err != nil {
 			return err
 		}
 		var item KnowledgeItem
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id=? AND id=?", groupID, id).First(&item).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=? AND id=?", kind, targetID, id).First(&item).Error; err != nil {
 			return err
 		}
 		if status == "active" {
@@ -55,7 +64,7 @@ func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint
 				return invalidKnowledge("知识缺少完整有效依据，暂时不能启用")
 			}
 			var duplicate KnowledgeItem
-			err = tx.Where("group_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND btrim(content)=? AND status='active' AND id<>?", groupID, item.SubjectUserID, item.Kind, item.Label, item.Content, id).First(&duplicate).Error
+			err = tx.Where("conversation_kind=? AND target_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND lower(btrim(content))=lower(btrim(?)) AND status='active' AND id<>?", kind, targetID, item.SubjectUserID, item.Kind, item.Label, item.Content, id).First(&duplicate).Error
 			if err == nil {
 				var sets []KnowledgeEvidenceSet
 				if err := tx.Where("item_id=?", id).Find(&sets).Error; err != nil {
@@ -70,79 +79,23 @@ func (m *Manager) SetKnowledgeStatus(ctx context.Context, groupID int64, id uint
 						return err
 					}
 				}
-				if err := tx.Model(&duplicate).Updates(map[string]any{"updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,?,(SELECT COALESCE(max(id),0) FROM message_logs WHERE group_id=?))", item.ReviewedThroughID, groupID)}).Error; err != nil {
+				if err := tx.Model(&duplicate).Updates(map[string]any{"updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,?,(SELECT COALESCE(max(id),0) FROM message_logs WHERE conversation_kind=? AND target_id=?))", item.ReviewedThroughID, kind, targetID)}).Error; err != nil {
 					return err
 				}
 				if err := tx.Model(&item).Updates(map[string]any{"status": "archived", "updated_at": time.Now()}).Error; err != nil {
 					return err
 				}
-				return archiveInvalidKnowledgeRelations(tx, groupID)
+				return ArchiveInvalidKnowledgeRelations(tx, kind, targetID)
 			}
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
 		}
-		updates := map[string]any{"status": status, "updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,(SELECT COALESCE(max(id),0) FROM message_logs WHERE group_id=?))", groupID)}
+		updates := map[string]any{"status": status, "updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,(SELECT COALESCE(max(id),0) FROM message_logs WHERE conversation_kind=? AND target_id=?))", kind, targetID)}
 		if err := tx.Model(&item).Updates(updates).Error; err != nil {
 			return err
 		}
-		return archiveInvalidKnowledgeRelations(tx, groupID)
-	})
-}
-
-func (m *Manager) SetKnowledgeRelationStatus(ctx context.Context, groupID int64, id uint, status string) error {
-	if !validKnowledgeStatus(status) {
-		return invalidKnowledge("关系状态无效，请选择启用或归档")
-	}
-	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := LockKnowledgeGroup(tx, groupID); err != nil {
-			return err
-		}
-		var relation KnowledgeRelation
-		if err := tx.First(&relation, id).Error; err != nil {
-			return err
-		}
-		var items []KnowledgeItem
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id=? AND id IN ?", groupID, []uint{relation.SourceItemID, relation.TargetItemID}).Order("id").Find(&items).Error; err != nil {
-			return err
-		}
-		if len(items) != 2 {
-			return invalidKnowledge("关系不属于当前群，请刷新后重新选择")
-		}
-		if status == "active" {
-			if err := checkRelationActivation(tx, relation); err != nil {
-				return err
-			}
-			for _, item := range items {
-				ok, err := knowledgeHasEvidence(tx, item.ID, 0)
-				if err != nil {
-					return err
-				}
-				if !ok || (item.Status != "active" && !(relation.Kind == "supersedes" && item.ID == relation.TargetItemID && item.Status == "archived")) {
-					return invalidKnowledge("关系端点尚未启用或缺少有效依据，请先处理端点知识")
-				}
-			}
-			ok, err := knowledgeHasEvidence(tx, 0, id)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return invalidKnowledge("关系缺少完整有效依据，暂时不能启用")
-			}
-		}
-		if err := tx.Model(&relation).Update("status", status).Error; err != nil {
-			return err
-		}
-		updates := map[string]any{"updated_at": time.Now(), "reviewed_through_id": gorm.Expr("GREATEST(reviewed_through_id,(SELECT COALESCE(max(id),0) FROM message_logs WHERE group_id=?))", groupID)}
-		if err := tx.Model(&KnowledgeItem{}).Where("id IN ?", []uint{relation.SourceItemID, relation.TargetItemID}).Updates(updates).Error; err != nil {
-			return err
-		}
-		if status == "active" && relation.Kind == "supersedes" {
-			if err := tx.Model(&KnowledgeItem{}).Where("id=?", relation.TargetItemID).Updates(map[string]any{"status": "archived", "updated_at": time.Now()}).Error; err != nil {
-				return err
-			}
-		}
-		return archiveInvalidKnowledgeRelations(tx, groupID)
+		return ArchiveInvalidKnowledgeRelations(tx, kind, targetID)
 	})
 }
 

@@ -15,62 +15,65 @@ templ StickerListBody(data StickerListPageData) {
 		@PageHeader("表情包管理", "查看和管理机器人用于回复的自定义表情资源。", "")
 		@FilterPanel("sticker-filters", "筛选条件", EmptyComponent(), false, StickerFilterForm(data))
 		@SortToolbar(data.Sort)
-		<section class="card min-h-[520px] border border-base-300 bg-base-100">
-			<div class="card-body p-5">
-				if len(data.Items) == 0 {
-					<div class="flex min-h-[420px] items-center justify-center text-sm text-base-content/55">当前筛选条件下暂无表情包</div>
-				} else {
-					<div class="grid grid-cols-4 gap-4 2xl:grid-cols-5">
-						for _, item := range data.Items {
-							<article class="card border border-base-300 bg-base-100 shadow-sm">
-								<figure class="m-3 mb-0 aspect-square overflow-hidden rounded-xl bg-base-200 p-2">
-									if stickerFileURL(item.FileName) != "" {
-										<button class="h-full w-full" type="button" title="查看大图" data-admin-dialog="#admin-sticker-preview-dialog" hx-get={ stickerPreviewDialogHref(item.ID) } hx-target="#admin-sticker-preview-content" hx-swap="innerHTML" aria-label={ stickerPreviewAlt(item.Description, item.ID) }>
-											<img class="h-full w-full object-contain" width="240" height="240" src={ stickerFileURL(item.FileName) } alt={ stickerPreviewAlt(item.Description, item.ID) } loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"/>
-											<span class="hidden text-xl font-semibold text-base-content/35">{ stickerPreviewText(item.Description) }</span>
-										</button>
-									} else {
-										<span class="text-sm text-base-content/35">暂无预览</span>
-									}
-								</figure>
-								<div class="card-body gap-2 p-3">
-									<h2 class="truncate text-sm font-medium" title={ stickerDescriptionText(item.Description) }>{ stickerCardTitle(item) }</h2>
-									<p class="truncate text-xs text-base-content/55" title={ item.FileName }>{ item.FileName }</p>
-									<div class="flex items-center justify-between text-xs text-base-content/55"><span>使用 { fmt.Sprintf("%d", item.UseCount) } 次</span><time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
-									<div class="card-actions mt-1 justify-end">
-										<button class="btn btn-error btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ stickerDeleteDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">删除</button>
-									</div>
-								</div>
-							</article>
-						}
-					</div>
+		if len(data.Items) == 0 {
+			<div class="card border-dashed"><div class="card-body items-center py-14 text-sm text-base-content/60">当前筛选条件下暂无表情包</div></div>
+		} else {
+			<div class="grid grid-cols-[repeat(auto-fill,minmax(clamp(200px,17vw,240px),1fr))] gap-4" data-sticker-grid data-page-size={ fmt.Sprint(data.Meta.PageSize) }>
+				for _, item := range data.Items {
+					<article class="card">
+						<figure class="m-3 mb-0 aspect-square overflow-hidden rounded-xl bg-base-200 p-2">
+							if stickerFileURL(item.FileName) != "" {
+								<button class="h-full w-full" type="button" title="查看大图" data-admin-dialog="#admin-sticker-preview-dialog" hx-get={ stickerPreviewDialogHref(item.ID) } hx-target="#admin-sticker-preview-content" hx-swap="innerHTML" aria-label={ stickerPreviewAlt(item.Description, item.ID) }>
+									<img class="h-full w-full object-contain" width="240" height="240" src={ stickerFileURL(item.FileName) } alt={ stickerPreviewAlt(item.Description, item.ID) } loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"/>
+									<span class="hidden text-xl font-semibold text-base-content/60">{ stickerPreviewText(item.Description) }</span>
+								</button>
+							} else {
+								<span class="text-sm text-base-content/60">暂无预览</span>
+							}
+						</figure>
+						<div class="card-body gap-2 p-3">
+							<h2 class="truncate text-sm font-medium" title={ stickerDescriptionText(item.Description) }>{ stickerCardTitle(item) }</h2>
+							<p class="truncate text-xs text-base-content/60" title={ item.FileName }>{ item.FileName }</p>
+							<div class="flex items-center justify-between text-xs text-base-content/60"><span>使用 { fmt.Sprintf("%d", item.UseCount) } 次</span><time datetime={ formatTimeAttr(item.UpdatedAt) }>{ formatTime(item.UpdatedAt) }</time></div>
+							<div class="card-actions mt-1 justify-end">
+								<button class="btn btn-error btn-soft btn-xs" type="button" data-admin-dialog="#admin-action-dialog" hx-get={ stickerDeleteDialogHref(item.ID) } hx-target="#admin-action-dialog-content" hx-swap="innerHTML">删除</button>
+							</div>
+						</div>
+					</article>
 				}
-				@ListFooter(data.Meta)
 			</div>
-		</section>
+		}
+		@ListFooter(data.Meta)
 	</div>
 }
 
 templ StickerFilterForm(data StickerListPageData) {
-	<form class="grid grid-cols-[minmax(240px,1fr)_auto] items-center gap-3" method="get" action="/admin/stickers" hx-get="/admin/stickers" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+	<form class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3" method="get" action="/admin/stickers" hx-get="/admin/stickers" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="搜索描述、文件名或哈希…" aria-label="搜索描述、文件名或哈希"/>
-		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">@AdminIcon("filter", "size-4", "sticker-filter")
-<span>筛选</span></button>
+		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">
+			@AdminIcon("filter", "size-4", "sticker-filter")
+			<span>筛选</span>
+		</button>
 	</form>
 }
 
 templ StickerPreviewOverlay() {
 	<dialog id="admin-sticker-preview-dialog" class="modal" aria-labelledby="admin-sticker-preview-dialog-title">
-		<div class="modal-box max-h-[88vh] max-w-4xl border border-base-300 p-6"><div id="admin-sticker-preview-content">@StickerPreviewOverlayBody()
-</div></div>
+		<div class="modal-box max-h-[88vh] max-w-4xl border border-base-300 p-6">
+			<div id="admin-sticker-preview-content">
+				@StickerPreviewOverlayBody()
+			</div>
+		</div>
 		<form method="dialog" class="modal-backdrop"><button aria-label="关闭表情包预览">关闭</button></form>
 	</dialog>
 }
 
 templ StickerPreviewOverlayBody() {
-	<div class="space-y-5"><div class="flex items-start justify-between"><div><h3 id="admin-sticker-preview-dialog-title" class="text-xl font-semibold">表情包预览</h3><p class="mt-1 text-sm text-base-content/55">正在载入图片和文件信息。</p></div>@DialogCloseButton("#admin-sticker-preview-dialog")
-</div><div class="skeleton h-80 w-full"></div></div>
+	<div class="space-y-6">
+		@DialogHeader("表情包预览", "正在载入图片和文件信息。", "admin-sticker-preview-dialog-title", "#admin-sticker-preview-dialog")
+		<div class="skeleton h-80 w-full"></div>
+	</div>
 }
 
 templ MemberListPage(data MemberListPageData, currentPath string) {
@@ -78,37 +81,55 @@ templ MemberListPage(data MemberListPageData, currentPath string) {
 }
 
 templ MemberListBody(data MemberListPageData) {
-	<div class="admin-memory-page space-y-5">
-		@PageHeader("成员管理", "查看成员身份、相关知识与参与记录。", "")
+	<div class="admin-memory-page space-y-6">
+		@PageHeader("成员管理", "查看成员身份、群聊知识与原文参与记录。", "")
 		@FilterPanel("member-filters", "筛选条件", EmptyComponent(), false, MemberFilterForm(data))
 		@SortToolbar(data.Sort)
 		<div class="space-y-3">
 			if len(data.Items) == 0 {
-				<div class="card border border-dashed border-base-300 bg-base-100"><div class="card-body items-center py-14 text-sm text-base-content/55">当前筛选条件下暂无成员</div></div>
+				<div class="card border-dashed"><div class="card-body items-center py-14 text-sm text-base-content/60">当前筛选条件下暂无成员</div></div>
 			}
 			for _, item := range data.Items {
-				<article class="card border border-base-300 bg-base-100 shadow-sm">
+				<article class="card">
 					<div class="admin-member-row">
 						<section class="flex min-w-0 items-center gap-3">
 							<div class="grid size-10 shrink-0 place-content-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
 								{ memberInitial(memberDisplayName(memberPrimaryName(item))) }
 							</div>
 							<div class="min-w-0">
-								<h2 class="break-words text-base font-semibold">{ memberDisplayName(memberPrimaryName(item)) }</h2>
-								<p class="admin-number mt-1 text-xs text-base-content/50">QQ { fmt.Sprintf("%d", item.UserID) }</p>
+								<h2 class="break-words text-lg font-semibold text-base-content">{ memberDisplayName(memberPrimaryName(item)) }</h2>
+								<p class="admin-number mt-1 text-xs text-base-content/60">QQ { fmt.Sprintf("%d", item.UserID) }</p>
 								if item.Nickname=="" && len(item.Names)>0 {
-									<span class="text-xs text-base-content/50">群内称呼</span>
+									<span class="text-xs text-base-content/60">群内称呼</span>
 								}
 								@MemberNames(item)
 							</div>
 						</section>
 						<section class="grid grid-cols-2 gap-3 text-sm">
-							<a class="admin-member-stat text-primary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?user_id=%d", item.UserID)) }><span>关于 TA 的记忆</span><strong>{ fmt.Sprint(item.KnowledgeCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-knowledge")
-</a>
-							<a class="admin-member-stat text-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?author_id=%d", item.UserID)) }><span>提供依据的记忆</span><strong>{ fmt.Sprint(item.ParticipationCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-evidence")
-</a>
+							<a class="admin-member-stat text-primary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?user_id=%d", item.UserID)) }>
+								<span>关于 TA 的群聊记忆</span><strong>{ fmt.Sprint(item.KnowledgeCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-knowledge")
+							</a>
+							<a class="admin-member-stat text-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?author_id=%d", item.UserID)) }>
+								<span>提供依据的群聊记忆</span><strong>{ fmt.Sprint(item.ParticipationCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-evidence")
+							</a>
 						</section>
-						<section class="text-right text-xs text-base-content/60"><p>好感度 <strong class="text-base text-base-content">{ fmt.Sprintf("%.2f", item.Intimacy) }</strong>（{ fmt.Sprintf("%d级·%s", memory.IntimacyLevel(item.Intimacy), memory.IntimacyLevelName(item.Intimacy)) }）</p><p class="mt-1">发言 <strong class="text-base text-base-content">{ fmt.Sprint(item.MessageCount) }</strong> 次</p><time class="mt-2 block" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time><span>最近活跃</span></section>
+						<section class="text-right text-xs text-base-content/60">
+							<details class="admin-intimacy-details" data-admin-hover-popover>
+								<summary class="admin-intimacy-summary" aria-label={ fmt.Sprintf("%s的好感度变化", memberPrimaryName(item)) }>
+									<p>好感度 <strong class="text-base text-base-content admin-number">{ fmt.Sprintf("%.2f", item.Intimacy) }</strong>（{ fmt.Sprintf("%d级·%s", memory.IntimacyLevel(item.Intimacy), memory.IntimacyLevelName(item.Intimacy)) }）</p>
+								</summary>
+								<div class="admin-intimacy-popover">
+									<p class="mb-2 text-xs font-semibold text-base-content/75">最近的好感度变化</p>
+									if len(item.IntimacyLogs) == 0 {
+										<p class="py-2 text-xs text-base-content/60">还没有变化记录</p>
+									}
+									for _, log := range item.IntimacyLogs {
+										@IntimacyLogRow(log)
+									}
+								</div>
+							</details>
+							<p class="mt-1">发言 <strong class="text-base text-base-content">{ fmt.Sprint(item.MessageCount) }</strong> 次</p><time class="mt-2 block" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time><span>最近活跃</span>
+						</section>
 					</div>
 				</article>
 			}
@@ -117,35 +138,56 @@ templ MemberListBody(data MemberListPageData) {
 	</div>
 }
 
+templ IntimacyLogRow(log memory.MemberIntimacyLog) {
+	<div class="admin-intimacy-row">
+		<div class="flex items-center justify-between gap-2">
+			<span class={ joinClasses("admin-number text-xs font-semibold", intimacyDeltaClass(log.Delta)) }>{ intimacyDeltaText(log.Delta) }</span>
+			<time class="admin-number text-xs text-base-content/45" datetime={ formatTimeAttr(log.CreatedAt) }>{ formatTime(log.CreatedAt) }</time>
+		</div>
+		<p class="mt-1 text-xs leading-5 text-base-content/75">{ intimacyReasonText(log.Reason) }</p>
+		<p class="admin-number mt-0.5 text-xs text-base-content/60">{ fmt.Sprintf("%.2f → %.2f", log.BeforeValue, log.AfterValue) }</p>
+	</div>
+}
+
 templ MemberFilterForm(data MemberListPageData) {
-	<form class="grid grid-cols-[minmax(280px,1fr)_auto] items-center gap-3" method="get" action="/admin/members" hx-get="/admin/members" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+	<form class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3" method="get" action="/admin/members" hx-get="/admin/members" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Sort.CurrentSort }/><input type="hidden" name="order" value={ data.Sort.CurrentOrder }/>
 		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="昵称 / QQ号 / 关键词…" aria-label="昵称 / QQ号 / 关键词"/>
-		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">筛选</button>
+		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">
+			@AdminIcon("filter", "size-4", "member-filter")
+			<span>筛选</span>
+		</button>
 	</form>
 }
 
 templ MemberNames(item services.MemberProfileView) {
-	{{ cards := memberGroupCards(item, 2) }}
-	if len(item.Names)>len(cards) {
-		<details class="admin-member-names mt-1">
-			<summary class="text-left" aria-label={ fmt.Sprintf("%s的全部称呼", memberPrimaryName(item)) }>
-				for _,tag:=range cards {
-					<span class="block truncate text-xs text-base-content/60">{ tag }</span>
+	{{ entries := memberNameEntries(item) }}
+	{{ shown := memberNameEntriesLimited(entries, 2) }}
+	if len(entries) > len(shown) {
+		<details class="admin-member-names mt-1" data-admin-hover-popover>
+			<summary class="text-left" aria-label={ fmt.Sprintf("%s的其他称呼", memberPrimaryName(item)) }>
+				for i, entry := range shown {
+					if i == len(shown)-1 {
+						<span class="flex items-baseline gap-1 text-xs text-base-content/60">
+							<span class="min-w-0 truncate" title={ entry.Label }>{ entry.Label }</span>
+							<span class="admin-member-more shrink-0">（+{ fmt.Sprint(len(entries) - len(shown)) }）</span>
+						</span>
+					} else {
+						<span class="block truncate text-xs text-base-content/60" title={ entry.Label }>{ entry.Label }</span>
+					}
 				}
-				<span class="text-xs text-primary/80">另有 { fmt.Sprint(len(item.Names)-len(cards)) } 个称呼</span>
 			</summary>
 			<div class="admin-names-popover">
-				<p class="mb-2 text-xs font-semibold text-base-content/70">全部称呼</p>
-				for _,name:=range item.Names {
-					<div class="py-2 border-t border-base-300/70"><p class="text-sm break-words">{ name.Value }</p><span class="text-xs text-base-content/50">群 { fmt.Sprint(name.GroupID) }</span></div>
+				<p class="mb-2 text-xs font-semibold text-base-content/75">其他称呼</p>
+				for _,entry:=range memberNameEntriesRemaining(entries, len(shown)) {
+					<div class="py-2 border-t border-base-300"><p class="text-sm break-words">{ entry.Value }</p><span class="text-xs text-base-content/60">群 { fmt.Sprint(entry.GroupID) }</span></div>
 				}
 			</div>
 		</details>
 	} else {
 		<div class="mt-1 space-y-1">
-			for _,tag:=range cards {
-				<span class="block truncate text-xs text-base-content/60" title={ tag }>{ tag }</span>
+			for _,entry:=range shown {
+				<span class="block truncate text-xs text-base-content/60" title={ entry.Label }>{ entry.Label }</span>
 			}
 		</div>
 	}

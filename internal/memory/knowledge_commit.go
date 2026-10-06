@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -11,25 +12,53 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrConversationUnavailable 表示提交事务中的会话已停用或拉黑
+var ErrConversationUnavailable = errors.New("当前会话已停用或拉黑")
+
+// WithContext 借用当前连接执行有界读写，不启动后台任务且不拥有连接生命周期
+func (m *Manager) WithContext(ctx context.Context) *Manager {
+	return &Manager{db: m.db.WithContext(ctx), embedding: m.embedding}
+}
+
+// LockConversationAllowed 锁住会话状态直到事务结束，禁止等待期间越过拉黑或退群决定
+func LockConversationAllowed(tx *gorm.DB, kind string, targetID int64) error {
+	var target ConversationTarget
+	err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("conversation_kind=? AND target_id=?", kind, targetID).First(&target).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && (!target.Active || target.Blocked)) {
+		return ErrConversationUnavailable
+	}
+	return err
+}
+
 // LockKnowledgeGroup 在获取行锁前串行化同群的知识写入与消息撤回
 func LockKnowledgeGroup(tx *gorm.DB, groupID int64) error {
-	if groupID <= 0 {
-		return invalidKnowledge("知识所属群无效，请使用当前群号")
+	return LockKnowledgeScope(tx, ConversationKindGroup, groupID)
+}
+
+func LockKnowledgeScope(tx *gorm.DB, kind string, targetID int64) error {
+	if targetID <= 0 {
+		return invalidKnowledge("知识作用域无效")
 	}
-	return tx.Exec("SELECT pg_advisory_xact_lock(?)", groupID).Error
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", fmt.Sprintf("knowledge:%s:%d", kind, targetID)).Error
 }
 
 func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch) (*KnowledgeCommitResult, error) {
+	if batch.ConversationKind == "" {
+		batch.ConversationKind = ConversationKindGroup
+	}
 	result := &KnowledgeCommitResult{ItemIDs: map[string]uint{}, ItemStatuses: map[string]string{}}
-	if batch.GroupID <= 0 || batch.SelfID <= 0 || batch.ThroughID == 0 {
+	if batch.TargetID <= 0 || batch.SelfID <= 0 || batch.ThroughID == 0 {
 		return nil, invalidKnowledge("知识批次范围无效，请使用本轮固定消息范围")
 	}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := LockKnowledgeGroup(tx, batch.GroupID); err != nil {
+		if err := LockKnowledgeScope(tx, batch.ConversationKind, batch.TargetID); err != nil {
+			return err
+		}
+		if err := LockConversationAllowed(tx, batch.ConversationKind, batch.TargetID); err != nil {
 			return err
 		}
 		var upperCount int64
-		if err := tx.Model(&MessageLog{}).Where("id=? AND group_id=?", batch.ThroughID, batch.GroupID).Count(&upperCount).Error; err != nil {
+		if err := tx.Model(&MessageLog{}).Where("id=? AND conversation_kind=? AND target_id=?", batch.ThroughID, batch.ConversationKind, batch.TargetID).Count(&upperCount).Error; err != nil {
 			return err
 		}
 		if upperCount != 1 {
@@ -39,22 +68,24 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 			if batch.ThroughID <= batch.AfterID {
 				return invalidKnowledge("整理范围起止位置无效，请在后续批次重新调查")
 			}
-			if err := tx.Exec("INSERT INTO learning_states(group_id,last_message_log_id) VALUES (?,0) ON CONFLICT DO NOTHING", batch.GroupID).Error; err != nil {
+			if err := tx.Exec("INSERT INTO learning_states(conversation_kind,target_id,last_message_log_id) VALUES (?, ?,0) ON CONFLICT DO NOTHING", batch.ConversationKind, batch.TargetID).Error; err != nil {
 				return err
 			}
 			var cursor uint
-			if err := tx.Raw("SELECT last_message_log_id FROM learning_states WHERE group_id=? FOR UPDATE", batch.GroupID).Scan(&cursor).Error; err != nil {
+			if err := tx.Raw("SELECT last_message_log_id FROM learning_states WHERE conversation_kind=? AND target_id=? FOR UPDATE", batch.ConversationKind, batch.TargetID).Scan(&cursor).Error; err != nil {
 				return err
 			}
 			if cursor != batch.AfterID {
 				return ErrSnapshotChanged
 			}
-			var pending int64
-			if err := tx.Raw(`SELECT count(*) FROM message_logs ml WHERE ml.group_id=? AND ml.id>? AND ml.id<=? AND NOT EXISTS(SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id=ml.id)`, batch.GroupID, batch.AfterID, batch.ThroughID).Scan(&pending).Error; err != nil {
-				return err
-			}
-			if pending != 0 {
-				return invalidKnowledge("本批仍有未归属消息，请补全话题归属后重试")
+			if batch.RequireAssigned {
+				var pending int64
+				if err := tx.Raw(`SELECT count(*) FROM message_logs ml WHERE ml.conversation_kind=? AND ml.target_id=? AND ml.id>? AND ml.id<=? AND NOT EXISTS(SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id=ml.id)`, batch.ConversationKind, batch.TargetID, batch.AfterID, batch.ThroughID).Scan(&pending).Error; err != nil {
+					return err
+				}
+				if pending != 0 {
+					return invalidKnowledge("本批仍有未归属消息，请补全话题归属后重试")
+				}
 			}
 		}
 		messages, err := lockKnowledgeEvidence(tx, batch)
@@ -69,7 +100,7 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 		existing := map[uint]KnowledgeItem{}
 		if len(ids) > 0 {
 			var rows []KnowledgeItem
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ? AND group_id=?", ids, batch.GroupID).Order("id").Find(&rows).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ? AND conversation_kind=? AND target_id=?", ids, batch.ConversationKind, batch.TargetID).Order("id").Find(&rows).Error; err != nil {
 				return err
 			}
 			if len(rows) != len(ids) {
@@ -95,7 +126,7 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 			}
 			existing[item.ID] = item
 		}
-		if err := archiveInvalidKnowledgeRelations(tx, batch.GroupID); err != nil {
+		if err := ArchiveInvalidKnowledgeRelations(tx, batch.ConversationKind, batch.TargetID); err != nil {
 			return err
 		}
 		for _, input := range batch.Relations {
@@ -105,14 +136,14 @@ func (m *Manager) CommitKnowledgeBatch(ctx context.Context, batch KnowledgeBatch
 			}
 			result.RelationIDs = append(result.RelationIDs, relation.ID)
 		}
-		if err := archiveInvalidKnowledgeRelations(tx, batch.GroupID); err != nil {
+		if err := ArchiveInvalidKnowledgeRelations(tx, batch.ConversationKind, batch.TargetID); err != nil {
 			return err
 		}
 		for key, id := range result.ItemIDs {
 			result.ItemStatuses[key] = existing[id].Status
 		}
 		if batch.AdvanceCursor {
-			return tx.Exec("UPDATE learning_states SET last_message_log_id=? WHERE group_id=?", batch.ThroughID, batch.GroupID).Error
+			return tx.Exec("UPDATE learning_states SET last_message_log_id=? WHERE conversation_kind=? AND target_id=?", batch.ThroughID, batch.ConversationKind, batch.TargetID).Error
 		}
 		return nil
 	})
@@ -127,7 +158,7 @@ func validKnowledgeStatus(status string) bool {
 }
 func validKnowledgeKind(kind string) bool {
 	switch kind {
-	case "fact", "episode", "preference", "constraint", "goal", "term", "expression", "alias":
+	case "fact", "preference", "constraint", "goal", "term", "expression", "alias":
 		return true
 	}
 	return false
@@ -151,7 +182,7 @@ func saveKnowledgeItem(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeItemInp
 			return item, invalidKnowledge("知识正文语义已变化，请新建知识并用关系表达修正")
 		}
 	} else {
-		err := tx.Where("group_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND btrim(content)=?", batch.GroupID, input.SubjectUserID, input.Kind, input.Label, input.Content).Order("id").First(&item).Error
+		err := tx.Where("conversation_kind=? AND target_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND lower(btrim(content))=lower(btrim(?))", batch.ConversationKind, batch.TargetID, input.SubjectUserID, input.Kind, input.Label, input.Content).Order("CASE WHEN status='active' THEN 0 ELSE 1 END").Order("id").First(&item).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if len(input.EvidenceSets) == 0 {
 				return item, invalidKnowledge("新知识必须提供完整原文依据，请补充后重试")
@@ -159,7 +190,7 @@ func saveKnowledgeItem(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeItemInp
 			if input.Status == "" {
 				input.Status = "active"
 			}
-			item = KnowledgeItem{GroupID: batch.GroupID, SubjectUserID: input.SubjectUserID, Kind: input.Kind, Label: input.Label, Content: input.Content, Status: input.Status, ReviewedThroughID: batch.ThroughID}
+			item = KnowledgeItem{ConversationKind: batch.ConversationKind, TargetID: batch.TargetID, SubjectUserID: input.SubjectUserID, Kind: input.Kind, Label: input.Label, Content: input.Content, Status: input.Status, ReviewedThroughID: batch.ThroughID}
 			if err = tx.Create(&item).Error; err != nil {
 				return item, err
 			}
@@ -219,17 +250,13 @@ func saveKnowledgeRelation(tx *gorm.DB, batch KnowledgeBatch, input KnowledgeRel
 	}
 	source, sok := items[input.SourceID]
 	target, tok := items[input.TargetID]
-	if !sok || !tok || source.ID == target.ID || source.GroupID != batch.GroupID || target.GroupID != batch.GroupID || (input.Status != "" && !validKnowledgeStatus(input.Status)) {
+	if !sok || !tok || source.ID == target.ID || source.ConversationKind != batch.ConversationKind || target.ConversationKind != batch.ConversationKind || source.TargetID != batch.TargetID || target.TargetID != batch.TargetID || (input.Status != "" && !validKnowledgeStatus(input.Status)) {
 		return relation, invalidKnowledge("关系两端必须是当前群中两个不同的知识，请修正后重试")
 	}
 	switch input.Kind {
 	case "variant_of":
 		if source.Kind != "term" || target.Kind != "term" {
 			return relation, invalidKnowledge("变体关系两端都必须是术语义项，请修正知识类型或关系")
-		}
-	case "part_of":
-		if target.Kind != "episode" {
-			return relation, invalidKnowledge("属于关系的目标必须是经历，请修正目标或关系类型")
 		}
 	case "supersedes":
 		if source.SubjectUserID != target.SubjectUserID || source.Kind != target.Kind {

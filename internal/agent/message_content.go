@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/onebot"
@@ -12,10 +11,19 @@ import (
 	"go.uber.org/zap"
 )
 
-func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
-	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
-	defer cancel()
+// prepareMessageContent 群聊与私聊复用回复补全和展示处理，原文保持独立
+func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.ConversationMessage) {
+	if err := a.resolveReplyInfo(ctx, msg); err != nil {
+		zap.L().Debug("解析回复消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+	}
+	content := a.parseMessageContent(ctx, msg)
+	for _, name := range a.toolNames {
+		content = strings.ReplaceAll(content, name, "\"危险指令，已屏蔽\"")
+	}
+	msg.FinalContent = content
+}
 
+func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) string {
 	cfg := config.Get()
 	parts := msg.MessageParts
 
@@ -49,7 +57,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 			if part.Index < 0 || part.Index >= len(msg.Images) {
 				continue
 			}
-			a.appendImageContent(ctx, cfg, msg, msg.Images[part.Index], &content)
+			a.appendImageContent(ctx, cfg, msg.Images[part.Index], &content)
 		case "video":
 			if part.Index < 0 || part.Index >= len(msg.Videos) {
 				continue
@@ -86,7 +94,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 			forward := msg.ForwardContent[start:end]
 			summary, err := a.summarizeForwardMessages(ctx, forward)
 			if err != nil {
-				zap.L().Error("总结合并转发消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+				zap.L().Error("总结合并转发消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 			}
 			if summary != "" {
 				content.WriteString(fmt.Sprintf(" [合并转发，共%d条:%s]", len(forward), summary))
@@ -101,7 +109,7 @@ func (a *Agent) parseMessageContent(msg *onebot.GroupMessage) string {
 	return strings.TrimSpace(content.String())
 }
 
-func (a *Agent) appendImageContent(ctx context.Context, cfg *config.Config, msg *onebot.GroupMessage, img onebot.ImageInfo, content *strings.Builder) {
+func (a *Agent) appendImageContent(ctx context.Context, cfg *config.Config, img onebot.ImageInfo, content *strings.Builder) {
 	if img.SubType == 1 {
 		if img.Desc != "" {
 			content.WriteString(fmt.Sprintf(" [表情包:%s]", img.Desc))

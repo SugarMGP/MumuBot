@@ -69,12 +69,13 @@ func NewClientForTier(tier Tier) (model.ToolCallingChatModel, error) {
 			return
 		}
 
-		chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
+		chatConfig := &openai.ChatModelConfig{
 			BaseURL:     baseURL,
 			APIKey:      apiKey,
 			Model:       modelName,
 			ExtraFields: modelCfg.ExtraFields,
-		})
+		}
+		chatModel, err := openai.NewChatModel(context.Background(), chatConfig)
 		if err != nil {
 			slot.err = fmt.Errorf("创建%s失败: %w", TierDisplayName(tier), err)
 			return

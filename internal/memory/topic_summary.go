@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"slices"
-	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -13,8 +12,7 @@ import (
 const TopicSummaryTextSQL = `concat_ws(' ',ts.summary_json->>'title',ts.summary_json->>'gist',ts.summary_json->>'open_loops',ts.summary_json->>'recent_turns',ts.summary_json->>'keywords')`
 
 // TopicSummaryValiditySQL 在选定版本之后检查来源，不能借失效过滤回退到旧解释
-const TopicSummaryValiditySQL = `(COALESCE(ts.summary_json->>'version','1')<>'2' OR EXISTS(SELECT 1 FROM topic_summary_sources ss WHERE ss.summary_id=ts.id))
- AND NOT EXISTS(SELECT 1 FROM topic_summary_sources ss JOIN message_logs ml ON ml.id=ss.message_log_id WHERE ss.summary_id=ts.id AND (ml.recalled_at IS NOT NULL OR btrim(ml.text_content)=''))`
+const TopicSummaryValiditySQL = "(COALESCE(ts.summary_json->>'version','1')<>'2' OR EXISTS(SELECT 1 FROM topic_summary_sources ss WHERE ss.summary_id=ts.id))\n AND NOT EXISTS(SELECT 1 FROM topic_summary_sources ss JOIN message_logs ml ON ml.id=ss.message_log_id WHERE ss.summary_id=ts.id AND (ml.recalled_at IS NOT NULL OR " + OriginalMessageTextSQL + "=''))"
 
 // LatestTopicSummaries 返回固定原文上界内各话题的最新版本，包括来源失效的版本
 func LatestTopicSummaries(db *gorm.DB, groupID int64, upper uint) *gorm.DB {
@@ -31,26 +29,10 @@ func LatestTopicSummaries(db *gorm.DB, groupID int64, upper uint) *gorm.DB {
 	return db.Table("(?) AS ts", latest).Select("ts.*, (" + TopicSummaryValiditySQL + ") AS sources_valid")
 }
 
-func saveTopicSources(ctx context.Context, tx *gorm.DB, batch KnowledgeBatch, topicID uint, input ConversationTopic, record *TopicSummaryRecord) error {
+func saveTopicSources(ctx context.Context, tx *gorm.DB, batch KnowledgeBatch, input ConversationTopic, record *TopicSummaryRecord) error {
 	ids := slices.Clone(input.SourceMessageIDs)
 	if len(ids) == 0 {
 		return invalidKnowledge("话题摘要必须提供 source_message_ids，请读取支持摘要的完整原文")
-	}
-	seenTopics := map[uint]bool{}
-	for _, related := range input.Summary.RelatedTopics {
-		if related.TopicID == 0 || related.TopicID == topicID || seenTopics[related.TopicID] || strings.TrimSpace(related.Reason) == "" || len(related.SourceMessageIDs) == 0 {
-			return invalidKnowledge("关联话题必须不同、去重，并提供关联说明和原文来源")
-		}
-		seenTopics[related.TopicID] = true
-		var count int64
-		if err := tx.Table("topic_threads tt").Where("tt.id=? AND tt.group_id=?", related.TopicID, batch.GroupID).
-			Where("EXISTS(SELECT 1 FROM topic_assignments a WHERE a.topic_id=tt.id AND a.message_log_id<=?)", batch.ThroughID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 1 {
-			return invalidKnowledge("关联话题 %d 不在本群固定范围内", related.TopicID)
-		}
-		ids = append(ids, related.SourceMessageIDs...)
 	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
@@ -60,7 +42,7 @@ func saveTopicSources(ctx context.Context, tx *gorm.DB, batch KnowledgeBatch, to
 		}
 	}
 	var rows []MessageLog
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id=? AND id IN ? AND id<=? AND recalled_at IS NULL AND btrim(text_content)<>''", batch.GroupID, ids, batch.ThroughID).Order("id").Find(&rows).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=? AND id IN ? AND id<=? AND recalled_at IS NULL AND "+originalMessageTextSQL+"<>''", batch.ConversationKind, batch.TargetID, ids, batch.ThroughID).Order("id").Find(&rows).Error; err != nil {
 		return err
 	}
 	if len(rows) != len(ids) {

@@ -1,9 +1,12 @@
-package memory
+package migration
 
 import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
 	pgvector "github.com/pgvector/pgvector-go"
@@ -81,6 +84,16 @@ func migrateV4(db *gorm.DB, selfID int64, dimensions int) error {
 	return nil
 }
 
+func (legacyKnowledgeRow) TableName() string { return "knowledge_items" }
+
+type legacyMessageLog struct {
+	ID              uint
+	GroupID         int64
+	OneBotMessageID int64
+	TextContent     string
+	RecalledAt      *time.Time
+}
+
 type legacyKnowledgeRow struct {
 	ID            uint
 	GroupID       int64
@@ -114,7 +127,7 @@ func migrateKnowledgeRows(db *gorm.DB) error {
 			return err
 		}
 		for _, row := range rows {
-			var messages []MessageLog
+			var messages []legacyMessageLog
 			if err := db.Table(source.evidence+" e").Select("ml.*").Joins("JOIN message_logs ml ON ml.id=e.message_log_id").Where("e."+source.key+"=? AND ml.group_id=?", row.ID, row.GroupID).Order("ml.id").Scan(&messages).Error; err != nil {
 				return err
 			}
@@ -135,7 +148,7 @@ func migrateKnowledgeRows(db *gorm.DB) error {
 					}
 				}
 			}
-			item := KnowledgeItem{GroupID: row.GroupID, SubjectUserID: row.SubjectUserID, Kind: row.Kind, Label: strings.TrimSpace(row.Label), Content: strings.TrimSpace(row.Content), Status: row.Status, Embedding: row.Embedding, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+			item := legacyKnowledgeRow{GroupID: row.GroupID, SubjectUserID: row.SubjectUserID, Kind: row.Kind, Label: strings.TrimSpace(row.Label), Content: strings.TrimSpace(row.Content), Status: row.Status, Embedding: row.Embedding, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 			if err := insertMigratedKnowledge(db, &item, messages); err != nil {
 				return err
 			}
@@ -144,8 +157,8 @@ func migrateKnowledgeRows(db *gorm.DB) error {
 	return nil
 }
 
-func insertMigratedKnowledge(db *gorm.DB, item *KnowledgeItem, messages []MessageLog) error {
-	var existing KnowledgeItem
+func insertMigratedKnowledge(db *gorm.DB, item *legacyKnowledgeRow, messages []legacyMessageLog) error {
+	var existing legacyKnowledgeRow
 	err := db.Where("group_id=? AND subject_user_id=? AND kind=? AND lower(btrim(label))=lower(btrim(?)) AND lower(btrim(content))=lower(btrim(?))", item.GroupID, item.SubjectUserID, item.Kind, item.Label, item.Content).Order("id").Limit(1).Find(&existing).Error
 	if err != nil {
 		return err
@@ -163,7 +176,7 @@ func insertMigratedKnowledge(db *gorm.DB, item *KnowledgeItem, messages []Messag
 	if len(messages) == 0 {
 		return nil
 	}
-	set := KnowledgeEvidenceSet{ItemID: &item.ID}
+	set := memory.KnowledgeEvidenceSet{ItemID: &item.ID}
 	if err := db.Create(&set).Error; err != nil {
 		return err
 	}
@@ -171,7 +184,7 @@ func insertMigratedKnowledge(db *gorm.DB, item *KnowledgeItem, messages []Messag
 		if msg.GroupID != item.GroupID {
 			return fmt.Errorf("迁移证据跨群")
 		}
-		if err := db.Create(&KnowledgeEvidenceMessage{EvidenceSetID: set.ID, MessageLogID: msg.ID}).Error; err != nil {
+		if err := db.Create(&memory.KnowledgeEvidenceMessage{EvidenceSetID: set.ID, MessageLogID: msg.ID}).Error; err != nil {
 			return err
 		}
 	}
@@ -191,30 +204,101 @@ func migratePendingKnowledge(db *gorm.DB, selfID int64) error {
 	}
 	for _, row := range rows {
 		var summary struct {
-			Claims []RawMemoryClaim `json:"claims"`
+			Claims []legacyMemoryClaim `json:"claims"`
 		}
 		if err := sonic.UnmarshalString(row.SummaryJSON, &summary); err != nil {
 			return fmt.Errorf("解析旧摘要 %d: %w", row.ID, err)
 		}
 		for _, raw := range summary.Claims {
-			claim, err := NormalizeMemoryClaim(raw, selfID)
+			// episode 会由 v10 的记忆模型收敛步骤删除，这里直接跳过，避免先写入再删除
+			if strings.EqualFold(strings.TrimSpace(raw.Kind), "episode") {
+				continue
+			}
+			claim, err := normalizeLegacyClaim(raw, selfID)
 			if err != nil {
 				return fmt.Errorf("迁移摘要 %d: %w", row.ID, err)
 			}
-			var messages []MessageLog
+			var messages []legacyMessageLog
 			if err := db.Table("message_logs ml").Select("ml.*").Joins("JOIN topic_assignments ta ON ta.message_log_id=ml.id").Where("ml.group_id=? AND ml.one_bot_message_id IN ? AND ta.topic_id=? AND ta.id<=?", row.GroupID, claim.EvidenceMessageIDs, row.TopicID, row.ThroughTopicAssignmentID).Order("ml.id").Scan(&messages).Error; err != nil {
 				return err
 			}
 			if len(messages) != len(claim.EvidenceMessageIDs) {
 				return fmt.Errorf("旧摘要 %d 证据缺失，迁移已回滚", row.ID)
 			}
-			item := KnowledgeItem{GroupID: row.GroupID, SubjectUserID: claim.SubjectUserID, Kind: string(claim.Kind), Content: claim.Content, Status: "candidate"}
+			item := legacyKnowledgeRow{GroupID: row.GroupID, SubjectUserID: claim.SubjectUserID, Kind: claim.Kind, Content: claim.Content, Status: "candidate"}
 			if err := insertMigratedKnowledge(db, &item, messages); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// legacyMemoryClaim 是 v4 迁移时期旧摘要 claims 的 JSON 结构，校验规则固定在本包
+type legacyMemoryClaim struct {
+	SubjectUserID      *int64  `json:"subject_user_id"`
+	Kind               string  `json:"kind"`
+	Content            string  `json:"content"`
+	EvidenceMessageIDs []int64 `json:"evidence_message_ids"`
+}
+
+type legacyNormalizedClaim struct {
+	SubjectUserID      int64
+	Kind               string
+	Content            string
+	EvidenceMessageIDs []int64
+}
+
+// normalizeLegacyClaim 复制 v4 发布时的校验规则，避免旧库迁移随运行时业务校验器变化
+func normalizeLegacyClaim(raw legacyMemoryClaim, selfID int64) (legacyNormalizedClaim, error) {
+	const selfInputID int64 = -1
+	if raw.SubjectUserID == nil {
+		return legacyNormalizedClaim{}, fmt.Errorf("invalid_subject: subject_user_id 必填")
+	}
+	subjectID := *raw.SubjectUserID
+	switch {
+	case subjectID == selfInputID:
+		if selfID <= 0 {
+			return legacyNormalizedClaim{}, fmt.Errorf("self_id_unavailable: 机器人账号尚未就绪")
+		}
+		subjectID = selfID
+	case subjectID < selfInputID:
+		return legacyNormalizedClaim{}, fmt.Errorf("invalid_subject: subject_user_id 不能小于 -1")
+	}
+	kind := strings.ToLower(strings.TrimSpace(raw.Kind))
+	switch kind {
+	case "fact", "episode", "preference", "constraint", "goal":
+	default:
+		return legacyNormalizedClaim{}, fmt.Errorf("invalid_kind: kind 必须是 fact、episode、preference、constraint 或 goal")
+	}
+	content := strings.TrimSpace(raw.Content)
+	if content == "" || utf8.RuneCountInString(content) > 500 {
+		return legacyNormalizedClaim{}, fmt.Errorf("invalid_content: content 必须为 1 到 500 个字符")
+	}
+	evidence := uniqueLegacyIDs(raw.EvidenceMessageIDs)
+	if len(evidence) == 0 {
+		return legacyNormalizedClaim{}, fmt.Errorf("missing_evidence: evidence_message_ids 必须包含至少一条消息")
+	}
+	if len(evidence) > 8 {
+		return legacyNormalizedClaim{}, fmt.Errorf("invalid_evidence: evidence_message_ids 最多 8 条")
+	}
+	return legacyNormalizedClaim{SubjectUserID: subjectID, Kind: kind, Content: content, EvidenceMessageIDs: evidence}, nil
+}
+
+func uniqueLegacyIDs(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func validateV4Schema(db *gorm.DB, dimensions int) error {

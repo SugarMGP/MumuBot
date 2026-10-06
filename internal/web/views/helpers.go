@@ -1,6 +1,7 @@
 package views
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ func NavItems() []NavItem {
 		{Label: "统一记忆", Href: "/admin/knowledge"},
 		{Label: "话题管理", Href: "/admin/topics"},
 		{Label: "成员管理", Href: "/admin/members"},
+		{Label: "会话管理", Href: "/admin/contacts"},
 		{Label: "表情包", Href: "/admin/stickers"},
 		{Label: "系统状态", Href: "/admin/system"},
 	}
@@ -44,7 +46,7 @@ func navClass(currentPath string, href string) string {
 	if active {
 		return joinClasses(base, "bg-primary/12 text-primary before:absolute before:-left-3 before:h-7 before:w-1 before:rounded-r-full before:bg-primary")
 	}
-	return joinClasses(base, "text-base-content/68 hover:bg-primary/10 hover:text-primary")
+	return joinClasses(base, "text-base-content/60 hover:bg-primary/10 hover:text-primary")
 }
 
 func moodPercent(kind string, raw float64) int {
@@ -60,6 +62,30 @@ func ConnectionText(v bool) string {
 		return "已连接"
 	}
 	return "未连接"
+}
+
+func intimacyDeltaText(delta float64) string {
+	if delta > 0 {
+		return fmt.Sprintf("+%.2f", delta)
+	}
+	return fmt.Sprintf("%.2f", delta)
+}
+
+func intimacyDeltaClass(delta float64) string {
+	if delta > 0 {
+		return "text-secondary"
+	}
+	if delta < 0 {
+		return "text-error"
+	}
+	return "text-base-content/60"
+}
+
+func intimacyReasonText(reason string) string {
+	if text := strings.TrimSpace(reason); text != "" {
+		return text
+	}
+	return "未记录原因"
 }
 
 func flashJSON(flash *FlashMessage) string {
@@ -78,10 +104,6 @@ func navIconName(href string) string {
 	switch strings.TrimSpace(href) {
 	case "/admin":
 		return "overview"
-	case "/admin/style-cards":
-		return "style-cards"
-	case "/admin/jargons":
-		return "jargons"
 	case "/admin/stickers":
 		return "stickers"
 	case "/admin/topics":
@@ -90,6 +112,8 @@ func navIconName(href string) string {
 		return "memories"
 	case "/admin/members":
 		return "members"
+	case "/admin/contacts":
+		return "sessions"
 	case "/admin/system":
 		return "system"
 	default:
@@ -117,45 +141,15 @@ func systemSectionIconName(title string) string {
 	switch strings.TrimSpace(title) {
 	case "人格设定":
 		return "persona"
-	case "群配置", "启用群聊", "群聊与学习":
+	case "群聊与学习":
 		return "group-config"
-	case "行为与学习":
-		return "behavior"
-	case "模型接入", "智能能力", "能力概览", "模型能力":
+	case "模型能力":
 		return "model"
-	case "OneBot 连接", "连接服务", "消息连接", "连接状态", "连接与数据":
+	case "连接与数据":
 		return "connection"
-	case "存储", "数据存储", "数据与检索", "数据状态":
-		return "storage"
-	case "后台服务", "后台访问", "后台安全", "登录与扩展":
-		return "backend"
 	default:
 		return "system"
 	}
-}
-
-func systemFieldCardClass(field SystemField) string {
-	base := "rounded-xl bg-base-200/50 p-4"
-	if systemFieldNeedsWide(field) {
-		return joinClasses(base, "sm:col-span-2")
-	}
-	return base
-}
-
-func systemFieldValueClass(field SystemField) string {
-	base := "mt-2 break-words whitespace-pre-line text-sm leading-6 text-base-content/75"
-	if systemFieldNeedsWide(field) {
-		return joinClasses(base, "font-normal")
-	}
-	return joinClasses(base, "font-medium")
-}
-
-func systemFieldNeedsWide(field SystemField) bool {
-	switch strings.TrimSpace(field.Label) {
-	case "已启用群聊", "群聊整理", "整理间隔":
-		return true
-	}
-	return len([]rune(strings.TrimSpace(field.Value))) > 32
 }
 
 func sortOrderIconName(label string) string {

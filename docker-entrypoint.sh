@@ -7,7 +7,7 @@ defaults_dir=/app/config-defaults
 mkdir -p "$config_dir"
 config_owner=$(stat -c '%u:%g' "$config_dir")
 
-for name in config.yaml persona.prompt mcp.json; do
+for name in config.yaml persona_group.prompt persona_private.prompt mcp.json; do
 	target="$config_dir/$name"
 	if [ -e "$target" ]; then
 		if [ ! -f "$target" ]; then

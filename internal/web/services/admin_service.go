@@ -1,6 +1,7 @@
 package services
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ type MemberProfileView struct {
 	Names              []memory.MemberName
 	KnowledgeCount     int64
 	ParticipationCount int64
+	IntimacyLogs       []memory.MemberIntimacyLog
 }
 
 type AdminService struct {
@@ -256,9 +258,7 @@ func (s *AdminService) ListTopicMessages(topicID uint, limit int) ([]memory.Mess
 	if err := q.Scan(&out).Error; err != nil {
 		return nil, err
 	}
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
+	slices.Reverse(out)
 	return out, nil
 }
 
@@ -301,7 +301,9 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 		UserID int64
 		Count  int64
 	}
-	if err := s.db.Model(&memory.KnowledgeItem{}).Select("subject_user_id AS user_id, COUNT(*) AS count").Where("subject_user_id IN ?", userIDs).Group("subject_user_id").Scan(&knowledgeCounts).Error; err != nil {
+	if err := s.filterKnowledge(s.db.Table("knowledge_items ki"), KnowledgeFilter{}).
+		Select("ki.subject_user_id AS user_id, COUNT(*) AS count").Where("ki.subject_user_id IN ?", userIDs).
+		Group("ki.subject_user_id").Scan(&knowledgeCounts).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
 	knowledgeByUser := make(map[int64]int64, len(knowledgeCounts))
@@ -313,8 +315,8 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 		Count  int64
 	}
 	participationSQL := strings.Replace(knowledgeParticipationSQL, "ml.user_id=?", "ml.user_id=mp.user_id", 1)
-	if err := s.db.Table("member_profiles mp").Select("mp.user_id, COUNT(DISTINCT ki.id) AS count").
-		Joins("JOIN knowledge_items ki ON "+participationSQL).Where("mp.user_id IN ?", userIDs).
+	if err := s.filterKnowledge(s.db.Table("member_profiles mp").Joins("JOIN knowledge_items ki ON "+participationSQL), KnowledgeFilter{}).
+		Select("mp.user_id, COUNT(DISTINCT ki.id) AS count").Where("mp.user_id IN ?", userIDs).
 		Group("mp.user_id").Scan(&participationCounts).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
@@ -322,9 +324,13 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 	for _, row := range participationCounts {
 		participationByUser[row.UserID] = row.Count
 	}
+	intimacyLogs, err := s.memory.RecentIntimacyLogs(userIDs, 8)
+	if err != nil {
+		return Page[MemberProfileView]{}, err
+	}
 	items := make([]MemberProfileView, 0, len(profiles))
 	for _, p := range profiles {
-		items = append(items, MemberProfileView{MemberProfile: p, Names: namesByUser[p.UserID], KnowledgeCount: knowledgeByUser[p.UserID], ParticipationCount: participationByUser[p.UserID]})
+		items = append(items, MemberProfileView{MemberProfile: p, Names: namesByUser[p.UserID], KnowledgeCount: knowledgeByUser[p.UserID], ParticipationCount: participationByUser[p.UserID], IntimacyLogs: intimacyLogs[p.UserID]})
 	}
 	return Page[MemberProfileView]{Items: items, Total: total, Page: page, PageSize: size}, nil
 }

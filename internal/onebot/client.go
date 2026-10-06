@@ -1,7 +1,6 @@
 package onebot
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,20 +9,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/utils"
-
-	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	napcat "github.com/zjutjh/napcat-sdk"
 	"github.com/zjutjh/napcat-sdk/api"
 	"go.uber.org/zap"
+	"mumu-bot/internal/config"
 )
 
-type groupEvent struct {
+type conversationEvent struct {
 	event      map[string]interface{}
 	receivedAt time.Time
 	arrivalSeq uint64
+	kind       string
 }
 
 type Client struct {
@@ -44,13 +41,17 @@ type Client struct {
 	gateOnce   sync.Once
 
 	memberInfoCache *ttlcache.Cache[string, *GroupMemberInfo]
-	onMessage       func(*GroupMessage)
-	onRecall        func(groupID, messageID, operatorID int64, arrivalSeq uint64)
-	onConnected     func()
+	onMessage       func(*ConversationMessage)
+	onRecall        func(kind string, targetID, messageID int64, arrivalSeq uint64)
+	connectedMu     sync.RWMutex
+	onConnected     []func()
+	onFriendRequest func(FriendRequestEvent)
+	onGroupLeft     func(groupID int64)
+	onFriendAdd     func(userID int64)
 	transportWG     sync.WaitGroup
 	eventWG         sync.WaitGroup
 	seqMu           sync.Mutex
-	groupSeq        map[int64]uint64
+	scopeSeq        map[string]uint64
 }
 
 func NewClient() *Client {
@@ -61,7 +62,7 @@ func NewClient() *Client {
 		stopTransport:   stopTransport,
 		mutedUntil:      make(map[int64]time.Time),
 		memberInfoCache: cache,
-		groupSeq:        make(map[int64]uint64),
+		scopeSeq:        make(map[string]uint64),
 		selfReady:       make(chan struct{}),
 		eventGate:       make(chan struct{}),
 	}
@@ -109,9 +110,7 @@ func (c *Client) connect() error {
 	if old != nil {
 		_ = old.Close()
 	}
-	if c.onConnected != nil {
-		c.onConnected()
-	}
+	c.runConnectedHandlers()
 	go func() {
 		defer c.transportWG.Done()
 		c.consumeEvents(sdk, generation)
@@ -143,85 +142,6 @@ func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
 		zap.L().Warn("OneBot 事件流意外结束")
 	}
 	c.startReconnect(sdk, generation)
-}
-
-func (c *Client) enqueueEvent(raw []byte) {
-	receivedAt := time.Now()
-	var event map[string]interface{}
-	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&event); err != nil {
-		zap.L().Warn("解析事件分组键失败", zap.Error(err))
-		return
-	}
-	postType, _ := event["post_type"].(string)
-	switch postType {
-	case "meta_event":
-		return
-	case "notice":
-		notice, _ := event["notice_type"].(string)
-		sub, _ := event["sub_type"].(string)
-		if notice == "group_ban" {
-			c.handleNoticeEvent(event, receivedAt, 0)
-			return
-		}
-		if notice != "group_recall" && (notice != "notify" || sub != "poke") {
-			return
-		}
-		// 按事件类型确认对应业务回调已就绪，未就绪则直接丢弃且不分配序号，
-		// 保证每个已分配序号的事件最终都能进入业务回调消费
-		if notice == "group_recall" {
-			if c.onRecall == nil {
-				return
-			}
-		} else if c.onMessage == nil {
-			return
-		}
-	case "request":
-		c.handleRequestEvent(event)
-		return
-	case "message":
-		if event["message_type"] != "group" {
-			return
-		}
-		if c.onMessage == nil {
-			return
-		}
-	default:
-		return
-	}
-	groupID, groupOK := utils.ParseInt64Value(event["group_id"])
-	if !groupOK || groupID <= 0 {
-		zap.L().Warn("忽略缺少有效群号的群事件")
-		return
-	}
-	if postType == "message" {
-		messageID, messageOK := utils.ParseInt64Value(event["message_id"])
-		if !messageOK || messageID == 0 {
-			zap.L().Warn("忽略缺少有效编号的群消息")
-			return
-		}
-	}
-	c.dispatchEvent(groupID, groupEvent{event: event, receivedAt: receivedAt})
-}
-
-// nextArrivalSeq 为收到的群事件和成功发送的群消息分配统一运行时顺序
-func (c *Client) nextArrivalSeq(groupID int64) uint64 {
-	c.seqMu.Lock()
-	defer c.seqMu.Unlock()
-	c.groupSeq[groupID]++
-	return c.groupSeq[groupID]
-}
-
-// dispatchEvent 每条事件直接并发处理，不做按群串行或并发上限
-// 事件入口已确认对应业务回调就绪，分发后该事件必然进入业务回调消费序号
-func (c *Client) dispatchEvent(groupID int64, event groupEvent) {
-	event.arrivalSeq = c.nextArrivalSeq(groupID)
-	c.eventWG.Add(1)
-	go func() {
-		defer c.eventWG.Done()
-		c.handleGroupEvent(event)
-	}()
 }
 
 func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) {
@@ -283,94 +203,6 @@ func (c *Client) connectLoop(generation uint64) {
 	}
 }
 
-func (c *Client) handleGroupEvent(queued groupEvent) {
-	switch queued.event["post_type"] {
-	case "message":
-		c.handleMessageEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
-	case "notice":
-		c.handleNoticeEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
-	}
-}
-
-func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	msg := c.parseGroupMessage(event)
-	if msg == nil {
-		// 解析失败：记录现场并构造占位消息消费到达序号，避免上层提交重排器死等
-		groupID, _ := utils.ParseInt64Value(event["group_id"])
-		messageID, _ := utils.ParseInt64Value(event["message_id"])
-		zap.L().Warn("群消息段解析失败，已构造占位消息", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Any("post_type", event["post_type"]))
-		msg = &GroupMessage{GroupID: groupID, ParseFailed: true}
-	}
-	msg.ReceivedAt = receivedAt
-	msg.ArrivalSeq = arrivalSeq
-	c.onMessage(msg)
-}
-func (c *Client) handleNoticeEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	notice, _ := event["notice_type"].(string)
-	sub, _ := event["sub_type"].(string)
-	switch {
-	case notice == "group_ban":
-		c.handleGroupBanNotice(event, sub)
-	case notice == "notify" && sub == "poke":
-		c.handleGroupPokeNotice(event, receivedAt, arrivalSeq)
-	case notice == "group_recall":
-		c.handleGroupRecallNotice(event, arrivalSeq)
-	}
-}
-
-func (c *Client) handleGroupPokeNotice(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	// 有效性由业务层校验：无效戳一戳也会通过占位路径消费序号，不在此处提前返回
-	groupID, _ := utils.ParseInt64Value(event["group_id"])
-	userID, _ := utils.ParseInt64Value(event["user_id"])
-	targetID, _ := utils.ParseInt64Value(event["target_id"])
-	eventTime := time.Now()
-	if seconds, ok := utils.ParseInt64Value(event["time"]); ok && seconds > 0 {
-		eventTime = time.Unix(seconds, 0)
-	}
-	c.onMessage(&GroupMessage{
-		GroupID:    groupID,
-		UserID:     userID,
-		AtList:     []int64{targetID},
-		Time:       eventTime,
-		ReceivedAt: receivedAt,
-		ArrivalSeq: arrivalSeq,
-	})
-}
-
-func (c *Client) handleGroupRecallNotice(event map[string]interface{}, arrivalSeq uint64) {
-	// 有效性由业务层校验（无效撤回会消费序号后跳过）
-	groupID, _ := utils.ParseInt64Value(event["group_id"])
-	messageID, _ := utils.ParseInt64Value(event["message_id"])
-	operatorID, _ := utils.ParseInt64Value(event["operator_id"])
-	c.onRecall(groupID, messageID, operatorID, arrivalSeq)
-}
-func (c *Client) handleRequestEvent(event map[string]interface{}) {
-	request, _ := event["request_type"].(string)
-	zap.L().Debug("收到请求", zap.String("type", request))
-}
-
-func (c *Client) handleGroupBanNotice(event map[string]interface{}, subType string) {
-	groupID, ok := utils.ParseInt64Value(event["group_id"])
-	if !ok || groupID == 0 {
-		return
-	}
-	userID, ok := utils.ParseInt64Value(event["user_id"])
-	if !ok || userID != c.GetSelfID() {
-		return
-	}
-	if subType == "lift_ban" {
-		c.clearSelfMuted(groupID)
-		return
-	}
-	if subType != "ban" {
-		return
-	}
-	if seconds, ok := utils.ParseInt64Value(event["duration"]); ok && seconds > 0 {
-		c.setSelfMutedUntil(groupID, time.Now().Add(time.Duration(seconds)*time.Second))
-		return
-	}
-	c.clearSelfMuted(groupID)
-}
 func (c *Client) setSelfMutedUntil(groupID int64, until time.Time) {
 	c.mutedMu.Lock()
 	c.mutedUntil[groupID] = until
@@ -394,12 +226,32 @@ func (c *Client) IsSelfMuted(groupID int64) bool {
 	}
 	return true
 }
-func (c *Client) OnMessage(handler func(*GroupMessage)) { c.onMessage = handler }
-func (c *Client) OnRecall(handler func(groupID, messageID, operatorID int64, arrivalSeq uint64)) {
+func (c *Client) OnMessage(handler func(*ConversationMessage)) { c.onMessage = handler }
+func (c *Client) OnRecall(handler func(kind string, targetID, messageID int64, arrivalSeq uint64)) {
 	c.onRecall = handler
 }
-func (c *Client) OnConnected(handler func()) { c.onConnected = handler }
-func (c *Client) GetSelfID() int64           { return c.selfID.Load() }
+func (c *Client) OnConnected(handler func()) {
+	if handler != nil {
+		c.connectedMu.Lock()
+		c.onConnected = append(c.onConnected, handler)
+		c.connectedMu.Unlock()
+	}
+}
+
+// runConnectedHandlers 复制已注册回调后释放锁，允许回调内继续注册或执行业务
+func (c *Client) runConnectedHandlers() {
+	c.connectedMu.RLock()
+	handlers := append([]func(){}, c.onConnected...)
+	c.connectedMu.RUnlock()
+	for _, handler := range handlers {
+		handler()
+	}
+}
+
+func (c *Client) OnFriendRequest(handler func(FriendRequestEvent)) { c.onFriendRequest = handler }
+func (c *Client) OnGroupLeft(handler func(groupID int64))          { c.onGroupLeft = handler }
+func (c *Client) OnFriendAdd(handler func(userID int64))           { c.onFriendAdd = handler }
+func (c *Client) GetSelfID() int64                                 { return c.selfID.Load() }
 func (c *Client) WaitSelfID(ctx context.Context) (int64, error) {
 	if selfID := c.GetSelfID(); selfID > 0 {
 		return selfID, nil

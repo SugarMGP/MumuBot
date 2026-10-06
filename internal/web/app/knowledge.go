@@ -2,9 +2,8 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
+	"strconv"
 	"strings"
 
 	"mumu-bot/internal/memory"
@@ -16,12 +15,7 @@ import (
 )
 
 func (a *App) handleKnowledge(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	if q.Get("view") == "graph" || (q.Get("view") == "" && (q.Get("focus_id") != "" || q.Get("selected_id") != "")) {
-		a.handleKnowledgeGraph(w, r)
-		return
-	}
-	workspace, err := a.knowledgeWorkspace(r, "list")
+	workspace, err := a.knowledgeWorkspace(r)
 	if err != nil {
 		http.Error(w, "记忆筛选加载失败", 500)
 		return
@@ -40,63 +34,6 @@ func (a *App) handleKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	data := views.KnowledgeListPageData{Workspace: workspace, Metadata: metadata, Items: result.Items, SelfID: a.runtimeSnapshot().SelfID, Meta: a.listMeta(r.URL, result.Page, result.PageSize, result.Total), Flash: a.flashFromRequest(r), Sort: buildSortToolbar(r.URL, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}})}
 	a.renderPageResponse(w, r, views.KnowledgeListPage(data, r.URL.Path), views.PageContent(views.KnowledgeListBody(data)))
-}
-
-func (a *App) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	workspace, err := a.knowledgeWorkspace(r, "graph")
-	if err != nil {
-		http.Error(w, "记忆筛选加载失败", 500)
-		return
-	}
-	f := workspace.Filter
-	groupID := f.GroupID
-	focusID, _ := parseUintParam(q.Get("focus_id"))
-	graph, err := a.admin.GroupKnowledgeGraph(r.Context(), f, q.Get("focus_kind"), focusID)
-	if err != nil {
-		http.Error(w, "图谱加载失败，请稍后再试", 500)
-		return
-	}
-	data := views.KnowledgeGraphPageData{Graph: graph, Workspace: workspace, Flash: a.flashFromRequest(r)}
-	kind := q.Get("selected_kind")
-	id, _ := parseUintParam(q.Get("selected_id"))
-	related, _ := parseUintParam(q.Get("selected_related"))
-	if id == 0 && focusID > 0 && (q.Get("focus_kind") == "knowledge" || q.Get("focus_kind") == "topic") {
-		kind, id = q.Get("focus_kind"), focusID
-	}
-	if id > 0 {
-		selection, e := a.admin.GraphSelection(r.Context(), groupID, kind, id, related, 0)
-		if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
-			http.Error(w, "依据加载失败，请稍后再试", 500)
-			return
-		}
-		if e == nil {
-			data.Panel = views.GraphPanel(selection, groupID, a.runtimeSnapshot().SelfID, kind, id, related, 0)
-			preserveGraphReturn(&data.Panel, workspace.CurrentURL)
-		}
-	}
-	a.renderPageResponse(w, r, views.KnowledgeGraphPage(data, r.URL.Path), views.PageContent(views.KnowledgeGraphBody(data)))
-}
-
-func (a *App) handleGraphPanel(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	groupID := parseInt64Query(q.Get("group_id"))
-	kind := q.Get("kind")
-	id, err := parseUintParam(q.Get("id"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	related, _ := parseUintParam(q.Get("related"))
-	offset := max(0, parsePositiveInt(q.Get("offset"), 0))
-	selection, err := a.admin.GraphSelection(r.Context(), groupID, kind, id, related, offset)
-	if err != nil {
-		http.Error(w, "该对象暂不可读取，请刷新后重试", http.StatusNotFound)
-		return
-	}
-	panel := views.GraphPanel(selection, groupID, a.runtimeSnapshot().SelfID, kind, id, related, offset)
-	preserveGraphReturn(&panel, a.knowledgeReturn(r, panel.ReturnTo))
-	a.render(w, views.KnowledgeGraphPanel(panel))
 }
 
 func (a *App) handleKnowledgeDetail(w http.ResponseWriter, r *http.Request) {
@@ -140,8 +77,6 @@ func (a *App) handleKnowledgeAction(w http.ResponseWriter, r *http.Request) {
 		switch kind {
 		case "knowledge-status":
 			err = a.admin.UpdateKnowledgeStatus(r.Context(), id, r.FormValue("status"))
-		case "relation-status":
-			err = a.admin.UpdateRelationStatus(r.Context(), id, r.FormValue("status"))
 		default:
 			http.Error(w, "未识别这次操作。", 400)
 			return
@@ -161,29 +96,42 @@ func (a *App) handleKnowledgeAction(w http.ResponseWriter, r *http.Request) {
 	if kind == "note-clear" {
 		title = "群便签已清除"
 	}
-	if kind == "relation-status" {
-		title = "关联状态已更新"
-	}
 	http.Redirect(w, r, withFlash(target.String(), "success", title, ""), http.StatusSeeOther)
 }
-func (a *App) knowledgeWorkspace(r *http.Request, view string) (views.KnowledgeWorkspaceData, error) {
+func (a *App) knowledgeWorkspace(r *http.Request) (views.KnowledgeWorkspaceData, error) {
 	q := r.URL.Query()
 	status := q.Get("status")
 	if status == "all" {
 		status = ""
 	}
 	kind := q.Get("kind")
-	if view == "list" && kind == "topic" {
-		kind = ""
-	}
+	conversationKind, targetID := parseConversationParam(q.Get("conversation"))
 	sortKey, order := services.NormalizeMemorySort(q.Get("sort"), q.Get("order"))
-	f := services.KnowledgeFilter{MemoryFilter: services.MemoryFilter{GroupID: parseInt64Query(q.Get("group_id")), Kind: kind, Status: status, Keyword: strings.TrimSpace(q.Get("keyword")), Sort: sortKey, Order: order, Page: parsePositiveInt(q.Get("page"), 1), PageSize: listPageSize(q.Get("page_size"))}, UserID: parseInt64Query(q.Get("user_id")), AuthorID: parseInt64Query(q.Get("author_id"))}
-	groups, err := a.admin.KnowledgeGroups(r.Context())
-	data := views.KnowledgeWorkspaceData{Filter: f, Groups: groups, View: view, CurrentURL: views.WithQuery(r.URL.RequestURI(), "view", view, "status", status, "kind", kind, "subject", "", "evidence", "", "return_to", "", "flash_kind", "", "flash_title", "", "flash_body", "")}
-	if err == nil && f.GroupID > 0 {
-		data.Note, err = a.memMgr.GetWorkingNote(r.Context(), f.GroupID)
+	conversation := ""
+	if conversationKind != "" {
+		conversation = conversationKind + ":" + strconv.FormatInt(targetID, 10)
+	}
+	f := services.KnowledgeFilter{MemoryFilter: services.MemoryFilter{Kind: kind, Status: status, Keyword: strings.TrimSpace(q.Get("keyword")), Sort: sortKey, Order: order, Page: parsePositiveInt(q.Get("page"), 1), PageSize: listPageSize(q.Get("page_size"))}, ConversationKind: conversationKind, TargetID: targetID, UserID: parseInt64Query(q.Get("user_id")), AuthorID: parseInt64Query(q.Get("author_id"))}
+	conversations, err := a.admin.KnowledgeConversations(r.Context())
+	data := views.KnowledgeWorkspaceData{Filter: f, Conversations: conversations, CurrentURL: views.WithQuery(r.URL.RequestURI(), "conversation", conversation, "status", status, "kind", kind, "focus_kind", "", "focus_id", "", "selected_kind", "", "selected_id", "", "selected_related", "", "return_to", "", "flash_kind", "", "flash_title", "", "flash_body", "")}
+	if err == nil && conversationKind == memory.ConversationKindGroup && targetID > 0 {
+		data.Note, err = a.memMgr.GetWorkingNote(r.Context(), targetID)
 	}
 	return data, err
+}
+
+// parseConversationParam 解析「群聊/好友:目标」形式的筛选值
+func parseConversationParam(raw string) (string, int64) {
+	kind, target, ok := strings.Cut(strings.TrimSpace(raw), ":")
+	if !ok {
+		return "", 0
+	}
+	kind = strings.TrimSpace(kind)
+	targetID := parseInt64Query(strings.TrimSpace(target))
+	if targetID <= 0 || (kind != memory.ConversationKindGroup && kind != memory.ConversationKindPrivate) {
+		return "", 0
+	}
+	return kind, targetID
 }
 
 func (a *App) knowledgeReturn(r *http.Request, fallback string) string {
@@ -191,17 +139,4 @@ func (a *App) knowledgeReturn(r *http.Request, fallback string) string {
 		return target.String()
 	}
 	return fallback
-}
-
-func preserveGraphReturn(panel *views.GraphPanelData, current string) {
-	panel.ReturnTo = views.WithQuery(current, "view", "graph", "selected_kind", panel.NodeKind, "selected_id", fmt.Sprint(panel.ID), "selected_related", fmt.Sprint(panel.Related))
-	for _, target := range []*string{&panel.DetailURL, &panel.PreviousURL, &panel.NextURL} {
-		if *target != "" {
-			*target = views.WithQuery(*target, "return_to", panel.ReturnTo)
-		}
-	}
-	if panel.FocusURL != "" {
-		focus, _ := url.Parse(panel.FocusURL)
-		panel.FocusURL = views.WithQuery(panel.ReturnTo, "focus_kind", focus.Query().Get("focus_kind"), "focus_id", focus.Query().Get("focus_id"))
-	}
 }

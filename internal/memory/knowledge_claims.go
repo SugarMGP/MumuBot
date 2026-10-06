@@ -7,12 +7,15 @@ import (
 
 // PrepareClaimBatch 在提交方入口统一将外部消息 ID 解析为内部消息 ID
 func (m *Manager) PrepareClaimBatch(ctx context.Context, scope StoreClaimsContext, claims []MemoryClaim) (KnowledgeBatch, error) {
-	batch := KnowledgeBatch{GroupID: scope.GroupID, SelfID: scope.SelfID}
+	if scope.ConversationKind == "" {
+		scope.ConversationKind = ConversationKindGroup
+	}
+	batch := KnowledgeBatch{ConversationKind: scope.ConversationKind, TargetID: scope.TargetID, SelfID: scope.SelfID}
 	if err := m.validateClaimEvidence(ctx, scope, claims); err != nil {
 		return batch, err
 	}
 	if scope.SnapshotOneBotMessageID != 0 {
-		row, err := m.GetMessageLogByID(scope.GroupID, scope.SnapshotOneBotMessageID)
+		row, err := m.GetMessageLogByScope(scope.ConversationKind, scope.TargetID, scope.SnapshotOneBotMessageID)
 		if err != nil {
 			return batch, err
 		}
@@ -22,7 +25,7 @@ func (m *Manager) PrepareClaimBatch(ctx context.Context, scope StoreClaimsContex
 	}
 	for i, claim := range claims {
 		var rows []MessageLog
-		if err := m.db.WithContext(ctx).Where("group_id=? AND one_bot_message_id IN ? AND id<=?", scope.GroupID, claim.EvidenceMessageIDs, batch.ThroughID).Order("id").Find(&rows).Error; err != nil {
+		if err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND one_bot_message_id IN ? AND id<=?", scope.ConversationKind, scope.TargetID, claim.EvidenceMessageIDs, batch.ThroughID).Order("id").Find(&rows).Error; err != nil {
 			return batch, err
 		}
 		if len(rows) != len(claim.EvidenceMessageIDs) {

@@ -11,6 +11,8 @@ import (
 
 type KnowledgeFilter struct {
 	MemoryFilter
+	ConversationKind string
+	TargetID         int64
 	UserID, AuthorID int64
 }
 
@@ -24,19 +26,35 @@ const knowledgeParticipationSQL = `EXISTS (
 )`
 
 type KnowledgeDetail struct {
-	Page              int
-	HasMore           bool
-	SensesHasMore     bool
-	RelationsHaveMore bool
-	Item              memory.KnowledgeItem
-	Evidence          []memory.KnowledgeEvidence
-	Relations         []KnowledgeRelationView
-	Topics            map[uint]uint
-	Senses            []memory.KnowledgeItem
+	Page     int
+	HasMore  bool
+	Item     memory.KnowledgeItem
+	Evidence []memory.KnowledgeEvidence
+	Topics   map[uint]uint
 }
-type KnowledgeRelationView struct {
-	memory.KnowledgeRelation
-	Source, Target memory.KnowledgeItem
+
+// KnowledgeGroups 列出有记忆或话题的群号，供话题筛选使用
+func (s *AdminService) KnowledgeGroups(ctx context.Context) ([]int64, error) {
+	var ids []int64
+	err := s.db.WithContext(ctx).Raw("SELECT target_id FROM knowledge_items WHERE conversation_kind='group' UNION SELECT group_id AS target_id FROM topic_threads ORDER BY target_id").Scan(&ids).Error
+	return ids, err
+}
+
+// KnowledgeConversation 是后台知识筛选用的会话项
+type KnowledgeConversation struct {
+	Kind     string
+	TargetID int64
+	Name     string
+}
+
+// KnowledgeConversations 列出有知识或话题的会话，供知识筛选使用
+func (s *AdminService) KnowledgeConversations(ctx context.Context) ([]KnowledgeConversation, error) {
+	var rows []KnowledgeConversation
+	err := s.db.WithContext(ctx).Raw(`SELECT c.conversation_kind AS kind, c.target_id AS target_id, COALESCE(ct.name,'') AS name
+	 FROM (SELECT conversation_kind,target_id FROM knowledge_items UNION SELECT 'group',group_id FROM topic_threads) c
+	 LEFT JOIN conversation_targets ct ON ct.conversation_kind=c.conversation_kind AND ct.target_id=c.target_id
+	 ORDER BY c.conversation_kind, c.target_id`).Scan(&rows).Error
+	return rows, err
 }
 
 func (s *AdminService) ListKnowledge(f KnowledgeFilter) (Page[memory.KnowledgeItem], error) {
@@ -47,8 +65,8 @@ func (s *AdminService) ListKnowledge(f KnowledgeFilter) (Page[memory.KnowledgeIt
 }
 
 func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
-	if f.GroupID > 0 {
-		q = q.Where("ki.group_id=?", f.GroupID)
+	if f.ConversationKind != "" && f.TargetID > 0 {
+		q = q.Where("ki.conversation_kind=? AND ki.target_id=?", f.ConversationKind, f.TargetID)
 	}
 	if f.UserID > 0 {
 		q = q.Where("ki.subject_user_id=?", f.UserID)
@@ -69,9 +87,15 @@ func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
 }
 
 type KnowledgeMetadata struct {
-	ID           uint
-	Name         string
-	Total, Valid int64
+	ID       uint
+	Name     string
+	Messages int64 // 全部原文条数
+	Recalled int64 // 其中已撤回的条数
+}
+
+// ValidMessages 返回仍可用的原文条数
+func (m KnowledgeMetadata) ValidMessages() int64 {
+	return max(0, m.Messages-m.Recalled)
 }
 
 func (s *AdminService) KnowledgeMetadata(ctx context.Context, items []memory.KnowledgeItem) (map[uint]KnowledgeMetadata, error) {
@@ -84,10 +108,7 @@ func (s *AdminService) KnowledgeMetadata(ctx context.Context, items []memory.Kno
 		ids[i] = item.ID
 	}
 	var rows []KnowledgeMetadata
-	err := s.db.WithContext(ctx).Table("knowledge_items ki").Select(`ki.id,
-	 COALESCE(NULLIF(btrim(mp.nickname),''),(SELECT mn.value FROM member_names mn WHERE mn.user_id=ki.subject_user_id AND btrim(mn.value)<>'' ORDER BY (mn.group_id=ki.group_id) DESC,mn.updated_at DESC LIMIT 1),'') name,
-	 (SELECT count(*) FROM knowledge_evidence_sets es WHERE es.item_id=ki.id) total,
-	 (SELECT count(*) FROM knowledge_evidence_sets es WHERE es.item_id=ki.id AND `+memory.KnowledgeEvidenceSetValiditySQL+`) valid`).
+	err := s.db.WithContext(ctx).Table("knowledge_items ki").Select("ki.id,\n\t COALESCE(NULLIF(btrim(mp.nickname),''),(SELECT mn.value FROM member_names mn WHERE mn.user_id=ki.subject_user_id AND btrim(mn.value)<>'' ORDER BY (ki.conversation_kind='group' AND mn.group_id=ki.target_id) DESC,mn.updated_at DESC LIMIT 1),'') name,\n\t (SELECT count(*) FROM knowledge_evidence_messages em JOIN knowledge_evidence_sets es ON es.id=em.evidence_set_id WHERE es.item_id=ki.id) messages,\n\t (SELECT count(*) FROM knowledge_evidence_messages em JOIN knowledge_evidence_sets es ON es.id=em.evidence_set_id JOIN message_logs ml ON ml.id=em.message_log_id WHERE es.item_id=ki.id AND (ml.recalled_at IS NOT NULL OR "+memory.OriginalMessageTextSQL+"='')) recalled").
 		Joins("LEFT JOIN member_profiles mp ON mp.user_id=ki.subject_user_id").Where("ki.id IN ?", ids).Scan(&rows).Error
 	for _, row := range rows {
 		out[row.ID] = row
@@ -109,44 +130,10 @@ func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint, page int) (
 		return d, err
 	}
 	d.Item = item
-	d.Evidence, d.HasMore, err = s.memory.ListKnowledgeEvidencePage(ctx, item.GroupID, id, 0, 0, offset, 5)
+	d.Evidence, d.HasMore, err = s.memory.ListKnowledgeEvidencePageScope(ctx, item.ConversationKind, item.TargetID, id, 0, offset, 5)
 	if err != nil {
 		return d, err
 	}
-	var relations []memory.KnowledgeRelation
-	if err = s.db.Where("source_item_id=? OR target_item_id=?", id, id).Order("id").Limit(31).Find(&relations).Error; err != nil {
-		return d, err
-	}
-	relationsHaveMore := len(relations) > 30
-	if relationsHaveMore {
-		relations = relations[:30]
-	}
-	endpointIDs := []uint{id}
-	for _, rel := range relations {
-		endpointIDs = append(endpointIDs, rel.SourceItemID, rel.TargetItemID)
-	}
-	var endpoints []memory.KnowledgeItem
-	if err = s.db.Where("group_id=? AND id IN ?", item.GroupID, endpointIDs).Order("id").Find(&endpoints).Error; err != nil {
-		return d, err
-	}
-	byID := map[uint]memory.KnowledgeItem{}
-	for _, endpoint := range endpoints {
-		byID[endpoint.ID] = endpoint
-	}
-	for _, rel := range relations {
-		d.Relations = append(d.Relations, KnowledgeRelationView{KnowledgeRelation: rel, Source: byID[rel.SourceItemID], Target: byID[rel.TargetItemID]})
-	}
-	if item.Kind == "term" {
-		err = s.db.Where("group_id=? AND kind='term' AND label=? AND id<>?", item.GroupID, item.Label, id).Order("id").Limit(31).Find(&d.Senses).Error
-		if err != nil {
-			return d, err
-		}
-	}
-	d.SensesHasMore = len(d.Senses) > 30
-	if d.SensesHasMore {
-		d.Senses = d.Senses[:30]
-	}
-	d.RelationsHaveMore = relationsHaveMore
 	ids := []uint{}
 	for _, set := range d.Evidence {
 		for _, msg := range set.Messages {
@@ -173,16 +160,5 @@ func (s *AdminService) UpdateKnowledgeStatus(ctx context.Context, id uint, statu
 	if err != nil {
 		return err
 	}
-	return s.memory.SetKnowledgeStatus(ctx, item.GroupID, id, strings.TrimSpace(status))
-}
-func (s *AdminService) UpdateRelationStatus(ctx context.Context, id uint, status string) error {
-	var rel memory.KnowledgeRelation
-	if err := s.db.First(&rel, id).Error; err != nil {
-		return err
-	}
-	item, err := s.GetKnowledge(rel.SourceItemID)
-	if err != nil {
-		return err
-	}
-	return s.memory.SetKnowledgeRelationStatus(ctx, item.GroupID, id, strings.TrimSpace(status))
+	return s.memory.SetKnowledgeStatusScope(ctx, item.ConversationKind, item.TargetID, id, strings.TrimSpace(status))
 }

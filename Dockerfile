@@ -6,6 +6,8 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY internal/web/assets/src/ internal/web/assets/src/
 COPY internal/web/views/ internal/web/views/
+COPY scripts/ scripts/
+RUN bun run gen:icons
 RUN bun run build
 
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
@@ -15,6 +17,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=assets /src/internal/web/assets/dist/ internal/web/assets/dist/
+COPY --from=assets /src/internal/web/views/icons.templ internal/web/views/icons.templ
 RUN templ generate ./internal/web/views
 ARG TARGETOS
 ARG TARGETARCH
@@ -28,7 +31,8 @@ RUN apk add --no-cache ca-certificates su-exec tzdata && \
 WORKDIR /app
 COPY --from=build /out/mumu-bot /app/mumu-bot
 COPY config/config.example.yaml /app/config-defaults/config.yaml
-COPY config/persona.prompt /app/config-defaults/persona.prompt
+COPY config/persona_group.prompt /app/config-defaults/persona_group.prompt
+COPY config/persona_private.prompt /app/config-defaults/persona_private.prompt
 COPY config/mcp.example.json /app/config-defaults/mcp.json
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir /app/config /app/stickers && chown -R mumu:mumu /app

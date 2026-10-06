@@ -7,14 +7,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// ConcurrencyManager 并发管理器
-type ConcurrencyManager struct {
+// GroupThinkConcurrency 管理群聊思考的并发、排队和每群单任务执行
+type GroupThinkConcurrency struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	maxConcurrency int
 	currentRunning int
-	queue          []*ThinkTask
-	queued         map[int64]*ThinkTask
+	queue          []*GroupThinkTask
+	queued         map[int64]*GroupThinkTask
 	running        map[int64]bool
 	mu             sync.Mutex
 	wg             sync.WaitGroup
@@ -22,33 +22,33 @@ type ConcurrencyManager struct {
 	handler func(groupID int64, probabilityPassed bool) // 执行函数
 }
 
-// ThinkTask 思考任务
-type ThinkTask struct {
+// GroupThinkTask 群聊思考任务
+type GroupThinkTask struct {
 	GroupID           int64
 	ProbabilityPassed bool
 }
 
-// NewConcurrencyManager 创建并发管理器
-func NewConcurrencyManager(parent context.Context, max int, h func(groupID int64, probabilityPassed bool)) *ConcurrencyManager {
+// NewGroupThinkConcurrency 创建群聊思考并发管理器
+func NewGroupThinkConcurrency(parent context.Context, max int, h func(groupID int64, probabilityPassed bool)) *GroupThinkConcurrency {
 	ctx, cancel := context.WithCancel(parent)
-	return &ConcurrencyManager{
+	return &GroupThinkConcurrency{
 		ctx:            ctx,
 		cancel:         cancel,
 		maxConcurrency: max,
-		queued:         make(map[int64]*ThinkTask),
+		queued:         make(map[int64]*GroupThinkTask),
 		running:        make(map[int64]bool),
 		handler:        h,
 	}
 }
 
-func (m *ConcurrencyManager) IsRunning(groupID int64) bool {
+func (m *GroupThinkConcurrency) IsRunning(groupID int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.running[groupID]
 }
 
 // Submit 提交任务
-func (m *ConcurrencyManager) Submit(groupID int64, probabilityPassed bool) {
+func (m *GroupThinkConcurrency) Submit(groupID int64, probabilityPassed bool) {
 	if err := m.ctx.Err(); err != nil {
 		return
 	}
@@ -71,7 +71,7 @@ func (m *ConcurrencyManager) Submit(groupID int64, probabilityPassed bool) {
 
 	// 如果设置了最大并发数，且当前运行数已满，则入队
 	if m.maxConcurrency > 0 && m.currentRunning >= m.maxConcurrency {
-		task := &ThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed}
+		task := &GroupThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed}
 		m.queue = append(m.queue, task)
 		m.queued[groupID] = task
 		zap.L().Debug("并发已满，任务进入队列",
@@ -84,11 +84,11 @@ func (m *ConcurrencyManager) Submit(groupID int64, probabilityPassed bool) {
 	m.currentRunning++
 	m.running[groupID] = true
 	m.wg.Add(1)
-	go m.execute(&ThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed})
+	go m.execute(&GroupThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed})
 }
 
 // execute 执行任务
-func (m *ConcurrencyManager) execute(task *ThinkTask) {
+func (m *GroupThinkConcurrency) execute(task *GroupThinkTask) {
 	defer m.wg.Done()
 	defer m.finish(task.GroupID)
 	if err := m.ctx.Err(); err != nil {
@@ -97,7 +97,7 @@ func (m *ConcurrencyManager) execute(task *ThinkTask) {
 	m.handler(task.GroupID, task.ProbabilityPassed)
 }
 
-func (m *ConcurrencyManager) finish(groupID int64) {
+func (m *GroupThinkConcurrency) finish(groupID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -121,14 +121,14 @@ func (m *ConcurrencyManager) finish(groupID int64) {
 }
 
 // Close 停止调度并等待已启动任务退出
-func (m *ConcurrencyManager) Close() {
+func (m *GroupThinkConcurrency) Close() {
 	if m.cancel != nil {
 		m.cancel()
 	}
 
 	m.mu.Lock()
 	m.queue = nil
-	m.queued = make(map[int64]*ThinkTask)
+	m.queued = make(map[int64]*GroupThinkTask)
 	m.mu.Unlock()
 
 	m.wg.Wait()

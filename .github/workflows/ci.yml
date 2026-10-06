@@ -25,6 +25,9 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Generate admin icons
+        run: bun run gen:icons
+
       - name: Build frontend assets
         run: bun run build
 

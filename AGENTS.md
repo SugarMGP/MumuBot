@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- MumuBot 是运行在 QQ 群里的智能体：通过 OneBot 11 接收群消息，使用 ReAct（观察、思考、行动循环）决定是否回复、调用工具或保持沉默。
+- MumuBot 是运行在 QQ 群和好友私聊里的智能体：通过 OneBot 11 接收群消息与好友私聊消息，使用 ReAct（观察、思考、行动循环）决定是否回复、调用工具或保持沉默。
 - 主链路由 `main.go` 启动：配置加载、模型客户端、记忆系统、聊天 agent、管理后台和退出清理都在这里串起来。
 - 语义能力分成几条边界清楚的链路：话题工作记忆保存对话脉络，统一 Memory Agent 负责话题归属、摘要和长期知识维护，后台负责查看、审核和管理。
 
@@ -14,10 +14,11 @@
 - `internal/onebot/`：napcat-sdk 接入、OneBot 11 Adapter、消息事件解析和发送 API。
 - `internal/topic/`：话题工作记忆读取、消息持久化、归档检索和提示词上下文；没有独立模型任务。
 - `internal/memory/`：PostgreSQL 数据模型、pgvector/pg_trgm 检索、长期记忆、消息日志、成员画像。
-- `internal/learning/`：统一 Memory Agent、群间轮转、批处理、冷却与请求限速。
+- `internal/migration/`：数据库 schema 版本与一次性数据迁移，只依赖 GORM 和 memory 的模型。
+- `internal/learning/`：统一 Memory Agent、群聊与私聊轮转、批处理与冷却。
 - `internal/tools/`：暴露给 ReAct agent 和学习审核流程使用的工具。
-- `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务。
-- `config/`：运行配置、人格提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
+- `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务（含会话与好友申请管理）。
+- `config/`：运行配置、群聊人格提示词、私聊提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
 
 ## 常用入口
 
@@ -28,14 +29,17 @@
 | 看回复决策 | `internal/agent/think.go` |
 | 看话题分配和摘要 | `internal/learning/investigate.go`、`internal/memory/conversation.go` |
 | 看长期记忆入库 | `internal/memory/knowledge_commit.go`、`internal/memory/conversation.go` |
-| 看数据库启动迁移 | `internal/memory/migrations_v1.go`、`main.go` |
+| 看数据库启动迁移 | `internal/migration/`、`main.go` |
 | 看群文化学习 | `internal/learning/learner.go` |
+| 看私聊收发与整理 | `internal/agent/private.go`、`internal/learning/private_learner.go` |
+| 看会话与黑名单 | `internal/memory/conversation_targets.go`、`internal/agent/contacts.go` |
 | 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
 
 ## 运行与验证命令
 
 ```bash
 bun install --frozen-lockfile
+bun run gen:icons
 bun run build
 templ generate ./internal/web/views
 go build ./...
@@ -59,13 +63,39 @@ go vet ./...
 ## 前端实现
 
 - 管理后台使用 Go/templ、Tailwind CSS 4、daisyUI、HTMX、Toastify 和 ECharts；少量通用行为使用集中式原生 JavaScript。不要重新引入 Preline、Alpine 或 React/Vue SPA。
-- 后台只保证 PC 端正常使用，不为移动端增加抽屉、响应式重排或独立适配；页面保持至少 1180px 的稳定工作区。
+- 后台面向 1000px 及以上的横屏窗口，通过流式字号、间距和栅格自适应；不为手机竖屏增加抽屉或独立布局。
 - 新增或大改后台页面前必须先用 Stitch 完成设计，再按确认稿实现。允许 daisyUI 控件细节与设计稿略有不同，但页面内容、排版、风格、配色和圆角层级不能明显偏离。
 - 页面以纯白或微粉近白为底，暖白侧栏、樱粉主色和青绿状态色为主要视觉语言；整体年轻、Anime Friendly、多圆角但不幼稚，避免大面积粉色背景和板正的传统企业后台风格。
 - 优先复用 daisyUI 组件和浏览器原生控件，不重复手搓按钮、输入框、下拉菜单、弹窗、提示、加载态和分页；图表统一使用 ECharts。
+- 后台所有图标必须使用 Lucide 官方线性图标：`internal/web/views/icons.templ` 与 `internal/web/assets/src/icons.generated.js` 由 `scripts/generate-icons.mjs` 从 npm 包 `lucide-static` 生成（`bun run gen:icons && templ generate ./internal/web/views`），禁止手工修改这两个文件、手绘路径或引入其他图标库；新增图标先在生成脚本的 mapping 中登记，语义要直观且互不混淆。
 - 保持所有页面的间距、字重、圆角、颜色和交互动效统一。
 - 所有重要交互都要有明确反馈；动效应控制在轻量范围内，并尊重 `prefers-reduced-motion`。
 
+## 后台设计规范
+
+后台统一设计令牌写入 `internal/web/assets/src/admin.css` 的 `:root`，页面不得再硬编码这些值的近似替代。字号与间距通过 `clamp()` 随横屏窗口宽度平滑缩放：1000px 附近取下限，1600px 及以上取表中数值：
+
+| 类别 | 统一值 | 用法 |
+|------|--------|------|
+| 页面区块间距 | 24px（`--admin-page-gap`、`space-y-6`） | 页面根节点 |
+| 卡片内边距 | 20px（`--admin-card-pad`、`p-5`） | `card-body` |
+| 紧凑内边距 | 16px（`--admin-card-pad-compact`、`p-4`） | 筛选、提示等紧凑区块 |
+| 卡片圆角 | 18px（`--admin-card-radius`、`rounded-box`） | 所有卡片 |
+| 子块/控件圆角 | 12px（`--admin-inner-radius`、`--admin-control-radius`） | 卡片内子块、输入框、按钮 |
+| 页面标题 | 28px（`--admin-title-size`） | `PageHeader` |
+| 卡片标题 | 18px（`--admin-section-title-size`、`text-lg`） | 卡片与区块标题 |
+| 正文/辅助文字 | 14px / 12px（`text-sm` / `text-xs`） | 正文与说明 |
+| 次要文字透明度 | 仅 `/75`、`/60`、`/45` 三档 | 正文、说明、弱提示 |
+| 边框色 | `var(--color-base-300)` | 卡片统一 1px 实线边框、表格、分隔线 |
+| 主色/成功色 | `var(--color-primary)` / `var(--color-secondary)` | 不写颜色字面量 |
+| 卡片阴影 | `0 1px 2px rgb(32 33 45 / 0.05), 0 8px 24px rgb(32 33 45 / 0.055)` | 唯一卡片阴影；登录页卡片可在此基础上叠一层品牌色投影 |
+
+- 全局页面底色统一：单层樱粉径向柔光叠加纵向近白渐变（body 级、固定不随滚动），登录页与后台页面共用同一套背景，不允许单页重写底色。
+- 表情包列表按当前栅格列数保持整三行：默认每页 12 个，窗口宽度变化导致列数变化时按实际列数调整每页数量。
+- 表格行密度统一使用默认 `table`，不再混用紧凑密度变体。
+- 弹层标题统一使用 `DialogHeader`，分页统一使用 `ListFooter`，筛选面板统一使用 `FilterPanel`，排序使用 `SortToolbar`，不允许再手写等价结构。
+- 图标只能通过 `AdminIcon` 或生成脚本的 JS 图标映射使用，新增图标先登记 mapping。
+- 所有 HTMX 导航控件必须保留 `aria-busy`/指针反馈；请求失败必须有可见提示，表单提交必须有 loading 状态。
 ## 模板与资源
 
 - 后台页面模板位于 `internal/web/views/*.templ`。
@@ -112,7 +142,7 @@ go vet ./...
 - 人工维护的说明性注释统一使用中文，末尾不加句号；保留标识符、协议名、工具指令和许可证声明的原文，不手改生成文件。
 - 注释优先解释用途、约束和原因，不重复显而易见的代码；导出符号注释以符号名开头，保留工具之间现有的长分隔注释。
 - Go 代码统一使用 gofmt；import 按标准库、项目内包、第三方依赖分组，组内排序。仅整理风格时不修改业务逻辑、接口或提示词。
-- 单个 `.go` 文件不超过 600 行；超过时按职责拆分，每个拆出的文件应有内聚的职责域，不要零散地把函数分到很多小文件。
+- 人工维护的 `.go` 文件不超过 600 行；templ 等生成文件不受此限制。超过时按职责拆分，每个拆出的文件应有内聚的职责域，不要零散地把函数分到很多小文件。
 - 同一函数内不要重复调用 `config.Get()`，提取为局部变量复用。
 - 同一函数内不要重复调用 `strings.TrimSpace` 处理同一个值；如果上层已经 Trim 过，下层不应再 Trim。
 - 不要在同一表达式或相邻行中对同一值重复调用（如 `a.bot.GetSelfID()` 在同一条件中出现两次），提取为局部变量。
@@ -129,6 +159,7 @@ go vet ./...
 
 - `internal/web/views/*_templ.go` 由 templ 生成，禁止手动修改；需要改页面结构时修改对应的 `.templ` 文件并运行 `templ generate`。
 - `internal/web/assets/dist/` 是前端构建产物，不手工修改，不纳入版本控制。
+- `internal/web/views/icons.templ` 与 `internal/web/assets/src/icons.generated.js` 由 `scripts/generate-icons.mjs` 生成，同样不纳入版本控制；首次构建前先运行 `bun run gen:icons`。
 
 ## 核心架构约束
 
@@ -138,42 +169,47 @@ go vet ./...
 - 回复决策保持单次 ReAct `Generate`，不拆 Planner/Replyer，也不在主 ReAct 前增加模型分类调用；普通消息先经过既有概率门控，进入 ReAct 后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct。每群保持单任务串行，think 运行期间的新触发由并发锁直接忽略，不创建 rerun；消息本身仍保留，等待后续正常调度纳入固定快照。普通触发继续使用既有概率门控。
 - 戳一戳只作为普通观察事件，不能成为回应理由；现有动态 prompt 的行动指引必须说明该事件没有消息 ID、禁止借用其他消息 ID 回应。同批普通消息仍按自身内容正常处理，不为此增加独立状态或条件提示词段落。
-- `think` 必须基于固定消息快照，不主动追加本轮或触发 rerun；机器人成功发言后取得同一套群内 `ArrivalSeq` 并进入提交队列，自身消息提交时把该序号及此前群事件推进为已读，之后到达的消息留给后续正常调度；`speak` 每次只发送一条消息，多条内容通过多次调用表达。
+- `think` 必须基于固定消息快照，不主动追加本轮或触发 rerun；机器人成功发言后取得同一会话的 `ArrivalSeq` 并进入提交队列，自身消息提交时把该序号及此前会话事件推进为已读，之后到达的消息留给后续正常调度；`speak` 每次只发送一条消息，多条内容通过多次调用表达。
 - 主 ReAct 的聊天上下文中旧消息统一添加 `(OLD)` 前缀；机器人自己的发言归入旧消息，新消息是本轮唯一需要判断是否行动的部分。
-- 事件处理直接并发分发：每条群消息、撤回和戳一戳事件独立处理，不按群串行、不设并发上限；消息解析（含视觉）并行完成，事件入口按到达顺序为每条群事件分配单调递增的群内 `ArrivalSeq`，成功的机器人主动发言也从同一序列取得边界序号，统一投入每群提交队列，由提交协程按序号重排后顺序落库、入缓冲并调度思考；解析失败、无效事件和未启用群通过跳过项消费序号，保证重排器不会死等。事件排序、固定快照和已读水位只能使用 `ArrivalSeq`，不能使用 OneBot `message_id`。
+- 会话是否可用以 `conversation_targets` 的 `active/blocked` 为准：启动、重连和每 5 分钟兜底同步刷新列表，机器人退群/被踢/群解散用 `group_decrease` 即时标记为已离开，好友关系建立用 `friend_add` 即时放行；好友删除没有 OneBot 事件，只能靠兜底同步纠正。同步以 API 是否报错为准，允许空列表（真的删光群和好友时会话状态要跟着清空）。MCP 工具统一命名为 `mcp-服务名-工具名`；服务器声明只读的工具不算副作用，未声明或声明失败的按可能有副作用处理，成功调用在失败轮次同样推进已读水位。
+- 事件处理直接并发分发：每条群聊/私聊消息、撤回和戳一戳事件独立处理，不按会话串行、不设并发上限；消息解析（含视觉）并行完成，事件入口按到达顺序为每个会话（群聊/私聊）分配单调递增的 `ArrivalSeq`，成功的机器人主动发言也从同一序列取得边界序号，统一投入对应会话的提交队列，由提交协程按序号重排后顺序落库、入缓冲并调度思考；解析失败、无效事件和未启用群/已拉黑会话通过跳过项消费序号，保证重排器不会死等。事件排序、固定快照和已读水位只能使用 `ArrivalSeq`，不能使用 OneBot `message_id`。
 - 序号消费只在业务层完成：Adapter 一旦分发事件就必须进入业务回调，不再在分发路径提前返回；事件入口按事件类型确认对应回调就绪后才分配序号，未就绪时事件丢弃且不产生缺口。提交重排等待队列有上限，超限时丢弃最旧等待项并把水位推进越过它，被越过的序号到达时自然跳过，不记录、不留下永久缺口、内存有界。
 - 消息处理为纯同步链路：回复信息补全、合并转发内容解析（含落库持久化）、视觉识别、工具名屏蔽与展示内容生成都在消息回调内完成；标已读、成员画像更新只在消息确实落库且非机器人自身消息时执行。
 - 群聊展示中的机器人提及必须直接用 Adapter 的运行时 `self_id` 识别并渲染为“@{persona.name}(你)”；普通成员优先使用 OneBot 事件自带称呼，缺失时只能在消息解析路径或主动发言路径查询群名片/昵称，禁止在思考快照构建中调用成员信息接口。
-- 业务上将 OneBot `message_id` 视为不重复的不透明外部定位符，用于消息去重、回复、撤回和缓存；消息落库以 `(group_id, one_bot_message_id)` 唯一约束实现同群重复事件幂等。合并转发只持久化视觉模型生成的展示摘要，不保存完整节点；撤回与同群消息共享序号流，按到达顺序在消息之后执行；原消息尚未落库时（重连窗口、上游丢失或事件乱序）登记有限 TTL 的待补偿记录，消息落库后补记撤回并同步缓冲展示。
+- 业务上将 OneBot `message_id` 视为不重复的不透明外部定位符，用于消息去重、回复、撤回和缓存；消息落库以 `(conversation_kind, target_id, one_bot_message_id)` 唯一约束实现同一会话重复事件幂等。合并转发只持久化视觉模型生成的展示摘要，不保存完整节点；撤回与同会话消息共享序号流，按到达顺序在消息之后执行；原消息尚未落库时（重连窗口、上游丢失或事件乱序）登记有限 TTL 的待补偿记录，消息落库后补记撤回并同步缓冲展示。
 - 停机时 Adapter 关闭不清零机器人账号，Agent 排空提交队列期间仍按真实账号识别机器人自身消息；账号仅在首次连接成功前处于未就绪状态，断线重连期间保留账号供后台任务继续按真实身份工作。
-- 消息触发的思考防抖从当前进程收到 OneBot 事件的时间开始计算；消息解析完成后按剩余窗口调度思考，解析耗时超过窗口时立即调度。思考仍使用开始时取得的固定消息快照。
-- 人格提示词只做增量调整；保留 `config/persona.prompt` 中 B站、贴吧、知乎和微博四个平台的参考原句，不恢复已删除的成组矫正案例。
+- 消息触发的思考防抖从当前进程收到 OneBot 事件的时间开始计算；消息解析完成后按剩余窗口调度思考，解析耗时超过窗口时立即调度。思考仍使用开始时取得的固定消息快照；模型可通过 `getNewMessages` 读取本轮开始后新到的消息，只有完整收集才推进已读水位。
+- 群聊与私聊后台整理共用 `learning` 的步数、超时、冷却、批量及最长等待，不添加重复的 `private_*` 设置；两类会话在一个调度器中轮转。
+- 通用消息事件与工具上下文使用 `ConversationMessage`、`TargetID`，专属流程明确使用 Group/Private 名称；数据库已发布的表名由 TableName 显式保留。
+- 网页、梗查询和表情包下载统一使用 utils 的 HTTP 入口，TLS 与 HTTP/2 指纹交给 tls-client，只校验 URL 合法性和响应大小限制，不做内网地址拦截；模型要求发送的网络图片由 NapCat 直接抓取，模型、MCP 和 OneBot 的 SDK 专属连接保持其协议与可信配置边界。
+- 人格提示词只做增量调整：群聊与私聊各自维护 `config/persona_group.prompt` 和 `config/persona_private.prompt`，不复用同一份模板，也不恢复已删除的成组矫正案例。
 - 后台 Memory Agent 在同一上下文中完成话题归属、摘要、稳定知识与群文化维护；不再启动独立话题模型或重复提取任务。
 - 自动知识由统一整理提交；显式 saveMemory 仍独立提交知识，两者共用知识存储及证据校验。
-- learning_states 每群仅保存一个统一整理水位。按数据库连续原文批次整理；默认同群至少5分钟，满50条或等待15分钟后可调度。启动和恢复扫描也遵守冷却与全局请求间隔，不强制连续排空。
+- learning_states 每个会话（群聊/私聊）仅保存一个统一整理水位。按数据库连续原文批次整理；默认同一会话至少5分钟，满50条或等待15分钟后可调度。启动和恢复扫描也遵守冷却，不强制连续排空。
 - 长期记忆主体只保存 `subject_user_id`：`0` 为群组、运行时 `self_id` 为自身、其他正数为成员；数据库不保存 `scope`。模型和工具输入用 `-1` 表示自身，必须在写库前解析，任何负数主体都不能进入持久化模型。
-- saveMemory 提交带主体、类型、完整正文和1-8条原文证据的 claim；统一 Agent 直接提交 knowledge items 及1-16条消息的证据组，不在摘要重复保存 claims。不拼昵称、不二次分类、不猜测目标。
+- saveMemory 提交带主体、类型、完整正文和1-8条原文证据的 claim；统一 Agent 直接提交 knowledge items 及1-16条消息的证据组，不在摘要重复保存 claims。不拼昵称、不二次分类、不猜测目标。知识类型不含经历（事件交给话题），证据组只要还有未被撤回的原文就算有效，整组原文全部撤回才失效；后台按原文条数展示。
+- 知识关系只有 variant_of、supersedes、contradicts 三种，必须各自带独立证据；关系会在一跳邻域内参与 agent 记忆召回，不为展示维护关系，也不再保存话题摘要的 related_topics。
 - 所有知识共用 memory 包的提交校验；只能用自己的证据验证主体，禁止借用其他条目的证据。
 - 知识统一保存为 `knowledge_items`，状态为 `active/archived`；正文语义变化新增条目，明确关联存为双端点 `knowledge_relations`。新知识通过完整证据校验后默认启用；证据或语义不确定时不提交。已有知识省略状态时保留原状态，重复保存不得复活人工归档结果；归档后重新启用须明确维护决定。
 - `reviewed_through_id` 保留作知识维护的快照可见上界，不再用于候选调度；关系维护同步更新端点，普通召回要求有效证据，后台维护可核对缺证据的归档记录。
-- 知识及关系证据通过 `knowledge_evidence_sets/knowledge_evidence_messages` 关联原始消息；每组是完整独立证明，任一必要消息撤回使整组失效，没有其他完整证明时归档并退出正常召回。不以摘要或模型推理作证据。
+- 知识及关系证据通过 `knowledge_evidence_sets/knowledge_evidence_messages` 关联原始消息；每组是完整独立证明，整组消息全部撤回才失效，没有其他完整证明时归档并退出正常召回。不以摘要或模型推理作证据。
 - 不再学习成员常用词、泛化说话风格；成员页聚合知识主体及原文参与情况，禁止恢复 `speaking/phrase/interest` 双写。
 - 统一 Agent 直接消费原文，不以前置 assignment 为门槛；一次 finish 原子保存所有归属、摘要、知识、证据与水位。
 - 成员画像保持全局 `user_id` 维度，不引入 `group_id` 维度，除非用户明确提出新的画像隔离需求。
 - 表达方式以包含语境与用法的统一知识正文保存，通过 `searchMemory` 与其他知识一起查询，不设专用表达或黑话存储。
-- Memory Agent 群间轮转、单轮统一使用 Eino MaxStep，默认25，纠错重试同样消耗总步数；每个后台推理及向量请求共享间隔。429遵循 Retry-After；异常不推进水位，历史读取限于本群固定消息上界。
-- `group_agent_states` 每群只保存 note 与更新时间，`saveWorkingNote` 空值清除；便签不算群行动，不独立推进失败轮次的已读水位。
+- Memory Agent 在群聊与私聊间轮转、单轮统一使用 Eino MaxStep，默认25，纠错重试同样消耗总步数；异常不推进水位，历史读取限于当前会话固定消息上界。
+- `group_agent_states` 按会话只保存 note 与更新时间，`saveWorkingNote` 空值清除；便签不算会话行动，不独立推进失败轮次的已读水位。
 
 ## 数据与检索边界
 
-- `GroupMessage.Content`、`MessageLog.TextContent` 保存原始文本；`GroupMessage.FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文。
+- `ConversationMessage.Content`、`MessageLog.TextContent` 保存原始文本；`ConversationMessage.FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文。
 - 话题归属、话题摘要、话题与主动长期记忆检索、黑话匹配、表达方式查询、成员画像学习、长期记忆提取等语义链路默认只使用原始文本；如果原始文本为空，就直接跳过，不要回退到渲染后的展示文本。
 - 当主动检索或混合查询构建失败时，优先跳过该步骤，不要回退到聊天展示文本、关键词提取或其他启发式拼接结果。
 - 话题与主动长期记忆检索共用固定消息快照生成的一份混合查询：拼接原文只用于单次向量查询，逐条原文用于 pg_trgm 文本召回，再由 RRF 融合；不要增加关键词提取模型、手写中文分词或第二份检索上下文。
 - 持久化使用 PostgreSQL。OneBot 首次连接并取得 `self_id` 后才允许打开数据库；连接已建立但业务事件必须由闸门阻塞，直到 schema 迁移、Agent 恢复和后台初始化全部完成。
 - schema 版本由 `schema_migrations` 记录并在后端启动时顺序执行。完全空库只走 `initializeV1Schema`；无版本表但全部已知旧业务表存在时只走 `migrateV1`；部分表、未知结构、版本断档或数据库版本高于程序时拒绝启动。迁移使用事务级 advisory lock 和显式 SQL，不使用 `AutoMigrate`。
 - 当前 NapCat 将原始 `msgId`、会话类型和对端标识拼接后做 MD5，并截取为 31 位正整数 OneBot `message_id`；没有同时覆盖消息、回复和撤回链路的更稳定上报字段，项目按碰撞概率可忽略的前提将它视为不重复，但绝不假设递增。`one_bot_message_id` 只能做等值匹配，禁止用于排序、范围比较或水位；数据库中的消息范围使用内部自增 `message_logs.id`，进程内到达顺序使用 `ArrivalSeq`。`0` 表示缺失，接入层仍接受其他 OneBot 实现可能返回的负数 ID。
-- 自动长期记忆召回先用当前群的群级、自身、消息作者和回复目标作者做主体硬过滤，再执行 pgvector + pg_trgm + RRF；不足时只补其他群的自身记忆。主动查询默认当前群，查询 `-1` 或真实自身 ID 时自动跨群。
+- 自动长期记忆召回先用当前会话的群级/好友、自身、消息作者和回复目标作者做主体硬过滤，再执行 pgvector + pg_trgm + RRF；群聊不足时只补其他群聊的自身记忆。主动查询默认当前会话，查询 `-1` 或真实自身 ID 时自动跨会话。
 - 管理后台日志每秒刷新内存中完整 300 条 buffer，搜索、最低级别和下载必须共用同一过滤逻辑；日志滚动以是否接近列表底部决定自动跟随，用户向上回看时自动暂停，回到底部自动恢复。用户选中日志文本时暂停轮询交换以保留选区，清除选区后自动恢复。日志高亮直接使用服务端已解析的时间、级别、消息与字段，格式化视图展开字段并保留真实换行，不引入第二套文本解析器。模型观测只保存按小时的任务/模型请求数、失败、耗时和 provider Token 聚合，不保存 prompt/response，不估算 Token 或成本。
 - 视觉模型调用失败或返回空响应时必须记录错误并向调用方返回失败，禁止静默降级成空描述；上层可以继续使用既有图片或视频占位展示。
 - 第一版检索固定为 pgvector 精确向量、pg_trgm 文本召回和 RRF 融合；没有明确需求和测量依据时，不引入 BM25 扩展、HNSW、Milvus、Elasticsearch、MMR、reranker、聚类或额外分类器。

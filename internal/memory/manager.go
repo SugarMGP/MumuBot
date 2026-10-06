@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -24,7 +25,8 @@ type EmbeddingProvider interface {
 }
 
 type StoreClaimsContext struct {
-	GroupID                 int64
+	ConversationKind        string
+	TargetID                int64
 	SelfID                  int64
 	SnapshotOneBotMessageID int64
 }
@@ -78,11 +80,15 @@ func EmbeddingVector(values []float64) (pgvector.Vector, error) {
 }
 
 func (m *Manager) GetRecentMessages(ctx context.Context, groupID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {
+	return m.GetRecentMessagesScope(ctx, ConversationKindGroup, groupID, throughOneBotMessageID, limit, offset)
+}
+
+func (m *Manager) GetRecentMessagesScope(ctx context.Context, kind string, targetID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {
 	var items []MessageLog
-	q := m.db.WithContext(ctx).Where("group_id = ?", groupID).Order("message_time DESC, id DESC").Limit(limit)
+	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id = ?", kind, targetID).Order("message_time DESC, id DESC").Limit(limit)
 	if throughOneBotMessageID != 0 {
 		upperBound := m.db.Model(&MessageLog{}).Select("id").
-			Where("group_id = ? AND one_bot_message_id = ?", groupID, throughOneBotMessageID)
+			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ?", kind, targetID, throughOneBotMessageID)
 		q = q.Where("message_logs.id <= (?)", upperBound)
 	}
 	if offset > 0 {
@@ -91,15 +97,13 @@ func (m *Manager) GetRecentMessages(ctx context.Context, groupID, throughOneBotM
 	if err := q.Find(&items).Error; err != nil {
 		return nil, err
 	}
-	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-		items[i], items[j] = items[j], items[i]
-	}
+	slices.Reverse(items)
 	return items, nil
 }
 
 func (m *Manager) GetMessageCountByTime(groupID, userID int64, start time.Time) (int64, error) {
 	var count int64
-	err := m.db.Model(&MessageLog{}).Where("group_id = ? AND user_id = ? AND message_time >= ?", groupID, userID, start).Count(&count).Error
+	err := m.db.Model(&MessageLog{}).Where("conversation_kind=? AND target_id = ? AND user_id = ? AND message_time >= ?", ConversationKindGroup, groupID, userID, start).Count(&count).Error
 	return count, err
 }
 
@@ -173,8 +177,15 @@ func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt
 }
 
 func (m *Manager) GetMessageLogByID(groupID, messageID int64) (*MessageLog, error) {
+	return m.GetMessageLogByScope(ConversationKindGroup, groupID, messageID)
+}
+
+func (m *Manager) GetMessageLogByScope(kind string, targetID, messageID int64) (*MessageLog, error) {
 	var item MessageLog
-	if err := m.db.Where("group_id=? AND one_bot_message_id = ?", groupID, messageID).First(&item).Error; err != nil {
+	if kind == "" {
+		kind = ConversationKindGroup
+	}
+	if err := m.db.Where("conversation_kind=? AND target_id=? AND one_bot_message_id = ?", kind, targetID, messageID).First(&item).Error; err != nil {
 		return nil, err
 	}
 	return &item, nil
@@ -186,17 +197,21 @@ func (m *Manager) SchemaVersion(ctx context.Context) (int, error) {
 	return version, err
 }
 
-func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bool, error) {
-	if groupID <= 0 || messageID == 0 {
+// MarkMessageRecalledScope 按会话作用域标记消息撤回并使相关证据失效
+func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int64) (*MessageLog, bool, error) {
+	if kind == "" {
+		kind = ConversationKindGroup
+	}
+	if targetID <= 0 || messageID == 0 {
 		return nil, false, nil
 	}
 	var item MessageLog
 	err := m.db.Transaction(func(tx *gorm.DB) error {
-		if err := LockKnowledgeGroup(tx, groupID); err != nil {
+		if err := LockKnowledgeScope(tx, kind, targetID); err != nil {
 			return err
 		}
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("group_id = ? AND one_bot_message_id = ? AND recalled_at IS NULL", groupID, messageID).
+			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ? AND recalled_at IS NULL", kind, targetID, messageID).
 			First(&item)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil
@@ -224,7 +239,7 @@ func (m *Manager) MarkMessageRecalled(groupID, messageID int64) (*MessageLog, bo
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error; err != nil {
 			return err
 		}
-		return InvalidateKnowledgeEvidence(tx, groupID)
+		return InvalidateKnowledgeEvidenceScope(tx, kind, targetID)
 	})
 	if err != nil {
 		return nil, false, err

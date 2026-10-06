@@ -15,13 +15,13 @@ type SearchMemoryInput struct {
 	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=读取已知知识的依据原文；此时不需要 query"`
 	Offset        int    `json:"offset,omitempty" jsonschema:"description=依据组的分页位置"`
 	Query         string `json:"query"`
-	SubjectUserID *int64 `json:"subject_user_id,omitempty" jsonschema:"description=-1 自身跨群，0 当前群，正数成员"`
-	Kind          string `json:"kind,omitempty" jsonschema:"enum=,enum=fact,enum=episode,enum=preference,enum=constraint,enum=goal,enum=term,enum=expression,enum=alias"`
+	SubjectUserID *int64 `json:"subject_user_id,omitempty" jsonschema:"description=-1 自身跨会话，0 当前群组主体，正数指定用户；私聊默认当前好友作用域"`
+	Kind          string `json:"kind,omitempty" jsonschema:"enum=,enum=fact,enum=preference,enum=constraint,enum=goal,enum=term,enum=expression,enum=alias"`
 	History       bool   `json:"history,omitempty" jsonschema:"description=追问来源时读取有证据的历史关系，历史解释不能当作当前事实"`
 }
 
 func NewSearchMemoryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchMemory", "统一查询事实、经历、成员偏好、群术语和表达方式。词义可能随语境不同；关系只表示已获得证据的联系，不能自行补全词源。", func(ctx context.Context, in *SearchMemoryInput) (map[string]any, error) {
+	return utils.InferTool("searchMemory", "统一查询事实、偏好、约束、目标、术语和表达方式。词义可能随语境不同；关系只表示已获得证据的联系，不能自行补全词源。", func(ctx context.Context, in *SearchMemoryInput) (map[string]any, error) {
 		tc := GetToolContext(ctx)
 		if tc == nil || in == nil || tc.MemoryMgr == nil || tc.Bot == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("工具未初始化"))
@@ -33,7 +33,7 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 		if in.Offset < 0 {
 			return nil, fmt.Errorf("offset 不得为负数")
 		}
-		upper, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, tc.SnapshotMessageID)
+		upper, err := tc.MemoryMgr.GetMessageLogByScope(tc.ConversationKind, tc.TargetID, tc.SnapshotMessageID)
 		if err != nil {
 			return nil, err
 		}
@@ -50,14 +50,14 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 			subject = &v
 		}
 		if in.ItemID > 0 {
-			items, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: tc.GroupID, SelfID: self, SubjectUserID: subject, ItemID: in.ItemID, IncludeInactive: in.History, ThroughID: upper.ID, Limit: 1})
+			items, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{ConversationKind: tc.ConversationKind, CrossConversationKinds: true, TargetID: tc.TargetID, SelfID: self, SubjectUserID: subject, ItemID: in.ItemID, IncludeInactive: in.History, ThroughID: upper.ID, Limit: 1})
 			if err != nil {
 				return nil, fmt.Errorf("读取知识失败：%w", err)
 			}
 			if len(items) == 0 {
 				return nil, fmt.Errorf("知识不存在或不在本次查询范围内")
 			}
-			sets, err := tc.MemoryMgr.ListKnowledgeEvidence(ctx, items[0].GroupID, in.ItemID, 0)
+			sets, err := tc.MemoryMgr.ListKnowledgeEvidenceScope(ctx, items[0].ConversationKind, items[0].TargetID, in.ItemID, 0)
 			if err != nil {
 				return nil, fmt.Errorf("读取依据失败：%w", err)
 			}
@@ -85,12 +85,12 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 		if err != nil {
 			return nil, err
 		}
-		items, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: tc.GroupID, SelfID: self, SubjectUserID: subject, Kind: in.Kind, Prepared: &prepared, ThroughID: upper.ID, Limit: 6})
+		items, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{ConversationKind: tc.ConversationKind, CrossConversationKinds: true, TargetID: tc.TargetID, SelfID: self, SubjectUserID: subject, Kind: in.Kind, Prepared: &prepared, ThroughID: upper.ID, Limit: 6})
 		if err != nil {
 			return nil, err
 		}
 		if in.History {
-			historical, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: tc.GroupID, SelfID: self, SubjectUserID: subject, Kind: in.Kind, Prepared: &prepared, ThroughID: upper.ID, IncludeInactive: true, Status: "archived", Limit: 6})
+			historical, err := tc.MemoryMgr.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{ConversationKind: tc.ConversationKind, CrossConversationKinds: true, TargetID: tc.TargetID, SelfID: self, SubjectUserID: subject, Kind: in.Kind, Prepared: &prepared, ThroughID: upper.ID, IncludeInactive: true, Status: "archived", Limit: 6})
 			if err != nil {
 				return nil, err
 			}
@@ -98,7 +98,7 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 		}
 		var seeds []uint
 		for _, item := range items {
-			if item.GroupID == tc.GroupID {
+			if item.ConversationKind == tc.ConversationKind && item.TargetID == tc.TargetID {
 				seeds = append(seeds, item.ID)
 			}
 		}
@@ -106,13 +106,13 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 		if in.History {
 			depth = 3
 		}
-		graph, err := tc.MemoryMgr.GetKnowledgeNeighborhood(ctx, tc.GroupID, seeds, depth, in.History, memory.KnowledgeGraphOptions{ThroughID: upper.ID})
+		graph, err := tc.MemoryMgr.GetKnowledgeNeighborhoodScope(ctx, tc.ConversationKind, tc.TargetID, seeds, depth, in.History, memory.KnowledgeGraphOptions{ThroughID: upper.ID})
 		if err != nil {
 			return nil, err
 		}
 		evidence := map[uint][][]string{}
 		for _, item := range graph.Items {
-			sets, e := tc.MemoryMgr.ListKnowledgeEvidence(ctx, tc.GroupID, item.ID, 0)
+			sets, e := tc.MemoryMgr.ListKnowledgeEvidenceScope(ctx, tc.ConversationKind, tc.TargetID, item.ID, 0)
 			if e != nil {
 				return nil, e
 			}
@@ -147,7 +147,7 @@ func NewSaveWorkingNoteTool() (tool.InvokableTool, error) {
 		if tc == nil || in == nil || tc.MemoryMgr == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("工具未初始化"))
 		}
-		if err := tc.MemoryMgr.SaveWorkingNote(ctx, tc.GroupID, in.Note); err != nil {
+		if err := tc.MemoryMgr.SaveWorkingNoteScope(ctx, tc.ConversationKind, tc.TargetID, in.Note); err != nil {
 			return nil, NewTerminalToolError(err)
 		}
 		return map[string]any{"success": true}, nil

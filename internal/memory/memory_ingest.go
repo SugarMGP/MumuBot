@@ -26,7 +26,7 @@ func claimError(code, message string) error {
 
 func NormalizeMemoryKind(raw string) MemoryKind {
 	switch kind := MemoryKind(strings.ToLower(strings.TrimSpace(raw))); kind {
-	case MemoryKindFact, MemoryKindEpisode, MemoryKindPreference, MemoryKindConstraint, MemoryKindGoal:
+	case MemoryKindFact, MemoryKindPreference, MemoryKindConstraint, MemoryKindGoal:
 		return kind
 	default:
 		return ""
@@ -49,7 +49,7 @@ func NormalizeMemoryClaim(raw RawMemoryClaim, selfID int64) (MemoryClaim, error)
 	}
 	kind := NormalizeMemoryKind(raw.Kind)
 	if kind == "" {
-		return MemoryClaim{}, claimError("invalid_kind", "kind 必须是 fact、episode、preference、constraint 或 goal")
+		return MemoryClaim{}, claimError("invalid_kind", "kind 必须是 fact、preference、constraint 或 goal")
 	}
 	content := strings.TrimSpace(raw.Content)
 	if content == "" || utf8.RuneCountInString(content) > 500 {
@@ -103,7 +103,7 @@ func NormalizeMemoryClaims(raw []RawMemoryClaim, selfID int64) ([]MemoryClaim, e
 }
 
 func (m *Manager) validateClaimEvidence(ctx context.Context, storeCtx StoreClaimsContext, claims []MemoryClaim) error {
-	if storeCtx.GroupID <= 0 {
+	if storeCtx.TargetID <= 0 {
 		return claimError("invalid_evidence", "当前群无效")
 	}
 	allIDs := make([]int64, 0)
@@ -118,7 +118,7 @@ func (m *Manager) validateClaimEvidence(ctx context.Context, storeCtx StoreClaim
 	var snapshotID uint
 	if storeCtx.SnapshotOneBotMessageID != 0 {
 		if err := m.db.WithContext(ctx).Model(&MessageLog{}).
-			Where("group_id = ? AND one_bot_message_id = ?", storeCtx.GroupID, storeCtx.SnapshotOneBotMessageID).
+			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ?", storeCtx.ConversationKind, storeCtx.TargetID, storeCtx.SnapshotOneBotMessageID).
 			Pluck("id", &snapshotID).Error; err != nil {
 			return err
 		}
@@ -128,7 +128,7 @@ func (m *Manager) validateClaimEvidence(ctx context.Context, storeCtx StoreClaim
 	}
 
 	var evidence []MessageLog
-	query := m.db.WithContext(ctx).Where("group_id = ? AND one_bot_message_id IN ? AND recalled_at IS NULL", storeCtx.GroupID, allIDs)
+	query := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id = ? AND one_bot_message_id IN ? AND recalled_at IS NULL", storeCtx.ConversationKind, storeCtx.TargetID, allIDs)
 	if snapshotID > 0 {
 		query = query.Where("id <= ?", snapshotID)
 	}

@@ -23,12 +23,14 @@ services:
       MODE: ws
       NAPCAT_UID: 1000
       NAPCAT_GID: 1000
+      NAPCAT_WEBUI_SECRET_KEY: ${NAPCAT_WEBUI_SECRET_KEY:?set NAPCAT_WEBUI_SECRET_KEY in .env}
       TZ: Asia/Shanghai
     ports:
       - ${NAPCAT_WEBUI_PORT:-6099}:6099
     volumes:
       - napcat-config:/app/napcat/config
       - napcat-qq:/app/.config/QQ
+      - napcat-plugin:/app/napcat/plugins
 
   mumu-bot:
     image: ghcr.io/sugarmgp/mumubot:latest
@@ -80,4 +82,5 @@ volumes:
   postgres-data:
   napcat-config:
   napcat-qq:
+  napcat-plugin:
   stickers:

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"mumu-bot/internal/utils"
@@ -20,6 +21,9 @@ import (
 func (c *Client) callAPI(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -139,33 +143,69 @@ func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content st
 	return c.sentMessageFromResponse(resp, groupID)
 }
 
-// SendImageMessage 发送图片/表情包消息
-// filePath: 本地文件绝对路径
-// isSticker: true 时作为表情包发送 (sub_type=1)
-func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, uint64, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return 0, 0, fmt.Errorf("读取待发送图片失败: %w", err)
+// SendPrivateMessage 发送好友私聊消息并返回私聊会话顺序
+func (c *Client) SendPrivateMessage(ctx context.Context, userID int64, content string, replyTo int64) (int64, uint64, error) {
+	if userID <= 0 {
+		return 0, 0, fmt.Errorf("好友 QQ 无效")
 	}
+	message := make([]map[string]interface{}, 0, 2)
+	if replyTo != 0 {
+		message = append(message, map[string]interface{}{
+			"type": "reply", "data": map[string]interface{}{"id": oneBotID(replyTo)},
+		})
+	}
+	message = append(message, map[string]interface{}{
+		"type": "text",
+		"data": map[string]interface{}{"text": content},
+	})
+	resp, err := c.callAPI(ctx, "send_private_msg", map[string]interface{}{
+		"user_id": userID,
+		"message": message,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return c.sentMessageFromResponseScope(resp, "private", userID)
+}
 
+// buildImageSegment 构造图片/表情包消息段：本地文件统一转 base64，避免 NapCat 读不到路径
+func buildImageSegment(filePath string, isSticker bool) (map[string]interface{}, error) {
 	subType := 0
 	if isSticker {
 		subType = 1
 	}
 
-	message := []map[string]interface{}{
-		{
-			"type": "image",
-			"data": map[string]interface{}{
-				"file":     "base64://" + base64.StdEncoding.EncodeToString(data),
-				"sub_type": subType,
-			},
+	file := filePath
+	trimmed := strings.ToLower(strings.TrimSpace(filePath))
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("读取待发送图片失败: %w", err)
+		}
+		file = "base64://" + base64.StdEncoding.EncodeToString(data)
+	}
+
+	return map[string]interface{}{
+		"type": "image",
+		"data": map[string]interface{}{
+			"file":     file,
+			"sub_type": subType,
 		},
+	}, nil
+}
+
+// SendImageMessage 发送图片/表情包到群聊
+// filePath: 本地文件绝对路径或图片 URL
+// isSticker: true 时作为表情包发送 (sub_type=1)
+func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, uint64, error) {
+	segment, err := buildImageSegment(filePath, isSticker)
+	if err != nil {
+		return 0, 0, err
 	}
 
 	resp, err := c.callAPI(ctx, "send_group_msg", map[string]interface{}{
 		"group_id": groupID,
-		"message":  message,
+		"message":  []map[string]interface{}{segment},
 	})
 	if err != nil {
 		return 0, 0, err
@@ -173,12 +213,36 @@ func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath s
 	return c.sentMessageFromResponse(resp, groupID)
 }
 
+// SendPrivateImageMessage 发送图片/表情包到好友私聊
+func (c *Client) SendPrivateImageMessage(ctx context.Context, userID int64, filePath string, isSticker bool) (int64, uint64, error) {
+	if userID <= 0 {
+		return 0, 0, fmt.Errorf("私聊图片目标无效")
+	}
+	segment, err := buildImageSegment(filePath, isSticker)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	resp, err := c.callAPI(ctx, "send_private_msg", map[string]interface{}{
+		"user_id": userID,
+		"message": []map[string]interface{}{segment},
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return c.sentMessageFromResponseScope(resp, "private", userID)
+}
+
 func (c *Client) sentMessageFromResponse(resp interface{}, groupID int64) (int64, uint64, error) {
+	return c.sentMessageFromResponseScope(resp, "group", groupID)
+}
+
+func (c *Client) sentMessageFromResponseScope(resp interface{}, kind string, targetID int64) (int64, uint64, error) {
 	messageID, err := messageIDFromResponse(resp)
 	if err != nil {
 		return 0, 0, err
 	}
-	return messageID, c.nextArrivalSeq(groupID), nil
+	return messageID, c.nextArrivalSeq(kind, targetID), nil
 }
 
 func messageIDFromResponse(resp interface{}) (int64, error) {
@@ -314,6 +378,23 @@ func (c *Client) SetMsgEmojiLike(ctx context.Context, messageID int64, emojiID i
 func (c *Client) MarkMsgAsRead(ctx context.Context, messageID int64) error {
 	_, err := c.callAPI(ctx, "mark_msg_as_read", map[string]interface{}{
 		"message_id": oneBotID(messageID),
+	})
+	return err
+}
+
+// MarkPrivateMsgAsRead 标记好友私聊已读
+func (c *Client) MarkPrivateMsgAsRead(ctx context.Context, userID int64) error {
+	_, err := c.callAPI(ctx, "mark_private_msg_as_read", map[string]interface{}{"user_id": userID})
+	return err
+}
+
+// FriendPoke 戳一戳好友（私聊）
+func (c *Client) FriendPoke(ctx context.Context, userID int64) error {
+	if userID <= 0 {
+		return fmt.Errorf("好友账号无效")
+	}
+	_, err := c.callAPI(ctx, "friend_poke", map[string]interface{}{
+		"user_id": userID,
 	})
 	return err
 }

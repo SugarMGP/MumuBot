@@ -6,34 +6,43 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
-	getreq "github.com/cloudwego/eino-ext/components/tool/httprequest/get"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"go.uber.org/zap"
 )
 
 // SpeakCallback 发言回调函数类型
-type SpeakCallback func(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) error
+type SpeakCallback func(ctx context.Context, targetID int64, content string, replyTo int64, mentions []int64) error
 
 // SendStickerCallback 发送表情包回调函数类型
-type SendStickerCallback func(ctx context.Context, groupID int64, filePath string, description string) error
+type SendStickerCallback func(ctx context.Context, targetID int64, filePath string, description string) error
+type InspectImageCallback func(ctx context.Context, imageURL string) (string, error)
+type SendImageURLCallback func(ctx context.Context, imageURL string) error
+type GetNewMessagesCallback func(ctx context.Context) (any, error)
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	GroupID                 int64
+	ConversationKind        string
+	TargetID                int64
 	MemoryMgr               *memory.Manager
 	Bot                     *onebot.Client
 	SnapshotMessageID       int64
 	SpeakCallback           SpeakCallback       // 发言回调
 	SendStickerCallback     SendStickerCallback // 发送表情包回调
+	InspectImageCallback    InspectImageCallback
+	SendImageURLCallback    SendImageURLCallback
+	GetNewMessagesCallback  GetNewMessagesCallback
+	ThinkStartArrivalSeq    uint64
+	ObservedThroughSeq      uint64
+	ObservationIncomplete   bool
 	MessageRecalledCallback func(*memory.MessageLog)
+	actionSucceeded         bool
 
 	messageRefs map[int64]string
 	messageIDs  map[string]int64
@@ -41,7 +50,25 @@ type ToolContext struct {
 
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
-	acted         atomic.Bool
+}
+
+// MarkActionSucceeded 只在已确认远程操作或本地状态变更成功后记录会话行动
+func (tc *ToolContext) MarkActionSucceeded() {
+	if tc != nil {
+		tc.actionSucceeded = true
+	}
+}
+
+// ReadThroughSeq 失败轮次仅在已执行行动时消费快照，观察缺口不能推进观察水位
+func (tc *ToolContext) ReadThroughSeq(thinkSucceeded bool) uint64 {
+	if tc == nil || (!thinkSucceeded && !tc.actionSucceeded) {
+		return 0
+	}
+	seq := tc.ThinkStartArrivalSeq
+	if !tc.ObservationIncomplete {
+		seq = max(seq, tc.ObservedThroughSeq)
+	}
+	return seq
 }
 
 func (tc *ToolContext) RegisterMessage(messageID int64) string {
@@ -75,14 +102,6 @@ func (tc *ToolContext) ResolveMessageRef(ref string) (int64, bool) {
 	}
 	messageID, ok := tc.messageIDs[strings.TrimSpace(ref)]
 	return messageID, ok
-}
-
-func (tc *ToolContext) MarkActed() {
-	tc.acted.Store(true)
-}
-
-func (tc *ToolContext) Acted() bool {
-	return tc.acted.Load()
 }
 
 // ctxKey 上下文键类型
@@ -192,7 +211,7 @@ func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailIn
 		return nil, fmt.Errorf("用户 ID 不能为空")
 	}
 
-	info, err := tc.Bot.GetGroupMemberInfo(ctx, tc.GroupID, input.UserID, false)
+	info, err := tc.Bot.GetGroupMemberInfo(ctx, tc.TargetID, input.UserID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +272,7 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 		limit = 40
 	}
 
-	messages, err := tc.MemoryMgr.GetRecentMessages(ctx, tc.GroupID, tc.SnapshotMessageID, limit, input.Offset)
+	messages, err := tc.MemoryMgr.GetRecentMessagesScope(ctx, tc.ConversationKind, tc.TargetID, tc.SnapshotMessageID, limit, input.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("读取最近消息失败：%w", err)
 	}
@@ -293,6 +312,16 @@ func NewGetRecentMessagesTool() (tool.InvokableTool, error) {
 	)
 }
 
+func NewGetNewMessagesTool() (tool.InvokableTool, error) {
+	return utils.InferTool("getNewMessages", "读取本轮思考开始后已经收到的新消息；不会等待。", func(ctx context.Context, _ *struct{}) (any, error) {
+		tc := GetToolContext(ctx)
+		if tc == nil || tc.GetNewMessagesCallback == nil {
+			return nil, NewTerminalToolError(fmt.Errorf("新消息读取能力未初始化"))
+		}
+		return tc.GetNewMessagesCallback(ctx)
+	})
+}
+
 // ==================== 获取群公告工具 ====================
 
 type GetGroupNoticesInput struct {
@@ -324,7 +353,7 @@ func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*Get
 		return nil, fmt.Errorf("公告查询参数不能为空")
 	}
 
-	notices, err := tc.Bot.GetGroupNotice(ctx, tc.GroupID)
+	notices, err := tc.Bot.GetGroupNotice(ctx, tc.TargetID)
 	if err != nil {
 		return nil, fmt.Errorf("获取群公告失败: %w", err)
 	}
@@ -390,7 +419,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 		return nil, fmt.Errorf("精华消息查询参数不能为空")
 	}
 
-	messages, err := tc.Bot.GetEssenceMessages(ctx, tc.GroupID)
+	messages, err := tc.Bot.GetEssenceMessages(ctx, tc.TargetID)
 	if err != nil {
 		return nil, fmt.Errorf("获取群精华消息失败: %w", err)
 	}
@@ -484,14 +513,4 @@ func NewGetMessageReactionsTool() (tool.InvokableTool, error) {
 		"获取某条消息的表情回应。可以看到大家对这条消息的反应。",
 		getMessageReactionsFunc,
 	)
-}
-
-func NewHttpRequestTool() (tool.BaseTool, error) {
-	return getreq.NewTool(context.Background(), &getreq.Config{
-		ToolName: "request_get",
-		ToolDesc: "获取网页内容。当你需要查看某个网页的具体内容时使用，输入应为完整的URL（例如https://www.baidu.com）。",
-		Headers: map[string]string{
-			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0",
-		},
-	})
 }

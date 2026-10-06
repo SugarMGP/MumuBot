@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">MumuBot</h1>
-  <p align="center">A cyber QQ group friend that chats, remembers, and blends into your community</p>
+  <p align="center">A cyber QQ group friend that chats, remembers, and blends into your group's culture</p>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 ## 🤔 What is MumuBot
 
-MumuBot is an AI group member that lives in your QQ group chat. Unlike typical Q&A bots, MumuBot decides on its own when to speak up and when to stay quiet. It remembers what's been discussed, picks up on group slang and inside jokes, and gradually builds an understanding of each member through everyday conversations.
+MumuBot is an AI companion that lives in your QQ group chats and friend DMs. Unlike typical Q&A bots, MumuBot decides on its own when to speak up and when to stay quiet. It remembers what's been discussed, picks up on group slang and inside jokes, and gradually builds an understanding of each member through everyday conversations.
 
 In short: it tries to behave like an actual person in the group, not an on-demand tool.
 
@@ -35,15 +35,16 @@ Core capabilities of this project:
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
 - 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
 - 🧵 **Topic Working Memory** — Continuously tracks current topics, summaries, participants, and open threads; can recall archived topics
-- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, poking, stickers, group information, and web browsing, with more available through MCP
-- 📝 **Long-term Memory** — Unifies facts, experiences, preferences, group terms, and expressions with pgvector and pg_trgm
+- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers, with more available through MCP
+- 📝 **Long-term Memory** — Unifies facts, preferences, constraints, goals, group terms, and expressions with pgvector and pg_trgm
 - 👤 **Member Profiles** — Shows evidence-backed member knowledge and participation; a background memory agent investigates historical context
 - 🎭 **Emotion System** — Three-dimensional mood (valence, energy, sociability) shifts naturally during conversation, affecting tone and activity
 - 👀 **Multimodal Understanding** — Vision model recognizes image and video content
 - 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
-- 🖥️ **Admin Dashboard** — Browse knowledge and topic graphs by group, then open relationships to verify source messages and active/archived status
+- 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and friend requests; browse remembered knowledge per conversation and group topics
+- 💬 **Friend DMs** — One-on-one friend chats with a dedicated prompt, conversation queue, and a single linear topic summary per friend
 - 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 
 ## 🚀 Quick Start
@@ -54,7 +55,7 @@ Core capabilities of this project:
 |------|------|
 | Go 1.26.5+ | Build and run |
 | Bun 1.3.14+ | Build frontend assets (only needed for source builds) |
-| PostgreSQL + pgvector | Store messages, memories, topics, community culture, and vectors |
+| PostgreSQL + pgvector | Store messages, memories, topics, group culture, and vectors |
 | NapCat | OneBot 11 protocol implementation |
 | LLM API | OpenAI-compatible, must support tool calling |
 
@@ -64,11 +65,11 @@ Compose starts MumuBot, PostgreSQL/pgvector, and NapCat together:
 
 ```bash
 cp .env.example .env
-# Fill in database, admin, and model settings in .env
+# Fill in database, admin, model, and NapCat WebUI password (NAPCAT_WEBUI_SECRET_KEY) settings in .env
 docker compose up -d
 ```
 
-Compose pulls the `latest` image directly from GHCR. On first start, the container creates any missing `config.yaml`, `persona.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
+Compose pulls the `latest` image directly from GHCR. On first start, the container creates any missing `config.yaml`, `persona_group.prompt`, `persona_private.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
 
 Restart the service after editing the generated configuration files. Then visit `http://localhost:6099/webui` to open the NapCat admin panel and sign in to QQ.
 
@@ -78,11 +79,12 @@ GitHub Releases provide pre-built packages for Linux, Windows, and macOS. Each a
 
 - Executable binary
 - `config/config.yaml` example configuration
-- `config/persona.prompt` persona prompt template
+- `config/persona_group.prompt` group chat persona template
+- `config/persona_private.prompt` private chat persona template
 - `config/mcp.json` example configuration
 - `README.md` and `LICENSE`
 
-No separate frontend deployment is needed — admin dashboard assets are embedded in the binary. To customize the persona prompt, edit `config/persona.prompt` directly from the archive.
+No separate frontend deployment is needed — admin dashboard assets are embedded in the binary.
 
 ### Building from Source
 
@@ -91,12 +93,13 @@ No separate frontend deployment is needed — admin dashboard assets are embedde
 git clone https://github.com/SugarMGP/MumuBot.git
 cd MumuBot
 
-# 2. Install frontend dependencies and build dashboard assets
+# 2. Install frontend dependencies, generate admin icons, and build dashboard assets
 bun install --frozen-lockfile
+bun run gen:icons
 bun run build
 
 # 3. Generate templ view code
-go run github.com/a-h/templ/cmd/templ@latest generate ./internal/web/views
+go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate ./internal/web/views
 
 # 4. Build
 go build -o mumu-bot .
@@ -104,7 +107,7 @@ go build -o mumu-bot .
 
 ### Configuration and Launch
 
-If you're using a GitHub Release archive, edit the bundled `config/config.yaml`, `config/persona.prompt`, and `config/mcp.json` directly — skip the copy step below.
+If you're using a GitHub Release archive, edit the bundled `config/config.yaml`, `config/persona_group.prompt`, `config/persona_private.prompt`, and `config/mcp.json` directly — skip the copy step below.
 
 ```bash
 # 1. Copy example configs and edit as needed
@@ -120,7 +123,7 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_ONEBOT_TOKEN                   - OneBot access token
 #   MUMU_DATABASE_DSN                   - PostgreSQL connection string
 
-# The static persona prompt template is at config/persona.prompt
+# The static persona prompt template is at config/persona_group.prompt; the private chat prompt template is at config/persona_private.prompt
 # persona.name, persona.alias_names, and persona.interests are still set in config/config.yaml
 # The bot QQ is detected from OneBot; interests only shape persona context and do not change trigger probability
 
@@ -143,13 +146,13 @@ Visit `/admin` to access the admin dashboard. The dashboard stays disabled until
 
 ## 🧠 Persona Template
 
-`config/persona.prompt` is the default persona prompt template that controls MumuBot's personality, speaking rhythm, and reply style. You can adjust it to fit your group's vibe and iterate based on real conversation results.
+`config/persona_group.prompt` and `config/persona_private.prompt` are the static persona templates for group chats and private chats. They share the same structure but stay independent: the group template keeps group-specific interaction rules, while the private template drops them and adds one-on-one rules. Tune each file separately and iterate based on real conversations.
 
 If you find a prompt that works better, feel free to share your use case and results via [Issues](https://github.com/SugarMGP/MumuBot/issues), or submit a Pull Request to improve the template together.
 
 ## 🔧 MCP Tool Extension
 
-Edit `config/mcp.json` to connect external MCP servers, supporting both SSE and Stdio transport:
+Edit `config/mcp.json` to connect external MCP servers, supporting both SSE and Stdio transport. Loaded tools are available to both group chats and friend DMs and are named `mcp-<server>-<tool>` to avoid collisions with built-in tools or other servers:
 
 ```json
 {
@@ -178,7 +181,7 @@ Edit `config/mcp.json` to connect external MCP servers, supporting both SSE and 
 
 ## 🤝 Contributing
 
-Contributions of any kind are welcome — bug reports, feature suggestions, or code submissions.
+**Contributions of any kind are welcome!** Bug reports, feature suggestions, or code submissions — we truly appreciate all of them.
 
 <a href="https://github.com/SugarMGP/MumuBot/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=SugarMGP/MumuBot" />

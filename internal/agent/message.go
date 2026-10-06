@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,43 +17,18 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	commitQueueSize   = 256
-	pendingCommitSize = 256
-	recallPendingTTL  = 5 * time.Minute
-)
-
-type recallCommit struct {
-	groupID    int64
-	messageID  int64
-	operatorID int64
-}
-
-// commitItem 提交队列项：消息、戳一戳、撤回统一按群内到达序号重排提交；
-// skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用群），避免重排器死等
-type commitItem struct {
-	groupID     int64
-	seq         uint64
-	skip        bool
-	recall      *recallCommit
-	msg         *onebot.GroupMessage
-	isMentioned bool
-}
-
-func (a *Agent) onMessage(msg *onebot.GroupMessage) {
+// onMessage 分流共享消息回调，群聊和私聊入口各自只处理本类会话
+func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 	if msg == nil {
 		return
 	}
-	if err := a.ctx.Err(); err != nil {
-		return
+	if msg.ConversationKind == "" {
+		msg.ConversationKind = memory.ConversationKindGroup
 	}
-	if msg.ParseFailed {
-		a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
-		return
-	}
-	cfg := config.Get()
-	if !cfg.IsGroupEnabled(msg.GroupID) {
-		a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
+	ctx, cancel := a.persistenceContext()
+	defer cancel()
+	if msg.ParseFailed || msg.UserID <= 0 || !a.messageAllowed(ctx, msg) {
+		a.SkipConversationEvent(msg.ConversationKind, msg.TargetID, msg.ArrivalSeq)
 		return
 	}
 	if msg.ReceivedAt.IsZero() {
@@ -60,261 +36,58 @@ func (a *Agent) onMessage(msg *onebot.GroupMessage) {
 	}
 	if msg.MessageID == 0 {
 		if !a.onInteractionMessage(msg) {
-			a.enqueueCommitSkip(msg.GroupID, msg.ArrivalSeq)
+			a.SkipConversationEvent(msg.ConversationKind, msg.TargetID, msg.ArrivalSeq)
 			return
 		}
-		a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg})
-		return
-	}
-
-	selfID := a.bot.GetSelfID()
-	a.resolveBufferedReplyInfo(msg)
-	if err := a.resolveReplyInfo(msg); err != nil {
-		zap.L().Debug("解析回复消息失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-	}
-	isMentioned := msg.IsMentioned || a.persona.IsMentioned(msg.Content)
-	if msg.Reply != nil && msg.Reply.SenderID != 0 && selfID != 0 && msg.Reply.SenderID == selfID {
-		isMentioned = true
-	}
-	msg.IsMentioned = isMentioned
-
-	parsedContent := a.parseMessageContent(msg)
-	for _, name := range a.toolNames {
-		parsedContent = strings.ReplaceAll(parsedContent, name, "\"危险指令，已屏蔽\"")
-	}
-	msg.FinalContent = parsedContent
-
-	a.enqueueCommit(commitItem{groupID: msg.GroupID, seq: msg.ArrivalSeq, msg: msg, isMentioned: isMentioned})
-}
-
-// enqueueCommit 把解析完成的消息、撤回或跳过项投入该群提交队列
-// 提交队列满时背压等待，不静默丢弃；关闭后由 ctx 退出
-func (a *Agent) enqueueCommit(item commitItem) {
-	a.commitMu.Lock()
-	queue := a.commitQueues[item.groupID]
-	if queue == nil {
-		queue = make(chan commitItem, commitQueueSize)
-		a.commitQueues[item.groupID] = queue
-		a.commitWG.Add(1)
-		go a.commitWorker(queue)
-	}
-	a.commitMu.Unlock()
-
-	select {
-	case queue <- item:
-	case <-a.ctx.Done():
-	}
-}
-
-// enqueueCommitSkip 消费一个不会产生实际处理的到达序号
-func (a *Agent) enqueueCommitSkip(groupID int64, seq uint64) {
-	a.enqueueCommit(commitItem{groupID: groupID, seq: seq, skip: true})
-}
-
-// commitWorker 每群一个提交协程：解析乱序完成后，按到达序号重排提交，
-// 保证落库、撤回、入缓冲和思考调度的顺序与事件到达顺序一致
-// 视觉等慢解析已在提交前并行完成，提交阶段只做快操作
-// 乱序窗口（pending）有上限：超限时丢弃等待队列中最接近水位的项并把水位推进越过它，
-// 被越过的序号（含仍在解析中的）到达时自然被跳过，不记录、不留下永久缺口，内存有界
-func (a *Agent) commitWorker(queue <-chan commitItem) {
-	defer a.commitWG.Done()
-	next := uint64(1)
-	pending := make(map[uint64]commitItem)
-	for item := range queue {
-		switch {
-		case item.seq > next:
-			if len(pending) >= pendingCommitSize {
-				minSeq := item.seq
-				for seq := range pending {
-					if seq < minSeq {
-						minSeq = seq
-					}
-				}
-				delete(pending, minSeq)
-				next = minSeq + 1
-				zap.L().Error("提交重排等待队列超限，丢弃最旧等待项并推进水位", zap.Int64("group_id", item.groupID), zap.Uint64("dropped_seq", minSeq), zap.Uint64("watermark", next), zap.Int("pending", len(pending)))
-				if item.seq > next {
-					pending[item.seq] = item
-				}
-			} else {
-				pending[item.seq] = item
-			}
-		case item.seq == next:
-			a.commitOne(item)
-			next++
-		}
-		for {
-			queued, ok := pending[next]
-			if !ok {
-				break
-			}
-			delete(pending, next)
-			a.commitOne(queued)
-			next++
-		}
-	}
-	if len(pending) > 0 {
-		zap.L().Warn("停机排空结束，乱序等待项未提交", zap.Int("pending", len(pending)))
-	}
-}
-
-func (a *Agent) commitOne(item commitItem) {
-	switch {
-	case item.skip:
-	case item.recall != nil:
-		a.commitRecall(item.recall)
-	default:
-		a.commitMessage(item)
-	}
-}
-
-// commitRecall 按到达顺序执行撤回：正常事件顺序下，同群序号更小的消息已落库并入缓冲，
-// 撤回总能命中数据库记录并在缓冲中找到对应消息。若原消息尚未落库（重连窗口、上游丢失或
-// 事件乱序），登记待补偿记录，待消息落库后补记撤回
-func (a *Agent) commitRecall(recall *recallCommit) {
-	log, changed, err := a.memory.MarkMessageRecalled(recall.groupID, recall.messageID)
-	if err != nil {
-		zap.L().Warn("标记群消息撤回失败", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID), zap.Int64("operator_id", recall.operatorID), zap.Error(err))
-		return
-	}
-	if !changed {
-		// 原消息尚未落库（重连窗口、上游丢失或事件乱序），登记待补偿
-		zap.L().Debug("撤回时原消息未落库，登记待补偿", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID))
-		a.recallMu.Lock()
-		if a.pendingRecalls[recall.groupID] == nil {
-			a.pendingRecalls[recall.groupID] = make(map[int64]time.Time)
-		}
-		a.pendingRecalls[recall.groupID][recall.messageID] = time.Now().Add(recallPendingTTL)
-		a.recallMu.Unlock()
-		return
-	}
-	a.syncRecalledMessage(log)
-	zap.L().Info("群消息已撤回", zap.Int64("group_id", recall.groupID), zap.Int64("message_id", recall.messageID), zap.Int64("operator_id", recall.operatorID))
-}
-
-// applyPendingRecall 消息落库后检查待补偿撤回记录，命中则补记撤回并同步缓冲展示
-func (a *Agent) applyPendingRecall(msg *onebot.GroupMessage) {
-	a.recallMu.Lock()
-	groupRecalls := a.pendingRecalls[msg.GroupID]
-	deadline, ok := groupRecalls[msg.MessageID]
-	if ok {
-		delete(groupRecalls, msg.MessageID)
-		if len(groupRecalls) == 0 {
-			delete(a.pendingRecalls, msg.GroupID)
-		}
-	}
-	a.recallMu.Unlock()
-	if !ok || time.Now().After(deadline) {
-		return
-	}
-
-	log, changed, err := a.memory.MarkMessageRecalled(msg.GroupID, msg.MessageID)
-	if err != nil {
-		zap.L().Warn("补记消息撤回失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-		return
-	}
-	if !changed {
-		return
-	}
-	msg.FinalContent = log.DisplayContent
-	a.syncRecalledMessage(log)
-}
-
-// recallPruneLoop 定期清理过期的待补偿撤回记录，防止永不落库的消息 ID 持续积累
-func (a *Agent) recallPruneLoop() {
-	defer a.wg.Done()
-	ticker := time.NewTicker(recallPendingTTL / 2)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-ticker.C:
-			a.prunePendingRecalls()
-		}
-	}
-}
-
-func (a *Agent) prunePendingRecalls() {
-	now := time.Now()
-	a.recallMu.Lock()
-	defer a.recallMu.Unlock()
-	for groupID, recalls := range a.pendingRecalls {
-		for messageID, deadline := range recalls {
-			if now.After(deadline) {
-				delete(recalls, messageID)
-			}
-		}
-		if len(recalls) == 0 {
-			delete(a.pendingRecalls, groupID)
-		}
-	}
-}
-
-// onRecall 撤回事件入口：带到达序号进入提交队列，与同群消息保持顺序
-func (a *Agent) onRecall(groupID, messageID, operatorID int64, arrivalSeq uint64) {
-	if groupID <= 0 || messageID == 0 || !config.Get().IsGroupEnabled(groupID) {
-		a.enqueueCommitSkip(groupID, arrivalSeq)
-		return
-	}
-	a.enqueueCommit(commitItem{groupID: groupID, seq: arrivalSeq, recall: &recallCommit{groupID: groupID, messageID: messageID, operatorID: operatorID}})
-}
-
-func (a *Agent) commitMessage(item commitItem) {
-	msg := item.msg
-	selfID := a.bot.GetSelfID()
-	if msg.MessageID != 0 {
-		ctx := a.ctx
-		if ctx.Err() != nil {
-			ctx = context.Background()
-		}
-		log, created, err := a.topicMgr.PersistMessage(ctx, msg, item.isMentioned)
-		if err != nil {
-			zap.L().Error("写入话题工作记忆失败", zap.Int64("group_id", msg.GroupID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-			return
-		}
-		if log == nil || !created {
-			return
-		}
-		a.addBuffer(msg)
-		a.applyPendingRecall(msg)
-
-		if msg.UserID == selfID {
-			return
-		}
-		if a.ctx.Err() != nil {
-			// 停机排空阶段：OneBot 已关闭，不再执行标已读和画像更新
-			return
-		}
-		// 只有确实落库成功且非机器人自身的消息，才执行标已读和画像更新
-		a.wg.Add(1)
-		go func(messageID int64) {
-			defer a.wg.Done()
-			if err := a.markMessageRead(messageID); err != nil {
-				zap.L().Error("标记消息已读失败", zap.Int64("message_id", messageID), zap.Error(err))
-			}
-			a.updateMember(msg)
-		}(msg.MessageID)
 	} else {
-		a.addBuffer(msg)
+		a.prepareMessageContent(ctx, msg)
+		selfID := a.bot.GetSelfID()
+		msg.IsMentioned = msg.IsMentioned || a.persona.IsMentioned(msg.Content) || (msg.Reply != nil && msg.Reply.SenderID == selfID)
 	}
-	if a.ctx.Err() != nil {
+	if msg.ConversationKind == memory.ConversationKindPrivate {
+		a.onPrivateMessage(msg)
 		return
 	}
-	a.scheduleThink(msg.GroupID, item.isMentioned, false, msg.ReceivedAt)
+	a.onGroupMessage(msg)
 }
 
-func (a *Agent) resolveBufferedReplyInfo(msg *onebot.GroupMessage) {
-	if msg == nil || msg.Reply == nil || msg.Reply.MessageID == 0 || msg.Reply.SenderID != 0 {
+func (a *Agent) onGroupMessage(msg *onebot.ConversationMessage) {
+	a.enqueueCommit(msg.ArrivalSeq, groupCommitItem{groupID: msg.TargetID, msg: msg})
+}
+
+// onRecall 撤回事件入口：带到达序号进入提交队列，与会话内消息保持顺序
+func (a *Agent) onRecall(kind string, targetID, messageID int64, arrivalSeq uint64) {
+	if kind == "" {
+		kind = memory.ConversationKindGroup
+	}
+	if targetID <= 0 {
 		return
 	}
-	if reply := findReplyInfoInMessages(a.getBuffer(msg.GroupID), msg.Reply.MessageID); reply != nil {
-		msg.Reply = reply
+	if messageID == 0 {
+		// 无效撤回同样消费序号，避免会话重排等待永久缺口
+		a.SkipConversationEvent(kind, targetID, arrivalSeq)
+		return
 	}
+	ctx, cancel := a.persistenceContext()
+	defer cancel()
+	allowed, err := a.memory.ConversationAllowed(ctx, kind, targetID)
+	if err != nil {
+		zap.L().Warn("撤回许可检查失败，按未启用处理", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
+	}
+	if err != nil || !allowed {
+		a.SkipConversationEvent(kind, targetID, arrivalSeq)
+		return
+	}
+	recall := &recallCommit{kind: kind, targetID: targetID, messageID: messageID}
+	if kind == memory.ConversationKindPrivate {
+		a.enqueuePrivateRecall(targetID, arrivalSeq, recall)
+		return
+	}
+	a.enqueueCommit(arrivalSeq, groupCommitItem{groupID: targetID, recall: recall})
 }
 
 // onInteractionMessage 只构造戳一戳的展示内容，返回是否有效；缓冲和思考调度由提交队列统一处理
-func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) bool {
+func (a *Agent) onInteractionMessage(msg *onebot.ConversationMessage) bool {
 	if msg.UserID <= 0 || len(msg.AtList) == 0 || msg.AtList[0] <= 0 {
 		return false
 	}
@@ -323,6 +96,7 @@ func (a *Agent) onInteractionMessage(msg *onebot.GroupMessage) bool {
 	defer cancel()
 	targetName := a.resolveMentionDisplayName(ctx, msg, targetID)
 	msg.Content = ""
+	msg.IsMentioned = false
 	msg.FinalContent = fmt.Sprintf("戳了戳 %s(%d)", targetName, targetID)
 	return true
 }
@@ -334,62 +108,80 @@ func botMentionDisplayName(botName string) string {
 	return "机器人(你)"
 }
 
-func (a *Agent) markMessageRead(messageID int64) error {
-	if a.bot == nil || messageID == 0 {
+// afterMessagePersisted 只由新建的非自身消息调用，重复事件不增加画像计数
+func (a *Agent) afterMessagePersisted(ctx context.Context, msg *onebot.ConversationMessage) {
+	// 思考调度前先更新画像，让本轮读取的昵称、活跃信息和好感度主体已就绪
+	a.updateMember(ctx, msg)
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		if err := a.markMessageRead(msg); err != nil {
+			zap.L().Error("标记消息已读失败", zap.Int64("message_id", msg.MessageID), zap.Error(err))
+		}
+	}()
+}
+
+func (a *Agent) markMessageRead(msg *onebot.ConversationMessage) error {
+	if a.bot == nil || msg.MessageID == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
-	return a.bot.MarkMsgAsRead(ctx, messageID)
+	if msg.ConversationKind == memory.ConversationKindPrivate {
+		return a.bot.MarkPrivateMsgAsRead(ctx, msg.TargetID)
+	}
+	return a.bot.MarkMsgAsRead(ctx, msg.MessageID)
 }
 
-func (a *Agent) resolveReplyInfo(msg *onebot.GroupMessage) error {
+func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMessage) error {
 	if msg == nil || msg.Reply == nil || msg.Reply.MessageID == 0 {
 		return nil
 	}
+	key := replyCacheKey(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID)
 	if msg.Reply.Content != "" && msg.Reply.SenderID != 0 {
-		a.replyCache.Set(msg.Reply.MessageID, *msg.Reply, ttlcache.DefaultTTL)
+		a.replyCache.Set(key, *msg.Reply, ttlcache.DefaultTTL)
 		return nil
 	}
 
-	if cached := a.replyCache.Get(msg.Reply.MessageID); cached != nil {
+	if cached := a.replyCache.Get(key); cached != nil {
 		clone := cached.Value()
 		msg.Reply = &clone
 		return nil
 	}
 
-	if reply := findReplyInfoInMessages(a.getBuffer(msg.GroupID), msg.Reply.MessageID); reply != nil {
+	buffer, _, _ := a.getConversationSnapshot(msg.ConversationKind, msg.TargetID)
+	if reply := findReplyInfoInMessages(buffer, msg.Reply.MessageID); reply != nil {
 		msg.Reply = reply
-		a.replyCache.Set(reply.MessageID, *reply, ttlcache.DefaultTTL)
+		a.replyCache.Set(key, *reply, ttlcache.DefaultTTL)
 		return nil
 	}
 
-	log, err := a.memory.GetMessageLogByID(msg.GroupID, msg.Reply.MessageID)
+	log, err := a.memory.WithContext(ctx).GetMessageLogByScope(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID)
 	if err == nil {
 		if reply := replyInfoFromMessageLog(log); reply != nil {
 			msg.Reply = reply
-			a.replyCache.Set(reply.MessageID, *reply, ttlcache.DefaultTTL)
+			a.replyCache.Set(key, *reply, ttlcache.DefaultTTL)
 			return nil
 		}
 	}
 
-	reply, err := a.fetchReplyInfo(msg.Reply.MessageID)
+	reply, err := a.fetchReplyInfo(ctx, msg.Reply.MessageID)
 	if err != nil {
 		return err
 	}
 	if reply != nil {
 		msg.Reply = reply
-		a.replyCache.Set(reply.MessageID, *reply, ttlcache.DefaultTTL)
+		a.replyCache.Set(key, *reply, ttlcache.DefaultTTL)
 	}
 	return nil
 }
 
-func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
+func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.ReplyInfo, error) {
 	if a.bot == nil || messageID == 0 {
 		return nil, nil
 	}
 
-	replyCtx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+	replyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	replyData, err := a.bot.GetMsg(replyCtx, messageID)
@@ -418,67 +210,102 @@ func (a *Agent) fetchReplyInfo(messageID int64) (*onebot.ReplyInfo, error) {
 	return reply, nil
 }
 
-func (a *Agent) addBuffer(msg *onebot.GroupMessage) {
-	a.buffersMu.Lock()
-	defer a.buffersMu.Unlock()
+func (a *Agent) addBuffer(msg *onebot.ConversationMessage) {
+	a.groupBuffersMu.Lock()
+	defer a.groupBuffersMu.Unlock()
 	bufSize := config.Get().Agent.MessageBufferSize
 	if bufSize <= 0 {
 		bufSize = 30
 	}
 	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可
-	messages := append(a.buffers[msg.GroupID], msg)
+	messages := append(a.groupBuffers[msg.TargetID], msg)
 	if len(messages) > bufSize {
+		trimmed := messages[:len(messages)-bufSize]
+		if n := len(trimmed); n > 0 && trimmed[n-1] != nil {
+			a.groupTrimmedSeq[msg.TargetID] = max(a.groupTrimmedSeq[msg.TargetID], trimmed[n-1].ArrivalSeq)
+		}
 		messages = slices.Delete(messages, 0, len(messages)-bufSize)
 	}
-	a.buffers[msg.GroupID] = messages
+	a.groupBuffers[msg.TargetID] = messages
 	if msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID() {
 		// 自身消息是缓冲边界，同序号及此前群事件不再留到下一轮处理
-		a.lastReadSeq[msg.GroupID] = max(a.lastReadSeq[msg.GroupID], msg.ArrivalSeq)
+		a.groupReadSeq[msg.TargetID] = max(a.groupReadSeq[msg.TargetID], msg.ArrivalSeq)
 	}
 }
 
-func (a *Agent) getBuffer(groupID int64) []*onebot.GroupMessage {
-	a.buffersMu.RLock()
-	defer a.buffersMu.RUnlock()
-	return slices.Clone(a.buffers[groupID])
+// getConversationSnapshot 同时取得缓冲、已读与裁剪水位，避免观察期间分次取值
+func (a *Agent) getConversationSnapshot(kind string, targetID int64) ([]*onebot.ConversationMessage, uint64, uint64) {
+	if kind == memory.ConversationKindPrivate {
+		a.privateMu.Lock()
+		defer a.privateMu.Unlock()
+		return slices.Clone(a.privateBuffers[targetID]), a.privateReadSeq[targetID], a.privateTrimmedSeq[targetID]
+	}
+	a.groupBuffersMu.RLock()
+	defer a.groupBuffersMu.RUnlock()
+	return slices.Clone(a.groupBuffers[targetID]), a.groupReadSeq[targetID], a.groupTrimmedSeq[targetID]
 }
 
-func (a *Agent) getMessageSnapshot(groupID int64) ([]*onebot.GroupMessage, uint64) {
-	a.buffersMu.RLock()
-	defer a.buffersMu.RUnlock()
-	return slices.Clone(a.buffers[groupID]), a.lastReadSeq[groupID]
+func (a *Agent) getMessageSnapshot(groupID int64) ([]*onebot.ConversationMessage, uint64) {
+	buffer, readSeq, _ := a.getConversationSnapshot(memory.ConversationKindGroup, groupID)
+	return buffer, readSeq
+}
+
+func replyCacheKey(kind string, targetID, messageID int64) string {
+	if kind == "" {
+		kind = memory.ConversationKindGroup
+	}
+	return recallScopeKey(kind, targetID) + ":" + strconv.FormatInt(messageID, 10)
 }
 
 func (a *Agent) syncRecalledMessage(log *memory.MessageLog) {
 	if log == nil {
 		return
 	}
-	a.buffersMu.Lock()
-	for i, msg := range a.buffers[log.GroupID] {
+	if log.ConversationKind == memory.ConversationKindPrivate {
+		a.privateMu.Lock()
+		for i, msg := range a.privateBuffers[log.TargetID] {
+			if msg == nil || msg.MessageID != log.OneBotMessageID {
+				continue
+			}
+			replacement := messageLogToBufferedConversationMessage(*log)
+			replacement.ArrivalSeq = msg.ArrivalSeq
+			a.privateBuffers[log.TargetID][i] = replacement
+			break
+		}
+		a.privateMu.Unlock()
+		a.replyCache.Delete(replyCacheKey(log.ConversationKind, log.TargetID, log.OneBotMessageID))
+		return
+	}
+	a.groupBuffersMu.Lock()
+	for i, msg := range a.groupBuffers[log.TargetID] {
 		if msg == nil || msg.MessageID != log.OneBotMessageID {
 			continue
 		}
-		replacement := messageLogToBufferedGroupMessage(*log)
+		replacement := messageLogToBufferedConversationMessage(*log)
 		replacement.ArrivalSeq = msg.ArrivalSeq
-		a.buffers[log.GroupID][i] = replacement
+		a.groupBuffers[log.TargetID][i] = replacement
 		break
 	}
-	a.buffersMu.Unlock()
-	a.replyCache.Delete(log.OneBotMessageID)
+	a.groupBuffersMu.Unlock()
+	a.replyCache.Delete(replyCacheKey(log.ConversationKind, log.TargetID, log.OneBotMessageID))
 }
 
-func (a *Agent) updateMember(msg *onebot.GroupMessage) {
-	_, err := a.memory.GetOrCreateMemberProfile(msg.UserID, msg.Nickname, msg.Time)
+func (a *Agent) updateMember(ctx context.Context, msg *onebot.ConversationMessage) {
+	mem := a.memory.WithContext(ctx)
+	_, err := mem.GetOrCreateMemberProfile(msg.UserID, msg.Nickname, msg.Time)
 	if err != nil {
 		zap.L().Error("获取成员画像失败", zap.Error(err))
 		return
 	}
-	if err := a.memory.RecordMemberName(msg.UserID, msg.GroupID, msg.GroupCard, msg.Time); err != nil {
+	if msg.ConversationKind == memory.ConversationKindPrivate {
+		return
+	}
+	if err := mem.RecordMemberName(msg.UserID, msg.TargetID, msg.GroupCard, msg.Time); err != nil {
 		zap.L().Error("更新成员群名片失败", zap.Error(err))
 	}
 }
 
-func findReplyInfoInMessages(msgs []*onebot.GroupMessage, messageID int64) *onebot.ReplyInfo {
+func findReplyInfoInMessages(msgs []*onebot.ConversationMessage, messageID int64) *onebot.ReplyInfo {
 	for i := len(msgs) - 1; i >= 0; i-- {
 		msg := msgs[i]
 		if msg == nil || msg.MessageID != messageID {

@@ -1,10 +1,12 @@
-package memory
+package migration
 
 import (
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"mumu-bot/internal/memory"
 
 	"gorm.io/gorm"
 )
@@ -15,7 +17,7 @@ var (
 )
 
 func migrateV3(db *gorm.DB) error {
-	var rows []MessageLog
+	var rows []memory.MessageLog
 	if err := db.Where("recalled_at IS NULL").Find(&rows).Error; err != nil {
 		return fmt.Errorf("读取待整理消息失败: %w", err)
 	}
@@ -28,14 +30,14 @@ func migrateV3(db *gorm.DB) error {
 		if row.ReplyToMessageID == nil && replyID != nil {
 			updates["reply_to_message_id"] = *replyID
 		}
-		if err := db.Model(&MessageLog{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+		if err := db.Model(&memory.MessageLog{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("整理消息 %d 失败: %w", row.ID, err)
 		}
 	}
 	return nil
 }
 
-func normalizeLegacyDisplayContent(row MessageLog) (string, *int64, bool) {
+func normalizeLegacyDisplayContent(row memory.MessageLog) (string, *int64, bool) {
 	content := strings.TrimSpace(row.DisplayContent)
 	if !strings.HasPrefix(content, "[") {
 		return content, nil, false

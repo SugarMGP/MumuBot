@@ -1,13 +1,14 @@
 # AGENTS
 
-本目录负责 OneBot 11 协议接入：使用 napcat-sdk 管理 WebSocket，在内部 Adapter 中解析事件、缓存成员信息、发送群消息和调用 OneBot API。
+本目录负责 OneBot 11 协议接入：使用 napcat-sdk 管理 WebSocket，在内部 Adapter 中解析事件、缓存成员信息、发送群聊/私聊消息和调用 OneBot API。
 
 ## 入口与职责
 
 - `client.go`：SDK 连接与自动重连、事件并发分发、原始 notice 分发和消息回调。
 - `client_parse.go`：消息段解析、基础展示文本、回复 ID、图片和转发内容解析。
-- `client_api.go`：发送消息、戳一戳、群信息、群成员、公告和精华相关 API。
-- `client_types.go`：消息段、群消息和动态 API 解析结果类型。
+- `client_api.go`：发送群聊/私聊消息、戳一戳、群信息、群成员、公告和精华相关 API。
+- `client_contacts.go`：联系人（群聊/好友）同步和好友申请处理 API。
+- `client_types.go`：消息段、会话消息和动态 API 解析结果类型。
 
 ## 原文与展示边界
 
@@ -26,11 +27,11 @@
 
 ## 修改注意
 
-- 修改消息类型或解析结果字段时，检查 `internal/topic`、`internal/agent`、`internal/learning` 是否把该字段当语义输入。
-- SDK event loop 只做一次事件信封解析和分流：`meta_event`、无顺序要求的 `notice`、`request` 在 Adapter 入口同步处理，群消息、撤回和戳一戳每条事件直接并发分发，不做按群串行或并发上限。
-- 事件入口按到达顺序为每条并发分发的群事件分配群内递增序号（`ArrivalSeq`），成功的主动群消息也在返回前取得同一序列的边界序号，供上层统一重排提交；事件分配前按类型确认对应业务回调已就绪，未就绪则丢弃且不分配序号，不产生缺口。消息段解析失败时构造占位消息并记录日志，由业务层消费序号。
+- 修改消息类型或解析结果字段时，检查 `internal/topic`、`internal/agent`、`internal/learning` 是否把该字段当语义输入；群聊与私聊共用 `ConversationMessage`，用 `ConversationKind` 区分作用域。
+- SDK event loop 只做一次事件信封解析和分流：`meta_event`、无顺序要求的 `notice`、`request` 在 Adapter 入口同步处理，群聊/私聊消息、撤回和戳一戳每条事件直接并发分发，不做按会话串行或并发上限。
+- 事件入口按到达顺序为每条并发分发的事件按会话分配递增序号（`ArrivalSeq`），主动发送成功的消息也在返回前取得同一序列的边界序号，供上层统一重排提交；事件分配前按类型确认对应业务回调已就绪，未就绪则丢弃且不分配序号，不产生缺口。消息段解析失败时构造占位消息并记录日志，由业务层消费序号。
 - 事件回调内完成消息结构解析、去重、原文入库和缓冲更新；消息内容相关的解析全部在回调内同步完成，Adapter 不拆分异步阶段。事件的字段有效性判断一律下沉到业务层，Adapter 分发路径不提前返回。
-- 群事件进入 Adapter 时记录 `ReceivedAt`，供上层从 OneBot 接收时刻计算防抖；任何并发处理不得修改该时间。
+- 事件进入 Adapter 时记录 `ReceivedAt`，供上层从 OneBot 接收时刻计算防抖；任何并发处理不得修改该时间。
 - Adapter 继续负责自动重连、主动关闭、notice 原始解析、禁言状态、成员缓存和动态返回体校验，不把这些职责下沉到业务层。
 - 每次 WebSocket 建连后必须先通过 `get_login_info` 取得有效机器人 QQ；首次连接只发布 `self_id`，业务事件在闸门内等待数据库迁移、Agent 恢复和回调注册完成后再消费。运行时 `self_id` 以 Adapter 为唯一事实来源，不回退到人格配置。
 - 事件直接并发分发，不静默丢弃；关闭顺序必须先停止 SDK 事件流，等待事件入口退出，再等待所有已分发事件 goroutine 处理完成；关闭与断线重连均不清零运行时账号，账号仅在首次连接成功前处于未就绪状态。

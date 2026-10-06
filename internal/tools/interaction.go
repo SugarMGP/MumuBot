@@ -2,13 +2,17 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"mumu-bot/internal/memory"
+
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // ==================== 发言工具 ====================
@@ -23,6 +27,12 @@ type SpeakInput struct {
 	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
 }
 
+// PrivateSpeakInput 私聊发言的输入参数
+type PrivateSpeakInput struct {
+	Content string `json:"content" jsonschema:"description=说话内容"`
+	ReplyTo string `json:"reply_to,omitempty" jsonschema:"description=要回复的消息编号，例如 m3"`
+}
+
 // SpeakOutput 发言的输出
 type SpeakOutput struct {
 	Success bool   `json:"success"`
@@ -30,7 +40,7 @@ type SpeakOutput struct {
 }
 
 // speakFunc 发言的实际实现 - 会通过回调实际发送消息
-func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
+func speakContent(ctx context.Context, content, replyRef string, inputMentions []int64) (*SpeakOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
@@ -38,21 +48,22 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 	if tc.SpeakCallback == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("发言回调未初始化"))
 	}
-	if input == nil || strings.TrimSpace(input.Content) == "" {
+	content = strings.TrimSpace(content)
+	if content == "" {
 		return nil, fmt.Errorf("说话内容不能为空")
 	}
 	replyTo := int64(0)
-	if input.ReplyTo != "" {
+	if replyRef != "" {
 		var ok bool
-		replyTo, ok = tc.ResolveMessageRef(input.ReplyTo)
+		replyTo, ok = tc.ResolveMessageRef(replyRef)
 		if !ok {
 			return nil, fmt.Errorf("reply_to 不是当前对话中的消息编号")
 		}
 	}
 
-	mentions := make([]int64, 0, len(input.Mentions))
-	seenMentions := make(map[int64]struct{}, len(input.Mentions))
-	for _, userID := range input.Mentions {
+	mentions := make([]int64, 0, len(inputMentions))
+	seenMentions := make(map[int64]struct{}, len(inputMentions))
+	for _, userID := range inputMentions {
 		if userID <= 0 {
 			return nil, fmt.Errorf("包含无效的 mentions")
 		}
@@ -63,15 +74,28 @@ func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
 		mentions = append(mentions, userID)
 	}
 
-	if err := tc.SpeakCallback(ctx, tc.GroupID, strings.TrimSpace(input.Content), replyTo, mentions); err != nil {
+	if err := tc.SpeakCallback(ctx, tc.TargetID, content, replyTo, mentions); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
-	tc.MarkActed()
 
 	return &SpeakOutput{
 		Success: true,
 		Message: "发言成功",
 	}, nil
+}
+
+func speakFunc(ctx context.Context, input *SpeakInput) (*SpeakOutput, error) {
+	if input == nil {
+		return nil, fmt.Errorf("说话参数不能为空")
+	}
+	return speakContent(ctx, input.Content, input.ReplyTo, input.Mentions)
+}
+
+func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutput, error) {
+	if input == nil {
+		return nil, fmt.Errorf("说话参数不能为空")
+	}
+	return speakContent(ctx, input.Content, input.ReplyTo, nil)
 }
 
 // NewSpeakTool 创建发言工具
@@ -86,6 +110,15 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 - 要回复某条消息时填写reply_to参数，只有当发言内容与该消息强相关时才用；不要回复自己的消息
 - 要at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号`,
 		speakFunc,
+	)
+}
+
+// NewPrivateSpeakTool 创建私聊发言工具
+func NewPrivateSpeakTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"speak",
+		`在私聊里说话。每次只能发送一条消息；需要回复某条消息时填写 reply_to，不需要填写 mentions。`,
+		privateSpeakFunc,
 	)
 }
 
@@ -128,6 +161,9 @@ type PokeInput struct {
 	UserID int64 `json:"user_id" jsonschema:"description=要戳的群成员QQ号"`
 }
 
+// PrivatePokeInput 私聊戳一戳的输入参数
+type PrivatePokeInput struct{}
+
 // PokeOutput 戳一戳的输出
 type PokeOutput struct {
 	Success bool   `json:"success"`
@@ -146,12 +182,29 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 	if input == nil || input.UserID == 0 {
 		return nil, fmt.Errorf("用户 ID 不能为空")
 	}
-
-	if err := tc.Bot.GroupPoke(ctx, tc.GroupID, input.UserID); err != nil {
+	if err := tc.Bot.GroupPoke(ctx, tc.TargetID, input.UserID); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
-	tc.MarkActed()
+	tc.MarkActionSucceeded()
 
+	return &PokeOutput{Success: true, Message: "已戳一戳"}, nil
+}
+
+func privatePokeFunc(ctx context.Context, _ *PrivatePokeInput) (*PokeOutput, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
+	}
+	if tc.ConversationKind != memory.ConversationKindPrivate {
+		return nil, fmt.Errorf("该工具只能在私聊中使用")
+	}
+	if tc.Bot == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
+	}
+	if err := tc.Bot.FriendPoke(ctx, tc.TargetID); err != nil {
+		return nil, NewTerminalToolError(err)
+	}
+	tc.MarkActionSucceeded()
 	return &PokeOutput{Success: true, Message: "已戳一戳"}, nil
 }
 
@@ -159,8 +212,17 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 func NewPokeTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"poke",
-		"戳一戳某个群友。可以用来打招呼、吸引注意力、或者逗逗人玩。不要频繁使用。",
+		"戳一戳当前群里的群友。可以用来打招呼、吸引注意力或逗逗对方，不要频繁使用。",
 		pokeFunc,
+	)
+}
+
+// NewPrivatePokeTool 创建私聊戳一戳工具
+func NewPrivatePokeTool() (tool.InvokableTool, error) {
+	return utils.InferTool(
+		"poke",
+		"戳一戳当前私聊好友。可以用来打招呼、吸引注意力或逗逗对方，不需要填写 QQ 号。不要频繁使用。",
+		privatePokeFunc,
 	)
 }
 
@@ -221,7 +283,7 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	if err := tc.Bot.SetMsgEmojiLike(ctx, messageID, emojiID); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
-	tc.MarkActed()
+	tc.MarkActionSucceeded()
 
 	return &ReactToMessageOutput{Success: true, Message: "已回应表情"}, nil
 }
@@ -269,15 +331,15 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return nil, NewTerminalToolError(fmt.Errorf("记忆管理器未初始化"))
 	}
 
-	log, err := tc.MemoryMgr.GetMessageLogByID(tc.GroupID, messageID)
+	log, err := tc.MemoryMgr.WithContext(ctx).GetMessageLogByScope(tc.ConversationKind, tc.TargetID, messageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("未找到该消息记录，无法确认是否还能撤回")
+		}
 		return nil, err
 	}
-	if log == nil {
-		return nil, fmt.Errorf("未找到该消息记录，无法确认是否还能撤回")
-	}
-	if log.GroupID != tc.GroupID {
-		return nil, fmt.Errorf("该消息不属于当前群")
+	if log == nil || log.TargetID != tc.TargetID || (tc.ConversationKind != "" && log.ConversationKind != tc.ConversationKind) {
+		return nil, fmt.Errorf("该消息不属于当前会话")
 	}
 	if selfID := tc.Bot.GetSelfID(); selfID > 0 && log.UserID != 0 && log.UserID != selfID {
 		return nil, fmt.Errorf("只能撤回你自己发的消息")
@@ -292,10 +354,12 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if err := tc.Bot.DeleteMsg(ctx, messageID); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
-	tc.MarkActed()
-	recalled, changed, syncErr := tc.MemoryMgr.MarkMessageRecalled(log.GroupID, messageID)
+	tc.MarkActionSucceeded()
+	storeCtx, storeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer storeCancel()
+	recalled, changed, syncErr := tc.MemoryMgr.WithContext(storeCtx).MarkMessageRecalledScope(tc.ConversationKind, log.TargetID, messageID)
 	if syncErr != nil {
-		zap.L().Error("主动撤回成功但同步本地状态失败", zap.Int64("group_id", log.GroupID), zap.Int64("message_id", messageID), zap.Error(syncErr))
+		zap.L().Error("主动撤回成功但同步本地状态失败", zap.String("conversation_kind", tc.ConversationKind), zap.Int64("target_id", log.TargetID), zap.Int64("message_id", messageID), zap.Error(syncErr))
 		return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
 	}
 	if changed && tc.MessageRecalledCallback != nil {

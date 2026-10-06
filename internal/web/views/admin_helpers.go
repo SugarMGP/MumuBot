@@ -82,8 +82,6 @@ func memoryKindText(kind string) string {
 	switch kind {
 	case "fact":
 		return "事实"
-	case "episode":
-		return "经历"
 	case "preference":
 		return "偏好"
 	case "constraint":
@@ -142,27 +140,44 @@ func memberPrimaryName(profile services.MemberProfileView) string {
 	return fmt.Sprintf("QQ %d", profile.UserID)
 }
 
-func memberGroupCards(profile services.MemberProfileView, limit int) []string {
-	if len(profile.Names) == 0 {
-		return nil
-	}
-	items := make([]string, 0, len(profile.Names))
+// memberNameEntry 是可展示的称呼条目：显示文本带上所属群，避免同一称呼重复
+type memberNameEntry struct {
+	GroupID int64
+	Value   string
+	Label   string
+}
+
+// memberNameEntries 按群去重后的称呼列表，保持原始顺序
+func memberNameEntries(profile services.MemberProfileView) []memberNameEntry {
+	entries := make([]memberNameEntry, 0, len(profile.Names))
 	seen := map[int64]bool{}
 	for _, record := range profile.Names {
-		if seen[record.GroupID] || strings.TrimSpace(record.Value) == "" {
+		value := strings.TrimSpace(record.Value)
+		if seen[record.GroupID] || value == "" {
 			continue
 		}
 		seen[record.GroupID] = true
-		label := record.Value
+		label := value
 		if record.GroupID > 0 {
-			label = fmt.Sprintf("%s · 群 %d", label, record.GroupID)
+			label = fmt.Sprintf("%s · 群 %d", value, record.GroupID)
 		}
-		items = append(items, label)
+		entries = append(entries, memberNameEntry{GroupID: record.GroupID, Value: value, Label: label})
 	}
-	if limit > 0 && len(items) > limit {
-		return items[:limit]
+	return entries
+}
+
+func memberNameEntriesLimited(entries []memberNameEntry, limit int) []memberNameEntry {
+	if limit > 0 && len(entries) > limit {
+		return entries[:limit]
 	}
-	return items
+	return entries
+}
+
+func memberNameEntriesRemaining(entries []memberNameEntry, shown int) []memberNameEntry {
+	if shown >= len(entries) {
+		return nil
+	}
+	return entries[shown:]
 }
 
 func stickerDeleteDialogHref(id uint) string {
@@ -187,34 +202,12 @@ func stickerPreviewDialogHref(id uint) string {
 	return "/admin/dialogs/stickers/" + strconv.FormatUint(uint64(id), 10)
 }
 
-func modalActionClass(action RowAction) string {
-	switch action.Kind {
-	case "danger":
-		return "btn btn-error"
-	case "ghost":
-		return "btn btn-ghost border-base-300"
-	default:
-		return "btn btn-primary"
-	}
-}
-
 func sortToolbarLinkClass(active bool) string {
 	base := "btn btn-sm"
 	if active {
 		return joinClasses(base, "btn-primary")
 	}
 	return joinClasses(base, "btn-ghost border-base-300")
-}
-
-func dialogChipClass(kind string) string {
-	switch strings.TrimSpace(kind) {
-	case "cyan":
-		return "badge badge-info badge-soft badge-sm"
-	case "teal":
-		return "badge badge-success badge-soft badge-sm"
-	default:
-		return "badge badge-ghost badge-sm"
-	}
 }
 
 func ternaryString(condition bool, whenTrue string, whenFalse string) string {
@@ -286,13 +279,12 @@ func modelStatsJSON(snapshot modelstats.Snapshot) string {
 }
 
 func StickerDeleteDialogData(item memory.Sticker, returnTo string) AdminActionDialogContentData {
-	action := RowAction{Kind: "danger", BusyLabel: "删除中"}
 	return AdminActionDialogContentData{
 		Title:       "删除表情包",
 		Body:        "删除后会一并移除这张图片，请确认它已经不再需要。",
 		SubmitLabel: "确认删除",
-		SubmitClass: modalActionClass(action),
-		BusyLabel:   action.BusyLabel,
+		SubmitClass: "btn btn-error",
+		BusyLabel:   "删除中",
 		Fields: []AdminActionField{
 			{Label: "待删除内容", Value: stickerDescriptionText(item.Description)},
 		},

@@ -54,6 +54,9 @@ jobs:
     - name: Install frontend dependencies
       run: bun install --frozen-lockfile
 
+    - name: Generate admin icons
+      run: bun run gen:icons
+
     - name: Build frontend assets
       run: bun run build
 
@@ -72,7 +75,8 @@ jobs:
       run: |
         mkdir -p dist/config
         cp config/config.example.yaml dist/config/config.yaml
-        cp config/persona.prompt dist/config/persona.prompt
+        cp config/persona_group.prompt dist/config/persona_group.prompt
+        cp config/persona_private.prompt dist/config/persona_private.prompt
         cp config/mcp.example.json dist/config/mcp.json
         cp README.md dist/
         cp LICENSE dist/

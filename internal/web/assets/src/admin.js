@@ -1,16 +1,21 @@
 import htmx from "htmx.org";
 import Toastify from "toastify-js";
+import { adminIconSvg } from "./icons.generated.js";
 import * as echarts from "echarts/core";
-import { PieChart, BarChart, LineChart, GraphChart } from "echarts/charts";
+import { PieChart, BarChart, LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TitleComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([PieChart, BarChart, LineChart, GraphChart, GridComponent, LegendComponent, TitleComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TitleComponent, TooltipComponent, CanvasRenderer]);
 
 window.htmx = htmx;
 
 const DEFAULT_TOAST_DELAY = 4200;
 const adminLogPosition = { node: null, top: 0, atBottom: true, initialized: false, anchorKey: "", anchorOffset: 0 };
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 function markFormSubmitting(form, activeButton) {
   if (!(form instanceof HTMLFormElement)) return;
@@ -92,10 +97,9 @@ function toastKind(kind) {
 }
 
 function toastIcon(kind) {
-  const common = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
-  if (kind === "error") return `<svg class="size-4" ${common}><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>`;
-  if (kind === "warn") return `<svg class="size-4" ${common}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
-  return `<svg class="size-4" ${common}><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`;
+  if (kind === "error") return adminIconSvg["flash-error"];
+  if (kind === "warn") return adminIconSvg["flash-warn"];
+  return adminIconSvg["flash-success"];
 }
 
 function showAdminToast(detail) {
@@ -107,9 +111,11 @@ function showAdminToast(detail) {
   node.dataset.kind = kind;
   node.setAttribute("role", kind === "success" ? "status" : "alert");
   node.setAttribute("aria-live", kind === "success" ? "polite" : "assertive");
-  node.innerHTML = `<div class="admin-toast__icon">${toastIcon(kind)}</div><div class="admin-toast__content"><div data-toast-title class="font-semibold"></div><div data-toast-body class="mt-0.5 text-sm text-base-content/65"></div></div><button type="button" class="admin-toast__close" aria-label="关闭提示"><svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>`;
-  node.querySelector("[data-toast-title]").textContent = normalized.title;
+  node.innerHTML = `<div class="admin-toast__icon">${toastIcon(kind)}</div><div class="admin-toast__content"><div data-toast-title class="font-semibold"></div><div data-toast-body class="mt-0.5 text-sm text-base-content/60"></div></div><button type="button" class="admin-toast__close" aria-label="关闭提示">${adminIconSvg.x}</button>`;
+  const title = node.querySelector("[data-toast-title]");
   const body = node.querySelector("[data-toast-body]");
+  if (!title || !body) return;
+  title.textContent = normalized.title;
   body.textContent = normalized.body;
   body.hidden = !normalized.body;
   const toast = Toastify({
@@ -152,6 +158,104 @@ function togglePassword(button) {
   if (label) label.textContent = visible ? "隐藏" : "显示";
 }
 
+const HOVER_POPOVER_DELAY = 420;
+
+function bindHoverPopovers() {
+  document.querySelectorAll("[data-admin-hover-popover]").forEach((node) => {
+    if (!(node instanceof HTMLElement) || node.dataset.hoverBound === "true") return;
+    node.dataset.hoverBound = "true";
+    let timer = 0;
+    const open = (byHover) => {
+      if (node instanceof HTMLDetailsElement) {
+        node.dataset.hoverOpened = byHover ? "true" : "false";
+        node.open = true;
+      } else {
+        node.classList.add("is-open");
+      }
+    };
+    const close = () => {
+      delete node.dataset.hoverOpened;
+      if (node instanceof HTMLDetailsElement) node.open = false;
+      else node.classList.remove("is-open");
+    };
+    node.addEventListener("pointerenter", () => {
+      window.clearTimeout(timer);
+      if (node instanceof HTMLDetailsElement && node.open) return;
+      timer = window.setTimeout(() => open(true), HOVER_POPOVER_DELAY);
+    });
+    node.addEventListener("pointerleave", () => {
+      window.clearTimeout(timer);
+      if (node.dataset.hoverOpened === "true") close();
+    });
+    node.addEventListener("click", (event) => {
+      if (node instanceof HTMLDetailsElement && node.dataset.hoverOpened === "true" && node.open) {
+        // 悬停展开后点击表示固定展开：取消默认收起，转为常驻
+        event.preventDefault();
+        delete node.dataset.hoverOpened;
+        return;
+      }
+      delete node.dataset.hoverOpened;
+    });
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") close();
+    });
+  });
+}
+
+function bindPromptEditors() {
+  document.querySelectorAll("[data-prompt-editor]").forEach((node) => {
+    if (!(node instanceof HTMLElement) || node.dataset.promptBound === "true") return;
+    const button = node.querySelector("[data-prompt-edit]");
+    const form = node.querySelector("[data-prompt-form]");
+    const input = node.querySelector("[data-prompt-input]");
+    if (!(button instanceof HTMLElement) || !(form instanceof HTMLFormElement) || !(input instanceof HTMLInputElement)) return;
+    node.dataset.promptBound = "true";
+    let original = input.value;
+    let submitted = original;
+    let submitting = false;
+    const openEditor = () => {
+      button.hidden = true;
+      form.hidden = false;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    };
+    const closeEditor = () => {
+      form.hidden = true;
+      button.hidden = false;
+    };
+    const autoSave = () => {
+      if (submitting || form.hidden) return;
+      if (input.value === original) {
+        closeEditor();
+        return;
+      }
+      submitting = true;
+      form.requestSubmit();
+    };
+    form.addEventListener("htmx:beforeRequest", () => {
+      submitted = input.value;
+      submitting = true;
+    });
+    form.addEventListener("htmx:afterRequest", (event) => {
+      if (event.detail?.successful) original = submitted;
+      submitting = false;
+    });
+    button.addEventListener("click", openEditor);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        autoSave();
+        return;
+      }
+      if (event.key === "Escape") {
+        input.value = original;
+        closeEditor();
+      }
+    });
+    input.addEventListener("blur", autoSave);
+  });
+}
+
 function bootAdminPage() {
   const detail = readInitialToast();
   if (detail) showAdminToast(detail);
@@ -160,7 +264,9 @@ function bootAdminPage() {
   followAdminLogs();
   syncLogDownloadURL();
   renderModelStats();
-  renderKnowledgeGraph();
+  syncStickerPageSize();
+  bindHoverPopovers();
+  bindPromptEditors();
 }
 
 function followAdminLogs() {
@@ -176,7 +282,7 @@ function followAdminLogs() {
   }
   const shouldFollow = !adminLogPosition.initialized || adminLogPosition.atBottom;
   if (!adminLogPosition.initialized) logs.scrollTop = logs.scrollHeight;
-  else if (shouldFollow) logs.scrollTo({ top: logs.scrollHeight, behavior: "smooth" });
+  else if (shouldFollow) logs.scrollTo({ top: logs.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   else {
     const anchor = Array.from(logs.querySelectorAll("[data-admin-log-line]")).find((line) => line.dataset.logKey === adminLogPosition.anchorKey);
     logs.scrollTop = anchor instanceof HTMLElement ? Math.max(0, anchor.offsetTop - adminLogPosition.anchorOffset) : Math.min(adminLogPosition.top, logs.scrollHeight);
@@ -230,6 +336,23 @@ function prepareAdminLogSwap(event) {
   captureAdminLogPosition();
 }
 
+// 表情包列表按实际列数保持整三行，窗口宽度变化时重新计算每页数量
+let stickerPageSizeTimer = 0;
+function syncStickerPageSize() {
+  const grid = document.querySelector("[data-sticker-grid]");
+  if (!(grid instanceof HTMLElement)) return;
+  const pageSize = Number(grid.dataset.pageSize);
+  const columns = (getComputedStyle(grid).gridTemplateColumns || "").split(" ").filter(Boolean).length;
+  if (!pageSize || !columns) return;
+  const target = Math.min(100, columns * 3);
+  if (target === pageSize) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("page_size", String(target));
+  url.searchParams.set("page", "1");
+  htmx.ajax("GET", url.pathname + url.search, { target: "#admin-page-body", swap: "outerHTML" });
+  window.history.replaceState({}, "", url.pathname + url.search);
+}
+
 function renderModelStats() {
   const root = document.querySelector("[data-model-stats]");
   if (!(root instanceof HTMLElement)) return;
@@ -245,10 +368,10 @@ function renderModelStats() {
     chart.setOption({
       tooltip: { trigger: "axis" }, legend: { top: 4, data: ["请求", "Token", "平均耗时"] },
       grid: { left: 48, right: 48, top: 52, bottom: 44 }, xAxis: { type: "category", data: labels },
-      yAxis: [{ type: "value" }, { type: "value" }],
+      yAxis: [{ type: "value" }, { type: "value" }, { type: "value", show: false }],
       series: [
-        { name: "请求", type: "line", smooth: true, data: series.map((item) => item.request_count), itemStyle: { color: "#e85d75" } },
-        { name: "Token", type: "bar", data: series.map((item) => item.total_tokens), itemStyle: { color: "#159a8c" } },
+        { name: "请求", type: "line", yAxisIndex: 0, smooth: true, data: series.map((item) => item.request_count), itemStyle: { color: "#e85d75" } },
+        { name: "Token", type: "bar", yAxisIndex: 2, data: series.map((item) => item.total_tokens), itemStyle: { color: "#159a8c", opacity: 0.45 } },
         { name: "平均耗时", type: "line", yAxisIndex: 1, smooth: true, data: series.map((item) => item.request_count ? Math.round(item.latency_ms_sum / item.request_count) : 0), itemStyle: { color: "#6f65a8" } },
       ],
     });
@@ -261,108 +384,16 @@ function renderDistributionChart(id, title, rows) {
   const target = document.getElementById(id);
   if (!(target instanceof HTMLElement)) return;
   chartFor(target).setOption({
+    color: ["#e85d75", "#159a8c", "#8b7bc7", "#d59a22", "#5b87d8", "#62c8bb"],
     tooltip: { trigger: "item" }, title: { text: title, left: "center", textStyle: { fontSize: 13 } },
-    series: [{ type: "pie", radius: ["42%", "70%"], center: ["50%", "56%"], label: { show: false }, data: (Array.isArray(rows) ? rows : []).map((row) => ({ name: row.label, value: row.request_count })) }],
+    legend: { bottom: 0, itemWidth: 10, itemHeight: 10, itemGap: 12, textStyle: { fontSize: 11, color: "#666673" } },
+    series: [{ type: "pie", radius: ["40%", "64%"], center: ["50%", "48%"], label: { show: false }, data: (Array.isArray(rows) ? rows : []).map((row) => ({ name: row.label, value: row.request_count })) }],
   });
 }
 
 function chartFor(target) {
-  const existing = echarts.getInstanceByDom(target);
-  if (existing) existing.dispose();
-  return echarts.init(target);
+  return echarts.getInstanceByDom(target) || echarts.init(target);
 }
-
-function renderKnowledgeGraph() {
-  document.querySelectorAll("[data-knowledge-graph]").forEach((target) => {
-    if (echarts.getInstanceByDom(target)) return;
-    const data = JSON.parse(target.dataset.knowledgeGraph);
-    const dense = data.nodes.length > 30;
-    const chart = chartFor(target);
-    chart.setOption({ animation: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-      tooltip: { renderMode: "richText", formatter: (entry) => entry.dataType === "node" ? `${entry.data.name}\n${entry.data.status ?? ""}` : `${entry.data.name ?? "关联"}\n${entry.data.status ?? entry.data.value ?? ""}` },
-      series: [{ type: "graph", left: 65, right: 65, top: 50, bottom: 60, layout: dense ? "circular" : "force", force: { repulsion: 520, edgeLength: [110, 190], gravity: 0.05, layoutAnimation: false }, draggable: true, roam: true, symbolSize: dense ? 12 : undefined,
-        emphasis: { focus: "adjacency", scale: 1.18, label: { show: true, fontWeight: 600 } }, data: data.nodes, links: data.edges,
-        label: { show: data.nodes.length <= 8, position: "bottom", width: 132, overflow: "truncate", color: "#49394d", fontSize: 12, fontWeight: 500, backgroundColor: "rgba(255,255,255,.86)", borderColor: "rgba(224,214,225,.9)", borderWidth: 1, borderRadius: 8, padding: [4, 7] },
-        edgeSymbol: ["none", "none"], edgeSymbolSize: 8,
-        itemStyle: { shadowBlur: 0 }, lineStyle: { color: "#159a8c", width: 2.5, curveness: 0.14, opacity: 0.8 },
-        edgeLabel: { show: false, formatter: (edge) => edge.data.name ?? "", color: "#7a6578", fontSize: 11, backgroundColor: "rgba(255,255,255,.78)", padding: [3, 6], borderRadius: 8 } }],
-    });
-    syncGraphSelection();
-    chart.on("click", (entry) => {
-      if (!entry.data.url) return;
-      const url = new URL(entry.data.url, window.location.origin);
-      url.searchParams.set("return_to", target.dataset.graphReturn || window.location.pathname + window.location.search);
-      htmx.ajax("GET", url.pathname + url.search, { target: target.dataset.graphPanel, swap: "innerHTML" });
-    });
-  });
-}
-
-function syncGraphSelection() {
-  const panel = document.querySelector("#knowledge-graph-panel [data-selected-kind]");
-  const target = document.querySelector("[data-graph-panel]");
-  if (!panel || !target) return;
-  const chart = echarts.getInstanceByDom(target);
-  if (!chart) return;
-  const data = JSON.parse(target.dataset.knowledgeGraph);
-  const kind = panel.dataset.selectedKind;
-  const related = panel.dataset.selectedRelated;
-  const nodeID = kind === "knowledge" ? "k:" + panel.dataset.selectedId : kind === "topic" ? "t:" + panel.dataset.selectedId : "";
-  const selectedEdge = kind === "relation" || related !== "0" ? data.edges.find(edge => {
-    const query = new URL(edge.url, window.location.origin).searchParams;
-    return query.get("kind") === kind && query.get("id") === panel.dataset.selectedId && (related === "0" || query.get("related") === related);
-  }) : null;
-  const visible = new Set(selectedEdge ? [selectedEdge.source, selectedEdge.target] : [nodeID]);
-  for (const edge of data.edges) {
-    if (edge.source === nodeID) visible.add(edge.target);
-    if (edge.target === nodeID) visible.add(edge.source);
-  }
-  chart.setOption({ series: [{ links: data.edges.map(edge => ({ ...edge, lineStyle: { ...edge.lineStyle, width: edge === selectedEdge ? 4 : 2 } })), data: data.nodes.map(node => ({
-    ...node, label: { show: visible.has(node.id) },
-    itemStyle: { ...node.itemStyle, borderColor: node.id === nodeID ? "#e85d75" : node.itemStyle?.color, borderWidth: node.id === nodeID ? 4 : 2 }
-  })) }] });
-}
-
-function syncGraphSelectionURL() {
-  const panel = document.querySelector("#knowledge-graph-panel [data-selected-kind]");
-  const target = document.querySelector("[data-graph-panel]");
-  if (!panel || !target || !panel.dataset.selectedKind || panel.dataset.selectedId === "0") return;
-  const url = new URL(window.location.href);
-  url.searchParams.set("view", "graph");
-  url.searchParams.set("selected_kind", panel.dataset.selectedKind);
-  url.searchParams.set("selected_id", panel.dataset.selectedId);
-  if (panel.dataset.selectedRelated === "0") url.searchParams.delete("selected_related");
-  else url.searchParams.set("selected_related", panel.dataset.selectedRelated);
-  window.history.replaceState({}, "", url);
-  target.dataset.graphReturn = url.pathname + url.search;
-}
-
-document.addEventListener("htmx:afterSwap", (event) => {
-  if (event.detail.target?.id === "knowledge-graph-panel") {
-    syncGraphSelection();
-    syncGraphSelectionURL();
-  }
-});
-
-document.addEventListener("click", (event) => {
-  const control = event.target instanceof Element ? event.target.closest("[data-graph-command]") : null;
-  if (!(control instanceof HTMLElement)) return;
-  const host = control.closest(".admin-graph-surface");
-  const chartNode = host?.querySelector("[data-knowledge-graph]");
-  const chart = chartNode ? echarts.getInstanceByDom(chartNode) : null;
-  if (!chart || !(chartNode instanceof HTMLElement)) return;
-  const current = Number(chartNode.dataset.graphZoom || 1);
-  const command = control.dataset.graphCommand;
-  const zoom = command === "zoom-in" ? Math.min(2, current + 0.2) : command === "zoom-out" ? Math.max(0.6, current - 0.2) : 1;
-  chartNode.dataset.graphZoom = String(zoom);
-  chart.setOption({ series: [{ zoom, center: ["50%", "50%"] }] });
-});
-
-document.addEventListener("htmx:beforeCleanupElement", (event) => {
-  const element = event.detail.elt;
-  if (element?.matches?.("[data-knowledge-graph]")) echarts.getInstanceByDom(element)?.dispose();
-});
-document.addEventListener("htmx:afterSwap", renderKnowledgeGraph);
-window.addEventListener("resize", () => document.querySelectorAll("[data-knowledge-graph]").forEach((node) => echarts.getInstanceByDom(node)?.resize()));
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootAdminPage, { once: true });
 else queueMicrotask(bootAdminPage);
@@ -400,11 +431,53 @@ document.addEventListener("submit", (event) => {
   markFormSubmitting(form, event.submitter instanceof HTMLButtonElement ? event.submitter : null);
 }, true);
 
-document.addEventListener("htmx:afterRequest", (event) => resetFormSubmitting(formFromEvent(event)));
-document.addEventListener("htmx:responseError", (event) => resetFormSubmitting(formFromEvent(event)));
-document.addEventListener("htmx:sendError", (event) => resetFormSubmitting(formFromEvent(event)));
+document.addEventListener("htmx:beforeRequest", (event) => markNavigationPending(event.detail?.elt));
+
+function markNavigationPending(elt) {
+  const control = elt instanceof Element ? elt : null;
+  if (!(control instanceof HTMLElement) || control.closest("form")) return;
+  control.style.cursor = "wait";
+  control.setAttribute("aria-busy", "true");
+}
+
+function clearNavigationPending(elt) {
+  const control = elt instanceof Element ? elt : null;
+  if (!(control instanceof HTMLElement)) return;
+  control.style.removeProperty("cursor");
+  control.removeAttribute("aria-busy");
+}
+
+document.addEventListener("htmx:afterRequest", (event) => {
+  resetFormSubmitting(formFromEvent(event));
+  clearNavigationPending(event.detail?.elt);
+});
+document.addEventListener("htmx:responseError", (event) => {
+  resetFormSubmitting(formFromEvent(event));
+  clearNavigationPending(event.detail?.elt);
+  // 服务端已通过 HX-Trigger 给出具体失败提示时，不再叠加通用错误提示
+  const hasServerToast = /\bHX-Trigger(-After-Swap|-After-Settle)?:/i.test(event.detail?.xhr?.getAllResponseHeaders?.() || "");
+  if (!hasServerToast && event.detail?.xhr?.status) {
+    showAdminToast({ kind: "error", title: "操作失败", body: `请求未完成（HTTP ${event.detail.xhr.status}），请稍后重试。` });
+  }
+});
+document.addEventListener("htmx:sendError", (event) => {
+  resetFormSubmitting(formFromEvent(event));
+  clearNavigationPending(event.detail?.elt);
+  showAdminToast({ kind: "error", title: "连接失败", body: "网络请求未送达，请检查连接后重试。" });
+});
 document.addEventListener("htmx:beforeSwap", prepareAdminLogSwap);
-document.addEventListener("htmx:afterSwap", () => { syncAdminLogFormat(); followAdminLogs(); syncLogDownloadURL(); renderModelStats(); });
+document.addEventListener("htmx:beforeCleanupElement", (event) => {
+  if (event.detail?.elt instanceof HTMLElement) echarts.getInstanceByDom(event.detail.elt)?.dispose();
+});
+document.addEventListener("htmx:afterSwap", () => { syncAdminLogFormat(); followAdminLogs(); syncLogDownloadURL(); renderModelStats(); syncStickerPageSize(); bindHoverPopovers(); bindPromptEditors(); });
+window.addEventListener("resize", () => {
+  ["model-stats-trend", "model-stats-task", "model-stats-model"].forEach((id) => {
+    const target = document.getElementById(id);
+    if (target) echarts.getInstanceByDom(target)?.resize();
+  });
+  window.clearTimeout(stickerPageSizeTimer);
+  stickerPageSizeTimer = window.setTimeout(syncStickerPageSize, 250);
+});
 document.addEventListener("input", syncLogDownloadURL);
 document.addEventListener("change", (event) => {
   syncLogDownloadURL();

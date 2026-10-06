@@ -31,11 +31,11 @@ templ PageContent(content templ.Component) {
 }
 
 templ LayoutWithOverlay(data LayoutData, content templ.Component, overlay templ.Component) {
-	<!doctype html>
+	<!DOCTYPE html>
 	<html lang="zh-CN" data-theme="mumubot">
 		@AdminHead(data.Title, data.Flash)
 		<body class="font-sans antialiased selection:bg-primary/20">
-			<a class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-base-100 focus:px-4 focus:py-2 focus:shadow-lg" href="#admin-main">跳到主要内容</a>
+			<a class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-xl focus:bg-base-100 focus:px-4 focus:py-2 focus:shadow-lg" href="#admin-main">跳到主要内容</a>
 			<div class="admin-shell">
 				<aside class="admin-sidebar">
 					@SidebarPanel(data)
@@ -84,7 +84,7 @@ templ SidebarPanel(data LayoutData) {
 			</ul>
 		</nav>
 		<form class="mt-3 border-t border-base-300 pt-3" method="post" action="/logout">
-			<button class="btn btn-ghost w-full justify-start text-base-content/65" type="submit" data-loading-label="退出中">
+			<button class="btn btn-ghost w-full justify-start text-base-content/75" type="submit" data-loading-label="退出中">
 				@AdminIcon("log-out", "size-[18px]", "nav-logout")
 				<span>退出登录</span>
 			</button>
@@ -95,13 +95,13 @@ templ SidebarPanel(data LayoutData) {
 templ PageHeader(title string, subtitle string, tag string) {
 	<div>
 		<div class="flex items-center gap-3">
-			<h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight text-base-content">{ title }</h1>
+			<h1 class="admin-page-title text-base-content">{ title }</h1>
 			if tag != "" {
-				<span class="badge badge-primary badge-soft">{ tag }</span>
+				<span class="badge badge-primary badge-soft badge-sm">{ tag }</span>
 			}
 		</div>
 		if subtitle != "" {
-			<p class="mt-1.5 max-w-3xl text-sm leading-6 text-base-content/58">{ subtitle }</p>
+			<p class="mt-1.5 max-w-3xl text-sm leading-6 text-base-content/60">{ subtitle }</p>
 		}
 	</div>
 }
@@ -109,7 +109,7 @@ templ PageHeader(title string, subtitle string, tag string) {
 templ SortToolbar(data SortToolbarData) {
 	if len(data.Options) > 0 || len(data.OrderOptions) > 0 {
 		<div class="flex items-center justify-between gap-4">
-			<div class="text-sm text-base-content/55">{ data.Summary }</div>
+			<div class="text-sm text-base-content/60">{ data.Summary }</div>
 			<div class="flex items-center gap-2">
 				if len(data.Options) > 0 {
 					<div class="join">
@@ -133,27 +133,33 @@ templ SortToolbar(data SortToolbarData) {
 }
 
 templ ListFooter(meta ListMeta) {
-	<div class="mt-6 flex items-center justify-between border-t border-base-300 pt-4 text-sm text-base-content/55">
+	<div class="mt-6 flex items-center justify-between border-t border-base-300 pt-4 text-sm text-base-content/60">
 		<div>{ metaSummary(meta) }</div>
 		<div class="join">
 			if meta.PrevURL != "" {
-				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="上一页">@AdminIcon("chevron-left", "size-4", "page-prev")</a>
+				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.PrevURL } hx-get={ meta.PrevURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="上一页">
+					@AdminIcon("chevron-left", "size-4", "page-prev")
+				</a>
 			}
 			<span class="btn btn-primary btn-sm join-item pointer-events-none" aria-current="page">{ fmt.Sprintf("%d", meta.Page) }</span>
 			if meta.NextURL != "" {
-				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页">@AdminIcon("chevron-right", "size-4", "page-next")</a>
+				<a class="btn btn-ghost btn-sm btn-square join-item border-base-300" href={ meta.NextURL } hx-get={ meta.NextURL } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true" aria-label="下一页">
+					@AdminIcon("chevron-right", "size-4", "page-next")
+				</a>
 			}
 		</div>
 	</div>
 }
 
 templ FilterPanel(id string, title string, controls templ.Component, hasControls bool, content templ.Component) {
-	<section id={ id } class="card border border-base-300 bg-base-100 shadow-sm">
+	<section id={ id } class="card">
 		<div class="card-body gap-3 p-4">
 			<div class="flex items-center justify-between gap-6">
-				<h2 class="text-sm font-semibold text-base-content">{ title }</h2>
+				<h2 class="text-lg font-semibold text-base-content">{ title }</h2>
 				if hasControls {
-					<div class="shrink-0">@controls</div>
+					<div class="shrink-0">
+						@controls
+					</div>
 				}
 			</div>
 			@content
@@ -162,13 +168,8 @@ templ FilterPanel(id string, title string, controls templ.Component, hasControls
 }
 
 templ DialogLoadingPlaceholder(title string, summary string) {
-	<div class="space-y-5">
-		<div class="flex items-start justify-between gap-4">
-			<div><h3 id="admin-action-dialog-title" class="text-xl font-semibold">{ title }</h3><p class="mt-2 text-sm text-base-content/60">{ summary }</p></div>
-			<button type="button" class="btn btn-ghost btn-circle btn-sm" data-admin-dialog-close="#admin-action-dialog" aria-label="关闭弹层">
-				@AdminIcon("x", "size-4", "dialog-x")
-			</button>
-		</div>
+	<div class="space-y-6">
+		@DialogHeader(title, summary, "admin-action-dialog-title", "#admin-action-dialog")
 		<div class="space-y-3"><div class="skeleton h-24 w-full"></div><div class="grid grid-cols-2 gap-3"><div class="skeleton h-20"></div><div class="skeleton h-20"></div></div></div>
 	</div>
 }

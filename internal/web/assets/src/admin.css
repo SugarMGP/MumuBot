@@ -14,7 +14,7 @@
   color-scheme: "light";
   --color-base-100: #ffffff;
   --color-base-200: #f7f8fb;
-  --color-base-300: #e4e7ee;
+  --color-base-300: #dce1ea;
   --color-base-content: #20212d;
   --color-primary: #e85d75;
   --color-primary-content: #ffffff;
@@ -43,24 +43,52 @@
 }
 
 @source "../../views";
+@source "./admin.js";
 
 @theme {
   --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
+
+  /* 流式排版与间距：1024px 横屏取紧凑值，1600px 起回到设计值 */
+  --spacing: clamp(0.229rem, 0.185rem + 0.07vw, 0.25rem);
+  --text-xs: clamp(0.6875rem, 0.576rem + 0.174vw, 0.75rem);
+  --text-sm: clamp(0.8125rem, 0.701rem + 0.174vw, 0.875rem);
+  --text-base: clamp(0.9375rem, 0.826rem + 0.174vw, 1rem);
+  --text-lg: clamp(1.0625rem, 0.951rem + 0.174vw, 1.125rem);
+  --text-xl: clamp(1.1875rem, 1.076rem + 0.174vw, 1.25rem);
+  --text-2xl: clamp(1.375rem, 1.264rem + 0.174vw, 1.5rem);
 }
 
 @layer base {
+  :root {
+    /* 后台统一设计令牌：所有页面共用同一套字号、间距、圆角与层级 */
+    --admin-page-gap: clamp(1.25rem, 0.806rem + 0.694vw, 1.5rem);   /* 20→24px，页面根节点使用 space-y-6 */
+    --admin-card-pad: clamp(1rem, 0.556rem + 0.694vw, 1.25rem);     /* 16→20px，对应 card-body 的 p-5 */
+    --admin-card-pad-compact: clamp(0.875rem, 0.653rem + 0.347vw, 1rem); /* 14→16px，紧凑区块 */
+    --admin-card-radius: var(--radius-box); /* 18px，卡片统一 rounded-box */
+    --admin-inner-radius: 0.75rem; /* 12px，卡片内子块统一 12px */
+    --admin-control-radius: var(--radius-field); /* 12px，输入与按钮统一走 radius-field */
+    --admin-title-size: clamp(1.5rem, 1.056rem + 0.694vw, 1.75rem); /* 24→28px */
+    --admin-section-title-size: clamp(1.0625rem, 0.951rem + 0.174vw, 1.125rem); /* 17→18px */
+    --admin-body-size: clamp(0.8125rem, 0.701rem + 0.174vw, 0.875rem); /* 13→14px */
+    --admin-caption-size: clamp(0.6875rem, 0.576rem + 0.174vw, 0.75rem); /* 11→12px */
+  }
+
   html {
-    min-width: 1180px;
+    /* 窗口最小宽度扣除竖向滚动条，避免 1000px 横屏出现横向溢出 */
+    min-width: calc(1000px - (100vw - 100%));
     background: #f8f9fc;
     scrollbar-gutter: stable;
   }
 
+  /* 全局统一页面底色：单层樱粉柔光叠在纵向近白渐变上，登录页与后台共用 */
   body {
     min-height: 100vh;
-    background: linear-gradient(180deg, #f8f9fc 0%, #fdfbfc 55%, #fcf4f6 100%);
+    background:
+      radial-gradient(1100px 520px at 50% 16%, rgb(232 93 117 / 0.09), transparent 66%),
+      linear-gradient(180deg, #f8f9fc 0%, #fdfbfc 60%, #fbf3f6 100%);
     background-attachment: fixed;
-    color: #20212d;
+    color: var(--color-base-content);
   }
 
   button,
@@ -78,98 +106,38 @@
 }
 
 .admin-page .card:not(.modal-box) {
-  border-color: #e4e7ee;
+  border: 1px solid var(--color-base-300);
   background: #ffffff;
-  box-shadow: 0 2px 8px rgb(32 33 45 / 0.035);
+  box-shadow: 0 1px 2px rgb(32 33 45 / 0.05), 0 8px 24px rgb(32 33 45 / 0.055);
 }
 
-.admin-legend-dot {
-  display: inline-block;
-  width: 0.45rem;
-  height: 0.45rem;
-  margin-right: 0.35rem;
-  border-radius: 999px;
-  vertical-align: 0.05em;
+/* 空态卡片用虚线边框区分「这里暂时没有内容」，必须写在共享边框之后才能生效 */
+.admin-page .card.border-dashed { border-style: dashed; }
+
+/* 卡片悬停抬升：必须放在未分层区域才能压过上面的共享卡片规则 */
+.admin-page .card.admin-record-card:hover {
+  border-color: #d7c9d8;
+  box-shadow: 0 12px 28px rgb(61 48 74 / 0.11);
 }
 
-.admin-graph-canvas {
-  position: relative;
-  overflow: hidden;
+/* 系统模型统计块与卡片共用同一层次 */
+.admin-page .stats {
+  border: 1px solid var(--color-base-300);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(32 33 45 / 0.05), 0 8px 24px rgb(32 33 45 / 0.055);
 }
-
-.admin-graph-canvas [data-knowledge-graph] {
-  height: 100%;
-}
-
-.admin-graph-controls {
-  flex-shrink: 0;
-  border: 1px solid rgb(224 214 225 / 0.9);
-  border-radius: 0.75rem;
-  background: rgb(255 255 255 / 0.82);
-  backdrop-filter: blur(8px);
-}
-
-.admin-graph-controls .btn {
-  min-height: 2rem;
-  height: 2rem;
-  min-width: 2rem;
-  font-size: 1rem;
-}
-
-.admin-legend-separator {
-  width: 1px;
-  height: 1.2rem;
-  background: #e4dfe7;
-}
-
-.admin-legend-line {
-  position: relative;
-  padding-left: 1.15rem;
-}
-
-.admin-legend-line::before {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 0.8rem;
-  border-top: 2px solid currentColor;
-  content: "";
-  transform: translateY(-50%);
-}
-
-.admin-legend-line--pink { color: #ef8ca8; }
-.admin-legend-line--teal { color: #159a8c; }
-.admin-legend-line--gray { color: #9da5b5; }
-.admin-detail-surface { position: sticky; top: 1.25rem; max-height:calc(100vh - 40px); overflow:auto; }
-.admin-detail-heading { padding-bottom: 0.9rem; }
-.admin-detail-dot { width: 0.55rem; height: 0.55rem; border-radius: 999px; background: #ef8ca8; box-shadow: 0 0 0 4px rgb(239 140 168 / 0.14); }
-.admin-detail-quote { color: rgb(32 33 45 / 0.76); }
-.admin-detail-section { padding-top: 1rem; }
-.admin-detail-surface details { margin-bottom: 0.65rem; border: 1px solid #e4e8f0; border-radius: 0.85rem; background: rgb(255 255 255 / 0.7); padding: 0.75rem 1rem; }
-.admin-detail-surface details > div { margin-top: 0.75rem; }
 
 .admin-page h2 { letter-spacing: 0; }
-.admin-page .card-body { padding-block: 1.1rem; }
 
-  .admin-memory-page { font-size: 14px; }
-  .admin-memory-page h1 { font-size: 24px; }
-  .admin-memory-page .card-body { padding: 18px; }
-  .admin-memory-filters { font-size: 13px; }
-  .admin-memory-filters :is(.input,.select) { background: #fff; font-size: 13px; }
-  .admin-memory-note { padding: 12px 16px; border-radius: 12px; background: #fff7f9; }
+  .admin-memory-note { padding: var(--admin-card-pad-compact); border-radius: var(--admin-inner-radius); background: #fff7f9; }
   .admin-memory-table { background: #fff; }
-  .admin-memory-table th { color: #666673; font-size: 12px; font-weight: 500; }
-  .admin-memory-table td { padding-block: 18px; overflow-wrap: anywhere; }
-  .admin-memory-table tr:hover { background: #fffafb; }
-  .admin-member-row { display:grid; grid-template-columns:minmax(220px,1fr) minmax(320px,1.25fr) 140px; gap:20px; align-items:center; padding:16px 20px; min-height:104px; }
-  .admin-member-stat { display:grid; grid-template-columns:1fr 16px; gap:6px 8px; padding:10px 12px; border-radius:10px; background:#f8f9fc; font-size:12px; }
-  .admin-member-stat strong { font-size:20px; font-weight:600; grid-row:2; }
+  .admin-memory-table td { overflow-wrap: anywhere; }
+  .admin-member-row { display:grid; grid-template-columns:minmax(200px,1fr) minmax(260px,1.25fr) clamp(170px,16vw,220px); gap:clamp(14px,1.2vw,20px); align-items:center; padding:clamp(12px,1vw,16px) clamp(14px,1.4vw,20px); min-height:104px; }
+  .admin-member-stat { display:grid; grid-template-columns:1fr 16px; gap:6px 8px; padding:10px 12px; border-radius:var(--admin-inner-radius); background:var(--color-base-200); font-size:var(--admin-caption-size); }
+  .admin-member-stat strong { font-size:1.25rem; font-weight:600; grid-row:2; }
   .admin-member-stat svg { grid-column:2; grid-row:1 / 3; align-self:center; }
   .admin-member-stat:hover { background:#fff0f4; }
-  .admin-memory-page .admin-graph-toolbar { align-items:flex-start; }
-  .admin-memory-page .admin-graph-legend { flex:1; gap:10px; }
-  .admin-memory-page [data-knowledge-graph] { background-image:radial-gradient(#e4e7ee 0.7px,transparent 0.7px); background-size:18px 18px; }
-  .admin-memory-page :is(a,button,summary):focus-visible { outline:2px solid #e85d75; outline-offset:3px; }
+  .admin-memory-page :is(a,button,summary):focus-visible { outline:2px solid var(--color-primary); outline-offset:3px; }
 
 @layer components {
   .admin-memory-page article:has(.admin-member-names[open]) { position: relative; z-index: 20; }
@@ -180,14 +148,14 @@
   .admin-names-popover {
     position:absolute; z-index:1; top:calc(100% + 0.5rem); left:0; width:300px;
     max-height:min(320px,50vh); overflow:auto; padding:14px 16px;
-    border:1px solid rgb(232 216 225 / .8); border-radius:14px;
-    background:rgb(255 250 252 / .88); color:#20212d;
-    backdrop-filter:blur(14px); box-shadow:0 12px 32px rgb(49 30 40 / .14);
+    border:1px solid var(--color-base-300); border-radius:var(--admin-inner-radius);
+    background:#fffafc; color:var(--color-base-content);
+    box-shadow:0 12px 32px rgb(49 30 40 / .14);
   }
   .admin-shell {
     display: grid;
     min-height: 100vh;
-    grid-template-columns: 232px minmax(0, 1fr);
+    grid-template-columns: clamp(200px, 9vw + 104px, 232px) minmax(0, 1fr);
   }
 
   .admin-sidebar {
@@ -195,10 +163,9 @@
     top: 0;
     height: 100vh;
     overflow-x: clip;
-    border-right: 1px solid #f0e4ea;
-    background: rgb(255 250 251 / 0.82);
-    backdrop-filter: blur(14px);
-    box-shadow: 6px 0 24px rgb(232 93 117 / 0.05);
+    border-right: 1px solid var(--color-base-300);
+    background: #fffafb;
+    box-shadow: 6px 0 24px rgb(232 93 117 / 0.07);
   }
 
   .admin-sidebar > div {
@@ -230,9 +197,16 @@
 
   .admin-page {
     width: 100%;
-    max-width: 1480px;
+    max-width: clamp(1280px, 84vw, 1840px);
     margin: 0 auto;
-    padding: 28px 32px 44px;
+    padding: clamp(20px, 1.2vw + 8px, 32px) clamp(18px, 1.8vw + 2px, 36px) clamp(26px, 1.5vw + 10px, 48px);
+  }
+
+  /* 登录页不在 .admin-page 作用域内，卡片自带边框、底色和强化投影 */
+  .admin-login-card {
+    border: 1px solid var(--color-base-300);
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgb(32 33 45 / 0.05), 0 8px 24px rgb(32 33 45 / 0.055), 0 26px 64px rgb(232 93 117 / 0.16);
   }
 
   .admin-record-card {
@@ -256,14 +230,30 @@
     background: #c7c9d4;
   }
 
+  /* 统一的后台图标容器：所有页面共用同一圆角与对齐 */
+.admin-icon-tile {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--admin-inner-radius);
+}
+
+/* 页面与详情页统一标题 */
+.admin-page-title {
+  font-size: var(--admin-title-size);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.admin-page .table thead th { color: #666673; font-size: var(--admin-caption-size); font-weight: 500; }
+  .admin-page .table tbody td { padding-block: 0.75rem; }
+
   .admin-page .table tbody tr {
 	transition: border-color 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1), background-color 180ms ease-out;
   }
 
-  .admin-record-card:hover {
-    border-color: #d7c9d8;
-    box-shadow: 0 12px 28px rgb(61 48 74 / 0.08);
-  }
 
   .admin-page .table tbody tr:hover {
     background: #fff7f9;
@@ -271,16 +261,16 @@
 
   .admin-log-view {
 	position: relative;
-    min-height: 34rem;
+    min-height: clamp(20rem, 42vh, 34rem);
     max-height: 62vh;
     overflow: auto;
-    border: 1px solid #e4e7ee;
-    border-radius: 0.9rem;
-    background: #20212d;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--admin-inner-radius);
+    background: var(--color-base-content);
     padding: 0.75rem 0;
     color: #e8f7f5;
     font: 0.78rem/1.7 var(--font-mono);
-	white-space: nowrap;
+	white-space: normal;
   }
 
   .admin-log-count {
@@ -303,7 +293,7 @@
 
   .admin-log-line {
 	display: flex;
-	min-width: max-content;
+	min-width: 0;
 	align-items: baseline;
 	gap: 0.7rem;
 	border-left: 2px solid transparent;
@@ -327,12 +317,18 @@
 
   .admin-log-message {
 	color: #f4f5f8;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
   }
 
   .admin-log-fields {
 	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
 	gap: 0.7rem;
 	color: #c4b5fd;
+	overflow-wrap: anywhere;
   }
 
   .admin-log-field {
@@ -411,13 +407,8 @@
   }
 
   .admin-model-chart {
-	height: 20rem;
+	height: clamp(14rem, 26vh, 22rem);
 	min-width: 0;
-  }
-
-  .admin-quote {
-    border: 1px solid #ece7f3;
-    background: #fbf8ff;
   }
 
   .admin-toast {
@@ -425,11 +416,11 @@
     width: 100%;
     align-items: center;
     gap: 0.75rem;
-    border: 1px solid #e4e7ee;
-    border-radius: 1rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--admin-inner-radius);
     background: #ffffff;
-    padding: 0.9rem 1rem;
-    color: #20212d;
+    padding: var(--admin-card-pad-compact);
+    color: var(--color-base-content);
     box-shadow: 0 16px 48px rgb(33 34 45 / 0.14);
   }
 
@@ -452,7 +443,7 @@
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    border-radius: 0.75rem;
+    border-radius: var(--admin-inner-radius);
     background: #f7f8fb;
   }
 
@@ -474,6 +465,12 @@
   .admin-toast__content {
     min-width: 0;
     flex: 1;
+  }
+
+  /* 失败提示可能带一行原始错误详情，保留换行并允许长错误折行 */
+  .admin-toast__content [data-toast-body] {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .admin-toast__close {
@@ -499,8 +496,8 @@
 
   .admin-topic-change-card {
     overflow: hidden;
-    border: 1px solid #e4e7ee;
-    border-radius: 1rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--admin-inner-radius);
     background: #ffffff;
   }
 
@@ -545,7 +542,7 @@
     height: 0.6rem;
     border: 2px solid #ffffff;
     border-radius: 999px;
-    background: #159a8c;
+    background: var(--color-secondary);
     box-shadow: 0 0 0 3px #dff4f1;
   }
 
@@ -555,7 +552,7 @@
     height: 1.8rem;
     align-items: center;
     justify-content: center;
-    border: 1px solid #e4e7ee;
+    border: 1px solid var(--color-base-300);
     border-radius: 999px;
     color: #727381;
     transition: transform 180ms ease;
@@ -575,8 +572,8 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.18rem 0.24rem;
-    border: 1px solid #e4e7ee;
-    border-radius: 0.9rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--admin-inner-radius);
     background: #fbfbfd;
     padding: 0.85rem;
     font-size: 0.875rem;
@@ -610,8 +607,7 @@
 }
 
 .modal::backdrop {
-  background: rgb(32 33 45 / 0.34);
-  backdrop-filter: blur(3px);
+  background: rgb(32 33 45 / 0.42);
 }
 
 .toastify.admin-toastify {
@@ -650,4 +646,47 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+
+@layer components {
+  /* 群提示平时只显示纯文字，点击后原位置换成输入框，输入框不叠加在文字上 */
+  .admin-prompt-editor { display: inline-block; max-width: 22rem; min-width: 12rem; }
+  .admin-prompt-summary { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0; border: 0; background: transparent; color: rgb(32 33 45 / 0.78); text-align: left; }
+  .admin-prompt-summary:hover { color: var(--color-primary); }
+  .admin-prompt-text { display: inline-block; max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
+  .admin-prompt-caret { flex-shrink: 0; color: rgb(32 33 45 / 0.4); }
+  .admin-prompt-form { margin: 0; }
+  .admin-prompt-form[hidden] { display: none; }
+}
+
+@layer components {
+  /* 悬停弹层与触发行之间的透明桥接层：避免鼠标经过空隙时被判定为移出 */
+  .admin-intimacy-popover::before,
+  .admin-names-popover::before {
+    position: absolute;
+    top: -0.6rem;
+    left: 0;
+    right: 0;
+    height: 0.6rem;
+    content: "";
+  }
+
+  /* 好感度变化：悬停停留或点击后显示最近记录 */
+  .admin-intimacy-details { position: relative; line-height: 1.6; }
+  .admin-intimacy-details > summary { list-style: none; }
+  .admin-intimacy-details > summary::marker { content: ""; }
+  .admin-intimacy-details > summary::-webkit-details-marker { display: none; }
+  .admin-intimacy-summary { cursor: pointer; }
+  .admin-intimacy-summary:hover strong { color: var(--color-primary); }
+  .admin-intimacy-popover {
+    position: absolute; z-index: 3; top: calc(100% + 0.5rem); right: 0; width: 320px;
+    max-height: min(360px, 55vh); overflow: auto; padding: 14px 16px;
+    border: 1px solid var(--color-base-300); border-radius: var(--admin-inner-radius);
+    background: rgb(255 250 252 / 0.94); color: var(--color-base-content); text-align: left;
+    box-shadow: 0 12px 32px rgb(49 30 40 / 0.14);
+  }
+  .admin-intimacy-row { padding: 8px 0; border-top: 1px solid rgb(228 223 231 / 0.8); }
+  .admin-intimacy-row:first-of-type { border-top: 0; }
+  .admin-memory-page article:has(.admin-intimacy-details[open]) { position: relative; z-index: 20; }
 }

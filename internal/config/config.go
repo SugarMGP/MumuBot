@@ -21,7 +21,6 @@ type Config struct {
 	App        AppConfig        `mapstructure:"app"`
 	Persona    PersonaConfig    `mapstructure:"persona"`
 	OneBot     OneBotConfig     `mapstructure:"onebot"`
-	Groups     []GroupConfig    `mapstructure:"groups"`
 	Agent      AgentConfig      `mapstructure:"agent"`
 	Chat       ChatConfig       `mapstructure:"chat"`     // 聊天行为配置
 	Learning   LearningConfig   `mapstructure:"learning"` // 学习系统配置
@@ -44,10 +43,11 @@ type AppConfig struct {
 
 // PersonaConfig 人格配置
 type PersonaConfig struct {
-	Name           string   `mapstructure:"name"`
-	AliasNames     []string `mapstructure:"alias_names"` // 别名，都可以触发@检测
-	Interests      []string `mapstructure:"interests"`
-	PromptTemplate string   `mapstructure:"-"`
+	Name                  string   `mapstructure:"name"`
+	AliasNames            []string `mapstructure:"alias_names"` // 别名，都可以触发@检测
+	Interests             []string `mapstructure:"interests"`
+	GroupPromptTemplate   string   `mapstructure:"-"` // config/persona_group.prompt 静态群聊人格
+	PrivatePromptTemplate string   `mapstructure:"-"` // config/persona_private.prompt 静态私聊人格
 }
 
 // OneBotConfig OneBot协议配置
@@ -55,13 +55,6 @@ type OneBotConfig struct {
 	WsURL             string `mapstructure:"ws_url"`
 	AccessToken       string `mapstructure:"access_token"`
 	ReconnectInterval int    `mapstructure:"reconnect_interval"`
-}
-
-// GroupConfig 群配置
-type GroupConfig struct {
-	GroupID     int64  `mapstructure:"group_id"`
-	Enabled     bool   `mapstructure:"enabled"`
-	ExtraPrompt string `mapstructure:"extra_prompt"` // 群专属额外提示词
 }
 
 // AgentConfig Agent决策配置
@@ -152,7 +145,7 @@ type DatabaseConfig struct {
 type MessageLogCleanupConfig struct {
 	Enabled       *bool `mapstructure:"enabled"`        // 是否启用，默认 true
 	IntervalHours int   `mapstructure:"interval_hours"` // 清理间隔（小时），默认 6
-	KeepLatest    int   `mapstructure:"keep_latest"`    // 每个群保留最新消息数
+	KeepLatest    int   `mapstructure:"keep_latest"`    // 每个会话保留最新消息数
 }
 
 // StickerConfig 表情包配置
@@ -194,12 +187,18 @@ func Load(path string) (*Config, error) {
 			return
 		}
 
-		prompt, err := LoadPersonaPrompt(filepath.Join("config", "persona.prompt"))
+		groupPrompt, err := LoadPersonaPrompt(filepath.Join("config", "persona_group.prompt"))
 		if err != nil {
 			loadErr = err
 			return
 		}
-		loaded.Persona.PromptTemplate = prompt
+		privatePrompt, err := LoadPersonaPrompt(filepath.Join("config", "persona_private.prompt"))
+		if err != nil {
+			loadErr = err
+			return
+		}
+		loaded.Persona.GroupPromptTemplate = groupPrompt
+		loaded.Persona.PrivatePromptTemplate = privatePrompt
 		// 从环境变量覆盖模型端点和敏感配置
 		overrideModelEndpoint("MUMU_MODEL_HIGH", &loaded.ModelTiers.High.APIKey, &loaded.ModelTiers.High.BaseURL, &loaded.ModelTiers.High.Model)
 		overrideModelEndpoint("MUMU_MODEL_LOW", &loaded.ModelTiers.Low.APIKey, &loaded.ModelTiers.Low.BaseURL, &loaded.ModelTiers.Low.Model)
@@ -323,20 +322,4 @@ func LoadPersonaPrompt(path string) (string, error) {
 // Get 获取全局配置
 func Get() *Config {
 	return cfg
-}
-
-// GetGroupConfig 获取指定群的配置
-func (c *Config) GetGroupConfig(groupID int64) *GroupConfig {
-	for i := range c.Groups {
-		if c.Groups[i].GroupID == groupID {
-			return &c.Groups[i]
-		}
-	}
-	return nil
-}
-
-// IsGroupEnabled 检查群是否启用
-func (c *Config) IsGroupEnabled(groupID int64) bool {
-	gc := c.GetGroupConfig(groupID)
-	return gc != nil && gc.Enabled
 }

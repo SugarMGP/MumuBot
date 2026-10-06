@@ -7,7 +7,6 @@ import (
 
 	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type ConversationTopic struct {
@@ -31,6 +30,7 @@ type ConversationContext struct {
 	Assignments map[uint]uint  `json:"existing_assignments"`
 }
 
+// ConversationContext 只读取群聊话题上下文，私聊走 private_topic.go
 func (m *Manager) ConversationContext(ctx context.Context, groupID int64, upper uint, rows []MessageLog) (ConversationContext, error) {
 	result := ConversationContext{Assignments: map[uint]uint{}}
 	ids := messageLogIDs(rows)
@@ -58,13 +58,13 @@ func (m *Manager) ConversationContext(ctx context.Context, groupID int64, upper 
 			continue
 		}
 		var id uint
-		if err := m.db.WithContext(ctx).Raw(`SELECT COALESCE(ta.topic_id,0) FROM topic_assignments ta JOIN message_logs ml ON ml.id=ta.message_log_id WHERE ml.group_id=? AND ml.one_bot_message_id=? AND ml.id<=? AND ml.recalled_at IS NULL`, groupID, *r.ReplyToMessageID, upper).Scan(&id).Error; err != nil {
+		if err := m.db.WithContext(ctx).Raw(`SELECT COALESCE(ta.topic_id,0) FROM topic_assignments ta JOIN message_logs ml ON ml.id=ta.message_log_id WHERE ml.conversation_kind='group' AND ml.target_id=? AND ml.one_bot_message_id=? AND ml.id<=? AND ml.recalled_at IS NULL`, groupID, *r.ReplyToMessageID, upper).Scan(&id).Error; err != nil {
 			return result, err
 		}
 		add(id)
 	}
 	var recent []uint
-	if err := m.db.WithContext(ctx).Raw(`SELECT ta.topic_id FROM topic_assignments ta JOIN message_logs ml ON ml.id=ta.message_log_id WHERE ml.group_id=? AND ml.id<=? AND ta.topic_id IS NOT NULL AND ml.recalled_at IS NULL GROUP BY ta.topic_id ORDER BY max(ml.id) DESC LIMIT 6`, groupID, upper).Scan(&recent).Error; err != nil {
+	if err := m.db.WithContext(ctx).Raw(`SELECT ta.topic_id FROM topic_assignments ta JOIN message_logs ml ON ml.id=ta.message_log_id WHERE ml.conversation_kind='group' AND ml.target_id=? AND ml.id<=? AND ta.topic_id IS NOT NULL AND ml.recalled_at IS NULL GROUP BY ta.topic_id ORDER BY max(ml.id) DESC LIMIT 6`, groupID, upper).Scan(&recent).Error; err != nil {
 		return result, err
 	}
 	for _, id := range recent {
@@ -75,6 +75,7 @@ func (m *Manager) ConversationContext(ctx context.Context, groupID int64, upper 
 	return result, err
 }
 
+// SearchConversationTopics 只检索群聊话题，私聊话题检索走 private_topic.go
 func (m *Manager) SearchConversationTopics(ctx context.Context, groupID int64, upper uint, query string) ([]TopicContext, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, invalidKnowledge("话题查询不能为空，请提供关键词后重试")
@@ -121,37 +122,23 @@ func (m *Manager) topicContexts(ctx context.Context, groupID int64, upper uint, 
 }
 
 // CommitConversation 是后台唯一的写入入口，话题归属、摘要和知识在同一事务中提交
+// CommitConversation 只提交群聊话题与归属，并固定使用群级知识锁；私聊提交走 private_topic.go
 func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, rows []MessageLog, observed ConversationContext, topics []ConversationTopic, noTopic []uint) (*KnowledgeCommitResult, error) {
+	if batch.ConversationKind == "" {
+		batch.ConversationKind = ConversationKindGroup
+	}
 	var result *KnowledgeCommitResult
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := LockKnowledgeGroup(tx, batch.GroupID); err != nil {
+		if err := LockKnowledgeGroup(tx, batch.TargetID); err != nil {
 			return err
 		}
-		var current []MessageLog
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id=? AND id>? AND id<=?", batch.GroupID, batch.AfterID, batch.ThroughID).Order("id").Find(&current).Error; err != nil {
+		current, err := lockConversationSnapshot(tx, batch, rows)
+		if err != nil {
 			return err
-		}
-		if len(current) != len(rows) {
-			return ErrSnapshotChanged
-		}
-		readIDs := slices.Clone(batch.ReadMessageIDs)
-		slices.Sort(readIDs)
-		readIDs = slices.Compact(readIDs)
-		if len(readIDs) > 0 {
-			var valid []uint
-			if err := tx.Raw("SELECT id FROM message_logs WHERE group_id=? AND id IN ? AND id<=? AND recalled_at IS NULL ORDER BY id FOR UPDATE", batch.GroupID, readIDs, batch.ThroughID).Scan(&valid).Error; err != nil {
-				return err
-			}
-			if len(valid) != len(readIDs) {
-				return ErrSnapshotChanged
-			}
 		}
 		pending := map[uint]MessageLog{}
-		for i, r := range current {
-			if r.ID != rows[i].ID || r.TextContent != rows[i].TextContent || (r.RecalledAt == nil) != (rows[i].RecalledAt == nil) {
-				return ErrSnapshotChanged
-			}
-			pending[r.ID] = r
+		for _, row := range current {
+			pending[row.ID] = row
 		}
 		assigned := map[uint]bool{}
 		assign := func(id uint, topicID *uint) (uint, error) {
@@ -195,7 +182,7 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 			var latest uint
 			var newer bool
 			if id == 0 {
-				row := TopicThread{GroupID: batch.GroupID}
+				row := TopicThread{GroupID: batch.TargetID}
 				if err := tx.Create(&row).Error; err != nil {
 					return err
 				}
@@ -205,7 +192,7 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 					return invalidKnowledge("同一话题不能在一次提交中重复更新，请合并后重试")
 				}
 				var count int64
-				if err := tx.Model(&TopicThread{}).Where("group_id=? AND id=?", batch.GroupID, id).Count(&count).Error; err != nil {
+				if err := tx.Model(&TopicThread{}).Where("group_id=? AND id=?", batch.TargetID, id).Count(&count).Error; err != nil {
 					return err
 				}
 				if count != 1 {
@@ -257,7 +244,6 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 			input.Summary.OpenLoops = append([]string{}, input.Summary.OpenLoops...)
 			input.Summary.RecentTurns = append([]string{}, input.Summary.RecentTurns...)
 			input.Summary.Keywords = append([]string{}, input.Summary.Keywords...)
-			input.Summary.RelatedTopics = append([]RelatedTopic{}, input.Summary.RelatedTopics...)
 			body, err := sonic.MarshalString(input.Summary)
 			if err != nil {
 				return err
@@ -266,7 +252,7 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 			if err := tx.Create(&record).Error; err != nil {
 				return err
 			}
-			if err := saveTopicSources(ctx, tx, batch, id, input, &record); err != nil {
+			if err := saveTopicSources(ctx, tx, batch, input, &record); err != nil {
 				return err
 			}
 		}
@@ -274,7 +260,6 @@ func (m *Manager) CommitConversation(ctx context.Context, batch KnowledgeBatch, 
 			return invalidKnowledge("本批仍有消息没有归属，请为每条消息指定话题或无话题")
 		}
 		batch.RequireAssigned = true
-		var err error
 		result, err = (&Manager{db: tx}).CommitKnowledgeBatch(ctx, batch)
 		return err
 	})

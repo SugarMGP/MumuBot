@@ -29,23 +29,23 @@ templ SystemBody(data SystemPageData) {
 		} else if data.View == "models" {
 			@SystemModelStats(data)
 		} else {
-		<div class="flex items-start gap-5">
-			@SystemSectionColumn(systemSectionsLeft(data.Sections))
-			@SystemSectionColumn(systemSectionsRight(data.Sections))
-		</div>
+			<div class="grid grid-cols-[repeat(auto-fit,minmax(430px,1fr))] items-start gap-5">
+				@SystemSectionColumn(systemSectionsLeft(data.Sections))
+				@SystemSectionColumn(systemSectionsRight(data.Sections))
+			</div>
 		}
 	</div>
 }
 
 templ SystemLogView(data SystemPageData) {
-	<section class="card border border-base-300 bg-base-100 shadow-sm">
+	<section class="card">
 		<div class="card-body gap-4 p-5">
-			<div class="flex items-center justify-between gap-4"><div><h2 class="text-lg font-semibold">最近运行记录</h2><p class="mt-1 text-sm text-base-content/55">每秒刷新，展示当前进程内最近 300 条日志。</p></div><span class="badge badge-success badge-soft gap-2"><span class="size-2 animate-pulse rounded-full bg-success"></span>实时</span></div>
-			<div class="flex items-center gap-3 rounded-box border border-base-300 bg-base-200/45 p-2.5">
-				<form id="admin-log-filter-form" class="contents" hx-get="/admin/system" hx-target="#admin-log-stream" hx-swap="outerHTML" hx-trigger="input delay:250ms, change">
+			<div class="flex items-center justify-between gap-4"><div><h2 class="text-lg font-semibold text-base-content">最近运行记录</h2><p class="mt-1 text-sm text-base-content/60">每秒刷新，展示当前进程内最近日志。</p></div><span class="badge badge-success badge-soft badge-sm gap-2"><span class="size-2 animate-pulse rounded-full bg-success"></span>实时</span></div>
+			<div class="flex flex-wrap items-center gap-3 rounded-box border border-base-300 bg-base-200/45 p-2.5">
+				<form id="admin-log-filter-form" class="contents" hx-get="/admin/system" hx-target="#admin-log-stream" hx-swap="outerHTML" hx-trigger="input delay:250ms, change, submit">
 					<input type="hidden" name="view" value="logs"/><input type="hidden" name="fragment" value="logs-view"/>
-					<label class="input input-sm w-72 border-base-300"><span class="text-base-content/45">搜索</span><input type="search" name="keyword" value={ data.LogKeyword } placeholder="关键词…"/></label>
-					<select class="select select-sm w-36 border-base-300" name="level" aria-label="最低日志级别"><option value="debug" selected?={ data.LogLevel == "debug" }>DEBUG 以上</option><option value="info" selected?={ data.LogLevel == "info" }>INFO 以上</option><option value="warn" selected?={ data.LogLevel == "warn" }>WARN 以上</option><option value="error" selected?={ data.LogLevel == "error" }>ERROR</option></select>
+					<label class="input w-[clamp(12rem,22vw,18rem)] border-base-300"><span class="text-base-content/45">搜索</span><input type="search" name="keyword" value={ data.LogKeyword } placeholder="关键词…"/></label>
+					<select class="select w-[clamp(7rem,10vw,9rem)] border-base-300" name="level" aria-label="最低日志级别"><option value="debug" selected?={ data.LogLevel == "debug" }>DEBUG 以上</option><option value="info" selected?={ data.LogLevel == "info" }>INFO 以上</option><option value="warn" selected?={ data.LogLevel == "warn" }>WARN 以上</option><option value="error" selected?={ data.LogLevel == "error" }>ERROR</option></select>
 				</form>
 				<label class="label ml-auto cursor-pointer gap-2"><input id="admin-log-format" class="toggle toggle-sm toggle-primary" type="checkbox"/><span class="label-text text-sm">格式化</span></label>
 				<a class="btn btn-sm btn-ghost border-base-300" data-admin-log-download href={ systemLogDownloadURL(data) }>下载当前日志</a>
@@ -95,38 +95,49 @@ templ SystemLogRows(data SystemPageData) {
 templ SystemModelStats(data SystemPageData) {
 	<div class="space-y-5" data-model-stats={ modelStatsJSON(data.Stats) } data-model-stats-range={ data.StatsRange }>
 		<div class="flex justify-end"><div class="join"><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "24h", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=24h" hx-get="/admin/system?view=models&range=24h" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">24 小时</a><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "7d", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=7d" hx-get="/admin/system?view=models&range=7d" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">7 天</a><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "30d", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=30d" hx-get="/admin/system?view=models&range=30d" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">30 天</a><a class={ joinClasses("join-item btn btn-sm", ternaryString(data.StatsRange == "all", "btn-primary", "btn-ghost")) } href="/admin/system?view=models&range=all" hx-get="/admin/system?view=models&range=all" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">全部</a></div></div>
-		<div class="stats stats-horizontal w-full border border-base-300 bg-base-100 shadow-sm"><div class="stat"><div class="stat-title">请求次数</div><div class="stat-value text-2xl">{ fmt.Sprintf("%d", data.Stats.Totals.RequestCount) }</div><div class="stat-desc">成功 { fmt.Sprintf("%d", data.Stats.Totals.RequestCount-data.Stats.Totals.FailureCount) } 次</div></div><div class="stat"><div class="stat-title">失败率</div><div class="stat-value text-2xl">{ modelFailureRate(data.Stats.Totals) }</div></div><div class="stat"><div class="stat-title">平均耗时</div><div class="stat-value text-2xl">{ modelLatency(data.Stats.Totals) }</div></div><div class="stat"><div class="stat-title">Token</div><div class="stat-value text-2xl">{ fmt.Sprintf("%d", data.Stats.Totals.TotalTokens) }</div><div class="stat-desc">平均 { modelAverageTokens(data.Stats.Totals) } · 覆盖 { modelUsageCoverage(data.Stats.Totals) }</div></div></div>
-		<div class="grid grid-cols-2 gap-5"><section class="card border border-base-300 bg-base-100"><div class="card-body p-5"><h2 class="font-semibold">请求、Token 与耗时趋势</h2><div id="model-stats-trend" class="admin-model-chart"></div></div></section><section class="card border border-base-300 bg-base-100"><div class="card-body p-5"><h2 class="font-semibold">任务与模型分布</h2><div class="grid grid-cols-2"><div id="model-stats-task" class="admin-model-chart"></div><div id="model-stats-model" class="admin-model-chart"></div></div></div></section></div>
-		<div class="grid grid-cols-2 gap-5">@ModelStatsTable("按任务", data.Stats.ByTask)@ModelStatsTable("按模型", data.Stats.ByModel)</div>
+		<div class="stats stats-horizontal w-full border border-base-300 bg-base-100"><div class="stat"><div class="stat-title">请求次数</div><div class="stat-value text-2xl">{ fmt.Sprintf("%d", data.Stats.Totals.RequestCount) }</div><div class="stat-desc">成功 { fmt.Sprintf("%d", data.Stats.Totals.RequestCount-data.Stats.Totals.FailureCount) } 次</div></div><div class="stat"><div class="stat-title">失败率</div><div class="stat-value text-2xl">{ modelFailureRate(data.Stats.Totals) }</div></div><div class="stat"><div class="stat-title">平均耗时</div><div class="stat-value text-2xl">{ modelLatency(data.Stats.Totals) }</div></div><div class="stat"><div class="stat-title">Token</div><div class="stat-value text-2xl">{ fmt.Sprintf("%d", data.Stats.Totals.TotalTokens) }</div><div class="stat-desc">平均 { modelAverageTokens(data.Stats.Totals) } · 覆盖 { modelUsageCoverage(data.Stats.Totals) }</div></div></div>
+		<div class="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-5"><section class="card"><div class="card-body p-5"><h2 class="text-lg font-semibold text-base-content">请求、Token 与耗时趋势</h2><div id="model-stats-trend" class="admin-model-chart"></div></div></section><section class="card"><div class="card-body p-5"><h2 class="text-lg font-semibold text-base-content">任务与模型分布</h2><div class="grid grid-cols-2"><div id="model-stats-task" class="admin-model-chart"></div><div id="model-stats-model" class="admin-model-chart"></div></div></div></section></div>
+		<div class="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-5">
+			@ModelStatsTable("按任务", data.Stats.ByTask)
+			@ModelStatsTable("按模型", data.Stats.ByModel)
+		</div>
 	</div>
 }
 
 templ ModelStatsTable(title string, rows []modelstats.AggregateRow) {
-	<section class="card border border-base-300 bg-base-100">
-		<div class="card-body p-5"><h2 class="font-semibold">{ title }</h2><div class="overflow-x-auto"><table class="table table-sm"><thead><tr><th>分类</th><th>请求</th><th>失败率</th><th>平均耗时</th><th>Token</th></tr></thead><tbody>
-			for _, row := range rows {
-				<tr><td>{ row.Label }</td><td>{ fmt.Sprintf("%d", row.RequestCount) }</td><td>{ modelFailureRate(row) }</td><td>{ modelLatency(row) }</td><td><div>{ fmt.Sprintf("%d", row.TotalTokens) }</div><div class="text-xs text-base-content/50">平均 { modelAverageTokens(row) } · { modelUsageCoverage(row) }</div></td></tr>
-			}
-		</tbody></table></div></div>
+	<section class="card">
+		<div class="card-body p-5">
+			<h2 class="text-lg font-semibold text-base-content">{ title }</h2>
+			<div class="overflow-x-auto">
+				<table class="table">
+					<thead><tr><th>分类</th><th>请求</th><th>失败率</th><th>平均耗时</th><th>Token</th></tr></thead>
+					<tbody>
+						for _, row := range rows {
+							<tr><td>{ row.Label }</td><td>{ fmt.Sprintf("%d", row.RequestCount) }</td><td>{ modelFailureRate(row) }</td><td>{ modelLatency(row) }</td><td><div>{ fmt.Sprintf("%d", row.TotalTokens) }</div><div class="text-xs text-base-content/60">平均 { modelAverageTokens(row) } · { modelUsageCoverage(row) }</div></td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
 	</section>
 }
 
 templ SystemSectionColumn(sections []SystemSection) {
 	<div class="flex min-w-0 flex-1 flex-col gap-5">
 		for _, section := range sections {
-			<section class="card border border-base-300 bg-base-100 shadow-sm">
+			<section class="card">
 				<div class="card-body gap-5 p-5">
 					<div class="flex items-center gap-3">
-						<span class="flex size-9 items-center justify-center rounded-box bg-base-200 text-base-content/60">
+						<span class="admin-icon-tile size-9 bg-base-200 text-base-content/60">
 							@AdminIcon(systemSectionIconName(section.Title), "size-5", "system-section")
 						</span>
-						<h2 class="text-lg font-semibold">{ section.Title }</h2>
+						<h2 class="text-lg font-semibold text-base-content">{ section.Title }</h2>
 					</div>
 					<div class="grid grid-cols-2 gap-3">
 						for _, field := range section.Fields {
-							<div class={ systemFieldCardClass(field) }>
+							<div class="rounded-xl bg-base-200/50 p-4">
 								<div class="text-xs text-base-content/60">{ field.Label }</div>
-								<div class={ systemFieldValueClass(field) }>{ field.Value }</div>
+								<div class="mt-2 whitespace-pre-line break-words text-sm font-medium leading-6 text-base-content/75">{ field.Value }</div>
 							</div>
 						}
 					</div>

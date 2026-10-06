@@ -2,6 +2,7 @@ package topic
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ func (s *DBStore) PersistMessageLog(ctx context.Context, item memory.MessageLog)
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			if err := tx.Where("group_id=? AND one_bot_message_id = ?", item.GroupID, item.OneBotMessageID).First(&stored).Error; err != nil {
+			if err := tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id = ?", memory.ConversationKindGroup, item.TargetID, item.OneBotMessageID).First(&stored).Error; err != nil {
 				return err
 			}
 			if strings.TrimSpace(stored.TextContent) == "" {
@@ -53,7 +54,7 @@ func (s *DBStore) TopicRefForOneBotMessage(ctx context.Context, groupID, message
 	}
 	err = s.db.WithContext(ctx).Table("topic_assignments ta").Select("ml.id message_log_id, ta.topic_id").
 		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("ml.group_id = ? AND ml.one_bot_message_id = ? AND ml.recalled_at IS NULL", groupID, messageID).Scan(&row).Error
+		Where("ml.conversation_kind=? AND ml.target_id = ? AND ml.one_bot_message_id = ? AND ml.recalled_at IS NULL", memory.ConversationKindGroup, groupID, messageID).Scan(&row).Error
 	if err != nil || row.TopicID == nil {
 		return 0, row.MessageLogID, err
 	}
@@ -68,7 +69,7 @@ func (s *DBStore) ListRecentTopicThreads(ctx context.Context, groupID int64, thr
 	query := s.db.WithContext(ctx).Table("topic_threads tt").Select("tt.*").
 		Joins("JOIN topic_assignments ta ON ta.topic_id = tt.id").
 		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("tt.group_id = ? AND ml.recalled_at IS NULL AND ml.one_bot_message_id IN ?", groupID, snapshotMessageIDs)
+		Where("tt.group_id = ? AND ml.conversation_kind=? AND ml.recalled_at IS NULL AND ml.one_bot_message_id IN ?", groupID, memory.ConversationKindGroup, snapshotMessageIDs)
 	if throughMessageLogID > 0 {
 		query = query.Where("ml.id <= ?", throughMessageLogID)
 	}
@@ -96,9 +97,7 @@ func (s *DBStore) ListRecentTopicMessages(ctx context.Context, topicID, throughM
 	if err := q.Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
-	}
+	slices.Reverse(rows)
 	return rows, nil
 }
 

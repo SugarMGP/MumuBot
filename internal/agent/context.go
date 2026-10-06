@@ -47,7 +47,7 @@ func (a *Agent) buildGroupContext(groupID int64) string {
 	return strings.Join(parts, "\n")
 }
 
-func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot []*onebot.GroupMessage, query memory.HybridQuery, upper uint) ([]memory.KnowledgeItem, []memory.KnowledgeItem, []memory.KnowledgeRelation) {
+func (a *Agent) buildConversationMemoryContext(ctx context.Context, kind string, targetID int64, snapshot []*onebot.ConversationMessage, query memory.HybridQuery, upper uint) ([]memory.KnowledgeItem, []memory.KnowledgeItem, []memory.KnowledgeRelation) {
 	if query.Empty() {
 		return nil, nil, nil
 	}
@@ -64,35 +64,38 @@ func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot 
 			related = append(related, msg.Reply.SenderID)
 		}
 	}
-	related = append(related, 0, selfID)
-	local, err := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: groupID, SubjectIDs: related, Prepared: &query, ThroughID: upper, Limit: 6})
+	related = append(related, selfID)
+	if kind == memory.ConversationKindGroup {
+		related = append(related, 0)
+	}
+	local, err := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{ConversationKind: kind, TargetID: targetID, SubjectIDs: related, Prepared: &query, ThroughID: upper, Limit: 6})
 	direct := local
 	// 为关联知识预留两个名额，未用完的名额再由直接命中结果补齐
 	if len(local) > 4 {
 		local = append([]memory.KnowledgeItem(nil), local[:4]...)
 	}
 	var cross []memory.KnowledgeItem
-	if err == nil && len(local) < 2 {
-		found, e := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{GroupID: groupID, SelfID: selfID, SubjectUserID: &selfID, Prepared: &query, ThroughID: upper, Limit: 3})
+	if err == nil && kind == memory.ConversationKindGroup && len(local) < 2 {
+		found, e := a.memory.SearchKnowledge(ctx, memory.KnowledgeSearchOptions{ConversationKind: kind, TargetID: targetID, SelfID: selfID, SubjectUserID: &selfID, Prepared: &query, ThroughID: upper, Limit: 3})
 		if e != nil {
 			err = e
 		} else {
 			for _, item := range found {
-				if item.GroupID != groupID {
+				if item.TargetID != targetID {
 					cross = append(cross, item)
 				}
 			}
 		}
 	}
 	if err != nil {
-		zap.L().Warn("主动记忆检索失败", zap.Int64("group_id", groupID), zap.Error(err))
+		zap.L().Warn("主动记忆检索失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
 	}
 	var relations []memory.KnowledgeRelation
 	var seeds []uint
 	for _, item := range local {
 		seeds = append(seeds, item.ID)
 	}
-	if graph, e := a.memory.GetKnowledgeNeighborhood(ctx, groupID, seeds, 1, false, memory.KnowledgeGraphOptions{ThroughID: upper, SubjectIDs: related}); e != nil {
+	if graph, e := a.memory.GetKnowledgeNeighborhoodScope(ctx, kind, targetID, seeds, 1, false, memory.KnowledgeGraphOptions{ThroughID: upper, SubjectIDs: related}); e != nil {
 		zap.L().Warn("关联记忆检索失败", zap.Error(e))
 		local = direct
 	} else {
@@ -121,8 +124,9 @@ func (a *Agent) buildMemoryContext(ctx context.Context, groupID int64, snapshot 
 	return local, cross, relations
 }
 
-func (a *Agent) memorySubjectNames(groups ...[]memory.KnowledgeItem) map[int64]string {
+func (a *Agent) memorySubjectNames(ctx context.Context, groups ...[]memory.KnowledgeItem) map[int64]string {
 	result := make(map[int64]string)
+	mem := a.memory.WithContext(ctx)
 	selfID := a.bot.GetSelfID()
 	for _, items := range groups {
 		for _, item := range items {
@@ -132,7 +136,7 @@ func (a *Agent) memorySubjectNames(groups ...[]memory.KnowledgeItem) map[int64]s
 			if _, exists := result[item.SubjectUserID]; exists {
 				continue
 			}
-			if profile, err := a.memory.GetMemberProfile(item.SubjectUserID); err == nil {
+			if profile, err := mem.GetMemberProfile(item.SubjectUserID); err == nil {
 				result[item.SubjectUserID] = profile.Nickname
 			}
 		}
@@ -140,7 +144,7 @@ func (a *Agent) memorySubjectNames(groups ...[]memory.KnowledgeItem) map[int64]s
 	return result
 }
 
-func collectTextFragments(msgs []*onebot.GroupMessage) []string {
+func collectTextFragments(msgs []*onebot.ConversationMessage) []string {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -156,11 +160,11 @@ func collectTextFragments(msgs []*onebot.GroupMessage) []string {
 	return parts
 }
 
-func collectTextContext(msgs []*onebot.GroupMessage) string {
+func collectTextContext(msgs []*onebot.ConversationMessage) string {
 	return strings.Join(collectTextFragments(msgs), "\n")
 }
 
-func collectRetrievalTextFragments(readMessages, currentMessages []*onebot.GroupMessage, bufferSize int) []string {
+func collectRetrievalTextFragments(readMessages, currentMessages []*onebot.ConversationMessage, bufferSize int) []string {
 	window := bufferSize / 2
 	if window < 10 {
 		window = 10
@@ -170,14 +174,14 @@ func collectRetrievalTextFragments(readMessages, currentMessages []*onebot.Group
 	if len(readMessages) > window {
 		readMessages = readMessages[len(readMessages)-window:]
 	}
-	messages := make([]*onebot.GroupMessage, 0, len(readMessages)+len(currentMessages))
+	messages := make([]*onebot.ConversationMessage, 0, len(readMessages)+len(currentMessages))
 	messages = append(messages, readMessages...)
 	messages = append(messages, currentMessages...)
 	return collectTextFragments(messages)
 }
 
 // splitMessageSnapshot 使用本进程到达序号划分快照，不比较 OneBot message_id
-func splitMessageSnapshot(buffer []*onebot.GroupMessage, readSeq uint64, selfID int64) (readMessages, currentMessages []*onebot.GroupMessage) {
+func splitMessageSnapshot(buffer []*onebot.ConversationMessage, readSeq uint64, selfID int64) (readMessages, currentMessages []*onebot.ConversationMessage) {
 	for _, msg := range buffer {
 		if msg == nil {
 			continue
@@ -191,7 +195,7 @@ func splitMessageSnapshot(buffer []*onebot.GroupMessage, readSeq uint64, selfID 
 	return readMessages, currentMessages
 }
 
-func hasDisplayContext(messages []*onebot.GroupMessage) bool {
+func hasDisplayContext(messages []*onebot.ConversationMessage) bool {
 	for _, message := range messages {
 		if message != nil && strings.TrimSpace(message.FinalContent) != "" {
 			return true
@@ -200,7 +204,7 @@ func hasDisplayContext(messages []*onebot.GroupMessage) bool {
 	return false
 }
 
-func (a *Agent) renderModelMessage(message *onebot.GroupMessage, tc *tools.ToolContext) string {
+func (a *Agent) renderModelMessage(message *onebot.ConversationMessage, tc *tools.ToolContext) string {
 	if message == nil || strings.TrimSpace(message.FinalContent) == "" {
 		return ""
 	}
@@ -237,7 +241,7 @@ func (a *Agent) renderModelMessage(message *onebot.GroupMessage, tc *tools.ToolC
 	return fmt.Sprintf("%s[%s] %s(%s): %s%s\n", ref, message.Time.Format("15:04:05"), displayName, userID, reply, strings.TrimSpace(message.FinalContent))
 }
 
-func (a *Agent) renderChatContext(buffer []*onebot.GroupMessage, readSeq uint64, tc *tools.ToolContext) string {
+func (a *Agent) renderChatContext(buffer []*onebot.ConversationMessage, readSeq uint64, tc *tools.ToolContext) string {
 	if len(buffer) == 0 {
 		return ""
 	}
@@ -258,11 +262,12 @@ func (a *Agent) renderChatContext(buffer []*onebot.GroupMessage, readSeq uint64,
 	return b.String()
 }
 
-func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID int64) string {
+func (a *Agent) buildRecentPeopleContext(ctx context.Context, buffer []*onebot.ConversationMessage, groupID int64) string {
 	if len(buffer) == 0 {
 		return ""
 	}
 
+	mem := a.memory.WithContext(ctx)
 	seenIDs := make(map[int64]struct{}, 3)
 	ids := make([]int64, 0, 3)
 	selfID := a.bot.GetSelfID()
@@ -284,7 +289,7 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 		return ""
 	}
 
-	latestNames := make(map[int64]*onebot.GroupMessage, len(ids))
+	latestNames := make(map[int64]*onebot.ConversationMessage, len(ids))
 	for i := len(buffer) - 1; i >= 0; i-- {
 		if _, ok := latestNames[buffer[i].UserID]; ok {
 			continue
@@ -301,7 +306,7 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 			nickname = latestMsg.Nickname
 			groupCard = latestMsg.GroupCard
 		}
-		profile, err := a.memory.GetMemberProfile(userID)
+		profile, err := mem.GetMemberProfile(userID)
 		if err != nil {
 			name := utils.FirstNonEmpty(groupCard, nickname)
 			if name == "" {
@@ -313,7 +318,7 @@ func (a *Agent) buildRecentPeopleContext(buffer []*onebot.GroupMessage, groupID 
 
 		currentGroupName := strings.TrimSpace(groupCard)
 		if currentGroupName == "" {
-			currentGroupName, _ = a.memory.LatestMemberGroupCard(userID, groupID)
+			currentGroupName, _ = mem.LatestMemberGroupCard(userID, groupID)
 		}
 		displayName := currentGroupName
 		if displayName == "" {
@@ -349,7 +354,7 @@ func resolveMessageDisplayName(groupCard, nickname string) string {
 	return ""
 }
 
-func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.GroupMessage, userID int64) string {
+func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.ConversationMessage, userID int64) string {
 	selfID := a.bot.GetSelfID()
 	if selfID > 0 && userID == selfID {
 		return botMentionDisplayName(a.persona.GetName())
@@ -357,12 +362,18 @@ func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.Group
 	if displayName := strings.TrimSpace(msg.AtNames[userID]); displayName != "" {
 		return displayName
 	}
-	if info, err := a.bot.GetGroupMemberInfo(ctx, msg.GroupID, userID, false); err == nil {
+	if msg.ConversationKind == memory.ConversationKindPrivate {
+		if userID == msg.UserID && msg.Nickname != "" {
+			return msg.Nickname
+		}
+		return fmt.Sprintf("%d", userID)
+	}
+	if info, err := a.bot.GetGroupMemberInfo(ctx, msg.TargetID, userID, false); err == nil {
 		if displayName := utils.FirstNonEmpty(info.Card, info.Nickname); displayName != "" {
 			return displayName
 		}
 	} else {
-		zap.L().Debug("补全提及成员显示名失败", zap.Int64("group_id", msg.GroupID), zap.Int64("user_id", userID), zap.Error(err))
+		zap.L().Debug("补全提及成员显示名失败", zap.Int64("group_id", msg.TargetID), zap.Int64("user_id", userID), zap.Error(err))
 	}
 	return fmt.Sprintf("%d", userID)
 }
@@ -401,6 +412,14 @@ func (a *Agent) describeImageCached(ctx context.Context, img onebot.ImageInfo) (
 		a.visionCache.Set(cacheKey, desc, ttlcache.DefaultTTL)
 	}
 	return desc, err
+}
+
+func (a *Agent) describeWebImageCached(ctx context.Context, imageURL string) (string, error) {
+	imageURL = strings.TrimSpace(imageURL)
+	if imageURL == "" {
+		return "", fmt.Errorf("图片 URL 为空")
+	}
+	return a.describeImageCached(ctx, onebot.ImageInfo{URL: imageURL})
 }
 
 func (a *Agent) describeVideoCached(ctx context.Context, vid onebot.VideoInfo) (string, error) {
@@ -461,4 +480,69 @@ func (a *Agent) summarizeForwardMessages(ctx context.Context, content []interfac
 		return "", err
 	}
 	return a.vision.SummarizeForward(ctx, raw, imageURLs, videoURLs)
+}
+
+func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, targetID, snapshotMessageID int64, messages []*onebot.ConversationMessage) context.Context {
+	tc := &tools.ToolContext{
+		ConversationKind:  kind,
+		TargetID:          targetID,
+		MemoryMgr:         a.memory.WithContext(ctx),
+		Bot:               a.bot,
+		SnapshotMessageID: snapshotMessageID,
+		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) error {
+			if kind == memory.ConversationKindPrivate {
+				return a.doPrivateSpeak(callCtx, gid, content, replyTo)
+			}
+			return a.doSpeak(callCtx, gid, content, replyTo, mentions)
+		},
+		SendStickerCallback: func(callCtx context.Context, gid int64, filePath string, description string) error {
+			if kind == memory.ConversationKindPrivate {
+				return a.doPrivateSticker(callCtx, gid, filePath, description)
+			}
+			return a.doSendSticker(callCtx, gid, filePath, description)
+		},
+		InspectImageCallback: func(callCtx context.Context, imageURL string) (string, error) {
+			return a.describeWebImageCached(callCtx, imageURL)
+		},
+		SendImageURLCallback: func(callCtx context.Context, imageURL string) error {
+			if kind == memory.ConversationKindPrivate {
+				return a.doPrivateImage(callCtx, targetID, imageURL)
+			}
+			return a.doSendImageURL(callCtx, targetID, imageURL)
+		},
+		MessageRecalledCallback: a.syncRecalledMessage,
+	}
+	for _, message := range messages {
+		if message != nil {
+			tc.ThinkStartArrivalSeq = max(tc.ThinkStartArrivalSeq, message.ArrivalSeq)
+		}
+	}
+	tc.GetNewMessagesCallback = func(callCtx context.Context) (any, error) {
+		current, _, trimmed := a.getConversationSnapshot(kind, targetID)
+		selfID := a.bot.GetSelfID()
+		newMessages := make([]map[string]any, 0)
+		observed := tc.ObservedThroughSeq
+		floor := max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
+		for _, message := range current {
+			if message == nil || message.UserID == selfID || message.ArrivalSeq <= floor {
+				continue
+			}
+			ref := tc.RegisterMessage(message.MessageID)
+			newMessages = append(newMessages, map[string]any{"message_ref": ref, "sender_id": message.UserID, "nickname": message.Nickname, "content": message.FinalContent, "arrival_seq": message.ArrivalSeq})
+			observed = max(observed, message.ArrivalSeq)
+		}
+		if trimmed > floor {
+			// 缓冲窗口外的消息已被裁剪，本轮无法完整收集，不提交观察水位
+			tc.ObservationIncomplete = true
+			return map[string]any{"success": true, "complete": false, "messages": newMessages}, nil
+		}
+		tc.ObservedThroughSeq = observed
+		return map[string]any{"success": true, "complete": true, "messages": newMessages}, nil
+	}
+	for _, message := range messages {
+		if message != nil {
+			tc.RegisterMessage(message.MessageID)
+		}
+	}
+	return tools.WithToolContext(ctx, tc)
 }

@@ -14,8 +14,8 @@ type Manager struct{ store *DBStore }
 
 func NewManager(db *gorm.DB) *Manager { return &Manager{store: &DBStore{db: db}} }
 
-func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, isMentioned bool) (*memory.MessageLog, bool, error) {
-	if msg == nil || msg.MessageID == 0 || msg.GroupID == 0 {
+func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.ConversationMessage, isMentioned bool) (*memory.MessageLog, bool, error) {
+	if msg == nil || msg.MessageID == 0 || msg.TargetID == 0 {
 		return nil, false, nil
 	}
 	var replyTo *int64
@@ -24,7 +24,7 @@ func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.GroupMessage, 
 		replyTo = &id
 	}
 	item, created, err := m.store.PersistMessageLog(ctx, memory.MessageLog{
-		OneBotMessageID: msg.MessageID, GroupID: msg.GroupID, UserID: msg.UserID, Nickname: msg.Nickname,
+		OneBotMessageID: msg.MessageID, ConversationKind: memory.ConversationKindGroup, TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname,
 		TextContent: strings.TrimSpace(msg.Content), DisplayContent: msg.FinalContent,
 		ReplyToMessageID: replyTo, IsMentioned: isMentioned, MessageTime: msg.Time,
 	})

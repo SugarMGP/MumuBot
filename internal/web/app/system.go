@@ -7,14 +7,13 @@ import (
 	neturl "net/url"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/migration"
+	"mumu-bot/internal/utils"
 	"mumu-bot/internal/web/views"
 
-	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
 )
 
@@ -22,10 +21,15 @@ func (a *App) systemSections() []views.SystemSection {
 	cfg := a.cfg
 	snapshot := a.runtimeSnapshot()
 
-	groupIDs := make([]string, 0, len(cfg.Groups))
-	for _, group := range cfg.Groups {
-		if group.Enabled {
-			groupIDs = append(groupIDs, fmt.Sprintf("%d", group.GroupID))
+	groupIDs := make([]string, 0)
+	groupCount := 0
+	if rows, err := a.memMgr.ListConversationTargets(context.Background(), memory.ConversationKindGroup, true); err == nil {
+		for _, group := range rows {
+			if group.Blocked {
+				continue
+			}
+			groupCount++
+			groupIDs = append(groupIDs, fmt.Sprintf("%d", group.TargetID))
 		}
 	}
 	groupSummary := "暂未启用群聊"
@@ -46,7 +50,7 @@ func (a *App) systemSections() []views.SystemSection {
 	personaFields = appendField(personaFields, "别名", joinOrDash(cfg.Persona.AliasNames))
 
 	groupFields := []views.SystemField{
-		{Label: "启用群数", Value: fmt.Sprintf("%d / %d", countEnabledGroups(cfg.Groups), len(cfg.Groups))},
+		{Label: "启用群数", Value: fmt.Sprintf("%d", groupCount)},
 		{Label: "已启用群聊", Value: groupSummary},
 		{Label: "思考间隔", Value: fmt.Sprintf("%d 秒", cfg.Agent.ThinkInterval)},
 	}
@@ -54,8 +58,8 @@ func (a *App) systemSections() []views.SystemSection {
 		groupFields = append(groupFields, views.SystemField{Label: "聚合窗口", Value: fmt.Sprintf("%d 毫秒", cfg.Agent.ThinkDebounceMS)})
 	}
 	groupFields = append(groupFields,
-		views.SystemField{Label: "群聊整理", Value: fmt.Sprintf("满 %d 条或等待 %d 分钟后排队", cfg.Learning.BatchSize, cfg.Learning.MaxWaitMinutes)},
-		views.SystemField{Label: "整理间隔", Value: fmt.Sprintf("同群至少 %d 分钟，单轮最多 %d 秒", cfg.Learning.IntervalMinutes, cfg.Learning.TimeoutSeconds)},
+		views.SystemField{Label: "记忆整理", Value: fmt.Sprintf("满 %d 条或等待 %d 分钟后排队", cfg.Learning.BatchSize, cfg.Learning.MaxWaitMinutes)},
+		views.SystemField{Label: "整理间隔", Value: fmt.Sprintf("同一会话至少 %d 分钟，单轮最多 %d 秒", cfg.Learning.IntervalMinutes, cfg.Learning.TimeoutSeconds)},
 	)
 
 	modelFields := make([]views.SystemField, 0, 8)
@@ -72,7 +76,7 @@ func (a *App) systemSections() []views.SystemSection {
 		{Label: "重连间隔", Value: fmt.Sprintf("%d 秒", cfg.OneBot.ReconnectInterval)},
 	}
 	if currentVersion, err := a.memMgr.SchemaVersion(context.Background()); err == nil {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "数据结构版本", Value: fmt.Sprintf("v%d / v%d", currentVersion, memory.LatestSchemaVersion())})
+		runtimeFields = append(runtimeFields, views.SystemField{Label: "数据结构版本", Value: fmt.Sprintf("v%d / v%d", currentVersion, migration.LatestSchemaVersion())})
 	}
 	if snapshot.SelfID > 0 {
 		runtimeFields = append(runtimeFields, views.SystemField{Label: "机器人 QQ", Value: fmt.Sprintf("%d", snapshot.SelfID)})
@@ -187,32 +191,7 @@ func actionTriggerHeader(flash *views.FlashMessage, closeDialog bool) (string, e
 		payload["admin:action-dialog-close"] = true
 	}
 
-	encoded, err := sonic.MarshalString(payload)
-	if err != nil {
-		return "", err
-	}
-	return asciiHeaderJSON(encoded), nil
-}
-
-func asciiHeaderJSON(raw string) string {
-	var builder strings.Builder
-	builder.Grow(len(raw))
-
-	for _, r := range raw {
-		if r <= 127 {
-			builder.WriteRune(r)
-			continue
-		}
-		if r <= 0xFFFF {
-			fmt.Fprintf(&builder, "\\u%04x", r)
-			continue
-		}
-		for _, unit := range utf16.Encode([]rune{r}) {
-			fmt.Fprintf(&builder, "\\u%04x", unit)
-		}
-	}
-
-	return builder.String()
+	return utils.MarshalJSONHeader(payload)
 }
 
 func parsePositiveInt(raw string, fallback int) int {
@@ -239,16 +218,6 @@ func parseInt64Query(raw string) int64 {
 func parseUintParam(raw string) (uint, error) {
 	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
 	return uint(value), err
-}
-
-func countEnabledGroups(groups []config.GroupConfig) int {
-	total := 0
-	for _, group := range groups {
-		if group.Enabled {
-			total++
-		}
-	}
-	return total
 }
 
 func joinOrDash(values []string) string {

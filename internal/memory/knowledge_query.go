@@ -9,8 +9,11 @@ import (
 )
 
 func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptions) ([]KnowledgeItem, error) {
-	if opts.GroupID <= 0 {
-		return nil, fmt.Errorf("知识查询需要有效群号，请使用当前群后重试")
+	if opts.ConversationKind == "" {
+		opts.ConversationKind = ConversationKindGroup
+	}
+	if opts.TargetID <= 0 {
+		return nil, fmt.Errorf("知识查询需要有效会话，请使用当前会话后重试")
 	}
 	limit := opts.Limit
 	if limit <= 0 {
@@ -19,11 +22,16 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 	if limit > 100 {
 		limit = 100
 	}
-	base := "ki.group_id=?"
-	args := []any{opts.GroupID}
+	base := "ki.conversation_kind=? AND ki.target_id=?"
+	args := []any{opts.ConversationKind, opts.TargetID}
 	if opts.SelfID > 0 && opts.SubjectUserID != nil && *opts.SubjectUserID == opts.SelfID {
-		base = "TRUE"
-		args = nil
+		if opts.CrossConversationKinds {
+			base = "TRUE"
+			args = nil
+		} else if opts.ConversationKind == ConversationKindGroup {
+			// 自动补充只读取其他群聊的自身知识，私聊内容不进入群聊上下文
+			base = "ki.conversation_kind=? AND ki.target_id<>?"
+		}
 	}
 	if opts.ItemID > 0 {
 		base += " AND ki.id=?"
@@ -138,8 +146,9 @@ func (m *Manager) loadKnowledgeInOrder(ctx context.Context, ids []uint, base str
 	return result, nil
 }
 
-func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, seedIDs []uint, depth int, includeHistory bool, opts KnowledgeGraphOptions) (*KnowledgeGraph, error) {
-	if groupID <= 0 || len(seedIDs) == 0 {
+// GetKnowledgeNeighborhoodScope 读取当前会话内的知识关系与有效原文依据
+func (m *Manager) GetKnowledgeNeighborhoodScope(ctx context.Context, kind string, targetID int64, seedIDs []uint, depth int, includeHistory bool, opts KnowledgeGraphOptions) (*KnowledgeGraph, error) {
+	if targetID <= 0 || len(seedIDs) == 0 {
 		return &KnowledgeGraph{}, nil
 	}
 	depth = max(1, min(depth, 3))
@@ -148,7 +157,7 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 	seen := map[uint]bool{}
 	edges := map[uint]bool{}
 	visibleItems := func() *gorm.DB {
-		q := m.db.WithContext(ctx).Table("knowledge_items ki").Where("ki.group_id=?", groupID).Where(knowledgeItemEvidenceSQL)
+		q := m.db.WithContext(ctx).Table("knowledge_items ki").Where("ki.conversation_kind=? AND ki.target_id=?", kind, targetID).Where(knowledgeItemEvidenceSQL)
 		if len(opts.SubjectIDs) > 0 {
 			q = q.Where("ki.subject_user_id=ANY(?)", int64Array(opts.SubjectIDs))
 		}
@@ -249,10 +258,4 @@ func (m *Manager) GetKnowledgeNeighborhood(ctx context.Context, groupID int64, s
 		frontier = next
 	}
 	return graph, nil
-}
-
-func (m *Manager) GetKnowledgeItem(ctx context.Context, groupID int64, id uint) (*KnowledgeItem, error) {
-	var item KnowledgeItem
-	err := m.db.WithContext(ctx).Where("group_id=? AND id=?", groupID, id).First(&item).Error
-	return &item, err
 }

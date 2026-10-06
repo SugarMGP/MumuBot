@@ -8,7 +8,8 @@ import (
 
 type KnowledgeItem struct {
 	ID                uint             `gorm:"primaryKey" json:"id"`
-	GroupID           int64            `json:"group_id"`
+	ConversationKind  string           `json:"conversation_kind"`
+	TargetID          int64            `gorm:"column:target_id" json:"target_id"`
 	SubjectUserID     int64            `json:"subject_user_id"`
 	Kind              string           `json:"kind"`
 	Label             string           `json:"label"`
@@ -47,13 +48,14 @@ type KnowledgeEvidenceMessage struct {
 
 func (KnowledgeEvidenceMessage) TableName() string { return "knowledge_evidence_messages" }
 
-type GroupAgentState struct {
-	GroupID   int64     `gorm:"primaryKey" json:"group_id"`
-	Note      string    `json:"note"`
-	UpdatedAt time.Time `json:"updated_at"`
+type ConversationAgentState struct {
+	ConversationKind string    `gorm:"primaryKey;type:text" json:"conversation_kind"`
+	TargetID         int64     `gorm:"column:target_id;primaryKey" json:"target_id"`
+	Note             string    `json:"note"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-func (GroupAgentState) TableName() string { return "group_agent_states" }
+func (ConversationAgentState) TableName() string { return "group_agent_states" }
 
 type KnowledgeItemInput struct {
 	Key           string   `json:"key"`
@@ -75,16 +77,17 @@ type KnowledgeRelationInput struct {
 	EvidenceSets [][]uint `json:"evidence_sets"`
 }
 type KnowledgeBatch struct {
-	GroupID         int64
-	SelfID          int64
-	AfterID         uint
-	ThroughID       uint
-	AdvanceCursor   bool
-	RequireAssigned bool
-	ReadMessageIDs  []uint
-	ExpectedItems   map[uint]time.Time
-	Items           []KnowledgeItemInput
-	Relations       []KnowledgeRelationInput
+	ConversationKind string
+	TargetID         int64
+	SelfID           int64
+	AfterID          uint
+	ThroughID        uint
+	AdvanceCursor    bool
+	RequireAssigned  bool
+	ReadMessageIDs   []uint
+	ExpectedItems    map[uint]time.Time
+	Items            []KnowledgeItemInput
+	Relations        []KnowledgeRelationInput
 }
 type KnowledgeCommitResult struct {
 	ItemIDs      map[string]uint   `json:"item_ids"`
@@ -92,20 +95,22 @@ type KnowledgeCommitResult struct {
 	RelationIDs  []uint            `json:"relation_ids"`
 }
 type KnowledgeSearchOptions struct {
-	ItemID          uint
-	GroupID         int64
-	SelfID          int64
-	SubjectUserID   *int64
-	SubjectIDs      []int64
-	Kind            string
-	Status          string
-	Query           string
-	Prepared        *HybridQuery
-	ForMaintenance  bool // 维护入口可读取缺少有效原文的归档记录
-	IncludeInactive bool
-	ThroughID       uint
-	Limit           int
-	Offset          int
+	ConversationKind       string
+	CrossConversationKinds bool // 仅主动查询自身时允许跨群聊与私聊
+	ItemID                 uint
+	TargetID               int64
+	SelfID                 int64
+	SubjectUserID          *int64
+	SubjectIDs             []int64
+	Kind                   string
+	Status                 string
+	Query                  string
+	Prepared               *HybridQuery
+	ForMaintenance         bool // 维护入口可读取缺少有效原文的归档记录
+	IncludeInactive        bool
+	ThroughID              uint
+	Limit                  int
+	Offset                 int
 }
 type KnowledgeGraph struct {
 	Items     []KnowledgeItem     `json:"items"`
@@ -123,9 +128,12 @@ type KnowledgeEvidence struct {
 	Valid    bool         `json:"valid"`
 }
 type KnowledgeMessageQuery struct {
-	GroupID          int64
+	ConversationKind string
+	TargetID         int64
 	ThroughID        uint
 	AfterID          uint
+	BeforeID         uint
+	NewestFirst      bool
 	UserID           int64
 	Text             string
 	ReplyToMessageID *int64
