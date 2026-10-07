@@ -293,6 +293,7 @@
 
   .admin-log-line {
 	display: flex;
+	flex-wrap: wrap;
 	min-width: 0;
 	align-items: baseline;
 	gap: 0.7rem;
@@ -306,10 +307,12 @@
   }
 
   .admin-log-line time {
+	flex: none;
 	color: #80cbc4;
   }
 
   .admin-log-line strong {
+	flex: none;
 	width: 3.25rem;
 	color: #8fb8ff;
 	font-weight: 700;
@@ -324,6 +327,7 @@
 
   .admin-log-fields {
 	display: flex;
+	flex: 1 1 auto;
 	min-width: 0;
 	flex-wrap: wrap;
 	gap: 0.7rem;
