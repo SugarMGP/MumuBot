@@ -49,10 +49,6 @@ func (m *GroupThinkConcurrency) IsRunning(groupID int64) bool {
 
 // Submit 提交任务
 func (m *GroupThinkConcurrency) Submit(groupID int64, probabilityPassed bool) {
-	if err := m.ctx.Err(); err != nil {
-		return
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.ctx.Err(); err != nil {
@@ -122,9 +118,7 @@ func (m *GroupThinkConcurrency) finish(groupID int64) {
 
 // Close 停止调度并等待已启动任务退出
 func (m *GroupThinkConcurrency) Close() {
-	if m.cancel != nil {
-		m.cancel()
-	}
+	m.cancel()
 
 	m.mu.Lock()
 	m.queue = nil

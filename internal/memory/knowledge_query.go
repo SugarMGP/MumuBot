@@ -96,7 +96,7 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 	}
 	if len(prepared.embedding.Slice()) > 0 {
 		sql := `SELECT ki.id FROM knowledge_items ki WHERE ` + base + ` AND ki.embedding IS NOT NULL AND 1-(ki.embedding <=> ?)>=? ORDER BY ki.embedding <=> ?,ki.id` + poolLimit
-		values := append(append([]any{}, args...), prepared.embedding, 0.3, prepared.embedding)
+		values := append(append([]any{}, args...), prepared.embedding, contextVectorThreshold, prepared.embedding)
 		if err := m.db.WithContext(ctx).Raw(sql, values...).Scan(&vectors).Error; err != nil {
 			return nil, err
 		}

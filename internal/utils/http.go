@@ -119,9 +119,11 @@ func OpenPublicHTTP(ctx context.Context, rawURL string) (*http.Response, error) 
 			if attempt == 0 {
 				delay := retryDelay(wrapped)
 				_ = wrapped.Body.Close()
-				if waitRetry(ctx, delay) == nil {
-					continue
+				if err := waitRetry(ctx, delay); err != nil {
+					// 退避期间上下文已取消时返回真实取消原因，不再伪装成 HTTP 失败
+					return nil, err
 				}
+				continue
 			}
 		}
 		if wrapped.StatusCode < 200 || wrapped.StatusCode >= 300 {

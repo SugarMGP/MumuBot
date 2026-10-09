@@ -183,17 +183,26 @@ func (a *App) renderPageResponse(w http.ResponseWriter, r *http.Request, full te
 	a.render(w, full)
 }
 
-func (a *App) runtimeSnapshot() RuntimeSnapshot {
-	snapshot := RuntimeSnapshot{}
-	if a.cfg != nil {
-		if rows, err := a.memMgr.ListConversationTargets(context.Background(), memory.ConversationKindGroup, true); err == nil {
-			for _, row := range rows {
-				if !row.Blocked {
-					snapshot.EnabledGroups++
-				}
-			}
+// enabledGroups 返回当前启用且未被拉黑的群号，由需要群数据的页面各自调用，不混入运行时快照
+func (a *App) enabledGroups() []int64 {
+	if a.cfg == nil || a.memMgr == nil {
+		return nil
+	}
+	rows, err := a.memMgr.ListConversationTargets(context.Background(), memory.ConversationKindGroup, true)
+	if err != nil {
+		return nil
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if !row.Blocked {
+			ids = append(ids, row.TargetID)
 		}
 	}
+	return ids
+}
+
+func (a *App) runtimeSnapshot() RuntimeSnapshot {
+	snapshot := RuntimeSnapshot{}
 	if a.mumuAgent != nil {
 		snapshot.Connected = a.mumuAgent.OneBotConnected()
 		snapshot.SelfID = a.mumuAgent.BotSelfID()

@@ -4,24 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/jellydator/ttlcache/v3"
-	napcat "github.com/zjutjh/napcat-sdk"
-	"github.com/zjutjh/napcat-sdk/api"
-	"go.uber.org/zap"
 	"mumu-bot/internal/config"
-)
 
-type conversationEvent struct {
-	event      map[string]interface{}
-	receivedAt time.Time
-	arrivalSeq uint64
-	kind       string
-}
+	"github.com/jellydator/ttlcache/v3"
+	ob "github.com/zjutjh/onebot-sdk"
+	"github.com/zjutjh/onebot-sdk/api"
+	"go.uber.org/zap"
+)
 
 type Client struct {
 	transportCtx  context.Context
@@ -29,7 +22,7 @@ type Client struct {
 	closeOnce     sync.Once
 
 	connMu     sync.RWMutex
-	sdk        *napcat.Client
+	sdk        *ob.Client
 	generation uint64
 
 	mutedMu    sync.RWMutex
@@ -79,7 +72,8 @@ func (c *Client) connect() error {
 		return context.Canceled
 	}
 	cfg := config.Get()
-	sdk, err := napcat.DialWebSocket(c.transportCtx, cfg.OneBot.WsURL, napcat.WithToken(cfg.OneBot.AccessToken), napcat.WithRequestTimeout(30*time.Second), napcat.WithEventBuffer(1024), napcat.WithEventDeliveryTimeout(time.Second))
+	// 由 SDK 通过 get_version_info 自动检测后端方言，兼容 NapCat 与 SnowLuma
+	sdk, err := ob.DialWebSocket(c.transportCtx, cfg.OneBot.WsURL, ob.WithToken(cfg.OneBot.AccessToken), ob.WithRequestTimeout(30*time.Second), ob.WithEventBuffer(1024), ob.WithEventDeliveryTimeout(time.Second))
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
@@ -88,7 +82,8 @@ func (c *Client) connect() error {
 		_ = sdk.Close()
 		return fmt.Errorf("获取OneBot登录账号失败: %w", err)
 	}
-	if login == nil || login.UserID <= 0 || login.UserID > 1<<53-1 || math.Trunc(login.UserID) != login.UserID {
+	// UserID 为 int64，JSON 整数精确解码，不再需要 float64 精度校验
+	if login == nil || login.UserID <= 0 {
 		_ = sdk.Close()
 		return fmt.Errorf("OneBot返回无效的登录账号")
 	}
@@ -111,6 +106,7 @@ func (c *Client) connect() error {
 		_ = old.Close()
 	}
 	c.runConnectedHandlers()
+	zap.L().Info("OneBot 后端方言", zap.String("dialect", sdk.Dialect(c.transportCtx).Name))
 	go func() {
 		defer c.transportWG.Done()
 		c.consumeEvents(sdk, generation)
@@ -118,14 +114,14 @@ func (c *Client) connect() error {
 	return nil
 }
 
-func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
+func (c *Client) consumeEvents(sdk *ob.Client, generation uint64) {
 	select {
 	case <-c.eventGate:
 	case <-c.transportCtx.Done():
 		return
 	}
 	for ev := range sdk.Events() {
-		c.enqueueEvent(ev.Raw())
+		c.enqueueEvent(ev)
 	}
 	err := sdk.Err()
 	c.connMu.RLock()
@@ -134,7 +130,7 @@ func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
 	switch {
 	case c.transportCtx.Err() != nil || !current:
 		zap.L().Debug("OneBot 事件流已主动关闭", zap.Error(err))
-	case errors.Is(err, napcat.ErrEventBackpressure):
+	case errors.Is(err, ob.ErrEventBackpressure):
 		zap.L().Error("OneBot SDK 事件背压超时，连接将重建", zap.Error(err))
 	case err != nil:
 		zap.L().Warn("OneBot 网络事件流中断", zap.Error(err))
@@ -144,7 +140,7 @@ func (c *Client) consumeEvents(sdk *napcat.Client, generation uint64) {
 	c.startReconnect(sdk, generation)
 }
 
-func (c *Client) startReconnect(disconnected *napcat.Client, generation uint64) {
+func (c *Client) startReconnect(disconnected *ob.Client, generation uint64) {
 	c.connMu.Lock()
 	if c.transportCtx.Err() != nil || c.sdk != disconnected || c.generation != generation {
 		c.connMu.Unlock()
@@ -297,7 +293,7 @@ func (c *Client) Close() error {
 	return closeErr
 }
 
-func (c *Client) currentSDK() (*napcat.Client, error) {
+func (c *Client) currentSDK() (*ob.Client, error) {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()
 	if c.sdk == nil {

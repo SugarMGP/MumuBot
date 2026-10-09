@@ -112,7 +112,8 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 		}
 		evidence := map[uint][][]string{}
 		for _, item := range graph.Items {
-			sets, e := tc.MemoryMgr.ListKnowledgeEvidenceScope(ctx, tc.ConversationKind, tc.TargetID, item.ID, 0)
+			// 邻域可能含其他会话的自身知识，证据按条目自身作用域读取
+			sets, e := tc.MemoryMgr.ListKnowledgeEvidenceScope(ctx, item.ConversationKind, item.TargetID, item.ID, 0)
 			if e != nil {
 				return nil, e
 			}

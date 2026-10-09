@@ -82,7 +82,7 @@ templ MemberListPage(data MemberListPageData, currentPath string) {
 
 templ MemberListBody(data MemberListPageData) {
 	<div class="admin-memory-page space-y-6">
-		@PageHeader("成员管理", "查看成员身份、群聊知识与原文参与记录。", "")
+		@PageHeader("成员管理", "查看成员身份、会话知识与原文参与记录。", "")
 		@FilterPanel("member-filters", "筛选条件", EmptyComponent(), false, MemberFilterForm(data))
 		@SortToolbar(data.Sort)
 		<div class="space-y-3">
@@ -107,10 +107,10 @@ templ MemberListBody(data MemberListPageData) {
 						</section>
 						<section class="grid grid-cols-2 gap-3 text-sm">
 							<a class="admin-member-stat text-primary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?user_id=%d", item.UserID)) }>
-								<span>关于 TA 的群聊记忆</span><strong>{ fmt.Sprint(item.KnowledgeCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-knowledge")
+								<span>关于 TA 的会话记忆</span><strong>{ fmt.Sprint(item.KnowledgeCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-knowledge")
 							</a>
 							<a class="admin-member-stat text-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?author_id=%d", item.UserID)) }>
-								<span>提供依据的群聊记忆</span><strong>{ fmt.Sprint(item.ParticipationCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-evidence")
+								<span>提供依据的会话记忆</span><strong>{ fmt.Sprint(item.ParticipationCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-evidence")
 							</a>
 						</section>
 						<section class="text-right text-xs text-base-content/60">

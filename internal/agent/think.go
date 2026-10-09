@@ -82,16 +82,12 @@ func (a *Agent) thinkCycle() {
 }
 
 func (a *Agent) scheduleGroupThink(groupID int64, isMention, probabilityPassed bool, receivedAt time.Time) {
-	if a.stopping.Load() || a.ctx.Err() != nil || a.groupConcurrency.IsRunning(groupID) {
-		zap.L().Debug("群思考正在执行，忽略新触发", zap.Int64("group_id", groupID))
-		return
-	}
 	debounce := time.Duration(config.Get().Agent.ThinkDebounceMS) * time.Millisecond
 	delay := remainingDebounce(receivedAt, time.Now(), debounce)
 
 	a.pendingGroupMu.Lock()
 	defer a.pendingGroupMu.Unlock()
-	if a.stopping.Load() || a.ctx.Err() != nil {
+	if a.stopping.Load() || a.ctx.Err() != nil || a.groupConcurrency.IsRunning(groupID) {
 		return
 	}
 	pending := a.pendingGroupThinks[groupID]
@@ -267,8 +263,8 @@ func (a *Agent) thinkGroup(groupID int64, probabilityPassed bool) {
 	tc := tools.GetToolContext(ctx)
 
 	chatContext := a.renderChatContext(buffer, readSeq, tc)
-	if chatContext == "" {
-		// 无任何可读内容时同样消费快照水位，避免后续调度反复空转
+	// 本轮消息没有可读内容时消费快照水位，避免后续调度反复空转
+	if chatContext == "" || !hasCurrentContext {
 		a.commitReadSnapshot(groupID, snapshotSeq)
 		return
 	}
@@ -279,13 +275,6 @@ func (a *Agent) thinkGroup(groupID int64, probabilityPassed bool) {
 		zap.L().Warn("读取工作便签失败", zap.Error(err))
 	} else {
 		promptCtx.WorkingNote = note
-	}
-
-	if !semanticCurrent {
-		if !hasCurrentContext {
-			a.commitReadSnapshot(groupID, snapshotSeq)
-			return
-		}
 	}
 
 	if semanticCurrent && snapshotMessageID != 0 {

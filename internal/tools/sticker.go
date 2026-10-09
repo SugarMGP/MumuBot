@@ -100,15 +100,20 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	// 获取表情包信息
 	sticker, err := tc.MemoryMgr.GetStickerByID(input.StickerID)
 	if err != nil {
-		return nil, fmt.Errorf("表情包不存在")
+		return nil, fmt.Errorf("获取表情包信息失败: %w", err)
 	}
 
-	// 构建文件路径
-	cfg := config.Get()
-	storagePath := cfg.Sticker.StoragePath
-	filePath, err := filepath.Abs(filepath.Join(storagePath, sticker.FileName))
+	// 构建文件路径，文件名只取基名并校验结果仍位于表情包目录内，不允许携带路径
+	base, err := filepath.Abs(config.Get().Sticker.StoragePath)
 	if err != nil {
 		return nil, fmt.Errorf("获取文件路径失败: %w", err)
+	}
+	filePath, err := filepath.Abs(filepath.Join(base, filepath.Base(sticker.FileName)))
+	if err != nil {
+		return nil, fmt.Errorf("获取文件路径失败: %w", err)
+	}
+	if filepath.Dir(filePath) != base {
+		return nil, fmt.Errorf("表情包文件路径无效")
 	}
 
 	// 检查文件是否存在

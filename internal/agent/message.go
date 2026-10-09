@@ -11,7 +11,6 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
-	"mumu-bot/internal/utils"
 
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
@@ -52,7 +51,7 @@ func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 }
 
 func (a *Agent) onGroupMessage(msg *onebot.ConversationMessage) {
-	a.enqueueCommit(msg.ArrivalSeq, groupCommitItem{groupID: msg.TargetID, msg: msg})
+	a.groupCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg})
 }
 
 // onRecall 撤回事件入口：带到达序号进入提交队列，与会话内消息保持顺序
@@ -80,10 +79,10 @@ func (a *Agent) onRecall(kind string, targetID, messageID int64, arrivalSeq uint
 	}
 	recall := &recallCommit{kind: kind, targetID: targetID, messageID: messageID}
 	if kind == memory.ConversationKindPrivate {
-		a.enqueuePrivateRecall(targetID, arrivalSeq, recall)
+		a.privateCommits.enqueue(targetID, arrivalSeq, commitItem{recall: recall})
 		return
 	}
-	a.enqueueCommit(arrivalSeq, groupCommitItem{groupID: targetID, recall: recall})
+	a.groupCommits.enqueue(targetID, arrivalSeq, commitItem{recall: recall})
 }
 
 // onInteractionMessage 只构造戳一戳的展示内容，返回是否有效；缓冲和思考调度由提交队列统一处理
@@ -192,14 +191,10 @@ func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.Re
 		return &onebot.ReplyInfo{MessageID: messageID}, nil
 	}
 
-	reply := &onebot.ReplyInfo{MessageID: messageID}
-	if rawMsg, ok := replyData["raw_message"].(string); ok {
-		reply.Content = rawMsg
-	}
-	if sender, ok := replyData["sender"].(map[string]interface{}); ok {
-		if uid, ok := utils.ParseInt64Value(sender["user_id"]); ok {
-			reply.SenderID = uid
-		}
+	reply := &onebot.ReplyInfo{MessageID: messageID, Content: replyData.RawMessage}
+	// UserID 保留生成代码的原始联合形态（整数报文），直接解码；Sender map 值已退化为 float64，只取字符串字段
+	reply.SenderID = onebot.ParseIDFromRaw(replyData.UserID.Raw)
+	if sender := replyData.Sender; sender != nil {
 		if nick, ok := sender["nickname"].(string); ok {
 			reply.Nickname = nick
 		}
@@ -210,23 +205,38 @@ func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.Re
 	return reply, nil
 }
 
+// messageBufferLimit 读取会话缓冲窗口大小，未配置时回退默认值
+func messageBufferLimit() int {
+	limit := config.Get().Agent.MessageBufferSize
+	if limit <= 0 {
+		return 30
+	}
+	return limit
+}
+
+// appendMessageBuffer 追加一条消息并按窗口上限裁剪，返回新缓冲与被裁剪消息的最大到达序号（0 表示未裁剪）
+func appendMessageBuffer(messages []*onebot.ConversationMessage, msg *onebot.ConversationMessage, limit int) ([]*onebot.ConversationMessage, uint64) {
+	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可
+	messages = append(messages, msg)
+	if len(messages) <= limit {
+		return messages, 0
+	}
+	trimmed := messages[:len(messages)-limit]
+	trimmedSeq := uint64(0)
+	if last := trimmed[len(trimmed)-1]; last != nil {
+		trimmedSeq = last.ArrivalSeq
+	}
+	return slices.Delete(messages, 0, len(messages)-limit), trimmedSeq
+}
+
 func (a *Agent) addBuffer(msg *onebot.ConversationMessage) {
 	a.groupBuffersMu.Lock()
 	defer a.groupBuffersMu.Unlock()
-	bufSize := config.Get().Agent.MessageBufferSize
-	if bufSize <= 0 {
-		bufSize = 30
-	}
-	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可
-	messages := append(a.groupBuffers[msg.TargetID], msg)
-	if len(messages) > bufSize {
-		trimmed := messages[:len(messages)-bufSize]
-		if n := len(trimmed); n > 0 && trimmed[n-1] != nil {
-			a.groupTrimmedSeq[msg.TargetID] = max(a.groupTrimmedSeq[msg.TargetID], trimmed[n-1].ArrivalSeq)
-		}
-		messages = slices.Delete(messages, 0, len(messages)-bufSize)
-	}
+	messages, trimmedSeq := appendMessageBuffer(a.groupBuffers[msg.TargetID], msg, messageBufferLimit())
 	a.groupBuffers[msg.TargetID] = messages
+	if trimmedSeq > 0 {
+		a.groupTrimmedSeq[msg.TargetID] = max(a.groupTrimmedSeq[msg.TargetID], trimmedSeq)
+	}
 	if msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID() {
 		// 自身消息是缓冲边界，同序号及此前群事件不再留到下一轮处理
 		a.groupReadSeq[msg.TargetID] = max(a.groupReadSeq[msg.TargetID], msg.ArrivalSeq)
@@ -261,32 +271,27 @@ func (a *Agent) syncRecalledMessage(log *memory.MessageLog) {
 	if log == nil {
 		return
 	}
-	if log.ConversationKind == memory.ConversationKindPrivate {
-		a.privateMu.Lock()
-		for i, msg := range a.privateBuffers[log.TargetID] {
+	replace := func(messages []*onebot.ConversationMessage) []*onebot.ConversationMessage {
+		for i, msg := range messages {
 			if msg == nil || msg.MessageID != log.OneBotMessageID {
 				continue
 			}
 			replacement := messageLogToBufferedConversationMessage(*log)
 			replacement.ArrivalSeq = msg.ArrivalSeq
-			a.privateBuffers[log.TargetID][i] = replacement
+			messages[i] = replacement
 			break
 		}
+		return messages
+	}
+	if log.ConversationKind == memory.ConversationKindPrivate {
+		a.privateMu.Lock()
+		a.privateBuffers[log.TargetID] = replace(a.privateBuffers[log.TargetID])
 		a.privateMu.Unlock()
-		a.replyCache.Delete(replyCacheKey(log.ConversationKind, log.TargetID, log.OneBotMessageID))
-		return
+	} else {
+		a.groupBuffersMu.Lock()
+		a.groupBuffers[log.TargetID] = replace(a.groupBuffers[log.TargetID])
+		a.groupBuffersMu.Unlock()
 	}
-	a.groupBuffersMu.Lock()
-	for i, msg := range a.groupBuffers[log.TargetID] {
-		if msg == nil || msg.MessageID != log.OneBotMessageID {
-			continue
-		}
-		replacement := messageLogToBufferedConversationMessage(*log)
-		replacement.ArrivalSeq = msg.ArrivalSeq
-		a.groupBuffers[log.TargetID][i] = replacement
-		break
-	}
-	a.groupBuffersMu.Unlock()
 	a.replyCache.Delete(replyCacheKey(log.ConversationKind, log.TargetID, log.OneBotMessageID))
 }
 

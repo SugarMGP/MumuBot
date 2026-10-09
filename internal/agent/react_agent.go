@@ -47,8 +47,8 @@ type Agent struct {
 	privateTools     []tool.BaseTool
 	mcpMgr           *mcp.Manager
 	groupConcurrency *GroupThinkConcurrency
-	groupCommits     *commitQueueSet[groupCommitItem]
-	privateCommits   *commitQueueSet[privateCommitItem]
+	groupCommits     *commitQueueSet[commitItem]
+	privateCommits   *commitQueueSet[commitItem]
 
 	learner *learning.Learner
 
@@ -136,7 +136,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		visionCache:          newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
 	}
 	a.groupCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("group_id", targetID) })
-	a.privateCommits = newCommitQueueSet(a.commitPrivateItem, func(targetID int64) zap.Field { return zap.Int64("target_id", targetID) })
+	a.privateCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("target_id", targetID) })
 	a.topicMgr = topic.NewManager(mem.GetDB())
 	constructed := false
 	defer func() {
@@ -324,7 +324,6 @@ func (a *Agent) Start() error {
 	a.bot.OnMessage(a.onMessage)
 	a.bot.OnRecall(a.onRecall)
 	if a.learner != nil {
-		a.bot.OnConnected(func() { a.learner.Start(a.ctx) })
 		a.learner.Start(a.ctx)
 	}
 
@@ -335,11 +334,7 @@ func (a *Agent) Start() error {
 }
 
 func (a *Agent) loadConversationBuffersFromDB() error {
-	cfg := config.Get()
-	bufSize := cfg.Agent.MessageBufferSize
-	if bufSize <= 0 {
-		bufSize = 30
-	}
+	bufSize := messageBufferLimit()
 	groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx)
 	if err != nil {
 		return fmt.Errorf("读取可恢复群聊失败: %w", err)
@@ -357,7 +352,6 @@ func (a *Agent) loadConversationBuffersFromDB() error {
 		messages := a.restoreMessageBuffer(logs)
 		a.groupBuffersMu.Lock()
 		a.groupBuffers[groupID] = messages
-		a.groupReadSeq[groupID] = 0
 		a.groupBuffersMu.Unlock()
 
 		zap.L().Info("已从数据库加载消息历史", zap.Int64("group_id", groupID), zap.Int("count", len(logs)))

@@ -1,90 +1,86 @@
 package onebot
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"time"
 
-	"mumu-bot/internal/utils"
-
-	"github.com/bytedance/sonic"
+	"github.com/zjutjh/onebot-sdk/event"
 	"go.uber.org/zap"
 )
 
-func (c *Client) enqueueEvent(raw []byte) {
-	receivedAt := time.Now()
-	var event map[string]interface{}
-	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&event); err != nil {
-		zap.L().Warn("解析事件分组键失败", zap.Error(err))
-		return
-	}
-	postType, _ := event["post_type"].(string)
-	switch postType {
-	case "meta_event":
-		return
-	case "notice":
-		notice, _ := event["notice_type"].(string)
-		sub, _ := event["sub_type"].(string)
-		// 这几种通知不参与消息排序，直接处理
-		if notice == "group_ban" || notice == "group_decrease" || notice == "friend_add" {
-			c.handleNoticeEvent(event, receivedAt, 0)
-			return
-		}
-		if notice != "group_recall" && notice != "friend_recall" && (notice != "notify" || sub != "poke") {
-			return
-		}
-		// 按事件类型确认对应业务回调已就绪，未就绪则直接丢弃且不分配序号，
-		// 保证每个已分配序号的事件最终都能进入业务回调消费
-		if notice == "group_recall" || notice == "friend_recall" {
-			if c.onRecall == nil {
-				return
-			}
-		} else if c.onMessage == nil {
-			return
-		}
-	case "request":
-		c.handleRequestEvent(event)
-		return
-	case "message":
-		messageType, _ := event["message_type"].(string)
-		if messageType != "group" && messageType != "private" {
+// conversationEvent 已确认会话归属、等待分配到达序号的事件
+type conversationEvent struct {
+	event      event.Event
+	receivedAt time.Time
+	arrivalSeq uint64
+	kind       string
+}
+
+// enqueueEvent 识别强类型事件并按会话分发，无法定位会话或回调未就绪的事件直接丢弃
+func (c *Client) enqueueEvent(ev event.Event) {
+	switch e := ev.(type) {
+	case *event.GroupMessage:
+		// 机器人自发消息（post_type 为 message_sent）不作为新消息处理
+		if e.PostType() != "message" {
 			return
 		}
 		if c.onMessage == nil {
 			return
 		}
-	default:
-		return
-	}
-	kind := "group"
-	targetID, targetOK := utils.ParseInt64Value(event["group_id"])
-	if postType == "notice" && event["notice_type"] == "friend_recall" {
-		kind = "private"
-		targetID, targetOK = utils.ParseInt64Value(event["user_id"])
-	}
-	if postType == "message" && event["message_type"] == "private" {
-		kind = "private"
-		targetID = privateMessageTarget(event, c.GetSelfID())
-		targetOK = targetID > 0
-	}
-	if postType == "notice" && event["notice_type"] == "notify" && event["sub_type"] == "poke" {
-		kind, targetID = pokeConversation(event)
-		targetOK = targetID > 0
-	}
-	if !targetOK || targetID <= 0 {
-		zap.L().Warn("忽略缺少有效会话目标的事件")
-		return
-	}
-	if postType == "message" {
-		messageID, messageOK := utils.ParseInt64Value(event["message_id"])
-		if !messageOK || messageID == 0 {
-			zap.L().Warn("忽略缺少有效编号的群消息")
+		c.requireConversationTarget(e.GroupID.Int64(), e.MessageID.Int64(), int64(e.GroupID), "group", e, "群消息")
+
+	case *event.PrivateMessage:
+		if e.PostType() != "message" {
 			return
 		}
+		if c.onMessage == nil {
+			return
+		}
+		// target_id 由 SDK 管线按方言补齐，缺失时无法定位会话
+		c.requireConversationTarget(e.TargetID.Int64(), e.MessageID.Int64(), int64(e.TargetID), "private", e, "私聊消息")
+
+	case *event.Poke:
+		if c.onMessage == nil {
+			return
+		}
+		kind, targetID := pokeConversation(e)
+		if targetID <= 0 {
+			zap.L().Warn("忽略缺少有效会话目标的戳一戳事件")
+			return
+		}
+		c.dispatchEvent(kind, targetID, conversationEvent{event: e, receivedAt: time.Now(), kind: kind})
+
+	case *event.GroupRecall:
+		if c.onRecall == nil || e.GroupID <= 0 {
+			return
+		}
+		c.dispatchEvent("group", int64(e.GroupID), conversationEvent{event: e, receivedAt: time.Now(), kind: "group"})
+
+	case *event.FriendRecall:
+		if c.onRecall == nil || e.UserID <= 0 {
+			return
+		}
+		c.dispatchEvent("private", int64(e.UserID), conversationEvent{event: e, receivedAt: time.Now(), kind: "private"})
+
+	case *event.GroupBan:
+		c.handleGroupBan(e)
+	case *event.GroupDecrease:
+		c.handleGroupDecrease(e)
+	case *event.FriendAdd:
+		c.handleFriendAdd(e)
+	case *event.FriendRequest:
+		c.handleFriendRequest(e)
 	}
-	c.dispatchEvent(targetID, conversationEvent{event: event, receivedAt: receivedAt, kind: kind})
+}
+
+// requireConversationTarget 校验群聊/私聊消息的会话目标与消息编号后分发
+func (c *Client) requireConversationTarget(targetID, messageID, eventTarget int64, kind string, ev event.Event, label string) {
+	if eventTarget <= 0 || messageID == 0 {
+		zap.L().Warn("忽略缺少有效会话目标或编号的消息", zap.String("label", label))
+		return
+	}
+	c.dispatchEvent(kind, targetID, conversationEvent{event: ev, receivedAt: time.Now(), kind: kind})
 }
 
 // nextArrivalSeq 为每个会话分配统一运行时顺序
@@ -98,195 +94,137 @@ func (c *Client) nextArrivalSeq(kind string, targetID int64) uint64 {
 
 // dispatchEvent 每条事件直接并发处理，不做按会话串行或并发上限
 // 事件入口已确认对应业务回调就绪，分发后该事件必然进入业务回调消费序号
-func (c *Client) dispatchEvent(targetID int64, event conversationEvent) {
-	event.arrivalSeq = c.nextArrivalSeq(event.kind, targetID)
+func (c *Client) dispatchEvent(kind string, targetID int64, queued conversationEvent) {
+	queued.arrivalSeq = c.nextArrivalSeq(kind, targetID)
 	c.eventWG.Add(1)
 	go func() {
 		defer c.eventWG.Done()
-		c.handleConversationEvent(event)
+		c.handleConversationEvent(queued)
 	}()
 }
 
 func (c *Client) handleConversationEvent(queued conversationEvent) {
-	switch queued.event["post_type"] {
-	case "message":
-		if queued.kind == "private" {
-			c.handlePrivateMessageEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
-			return
+	switch e := queued.event.(type) {
+	case *event.GroupMessage:
+		msg := c.parseGroupMessage(e)
+		if msg == nil {
+			// 解析失败：记录现场并构造占位消息消费到达序号，避免上层提交重排器死等
+			zap.L().Warn("群消息段解析失败，已构造占位消息", zap.Int64("group_id", int64(e.GroupID)), zap.Int64("message_id", int64(e.MessageID)))
+			msg = &ConversationMessage{ConversationKind: "group", TargetID: int64(e.GroupID), MessageID: int64(e.MessageID), ParseFailed: true}
 		}
-		c.handleMessageEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
-	case "notice":
-		c.handleNoticeEvent(queued.event, queued.receivedAt, queued.arrivalSeq)
+		msg.ReceivedAt = queued.receivedAt
+		msg.ArrivalSeq = queued.arrivalSeq
+		c.onMessage(msg)
+
+	case *event.PrivateMessage:
+		msg := c.parsePrivateMessage(e)
+		if msg == nil {
+			zap.L().Warn("私聊消息段解析失败，已构造占位消息", zap.Int64("target_id", int64(e.TargetID)), zap.Int64("message_id", int64(e.MessageID)))
+			msg = &ConversationMessage{ConversationKind: "private", TargetID: int64(e.TargetID), MessageID: int64(e.MessageID), ParseFailed: true}
+		}
+		msg.ReceivedAt = queued.receivedAt
+		msg.ArrivalSeq = queued.arrivalSeq
+		c.onMessage(msg)
+
+	case *event.Poke:
+		c.handlePoke(e, queued.receivedAt, queued.arrivalSeq)
+
+	case *event.GroupRecall:
+		// 有效性由业务层校验（无效撤回会消费序号后跳过）
+		c.onRecall("group", int64(e.GroupID), int64(e.MessageID), queued.arrivalSeq)
+
+	case *event.FriendRecall:
+		// 好友撤回没有操作人字段，按好友 QQ 定位会话
+		c.onRecall("private", int64(e.UserID), int64(e.MessageID), queued.arrivalSeq)
 	}
 }
 
-func (c *Client) handleMessageEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	msg := c.parseGroupMessage(event)
-	if msg == nil {
-		// 解析失败：记录现场并构造占位消息消费到达序号，避免上层提交重排器死等
-		groupID, _ := utils.ParseInt64Value(event["group_id"])
-		messageID, _ := utils.ParseInt64Value(event["message_id"])
-		zap.L().Warn("群消息段解析失败，已构造占位消息", zap.Int64("group_id", groupID), zap.Int64("message_id", messageID), zap.Any("post_type", event["post_type"]))
-		msg = &ConversationMessage{ConversationKind: "group", TargetID: groupID, ParseFailed: true}
+// pokeConversation 使用后端上报的群号或好友对端定位会话，好友 user_id 不是动作发送者
+func pokeConversation(e *event.Poke) (string, int64) {
+	if e.GroupID != 0 {
+		return "group", int64(e.GroupID)
 	}
-	msg.ReceivedAt = receivedAt
-	msg.ArrivalSeq = arrivalSeq
-	c.onMessage(msg)
+	return "private", int64(e.UserID)
 }
 
-func (c *Client) handlePrivateMessageEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	msg := c.parsePrivateMessage(event)
-	if msg == nil {
-		targetID := privateMessageTarget(event, c.GetSelfID())
-		messageID, _ := utils.ParseInt64Value(event["message_id"])
-		zap.L().Warn("私聊消息段解析失败，已构造占位消息", zap.Int64("target_id", targetID), zap.Int64("message_id", messageID))
-		msg = &ConversationMessage{ConversationKind: "private", TargetID: targetID, MessageID: messageID, ParseFailed: true}
-	}
-	msg.ReceivedAt = receivedAt
-	msg.ArrivalSeq = arrivalSeq
-	c.onMessage(msg)
-}
-func (c *Client) handleNoticeEvent(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
-	notice, _ := event["notice_type"].(string)
-	sub, _ := event["sub_type"].(string)
-	switch {
-	case notice == "group_ban":
-		c.handleGroupBanNotice(event, sub)
-	case notice == "notify" && sub == "poke":
-		c.handlePokeNotice(event, receivedAt, arrivalSeq)
-	case notice == "group_recall":
-		c.handleGroupRecallNotice(event, arrivalSeq)
-	case notice == "friend_recall":
-		c.handleFriendRecallNotice(event, arrivalSeq)
-	case notice == "group_decrease":
-		c.handleGroupDecreaseNotice(event)
-	case notice == "friend_add":
-		c.handleFriendAddNotice(event)
-	}
-}
-
-// handleGroupDecreaseNotice 只在机器人自己退群、被踢或群解散时回调，普通成员进出群与联系人状态无关
-func (c *Client) handleGroupDecreaseNotice(event map[string]interface{}) {
-	if c.onGroupLeft == nil {
-		return
-	}
-	groupID, _ := utils.ParseInt64Value(event["group_id"])
-	if groupID <= 0 {
-		return
-	}
-	subType, _ := event["sub_type"].(string)
-	userID, _ := utils.ParseInt64Value(event["user_id"])
-	selfID := c.GetSelfID()
-	if subType != "kick_me" && subType != "disband" && !(selfID > 0 && userID == selfID) {
-		return
-	}
-	c.onGroupLeft(groupID)
-}
-
-// handleFriendAddNotice 好友关系建立后立即放行，避免等下一次联系人同步
-func (c *Client) handleFriendAddNotice(event map[string]interface{}) {
-	if c.onFriendAdd == nil {
-		return
-	}
-	userID, _ := utils.ParseInt64Value(event["user_id"])
-	if userID <= 0 {
-		return
-	}
-	c.onFriendAdd(userID)
-}
-
-// pokeConversation 使用 NapCat 的群号或好友对端定位会话，好友 user_id 不是动作发送者
-func pokeConversation(event map[string]interface{}) (string, int64) {
-	if value, exists := event["group_id"]; exists {
-		groupID, _ := utils.ParseInt64Value(value)
-		return "group", groupID
-	}
-	targetID, _ := utils.ParseInt64Value(event["user_id"])
-	return "private", targetID
-}
-
-func (c *Client) handlePokeNotice(event map[string]interface{}, receivedAt time.Time, arrivalSeq uint64) {
+func (c *Client) handlePoke(e *event.Poke, receivedAt time.Time, arrivalSeq uint64) {
 	// 有效性由业务层校验：无效戳一戳也会通过占位路径消费序号，不在此处提前返回
-	kind, conversationTarget := pokeConversation(event)
-	userID, _ := utils.ParseInt64Value(event["user_id"])
+	kind, conversationTarget := pokeConversation(e)
+	userID := int64(e.UserID)
 	if kind == "private" {
-		userID, _ = utils.ParseInt64Value(event["sender_id"])
+		userID = int64(e.SenderID)
 	}
-	targetID, _ := utils.ParseInt64Value(event["target_id"])
 	eventTime := time.Now()
-	if seconds, ok := utils.ParseInt64Value(event["time"]); ok && seconds > 0 {
+	if seconds := e.Time(); seconds > 0 {
 		eventTime = time.Unix(seconds, 0)
 	}
 	c.onMessage(&ConversationMessage{
 		ConversationKind: kind,
 		TargetID:         conversationTarget,
 		UserID:           userID,
-		AtList:           []int64{targetID},
+		AtList:           []int64{int64(e.TargetID)},
 		Time:             eventTime,
 		ReceivedAt:       receivedAt,
 		ArrivalSeq:       arrivalSeq,
 	})
 }
 
-func (c *Client) handleGroupRecallNotice(event map[string]interface{}, arrivalSeq uint64) {
-	// 有效性由业务层校验（无效撤回会消费序号后跳过）
-	groupID, _ := utils.ParseInt64Value(event["group_id"])
-	messageID, _ := utils.ParseInt64Value(event["message_id"])
-	c.onRecall("group", groupID, messageID, arrivalSeq)
-}
-
-func (c *Client) handleFriendRecallNotice(event map[string]interface{}, arrivalSeq uint64) {
-	// 好友撤回没有操作人字段，按好友 QQ 定位会话
-	userID, _ := utils.ParseInt64Value(event["user_id"])
-	messageID, _ := utils.ParseInt64Value(event["message_id"])
-	c.onRecall("private", userID, messageID, arrivalSeq)
-}
-func (c *Client) handleRequestEvent(event map[string]interface{}) {
-	request, _ := event["request_type"].(string)
-	zap.L().Debug("收到请求", zap.String("type", request))
-	if request != "friend" || c.onFriendRequest == nil {
+// handleGroupBan 只关心机器人自身被禁言的时长
+func (c *Client) handleGroupBan(e *event.GroupBan) {
+	groupID := int64(e.GroupID)
+	if groupID == 0 || int64(e.UserID) != c.GetSelfID() {
 		return
 	}
-	userID, ok := utils.ParseInt64Value(event["user_id"])
-	if !ok || userID <= 0 {
-		return
-	}
-	flag, _ := event["flag"].(string)
-	nickname := ""
-	if sender, ok := event["sender"].(map[string]interface{}); ok {
-		if value, ok := sender["nickname"].(string); ok && value != "" {
-			nickname = value
-		}
-	}
-	c.onFriendRequest(FriendRequestEvent{Flag: flag, UserID: userID, Nickname: nickname, Comment: commentText(event), ReceivedAt: time.Now()})
-}
-
-func commentText(event map[string]interface{}) string {
-	if value, ok := event["comment"].(string); ok {
-		return value
-	}
-	return ""
-}
-
-func (c *Client) handleGroupBanNotice(event map[string]interface{}, subType string) {
-	groupID, ok := utils.ParseInt64Value(event["group_id"])
-	if !ok || groupID == 0 {
-		return
-	}
-	userID, ok := utils.ParseInt64Value(event["user_id"])
-	if !ok || userID != c.GetSelfID() {
-		return
-	}
-	if subType == "lift_ban" {
+	if e.SubType == "lift_ban" {
 		c.clearSelfMuted(groupID)
 		return
 	}
-	if subType != "ban" {
+	if e.SubType != "ban" {
 		return
 	}
-	if seconds, ok := utils.ParseInt64Value(event["duration"]); ok && seconds > 0 {
-		c.setSelfMutedUntil(groupID, time.Now().Add(time.Duration(seconds)*time.Second))
+	if e.Duration > 0 {
+		c.setSelfMutedUntil(groupID, time.Now().Add(time.Duration(e.Duration)*time.Second))
 		return
 	}
 	c.clearSelfMuted(groupID)
+}
+
+// handleGroupDecrease 只在机器人自己退群、被踢或群解散时回调，普通成员进出群与联系人状态无关
+func (c *Client) handleGroupDecrease(e *event.GroupDecrease) {
+	if c.onGroupLeft == nil {
+		return
+	}
+	groupID := int64(e.GroupID)
+	if groupID <= 0 {
+		return
+	}
+	userID := int64(e.UserID)
+	selfID := c.GetSelfID()
+	if e.SubType != "kick_me" && e.SubType != "disband" && !(selfID > 0 && userID == selfID) {
+		return
+	}
+	c.onGroupLeft(groupID)
+}
+
+// handleFriendAdd 好友关系建立后立即放行，避免等下一次联系人同步
+func (c *Client) handleFriendAdd(e *event.FriendAdd) {
+	if c.onFriendAdd == nil || e.UserID <= 0 {
+		return
+	}
+	c.onFriendAdd(int64(e.UserID))
+}
+
+func (c *Client) handleFriendRequest(e *event.FriendRequest) {
+	zap.L().Debug("收到请求", zap.String("type", "friend"))
+	if c.onFriendRequest == nil || e.UserID <= 0 {
+		return
+	}
+	// 好友申请事件只上报 user_id/comment/flag，昵称需补查；事件流水线是串行的，
+	// 补查放到独立协程执行，失败时昵称留空由后台回退展示 QQ 号
+	go func() {
+		ctx, cancel := context.WithTimeout(c.transportCtx, 5*time.Second)
+		defer cancel()
+		nickname := c.GetStrangerNickname(ctx, int64(e.UserID))
+		c.onFriendRequest(FriendRequestEvent{Flag: e.Flag, UserID: int64(e.UserID), Nickname: nickname, Comment: e.Comment, ReceivedAt: time.Now()})
+	}()
 }

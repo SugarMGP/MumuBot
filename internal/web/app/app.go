@@ -22,11 +22,10 @@ import (
 )
 
 type RuntimeSnapshot struct {
-	Connected     bool
-	SelfID        int64
-	MCPToolCount  int
-	CurrentMood   *memory.MoodState
-	EnabledGroups int
+	Connected    bool
+	SelfID       int64
+	MCPToolCount int
+	CurrentMood  *memory.MoodState
 }
 
 type App struct {
@@ -218,6 +217,7 @@ func (a *App) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expiresAt,
 	})
@@ -235,6 +235,7 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

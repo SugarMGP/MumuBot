@@ -13,6 +13,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/zjutjh/onebot-sdk/message"
 	"go.uber.org/zap"
 )
 
@@ -24,7 +25,7 @@ func (a *Agent) buildGroupContext(groupID int64) string {
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
 
-	info, err := a.bot.GetGroupInfo(ctx, groupID, false)
+	info, err := a.bot.GetGroupInfo(ctx, groupID)
 	if err != nil {
 		zap.L().Debug("获取群基础信息失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return ""
@@ -80,11 +81,8 @@ func (a *Agent) buildConversationMemoryContext(ctx context.Context, kind string,
 		if e != nil {
 			err = e
 		} else {
-			for _, item := range found {
-				if item.TargetID != targetID {
-					cross = append(cross, item)
-				}
-			}
+			// 跨会话查询的 SQL 条件已排除当前会话，结果无需再次过滤
+			cross = found
 		}
 	}
 	if err != nil {
@@ -205,7 +203,11 @@ func hasDisplayContext(messages []*onebot.ConversationMessage) bool {
 }
 
 func (a *Agent) renderModelMessage(message *onebot.ConversationMessage, tc *tools.ToolContext) string {
-	if message == nil || strings.TrimSpace(message.FinalContent) == "" {
+	if message == nil {
+		return ""
+	}
+	final := strings.TrimSpace(message.FinalContent)
+	if final == "" {
 		return ""
 	}
 	userID := fmt.Sprintf("%d", message.UserID)
@@ -238,7 +240,7 @@ func (a *Agent) renderModelMessage(message *onebot.ConversationMessage, tc *tool
 			reply = "[回复历史消息] "
 		}
 	}
-	return fmt.Sprintf("%s[%s] %s(%s): %s%s\n", ref, message.Time.Format("15:04:05"), displayName, userID, reply, strings.TrimSpace(message.FinalContent))
+	return fmt.Sprintf("%s[%s] %s(%s): %s%s\n", ref, message.Time.Format("15:04:05"), displayName, userID, reply, final)
 }
 
 func (a *Agent) renderChatContext(buffer []*onebot.ConversationMessage, readSeq uint64, tc *tools.ToolContext) string {
@@ -441,40 +443,33 @@ func (a *Agent) describeVideoCached(ctx context.Context, vid onebot.VideoInfo) (
 	return desc, err
 }
 
-func collectForwardMedia(value interface{}, imageURLs, videoURLs *[]string) {
-	switch current := value.(type) {
-	case []interface{}:
-		for _, item := range current {
-			collectForwardMedia(item, imageURLs, videoURLs)
-		}
-	case map[string]interface{}:
-		segmentType, isSegment := current["type"].(string)
-		if isSegment {
-			data, _ := current["data"].(map[string]interface{})
-			switch segmentType {
-			case "image", "mface":
-				if url, ok := data["url"].(string); ok && strings.TrimSpace(url) != "" {
-					*imageURLs = append(*imageURLs, url)
+// collectForwardMedia 递归收集合并转发节点中的图片与视频 URL
+func collectForwardMedia(nodes []message.ForwardNode, imageURLs, videoURLs *[]string) {
+	for _, node := range nodes {
+		for _, seg := range node.Message {
+			switch data := seg.Data.(type) {
+			case message.ImageData:
+				if strings.TrimSpace(data.URL) != "" {
+					*imageURLs = append(*imageURLs, data.URL)
 				}
-			case "video":
-				if url, ok := data["url"].(string); ok && strings.TrimSpace(url) != "" {
-					*videoURLs = append(*videoURLs, url)
+			case message.VideoData:
+				if strings.TrimSpace(data.URL) != "" {
+					*videoURLs = append(*videoURLs, data.URL)
 				}
-			case "forward":
-				collectForwardMedia(data["content"], imageURLs, videoURLs)
+			case message.ForwardData:
+				collectForwardMedia(data.Content, imageURLs, videoURLs)
 			}
-			return
 		}
-		collectForwardMedia(current["message"], imageURLs, videoURLs)
 	}
 }
 
-func (a *Agent) summarizeForwardMessages(ctx context.Context, content []interface{}) (string, error) {
+func (a *Agent) summarizeForwardMessages(ctx context.Context, content []message.ForwardNode) (string, error) {
 	if len(content) == 0 {
 		return "", nil
 	}
 	var imageURLs, videoURLs []string
 	collectForwardMedia(content, &imageURLs, &videoURLs)
+	// ForwardNode 自带线报文序列化，视觉模型按原始结构识别
 	raw, err := sonic.MarshalString(content)
 	if err != nil {
 		return "", err
@@ -513,9 +508,11 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		MessageRecalledCallback: a.syncRecalledMessage,
 	}
 	for _, message := range messages {
-		if message != nil {
-			tc.ThinkStartArrivalSeq = max(tc.ThinkStartArrivalSeq, message.ArrivalSeq)
+		if message == nil {
+			continue
 		}
+		tc.ThinkStartArrivalSeq = max(tc.ThinkStartArrivalSeq, message.ArrivalSeq)
+		tc.RegisterMessage(message.MessageID)
 	}
 	tc.GetNewMessagesCallback = func(callCtx context.Context) (any, error) {
 		current, _, trimmed := a.getConversationSnapshot(kind, targetID)
@@ -538,11 +535,6 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		}
 		tc.ObservedThroughSeq = observed
 		return map[string]any{"success": true, "complete": true, "messages": newMessages}, nil
-	}
-	for _, message := range messages {
-		if message != nil {
-			tc.RegisterMessage(message.MessageID)
-		}
 	}
 	return tools.WithToolContext(ctx, tc)
 }

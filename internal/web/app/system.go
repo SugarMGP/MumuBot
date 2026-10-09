@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"mumu-bot/internal/llm"
-	"mumu-bot/internal/memory"
 	"mumu-bot/internal/migration"
 	"mumu-bot/internal/utils"
 	"mumu-bot/internal/web/views"
@@ -21,20 +20,15 @@ func (a *App) systemSections() []views.SystemSection {
 	cfg := a.cfg
 	snapshot := a.runtimeSnapshot()
 
-	groupIDs := make([]string, 0)
-	groupCount := 0
-	if rows, err := a.memMgr.ListConversationTargets(context.Background(), memory.ConversationKindGroup, true); err == nil {
-		for _, group := range rows {
-			if group.Blocked {
-				continue
-			}
-			groupCount++
-			groupIDs = append(groupIDs, fmt.Sprintf("%d", group.TargetID))
-		}
-	}
+	groupIDs := a.enabledGroups()
+	groupCount := len(groupIDs)
 	groupSummary := "暂未启用群聊"
-	if len(groupIDs) > 0 {
-		groupSummary = strings.Join(groupIDs, "、")
+	if groupCount > 0 {
+		summary := make([]string, 0, groupCount)
+		for _, id := range groupIDs {
+			summary = append(summary, fmt.Sprintf("%d", id))
+		}
+		groupSummary = strings.Join(summary, "、")
 	}
 
 	appendField := func(fields []views.SystemField, label string, value string) []views.SystemField {
@@ -146,17 +140,7 @@ func normalizeAdminTarget(raw string, requestHost string) (*neturl.URL, bool) {
 }
 
 func withPage(current *neturl.URL, page int) string {
-	cloned := *current
-	query := cloned.Query()
-	query.Set("page", strconv.Itoa(page))
-	cloned.RawQuery = query.Encode()
-	if cloned.RawPath != "" {
-		return cloned.RawPath + "?" + cloned.RawQuery
-	}
-	if cloned.RawQuery == "" {
-		return cloned.Path
-	}
-	return cloned.Path + "?" + cloned.RawQuery
+	return withQueryValues(current, false, map[string]string{"page": strconv.Itoa(page)})
 }
 
 func withFlash(target string, kind string, title string, body string) string {

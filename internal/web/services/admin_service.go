@@ -178,21 +178,16 @@ func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], er
 	return Page[TopicThreadView]{Items: items, Total: total, Page: page, PageSize: size}, nil
 }
 
-func (s *AdminService) loadTopicThread(thread memory.TopicThread) (TopicThreadView, error) {
-	view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt}
-	var activity struct {
-		LastAssignmentID uint
-		UpdatedAt        *time.Time
+func (s *AdminService) GetTopicThread(id uint) (TopicThreadView, error) {
+	var t memory.TopicThread
+	if err := s.db.First(&t, id).Error; err != nil {
+		return TopicThreadView{}, err
 	}
-	if err := s.db.Table("topic_assignments ta").Select("COALESCE(MAX(ta.id), 0) AS last_assignment_id, MAX(ml.message_time) AS updated_at").Joins("JOIN message_logs ml ON ml.id=ta.message_log_id").Where("ta.topic_id = ?", thread.ID).Scan(&activity).Error; err != nil {
-		return view, err
+	items, err := s.loadTopicThreads([]memory.TopicThread{t})
+	if err != nil {
+		return TopicThreadView{}, err
 	}
-	view.LastAssignmentID = activity.LastAssignmentID
-	if activity.UpdatedAt != nil {
-		view.UpdatedAt = *activity.UpdatedAt
-	}
-	err := s.db.Table("topic_summaries ts").Select("ts.*, ("+memory.TopicSummaryValiditySQL+") AS sources_valid").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id = ?", thread.ID).Order("ts.id ASC").Scan(&view.Summaries).Error
-	return view, err
+	return items[0], nil
 }
 
 func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicThreadView, error) {
@@ -239,14 +234,6 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicTh
 		items = append(items, view)
 	}
 	return items, nil
-}
-
-func (s *AdminService) GetTopicThread(id uint) (TopicThreadView, error) {
-	var t memory.TopicThread
-	if err := s.db.First(&t, id).Error; err != nil {
-		return TopicThreadView{}, err
-	}
-	return s.loadTopicThread(t)
 }
 
 func (s *AdminService) ListTopicMessages(topicID uint, limit int) ([]memory.MessageLog, error) {
@@ -314,8 +301,7 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 		UserID int64
 		Count  int64
 	}
-	participationSQL := strings.Replace(knowledgeParticipationSQL, "ml.user_id=?", "ml.user_id=mp.user_id", 1)
-	if err := s.filterKnowledge(s.db.Table("member_profiles mp").Joins("JOIN knowledge_items ki ON "+participationSQL), KnowledgeFilter{}).
+	if err := s.filterKnowledge(s.db.Table("member_profiles mp").Joins("JOIN knowledge_items ki ON "+knowledgeParticipationSQL("mp.user_id")), KnowledgeFilter{}).
 		Select("mp.user_id, COUNT(DISTINCT ki.id) AS count").Where("mp.user_id IN ?", userIDs).
 		Group("mp.user_id").Scan(&participationCounts).Error; err != nil {
 		return Page[MemberProfileView]{}, err

@@ -1,52 +1,49 @@
 package onebot
 
 import (
-	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"mumu-bot/internal/utils"
-
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/zjutjh/onebot-sdk/event"
+	"github.com/zjutjh/onebot-sdk/message"
 )
 
 // parseGroupMessage 按群目标解析群消息
-func (c *Client) parseGroupMessage(event map[string]interface{}) *ConversationMessage {
-	targetID, _ := utils.ParseInt64Value(event["group_id"])
-	return c.parseConversationMessage(event, "group", targetID)
-}
-
-// parsePrivateMessage 按好友目标解析私聊消息
-func (c *Client) parsePrivateMessage(event map[string]interface{}) *ConversationMessage {
-	return c.parseConversationMessage(event, "private", privateMessageTarget(event, c.GetSelfID()))
-}
-
-// parseConversationMessage 共用字段与消息段解析，进入解析前已确定会话作用域
-func (c *Client) parseConversationMessage(event map[string]interface{}, kind string, targetID int64) *ConversationMessage {
-	if targetID <= 0 {
+func (c *Client) parseGroupMessage(ev *event.GroupMessage) *ConversationMessage {
+	if ev.GroupID <= 0 || ev.Sender.UserID <= 0 {
 		return nil
 	}
-	msg := &ConversationMessage{ConversationKind: kind, TargetID: targetID, IsMentioned: kind == "private"}
-	if t, ok := utils.ParseInt64Value(event["time"]); ok {
-		msg.Time = time.Unix(t, 0)
+	msg := &ConversationMessage{ConversationKind: "group", TargetID: int64(ev.GroupID)}
+	c.parseConversationMessage(msg, ev.Time(), int64(ev.MessageID), int64(ev.Sender.UserID), ev.Sender.Nickname, ev.Sender.Card, ev.Message)
+	return msg
+}
+
+// parsePrivateMessage 按好友目标解析私聊消息，target_id 由 SDK 管线按方言补齐
+func (c *Client) parsePrivateMessage(ev *event.PrivateMessage) *ConversationMessage {
+	if ev.TargetID <= 0 || ev.Sender.UserID <= 0 {
+		return nil
+	}
+	msg := &ConversationMessage{ConversationKind: "private", TargetID: int64(ev.TargetID), IsMentioned: true}
+	c.parseConversationMessage(msg, ev.Time(), int64(ev.MessageID), int64(ev.Sender.UserID), ev.Sender.Nickname, "", ev.Message)
+	return msg
+}
+
+// parseConversationMessage 填充公共字段并解析消息段，进入前已确定会话作用域
+func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime int64, messageID, userID int64, nickname, groupCard string, chain message.Chain) {
+	if eventTime > 0 {
+		msg.Time = time.Unix(eventTime, 0)
 	} else {
 		msg.Time = time.Now()
 	}
-	if msgID, ok := utils.ParseInt64Value(event["message_id"]); ok {
-		msg.MessageID = msgID
-	}
-	if sender, ok := event["sender"].(map[string]interface{}); ok {
-		msg.UserID, _ = utils.ParseInt64Value(sender["user_id"])
-		msg.Nickname, _ = sender["nickname"].(string)
-		if kind == "group" {
-			msg.GroupCard, _ = sender["card"].(string)
-		}
-	}
-	if msg.UserID <= 0 || !c.parseMessageSegments(event, msg) {
-		return nil
-	}
+	msg.MessageID = messageID
+	msg.UserID = userID
+	msg.Nickname = nickname
+	msg.GroupCard = groupCard
+	parseMessageSegments(chain, msg)
 	selfID := c.GetSelfID()
 	for _, atID := range msg.AtList {
 		if selfID > 0 && atID == selfID {
@@ -54,170 +51,97 @@ func (c *Client) parseConversationMessage(event map[string]interface{}, kind str
 			break
 		}
 	}
-	return msg
 }
 
-// privateMessageTarget 优先读取 NapCat 的会话对端，标准入站事件缺省时使用发送者
-func privateMessageTarget(event map[string]interface{}, selfID int64) int64 {
-	if targetID, ok := utils.ParseInt64Value(event["target_id"]); ok && targetID > 0 {
-		return targetID
-	}
-	userID, _ := utils.ParseInt64Value(event["user_id"])
-	if selfID > 0 && userID == selfID {
-		return 0
-	}
-	return userID
-}
-
-// parseMessageSegments 解析消息段，填充消息各字段
-func (c *Client) parseMessageSegments(event map[string]interface{}, msg *ConversationMessage) bool {
-	message, ok := event["message"].([]interface{})
-	if !ok {
-		if raw, ok := event["raw_message"].(string); ok {
-			msg.Content = raw
-			msg.MessageParts = []MessagePart{{Kind: "text", Text: raw}}
-		}
-		return true
-	}
-
+// parseMessageSegments 解析强类型消息段，填充消息各字段
+func parseMessageSegments(chain message.Chain, msg *ConversationMessage) {
 	var textParts []string
 
-	for _, seg := range message {
-		segMap, ok := seg.(map[string]interface{})
-		if !ok {
-			continue
-		}
+	for _, seg := range chain {
+		switch data := seg.Data.(type) {
+		case message.TextData:
+			textParts = append(textParts, data.Text)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "text", Text: data.Text})
 
-		segType, _ := segMap["type"].(string)
-		data, _ := segMap["data"].(map[string]interface{})
-		if data == nil {
-			continue
-		}
-
-		switch segType {
-		case "text":
-			if t, ok := data["text"].(string); ok {
-				textParts = append(textParts, t)
-				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "text", Text: t})
+		case message.AtData:
+			qqID, ok := parseAtTarget(data.QQ)
+			if !ok {
+				continue
 			}
-
-		case "image":
-			img := ImageInfo{}
-			if url, ok := data["url"].(string); ok {
-				img.URL = url
-			}
-			if file, ok := data["file"].(string); ok {
-				img.File = file
-			}
-			if subType, ok := parseInt(data["sub_type"]); ok {
-				img.SubType = subType
-			}
-			if img.URL != "" || img.File != "" {
-				msg.Images = append(msg.Images, img)
-				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
+			msg.AtList = append(msg.AtList, qqID)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "at", AtUserID: qqID})
+			if qqID > 0 && data.Name != "" {
+				if msg.AtNames == nil {
+					msg.AtNames = make(map[int64]string)
+				}
+				msg.AtNames[qqID] = data.Name
 			}
 
-		case "face":
+		case message.FaceData:
 			face := FaceInfo{}
-			// 表情 ID
-			if id, ok := parseInt(data["id"]); ok {
-				face.ID = id
-			}
-			// 表情名称（NapCat 扩展字段）
-			if name, ok := data["name"].(string); ok && name != "" {
-				face.Name = name
-			} else if text, ok := data["text"].(string); ok && text != "" {
-				face.Name = text
-			} else if raw, ok := data["raw"].(string); ok && raw != "" {
-				face.Name = raw
+			// 表情名称不在强类型字段内，展示层回退为 [表情:ID]
+			if id, ok := parseStrNum(data.ID); ok {
+				face.ID = int(id)
 			}
 			msg.Faces = append(msg.Faces, face)
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "face", Index: len(msg.Faces) - 1})
 
-		case "at":
-			qqID, ok := parseAtSegmentForGroup(data)
-			if ok {
-				msg.AtList = append(msg.AtList, qqID)
-				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "at", AtUserID: qqID})
-				if qqID > 0 {
-					if displayName := atDisplayName(data); displayName != "" {
-						if msg.AtNames == nil {
-							msg.AtNames = make(map[int64]string)
-						}
-						msg.AtNames[qqID] = displayName
-					}
-				}
-			}
+		case message.ReplyData:
+			msg.Reply = &ReplyInfo{MessageID: int64(data.ID)}
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "reply"})
 
-		case "reply":
-			if replyMsgID, ok := utils.ParseInt64Value(data["id"]); ok {
-				msg.Reply = &ReplyInfo{MessageID: replyMsgID}
-				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "reply"})
+		case message.ImageData:
+			if data.URL == "" && data.File == "" {
+				continue
 			}
+			img := ImageInfo{URL: data.URL, File: data.File}
+			if subType, ok := parseStrNum(data.SubType); ok {
+				img.SubType = int(subType)
+			}
+			msg.Images = append(msg.Images, img)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 
-		case "mface": // 商城表情/魔法表情
-			img := ImageInfo{}
-			if url, ok := data["url"].(string); ok {
-				img.URL = url
-			}
-			img.SubType = 1 // 标记为表情包类型
-			if img.URL != "" {
-				msg.Images = append(msg.Images, img)
-				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
-			}
+		case message.MFaceData: // 商城表情/魔法表情
+			img := ImageInfo{Desc: data.Summary, SubType: 1} // 标记为表情包类型
+			msg.Images = append(msg.Images, img)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 
-		case "record": // 语音消息
+		case message.RecordData: // 语音消息
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "record"})
 
-		case "video": // 视频消息
-			vid := VideoInfo{}
-			if url, ok := data["url"].(string); ok {
-				vid.URL = url
+		case message.VideoData:
+			if data.URL == "" && data.File == "" {
+				continue
 			}
-			if file, ok := data["file"].(string); ok {
-				vid.File = file
-			}
-			if vid.URL != "" || vid.File != "" {
-				msg.Videos = append(msg.Videos, vid)
-				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "video", Index: len(msg.Videos) - 1})
-			}
+			vid := VideoInfo{URL: data.URL, File: data.File}
+			msg.Videos = append(msg.Videos, vid)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "video", Index: len(msg.Videos) - 1})
 
-		case "file": // 文件
-			if name, ok := data["name"].(string); ok {
-				msg.FileNames = append(msg.FileNames, name)
-			} else {
-				msg.FileNames = append(msg.FileNames, "")
-			}
+		case message.FileData: // 文件
+			// 强类型文件段只有 file_id，没有文件名，展示层回退为 [文件]
+			msg.FileNames = append(msg.FileNames, "")
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "file", Index: len(msg.FileNames) - 1})
 
-		case "json": // JSON 卡片消息
-			if jsonStr, ok := data["data"].(string); ok {
-				card := parseCardMessage(jsonStr)
-				if card != nil {
-					msg.Cards = append(msg.Cards, *card)
-					msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "card", Index: len(msg.Cards) - 1})
-				}
+		case message.JSONData: // JSON 卡片消息
+			if card := parseCardMessage(data.Data); card != nil {
+				msg.Cards = append(msg.Cards, *card)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "card", Index: len(msg.Cards) - 1})
 			}
 
-		case "forward": // 合并转发
-			content, ok := data["content"].([]interface{})
-			if !ok {
-				return false
+		case message.ForwardData: // 合并转发，内容由 SDK 管线按方言补拉
+			if len(data.Content) > 0 {
+				start := len(msg.ForwardContent)
+				msg.ForwardContent = append(msg.ForwardContent, data.Content...)
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "forward", Index: start, Count: len(data.Content)})
+			} else {
+				// 补拉失败或缺少内容时保留占位，不伪造转发内容
+				msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "text", Text: "[合并转发消息]"})
 			}
-			start := len(msg.ForwardContent)
-			msg.ForwardContent = append(msg.ForwardContent, content...)
-			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "forward", Index: start, Count: len(content)})
 		}
 	}
 
 	// 合并文本内容
-	for i, part := range textParts {
-		if i > 0 {
-			msg.Content += " "
-		}
-		msg.Content += part
-	}
-	return true
+	msg.Content = strings.Join(textParts, " ")
 }
 
 // parseCardMessage 解析JSON卡片消息
@@ -231,9 +155,14 @@ func parseCardMessage(jsonStr string) *CardMessage {
 
 	// 尝试从 meta 中提取信息（常见结构）
 	if meta, ok := data["meta"].(map[string]interface{}); ok {
-		// 遍历 meta 中的第一个子对象
-		for _, v := range meta {
-			if detail, ok := v.(map[string]interface{}); ok {
+		// 按键名排序后取第一个子对象，避免 map 遍历顺序不稳定导致同一条卡片解析结果不同
+		keys := make([]string, 0, len(meta))
+		for k := range meta {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if detail, ok := meta[k].(map[string]interface{}); ok {
 				if title, ok := detail["title"].(string); ok {
 					card.Title = title
 				}
@@ -271,7 +200,7 @@ func parseCardMessage(jsonStr string) *CardMessage {
 	return card
 }
 
-// extractTextFromSegments 从消息段中提取文本内容
+// extractTextFromSegments 从原始消息段数组中提取文本内容
 func extractTextFromSegments(segments []interface{}) string {
 	var parts []string
 	for _, seg := range segments {
@@ -300,8 +229,11 @@ func extractTextFromSegments(segments []interface{}) string {
 		case "file":
 			parts = append(parts, "[文件]")
 		case "at":
-			if text, _, _ := parseAtSegment(data); text != "" {
-				parts = append(parts, text)
+			qq, _ := data["qq"].(string)
+			if qq == "all" {
+				parts = append(parts, "@全体成员")
+			} else if qq != "" {
+				parts = append(parts, "@"+qq)
 			}
 		case "json":
 			parts = append(parts, "[卡片消息]")
@@ -312,58 +244,21 @@ func extractTextFromSegments(segments []interface{}) string {
 	return strings.Join(parts, "")
 }
 
-func parseAtSegmentForGroup(data map[string]interface{}) (int64, bool) {
-	if qq, ok := data["qq"].(string); ok {
-		if qq == "all" {
-			return AtAllUserID, true
-		}
-		qqID, err := strconv.ParseInt(qq, 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return qqID, true
+// parseAtTarget 解析 @ 段的 QQ 号，"all" 表示全体成员
+func parseAtTarget(qq message.StrNum) (int64, bool) {
+	if qq == "all" {
+		return AtAllUserID, true
 	}
+	return parseStrNum(qq)
+}
 
-	qqID, ok := utils.ParseInt64Value(data["qq"])
-	if !ok {
+// parseStrNum 解析 SDK 的字符串数字形态
+func parseStrNum(v message.StrNum) (int64, bool) {
+	id, err := strconv.ParseInt(string(v), 10, 64)
+	if err != nil {
 		return 0, false
 	}
-	return qqID, true
-}
-
-func atDisplayName(data map[string]interface{}) string {
-	for _, key := range []string{"name", "nickname", "card"} {
-		if value, ok := data[key].(string); ok {
-			if trimmed := strings.TrimSpace(value); trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-	return ""
-}
-
-func parseAtSegment(data map[string]interface{}) (string, int64, bool) {
-	if qq, ok := data["qq"].(string); ok {
-		if qq == "all" {
-			return "@全体成员", 0, false
-		}
-		qqID, err := strconv.ParseInt(qq, 10, 64)
-		if err != nil {
-			return "", 0, false
-		}
-		if displayName := atDisplayName(data); displayName != "" {
-			return "@" + displayName, qqID, true
-		}
-		return "@" + qq, qqID, true
-	}
-	qqID, ok := utils.ParseInt64Value(data["qq"])
-	if !ok {
-		return "", 0, false
-	}
-	if displayName := atDisplayName(data); displayName != "" {
-		return "@" + displayName, qqID, true
-	}
-	return fmt.Sprintf("@%d", qqID), qqID, true
+	return id, true
 }
 
 func newGroupMemberInfoCache() *ttlcache.Cache[string, *GroupMemberInfo] {
@@ -375,10 +270,14 @@ func newGroupMemberInfoCache() *ttlcache.Cache[string, *GroupMemberInfo] {
 }
 
 func groupMemberCacheKey(groupID, userID int64) string {
-	return fmt.Sprintf("%d:%d", groupID, userID)
+	return strconv.FormatInt(groupID, 10) + ":" + strconv.FormatInt(userID, 10)
 }
 
-func parseInt(v interface{}) (int, bool) {
-	i64, ok := utils.ParseInt64Value(v)
-	return int(i64), ok
+// ParseIDFromRaw 从生成代码保留的原始联合字段中解析整数 ID
+func ParseIDFromRaw(raw []byte) int64 {
+	var id int64
+	if err := sonic.Unmarshal(raw, &id); err != nil {
+		return 0
+	}
+	return id
 }

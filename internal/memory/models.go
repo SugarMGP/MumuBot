@@ -145,9 +145,10 @@ type MemberName struct {
 func (MemberName) TableName() string { return "member_names" }
 
 type LearningState struct {
-	ConversationKind string `gorm:"primaryKey;type:text" json:"conversation_kind"`
-	TargetID         int64  `gorm:"column:target_id;primaryKey" json:"target_id"`
-	LastMessageLogID uint   `gorm:"not null" json:"last_message_log_id"`
+	ConversationKind string     `gorm:"primaryKey;type:text" json:"conversation_kind"`
+	TargetID         int64      `gorm:"column:target_id;primaryKey" json:"target_id"`
+	LastMessageLogID uint       `gorm:"not null" json:"last_message_log_id"`
+	NextAttemptAt    *time.Time `json:"next_attempt_at,omitempty"`
 }
 
 func (LearningState) TableName() string { return "learning_states" }

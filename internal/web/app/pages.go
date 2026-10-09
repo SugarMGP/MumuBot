@@ -30,7 +30,7 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	a.render(w, views.DashboardPage(views.DashboardPageData{
 		BotName:           a.cfg.Persona.Name,
-		EnabledGroupCount: snapshot.EnabledGroups,
+		EnabledGroupCount: len(a.enabledGroups()),
 		MemoryCount:       stats.MemoryCount,
 		MemberCount:       stats.MemberCount,
 		ActiveCount:       stats.ActiveCount,

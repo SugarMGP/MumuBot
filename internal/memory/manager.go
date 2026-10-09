@@ -161,6 +161,7 @@ func (m *Manager) GetMemberProfile(userID int64) (*MemberProfile, error) {
 }
 
 func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt time.Time) (*MemberProfile, error) {
+	// 用 RETURNING 直接取回写入后的行，省去 upsert 后再查一次
 	profile := MemberProfile{UserID: userID, Nickname: nickname, LastSeenAt: seenAt, MessageCount: 1}
 	err := m.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}},
@@ -169,11 +170,11 @@ func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt
 			"last_seen_at":  gorm.Expr("GREATEST(member_profiles.last_seen_at, EXCLUDED.last_seen_at)"),
 			"message_count": gorm.Expr("member_profiles.message_count + 1"),
 		}),
-	}).Create(&profile).Error
+	}, clause.Returning{}).Create(&profile).Error
 	if err != nil {
 		return nil, err
 	}
-	return m.GetMemberProfile(userID)
+	return &profile, nil
 }
 
 func (m *Manager) GetMessageLogByID(groupID, messageID int64) (*MessageLog, error) {

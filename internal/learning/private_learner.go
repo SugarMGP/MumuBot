@@ -5,12 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
 	agenttools "mumu-bot/internal/tools"
 
@@ -54,11 +51,12 @@ type privateContextInput struct {
 	Offset    int    `json:"offset,omitempty" jsonschema:"description=仅 message 模式，续读长原文的字符位置"`
 }
 
+const maxPriorSummaryRunes = 4000
+const maxPriorSourceIDs = 200
+
 func (l *Learner) investigatePrivate(targetID, selfID int64, after, upper uint, rows []memory.MessageLog) error {
-	cfg := config.Get()
-	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
+	ctx, cancel, cfg := l.investigateContext()
 	defer cancel()
-	ctx = llm.WithTask(ctx, "memory_agent", cfg.ModelTiers.Low.Model)
 	run := &privateInvestigation{knowledgeInvestigation: knowledgeInvestigation{
 		manager: l.memMgr,
 		batch:   memory.KnowledgeBatch{ConversationKind: memory.ConversationKindPrivate, TargetID: targetID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: true, ExpectedItems: make(map[uint]time.Time)},
@@ -69,13 +67,8 @@ func (l *Learner) investigatePrivate(targetID, selfID int64, after, upper uint, 
 	if err != nil {
 		return err
 	}
-	var validRows []memory.MessageLog
-	for _, row := range rows {
-		if row.RecalledAt == nil && strings.TrimSpace(row.TextContent) != "" {
-			run.required = append(run.required, row.ID)
-			validRows = append(validRows, row)
-		}
-	}
+	validRows, required := filterUsableRows(rows)
+	run.required = required
 	if len(validRows) == 0 {
 		_, err := run.finish(ctx, &privateFinishInput{})
 		return err
@@ -97,16 +90,20 @@ func (l *Learner) investigatePrivate(targetID, selfID int64, after, upper uint, 
 	if run.observed != nil {
 		prior["sources_valid"] = run.observed.SourcesValid
 		if run.observed.SourcesValid {
-			prior["summary"] = run.observed.SummaryJSON
-			prior["source_message_ids"] = run.observed.SourceMessageIDs
+			// 旧摘要和上一版来源只是背景提示，超限时省略旧摘要、只保留最近来源，保证输入有界
+			if utf8.RuneCountInString(run.observed.SummaryJSON) <= maxPriorSummaryRunes {
+				prior["summary"] = run.observed.SummaryJSON
+			}
+			if len(run.observed.SourceMessageIDs) > maxPriorSourceIDs {
+				prior["source_message_ids"] = run.observed.SourceMessageIDs[len(run.observed.SourceMessageIDs)-maxPriorSourceIDs:]
+			} else {
+				prior["source_message_ids"] = run.observed.SourceMessageIDs
+			}
 		}
 	}
 	input, err := sonic.MarshalString(map[string]any{"target_id": targetID, "self_id": selfID, "after_id": after, "upper_id": upper, "required_message_ids": run.required, "messages": initial, "previous_messages": history, "previous_summary": prior})
 	if err != nil {
 		return err
-	}
-	if utf8.RuneCountInString(input) > 24000 {
-		return fmt.Errorf("整理输入超出预算")
 	}
 	available, err := run.tools()
 	if err != nil {
@@ -116,13 +113,7 @@ func (l *Learner) investigatePrivate(targetID, selfID int64, after, upper uint, 
 	if err != nil {
 		return err
 	}
-	if _, err := agent.Generate(ctx, []*schema.Message{schema.SystemMessage(privateMemoryPrompt), schema.UserMessage(input)}); err != nil && !run.finished {
-		return err
-	}
-	if !run.finished {
-		return noFinishError()
-	}
-	return nil
+	return runUntilFinish(ctx, agent, []*schema.Message{schema.SystemMessage(privateMemoryPrompt), schema.UserMessage(input)}, &run.finished)
 }
 
 func (r *privateInvestigation) tools() ([]tool.BaseTool, error) {
@@ -142,19 +133,11 @@ func (r *privateInvestigation) tools() ([]tool.BaseTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	searchWeb, err := agenttools.NewSearchWebTool()
+	web, err := webTools()
 	if err != nil {
 		return nil, err
 	}
-	searchMeme, err := agenttools.NewSearchMemeTool()
-	if err != nil {
-		return nil, err
-	}
-	fetchWeb, err := agenttools.NewFetchWebTool()
-	if err != nil {
-		return nil, err
-	}
-	return []tool.BaseTool{search, history, contextTool, finish, searchMeme, searchWeb, fetchWeb}, nil
+	return append([]tool.BaseTool{search, history, contextTool, finish}, web...), nil
 }
 
 func (r *privateInvestigation) searchMessages(ctx context.Context, input *privateMessageSearchInput) (any, error) {

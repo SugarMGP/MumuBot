@@ -10,6 +10,7 @@ import (
 	"mumu-bot/internal/config"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func (m *Manager) startMessageLogCleanup() {
@@ -43,28 +44,35 @@ func (m *Manager) startMessageLogCleanup() {
 }
 
 func (m *Manager) cleanupMessageLogs(keepLatest int) {
-	var groups []int64
-	if err := m.db.Model(&MessageLog{}).Where("conversation_kind=?", ConversationKindGroup).Distinct("target_id").Pluck("target_id", &groups).Error; err != nil {
-		zap.L().Warn("读取消息清理群列表失败", zap.Error(err))
+	for _, kind := range []string{ConversationKindGroup, ConversationKindPrivate} {
+		m.cleanupConversationLogs(kind, keepLatest)
+	}
+}
+
+// cleanupConversationLogs 清理单类会话的历史消息：只删除整理水位之下、保留窗口之外
+// 且未被话题归属、知识证据或摘要来源引用的原文
+func (m *Manager) cleanupConversationLogs(kind string, keepLatest int) {
+	var targets []int64
+	if err := m.db.Model(&MessageLog{}).Where("conversation_kind=?", kind).Distinct("target_id").Pluck("target_id", &targets).Error; err != nil {
+		zap.L().Warn("读取消息清理会话列表失败", zap.String("conversation_kind", kind), zap.Error(err))
 		return
 	}
-	for _, groupID := range groups {
-		var states []LearningState
-		if err := m.db.Where("conversation_kind=? AND target_id = ?", ConversationKindGroup, groupID).Find(&states).Error; err != nil {
-			zap.L().Warn("读取消息清理学习状态失败", zap.Int64("target_id", groupID), zap.Error(err))
+	for _, targetID := range targets {
+		// 尚未整理的会话不清理，避免删除 learner 待处理的消息
+		var state LearningState
+		if err := m.db.Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&state).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				zap.L().Warn("读取消息清理学习状态失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
+			}
 			continue
 		}
-		if len(states) != 1 {
-			continue
-		}
-		watermark := states[0].LastMessageLogID
-		if watermark == 0 {
+		if state.LastMessageLogID == 0 {
 			continue
 		}
 		var keepFloor uint
-		if err := m.db.Model(&MessageLog{}).Where("conversation_kind=? AND target_id = ?", ConversationKindGroup, groupID).
+		if err := m.db.Model(&MessageLog{}).Where("conversation_kind=? AND target_id=?", kind, targetID).
 			Order("id DESC").Offset(keepLatest-1).Limit(1).Pluck("id", &keepFloor).Error; err != nil {
-			zap.L().Warn("读取消息清理保留边界失败", zap.Int64("target_id", groupID), zap.Error(err))
+			zap.L().Warn("读取消息清理保留边界失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
 			continue
 		}
 		if keepFloor == 0 {
@@ -72,16 +80,16 @@ func (m *Manager) cleanupMessageLogs(keepLatest int) {
 		}
 		result := m.db.Exec(`WITH deletable AS (
 			SELECT ml.id FROM message_logs ml
-			WHERE ml.conversation_kind = 'group' AND ml.target_id = ? AND ml.id <= ? AND ml.id < ?
+			WHERE ml.conversation_kind = ? AND ml.target_id = ? AND ml.id <= ? AND ml.id < ?
 			AND NOT EXISTS (SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id = ml.id AND ta.topic_id IS NOT NULL)
 			AND NOT EXISTS (SELECT 1 FROM knowledge_evidence_messages e WHERE e.message_log_id = ml.id)
 			AND NOT EXISTS (SELECT 1 FROM topic_summary_sources s WHERE s.message_log_id = ml.id)
 			ORDER BY ml.id LIMIT 500
-		) DELETE FROM message_logs WHERE id IN (SELECT id FROM deletable)`, groupID, watermark, keepFloor)
+		) DELETE FROM message_logs WHERE id IN (SELECT id FROM deletable)`, kind, targetID, state.LastMessageLogID, keepFloor)
 		if result.Error != nil {
-			zap.L().Warn("清理历史消息失败", zap.Int64("target_id", groupID), zap.Error(result.Error))
+			zap.L().Warn("清理历史消息失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(result.Error))
 		} else if result.RowsAffected > 0 {
-			zap.L().Info("清理历史消息完成", zap.Int64("target_id", groupID), zap.Int64("deleted", result.RowsAffected))
+			zap.L().Info("清理历史消息完成", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Int64("deleted", result.RowsAffected))
 		}
 	}
 }

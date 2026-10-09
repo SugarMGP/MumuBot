@@ -11,7 +11,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// commitRecall 先保留待补偿记录，再用有界事务标记；数据库失败不能丢失撤回请求
+// commitRecall 先保留待补偿记录，再用有界事务标记；数据库失败不能丢失撤回请求。
+// 与消息持久化不同，这里不复查会话许可：撤回是对已落库数据的修正，会话中途被拉黑时仍应清空原文并失效证据
 func (a *Agent) commitRecall(recall *recallCommit) {
 	if recall.kind == "" {
 		recall.kind = memory.ConversationKindGroup

@@ -16,58 +16,21 @@ import (
 )
 
 func (a *Agent) onPrivateMessage(msg *onebot.ConversationMessage) {
-	a.enqueuePrivate(msg.TargetID, msg.ArrivalSeq, privateCommitItem{msg: msg})
-}
-
-type privateCommitItem struct {
-	msg    *onebot.ConversationMessage
-	recall *recallCommit
-	skip   bool
-}
-
-// enqueuePrivateRecall 把好友撤回事件投入私聊提交队列，与私聊消息保持到达顺序
-func (a *Agent) enqueuePrivateRecall(targetID int64, seq uint64, recall *recallCommit) {
-	a.enqueuePrivate(targetID, seq, privateCommitItem{recall: recall})
-}
-
-func (a *Agent) enqueuePrivateSkip(targetID int64, seq uint64) {
-	a.enqueuePrivate(targetID, seq, privateCommitItem{skip: true})
-}
-
-func (a *Agent) enqueuePrivate(targetID int64, seq uint64, item privateCommitItem) {
-	a.privateCommits.enqueue(targetID, seq, item)
-}
-
-func (a *Agent) commitPrivateItem(item privateCommitItem) {
-	switch {
-	case item.skip:
-	case item.recall != nil:
-		a.commitRecall(item.recall)
-	default:
-		a.commitConversationMessage(item.msg)
-	}
+	a.privateCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg})
 }
 
 func (a *Agent) addPrivateBuffer(msg *onebot.ConversationMessage) {
 	a.privateMu.Lock()
-	a.privateBuffers[msg.TargetID] = append(a.privateBuffers[msg.TargetID], msg)
-	limit := config.Get().Agent.MessageBufferSize
-	if limit <= 0 {
-		limit = 30
+	defer a.privateMu.Unlock()
+	messages, trimmedSeq := appendMessageBuffer(a.privateBuffers[msg.TargetID], msg, messageBufferLimit())
+	a.privateBuffers[msg.TargetID] = messages
+	if trimmedSeq > 0 {
+		a.privateTrimmedSeq[msg.TargetID] = max(a.privateTrimmedSeq[msg.TargetID], trimmedSeq)
 	}
-	if len(a.privateBuffers[msg.TargetID]) > limit {
-		trimmed := a.privateBuffers[msg.TargetID][:len(a.privateBuffers[msg.TargetID])-limit]
-		if n := len(trimmed); n > 0 && trimmed[n-1] != nil {
-			a.privateTrimmedSeq[msg.TargetID] = max(a.privateTrimmedSeq[msg.TargetID], trimmed[n-1].ArrivalSeq)
-		}
-		a.privateBuffers[msg.TargetID] = a.privateBuffers[msg.TargetID][len(a.privateBuffers[msg.TargetID])-limit:]
-	}
-	selfMessage := msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID()
-	if selfMessage {
+	if msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID() {
 		// 自身发言是会话边界：该序号及此前的消息不再留到下一轮
 		a.privateReadSeq[msg.TargetID] = max(a.privateReadSeq[msg.TargetID], msg.ArrivalSeq)
 	}
-	a.privateMu.Unlock()
 }
 
 func (a *Agent) schedulePrivateThink(targetID int64, receivedAt time.Time) {
@@ -90,15 +53,13 @@ func (a *Agent) schedulePrivateThink(targetID int64, receivedAt time.Time) {
 func (a *Agent) flushPrivateThink(targetID int64, expected *pendingThink, generation uint64) {
 	a.privateMu.Lock()
 	pending := a.pendingPrivateThinks[targetID]
-	if pending != expected || pending == nil || pending.generation != generation || a.privateStopped || a.stopping.Load() || a.ctx.Err() != nil {
+	// 挂起的思考只能由最新一代定时器触发；进入 running 前同样持有锁，
+	// schedulePrivateThink 会在 running 期间跳过创建挂起项，因此这里无需复查
+	if pending != expected || pending.generation != generation || a.privateStopped || a.stopping.Load() || a.ctx.Err() != nil {
 		a.privateMu.Unlock()
 		return
 	}
 	delete(a.pendingPrivateThinks, targetID)
-	if a.privateRunning[targetID] {
-		a.privateMu.Unlock()
-		return
-	}
 	a.privateRunning[targetID] = true
 	a.thinkWG.Add(1)
 	a.privateMu.Unlock()

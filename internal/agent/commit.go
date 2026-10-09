@@ -121,26 +121,16 @@ func (a *Agent) commitConversationMessage(msg *onebot.ConversationMessage) {
 	}
 }
 
-// groupCommitItem 提交队列项：消息、戳一戳、撤回统一按群内到达序号重排提交；
-// skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用群），避免重排器死等
-type groupCommitItem struct {
-	groupID int64
-	skip    bool
-	recall  *recallCommit
-	msg     *onebot.ConversationMessage
+// commitItem 提交队列项：消息、戳一戳、撤回统一按会话内到达序号重排提交；
+// skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用会话），避免重排器死等
+type commitItem struct {
+	skip   bool
+	recall *recallCommit
+	msg    *onebot.ConversationMessage
 }
 
-// enqueueCommit 把解析完成的消息、撤回或跳过项投入该群提交队列
-// 队列满时背压等待；空闲回收由提交队列统一处理
-func (a *Agent) enqueueCommit(seq uint64, item groupCommitItem) {
-	a.groupCommits.enqueue(item.groupID, seq, item)
-}
-
-// enqueueCommitSkip 消费一个不会产生实际处理的到达序号
-func (a *Agent) enqueueCommitSkip(groupID int64, seq uint64) {
-	a.enqueueCommit(seq, groupCommitItem{groupID: groupID, skip: true})
-}
-func (a *Agent) commitOne(item groupCommitItem) {
+// commitOne 群聊与私聊提交队列共用的分发逻辑，会话隔离由各自队列实例保证
+func (a *Agent) commitOne(item commitItem) {
 	switch {
 	case item.skip:
 	case item.recall != nil:

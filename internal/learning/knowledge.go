@@ -3,9 +3,23 @@ package learning
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"mumu-bot/internal/memory"
 )
+
+// filterUsableRows 筛选未撤回且原文非空的消息，同时返回其内部 ID 列表
+func filterUsableRows(rows []memory.MessageLog) ([]memory.MessageLog, []uint) {
+	valid := make([]memory.MessageLog, 0, len(rows))
+	ids := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		if row.RecalledAt == nil && strings.TrimSpace(row.TextContent) != "" {
+			valid = append(valid, row)
+			ids = append(ids, row.ID)
+		}
+	}
+	return valid, ids
+}
 
 type knowledgeInvestigation struct {
 	manager *memory.Manager
@@ -111,7 +125,7 @@ func (r *knowledgeInvestigation) renderMessages(page memory.KnowledgeMessagePage
 	records := make([]map[string]any, 0, len(page.Messages))
 	remaining := 6500
 	next := uint(0)
-	for i, row := range page.Messages {
+	for _, row := range page.Messages {
 		text := []rune(row.TextContent)
 		if offset > len(text) {
 			return nil, fmt.Errorf("读取位置超出原文长度")
@@ -130,10 +144,6 @@ func (r *knowledgeInvestigation) renderMessages(page memory.KnowledgeMessagePage
 			if complete {
 				r.seen[row.ID] = true
 			}
-		}
-		if i < len(page.Messages)-1 && remaining < 500 {
-			page.HasMore = true
-			break
 		}
 	}
 	return map[string]any{"messages": records, "has_more": page.HasMore, "next_id": next}, nil

@@ -9,8 +9,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
 	agenttools "mumu-bot/internal/tools"
 
@@ -51,11 +49,11 @@ type groupContextInput struct {
 	Offset    int    `json:"offset,omitempty" jsonschema:"description=仅 message 模式，续读长原文的字符位置"`
 }
 
+const learningInputBudget = 24000
+
 func (l *Learner) investigateGroup(groupID, selfID int64, after, upper uint, rows []memory.MessageLog) error {
-	cfg := config.Get()
-	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
+	ctx, cancel, cfg := l.investigateContext()
 	defer cancel()
-	ctx = llm.WithTask(ctx, "memory_agent", cfg.ModelTiers.Low.Model)
 	run := &groupInvestigation{knowledgeInvestigation: knowledgeInvestigation{manager: l.memMgr, batch: memory.KnowledgeBatch{ConversationKind: memory.ConversationKindGroup, TargetID: groupID, SelfID: selfID, AfterID: after, ThroughID: upper, AdvanceCursor: true, RequireAssigned: true, ExpectedItems: make(map[uint]time.Time)}, seen: make(map[uint]bool), partial: make(map[uint]int)}}
 	run.rows = rows
 	var err error
@@ -63,14 +61,8 @@ func (l *Learner) investigateGroup(groupID, selfID int64, after, upper uint, row
 	if err != nil {
 		return err
 	}
-	validRows := []memory.MessageLog{}
-	for _, row := range rows {
-		if row.RecalledAt != nil || strings.TrimSpace(row.TextContent) == "" {
-			continue
-		}
-		run.required = append(run.required, row.ID)
-		validRows = append(validRows, row)
-	}
+	validRows, required := filterUsableRows(rows)
+	run.required = required
 	initialValue, err := run.renderMessages(memory.KnowledgeMessagePage{Messages: validRows}, 0)
 	if err != nil {
 		return err
@@ -103,26 +95,30 @@ func (l *Learner) investigateGroup(groupID, selfID int64, after, upper uint, row
 	}
 	initial += "\n仅供上下文，不重新分配：" + history
 	messages := []*schema.Message{schema.SystemMessage(groupMemoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s", groupID, selfID, after, upper, run.required, initial))}
-	topicText, err := sonic.MarshalString(run.topics)
-	if err != nil {
-		return err
+	// 话题上下文按优先级排序（本批归属 > 回复目标 > 近期活跃），超出预算时从末尾低优先级话题开始裁剪；
+	// 只裁剪提示词，run.topics 观察快照保持完整，CommitConversation 的校验不受影响
+	promptTopics := run.topics
+	var topicText string
+	for {
+		text, err := sonic.MarshalString(promptTopics)
+		if err != nil {
+			return err
+		}
+		if utf8.RuneCountInString(text) <= learningInputBudget-utf8.RuneCountInString(initial) || len(promptTopics.Topics) == 0 {
+			topicText = text
+			break
+		}
+		promptTopics.Topics = promptTopics.Topics[:len(promptTopics.Topics)-1]
+	}
+	if len(promptTopics.Topics) < len(run.topics.Topics) {
+		topicText += "（话题较多，仅展示与本批最相关的部分，其余可用 searchTopics 查询）"
 	}
 	messages = append(messages, schema.UserMessage("已有话题及原归属："+topicText))
-	textChars := utf8.RuneCountInString(initial) + utf8.RuneCountInString(topicText)
-	if textChars > 24000 {
-		return fmt.Errorf("整理输入超出预算")
-	}
 	agent, err := run.newAgent(ctx, l.model, cfg.Learning.MaxStep)
 	if err != nil {
 		return err
 	}
-	if _, err := agent.Generate(ctx, messages); err != nil && !run.finished {
-		return err
-	}
-	if !run.finished {
-		return noFinishError()
-	}
-	return nil
+	return runUntilFinish(ctx, agent, messages, &run.finished)
 }
 
 func (r *groupInvestigation) tools() ([]tool.BaseTool, error) {
@@ -146,19 +142,11 @@ func (r *groupInvestigation) tools() ([]tool.BaseTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := agenttools.NewSearchWebTool()
+	web, err := webTools()
 	if err != nil {
 		return nil, err
 	}
-	h, err := agenttools.NewSearchMemeTool()
-	if err != nil {
-		return nil, err
-	}
-	g, err := agenttools.NewFetchWebTool()
-	if err != nil {
-		return nil, err
-	}
-	return []tool.BaseTool{a, b, c, d, e, f, h, g}, nil
+	return append([]tool.BaseTool{a, b, c, d, e}, web...), nil
 }
 
 func (r *groupInvestigation) searchTopics(ctx context.Context, input *struct {

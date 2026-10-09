@@ -1,7 +1,6 @@
 package onebot
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,138 +8,87 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
-
-	"mumu-bot/internal/utils"
 
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
+	ob "github.com/zjutjh/onebot-sdk"
+	"github.com/zjutjh/onebot-sdk/api"
+	"github.com/zjutjh/onebot-sdk/message"
 )
 
-// callAPI 调用 OneBot API（同步等待响应）
-func (c *Client) callAPI(ctx context.Context, action string, params map[string]interface{}) (interface{}, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-
+// apiClient 取当前连接的强类型 API 客户端
+func (c *Client) apiClient() (*api.Client, error) {
 	sdk, err := c.currentSDK()
 	if err != nil {
 		return nil, err
 	}
-	var raw json.RawMessage
-	if err := sdk.Call(ctx, action, params, &raw); err != nil {
-		return nil, err
-	}
-	var data interface{}
-	if len(raw) > 0 && string(raw) != "null" {
-		decoder := sonic.ConfigDefault.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&data); err != nil {
-			return nil, fmt.Errorf("解析 %s 返回体失败: %w", action, err)
-		}
-	}
-	return data, nil
+	return sdk.API(), nil
 }
 
-func responseDataMap(data interface{}, action string) (map[string]interface{}, error) {
-	if data == nil {
-		return nil, fmt.Errorf("%s 返回空响应", action)
-	}
-	result, ok := data.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("%s 返回的 data 不是对象", action)
-	}
-	return result, nil
+// rawUnion 把取值编码进生成代码的原始联合字段
+func rawUnion[T ~struct {
+	Raw json.RawMessage
+}](value any) T {
+	raw, _ := sonic.Marshal(value)
+	return T{Raw: raw}
 }
 
-func responseDataList(data interface{}, action string) ([]interface{}, error) {
-	if data == nil {
-		return nil, fmt.Errorf("%s 返回空响应", action)
-	}
-	result, ok := data.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("%s 返回的 data 不是数组", action)
-	}
-	return result, nil
-}
-
-func positiveID(data map[string]interface{}, field, action string) (int64, error) {
-	id, ok := utils.ParseInt64Value(data[field])
-	if !ok || id <= 0 {
-		return 0, fmt.Errorf("%s 返回无效的 %s", action, field)
-	}
-	return id, nil
-}
-
-func messageID(data map[string]interface{}, action string) (int64, error) {
-	id, ok := utils.ParseInt64Value(data["message_id"])
-	if !ok || id == 0 {
-		return 0, fmt.Errorf("%s 返回无效的 message_id", action)
-	}
-	return id, nil
+// rawUnionPtr 同 rawUnion，用于可选的指针形联合字段
+func rawUnionPtr[T ~struct {
+	Raw json.RawMessage
+}](value any) *T {
+	v := rawUnion[T](value)
+	return &v
 }
 
 func oneBotID(id int64) string { return strconv.FormatInt(id, 10) }
 
+// sendChain 发送消息段链并返回消息编号与该会话的运行时顺序序号
+func (c *Client) sendChain(ctx context.Context, kind string, targetID int64, chain message.Chain) (int64, uint64, error) {
+	client, err := c.apiClient()
+	if err != nil {
+		return 0, 0, err
+	}
+	msgUnion, err := api.NewOB11Message(chain)
+	if err != nil {
+		return 0, 0, fmt.Errorf("编码消息段失败: %w", err)
+	}
+	var msgID int64
+	switch kind {
+	case "group":
+		resp, err := client.SendGroupMsg(ctx, api.SendGroupMsgRequest{GroupID: message.ID(targetID), Message: msgUnion})
+		if err != nil {
+			return 0, 0, err
+		}
+		msgID = int64(resp.MessageID)
+	case "private":
+		resp, err := client.SendPrivateMsg(ctx, api.SendPrivateMsgRequest{UserID: message.ID(targetID), Message: msgUnion})
+		if err != nil {
+			return 0, 0, err
+		}
+		msgID = int64(resp.MessageID)
+	default:
+		return 0, 0, fmt.Errorf("未知会话类型: %s", kind)
+	}
+	return msgID, c.nextArrivalSeq(kind, targetID), nil
+}
+
 // SendGroupMessage 发送群消息并返回群内运行时顺序序号
 func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) (int64, uint64, error) {
-	// 使用消息段数组格式，更符合 OneBot 11 标准
-	var message []map[string]interface{}
-
-	// reply 消息段
+	var chain message.Chain
 	if replyTo != 0 {
-		message = append(message, map[string]interface{}{
-			"type": "reply",
-			"data": map[string]interface{}{
-				"id": oneBotID(replyTo),
-			},
-		})
+		chain = append(chain, message.Reply(replyTo))
 	}
-
-	// @ 消息段
 	for _, uid := range mentions {
 		if uid <= 0 {
 			continue
 		}
-		message = append(message, map[string]interface{}{
-			"type": "at",
-			"data": map[string]interface{}{
-				"qq": strconv.FormatInt(uid, 10),
-			},
-		}, map[string]interface{}{
-			"type": "text",
-			"data": map[string]interface{}{
-				"text": " ",
-			},
-		})
+		chain = append(chain, message.At(uid), message.Text(" "))
 	}
-
-	// 文本消息段
 	if content != "" {
-		message = append(message, map[string]interface{}{
-			"type": "text",
-			"data": map[string]interface{}{
-				"text": content,
-			},
-		})
+		chain = append(chain, message.Text(content))
 	}
-
-	resp, err := c.callAPI(ctx, "send_group_msg", map[string]interface{}{
-		"group_id": groupID,
-		"message":  message,
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	return c.sentMessageFromResponse(resp, groupID)
+	return c.sendChain(ctx, "group", groupID, chain)
 }
 
 // SendPrivateMessage 发送好友私聊消息并返回私聊会话顺序
@@ -148,50 +96,33 @@ func (c *Client) SendPrivateMessage(ctx context.Context, userID int64, content s
 	if userID <= 0 {
 		return 0, 0, fmt.Errorf("好友 QQ 无效")
 	}
-	message := make([]map[string]interface{}, 0, 2)
+	var chain message.Chain
 	if replyTo != 0 {
-		message = append(message, map[string]interface{}{
-			"type": "reply", "data": map[string]interface{}{"id": oneBotID(replyTo)},
-		})
+		chain = append(chain, message.Reply(replyTo))
 	}
-	message = append(message, map[string]interface{}{
-		"type": "text",
-		"data": map[string]interface{}{"text": content},
-	})
-	resp, err := c.callAPI(ctx, "send_private_msg", map[string]interface{}{
-		"user_id": userID,
-		"message": message,
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	return c.sentMessageFromResponseScope(resp, "private", userID)
+	chain = append(chain, message.Text(content))
+	return c.sendChain(ctx, "private", userID, chain)
 }
 
-// buildImageSegment 构造图片/表情包消息段：本地文件统一转 base64，避免 NapCat 读不到路径
-func buildImageSegment(filePath string, isSticker bool) (map[string]interface{}, error) {
-	subType := 0
-	if isSticker {
-		subType = 1
-	}
-
+// buildImageSegment 构造图片/表情包消息段：本地文件统一转 base64，避免后端读不到路径
+func buildImageSegment(filePath string, isSticker bool) (message.Segment, error) {
 	file := filePath
 	trimmed := strings.ToLower(strings.TrimSpace(filePath))
 	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			return nil, fmt.Errorf("读取待发送图片失败: %w", err)
+			return message.Segment{}, fmt.Errorf("读取待发送图片失败: %w", err)
 		}
 		file = "base64://" + base64.StdEncoding.EncodeToString(data)
 	}
-
-	return map[string]interface{}{
-		"type": "image",
-		"data": map[string]interface{}{
-			"file":     file,
-			"sub_type": subType,
-		},
-	}, nil
+	subType := 0
+	if isSticker {
+		subType = 1
+	}
+	return message.Segment{Type: "image", Data: message.ImageData{
+		File:    file,
+		SubType: message.StrNum(strconv.Itoa(subType)),
+	}}, nil
 }
 
 // SendImageMessage 发送图片/表情包到群聊
@@ -202,15 +133,7 @@ func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath s
 	if err != nil {
 		return 0, 0, err
 	}
-
-	resp, err := c.callAPI(ctx, "send_group_msg", map[string]interface{}{
-		"group_id": groupID,
-		"message":  []map[string]interface{}{segment},
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	return c.sentMessageFromResponse(resp, groupID)
+	return c.sendChain(ctx, "group", groupID, message.ChainOf(segment))
 }
 
 // SendPrivateImageMessage 发送图片/表情包到好友私聊
@@ -222,82 +145,52 @@ func (c *Client) SendPrivateImageMessage(ctx context.Context, userID int64, file
 	if err != nil {
 		return 0, 0, err
 	}
-
-	resp, err := c.callAPI(ctx, "send_private_msg", map[string]interface{}{
-		"user_id": userID,
-		"message": []map[string]interface{}{segment},
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	return c.sentMessageFromResponseScope(resp, "private", userID)
-}
-
-func (c *Client) sentMessageFromResponse(resp interface{}, groupID int64) (int64, uint64, error) {
-	return c.sentMessageFromResponseScope(resp, "group", groupID)
-}
-
-func (c *Client) sentMessageFromResponseScope(resp interface{}, kind string, targetID int64) (int64, uint64, error) {
-	messageID, err := messageIDFromResponse(resp)
-	if err != nil {
-		return 0, 0, err
-	}
-	return messageID, c.nextArrivalSeq(kind, targetID), nil
-}
-
-func messageIDFromResponse(resp interface{}) (int64, error) {
-	data, err := responseDataMap(resp, "发送消息")
-	if err != nil {
-		return 0, err
-	}
-	return messageID(data, "发送消息")
+	return c.sendChain(ctx, "private", userID, message.ChainOf(segment))
 }
 
 // DeleteMsg 撤回消息
 func (c *Client) DeleteMsg(ctx context.Context, messageID int64) error {
-	_, err := c.callAPI(ctx, "delete_msg", map[string]interface{}{
-		"message_id": oneBotID(messageID),
+	client, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	// message_id 是不透明外部定位符，保持字符串形态等值传递
+	_, err = client.DeleteMsg(ctx, api.DeleteMsgRequest{
+		MessageID: rawUnion[api.DeleteMsgRequestMessageIDUnion](oneBotID(messageID)),
 	})
 	return err
 }
 
 // GetMsg 获取消息详情
-func (c *Client) GetMsg(ctx context.Context, messageID int64) (map[string]interface{}, error) {
-	resp, err := c.callAPI(ctx, "get_msg", map[string]interface{}{
-		"message_id": oneBotID(messageID),
-	})
+func (c *Client) GetMsg(ctx context.Context, messageID int64) (*api.GetMsgResponse, error) {
+	client, err := c.apiClient()
 	if err != nil {
 		return nil, err
 	}
-	return responseDataMap(resp, "get_msg")
+	return client.GetMsg(ctx, api.GetMsgRequest{
+		MessageID: rawUnion[api.GetMsgRequestMessageIDUnion](oneBotID(messageID)),
+	})
 }
 
 // GetGroupInfo 获取群信息
-func (c *Client) GetGroupInfo(ctx context.Context, groupID int64, noCache bool) (*GroupInfo, error) {
-	resp, err := c.callAPI(ctx, "get_group_info", map[string]interface{}{
-		"group_id": groupID,
-		"no_cache": noCache,
-	})
+func (c *Client) GetGroupInfo(ctx context.Context, groupID int64) (*GroupInfo, error) {
+	client, err := c.apiClient()
 	if err != nil {
 		return nil, err
 	}
-	data, err := responseDataMap(resp, "get_group_info")
+	resp, err := client.GetGroupInfo(ctx, api.GetGroupInfoRequest{GroupID: message.ID(groupID)})
 	if err != nil {
 		return nil, err
 	}
-	groupID, err = positiveID(data, "group_id", "get_group_info")
-	if err != nil {
-		return nil, err
+	if resp == nil || resp.GroupID <= 0 {
+		return nil, fmt.Errorf("get_group_info 返回无效的 group_id")
 	}
-	info := &GroupInfo{GroupID: groupID}
-	if name, ok := data["group_name"].(string); ok {
-		info.GroupName = name
+	info := &GroupInfo{GroupID: int64(resp.GroupID), GroupName: resp.GroupName}
+	if resp.MemberCount != nil {
+		info.MemberCount = int(*resp.MemberCount)
 	}
-	if count, ok := parseInt(data["member_count"]); ok {
-		info.MemberCount = count
-	}
-	if m, ok := parseInt(data["max_member_count"]); ok {
-		info.MaxMemberCount = m
+	if resp.MaxMemberCount != nil {
+		info.MaxMemberCount = int(*resp.MaxMemberCount)
 	}
 	return info, nil
 }
@@ -310,81 +203,81 @@ func (c *Client) GetGroupMemberInfo(ctx context.Context, groupID, userID int64, 
 			return item.Value(), nil
 		}
 	}
-	resp, err := c.callAPI(ctx, "get_group_member_info", map[string]interface{}{
-		"group_id": groupID,
-		"user_id":  userID,
-		"no_cache": noCache,
+	client, err := c.apiClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.GetGroupMemberInfo(ctx, api.GetGroupMemberInfoRequest{
+		GroupID: message.ID(groupID),
+		UserID:  message.ID(userID),
+		NoCache: rawUnionPtr[api.GetGroupMemberInfoRequestNoCacheUnion](noCache),
 	})
 	if err != nil {
 		return nil, err
 	}
-	data, err := responseDataMap(resp, "get_group_member_info")
-	if err != nil {
-		return nil, err
+	if resp == nil || resp.GroupID <= 0 || resp.UserID <= 0 {
+		return nil, fmt.Errorf("get_group_member_info 返回无效的成员标识")
 	}
-	info, err := parseGroupMemberInfo(data, "get_group_member_info")
-	if err != nil {
-		return nil, err
+	info := &GroupMemberInfo{
+		GroupID:  int64(resp.GroupID),
+		UserID:   int64(resp.UserID),
+		Nickname: resp.Nickname,
+	}
+	if resp.Card != nil {
+		info.Card = *resp.Card
+	}
+	if resp.Role != nil {
+		info.Role = *resp.Role
+	}
+	if resp.JoinTime != nil {
+		info.JoinTime = int64(*resp.JoinTime)
+	}
+	if resp.LastSentTime != nil {
+		info.LastSentTime = int64(*resp.LastSentTime)
+	}
+	if resp.Level != nil {
+		info.Level = *resp.Level
+	}
+	if resp.Title != nil {
+		info.Title = *resp.Title
 	}
 	c.memberInfoCache.Set(cacheKey, info, ttlcache.DefaultTTL)
 	return info, nil
 }
 
-func parseGroupMemberInfo(data map[string]interface{}, action string) (*GroupMemberInfo, error) {
-	groupID, err := positiveID(data, "group_id", action)
-	if err != nil {
-		return nil, err
-	}
-	userID, err := positiveID(data, "user_id", action)
-	if err != nil {
-		return nil, err
-	}
-	info := &GroupMemberInfo{GroupID: groupID, UserID: userID}
-	if nickname, ok := data["nickname"].(string); ok {
-		info.Nickname = nickname
-	}
-	if card, ok := data["card"].(string); ok {
-		info.Card = card
-	}
-	if role, ok := data["role"].(string); ok {
-		info.Role = role
-	}
-	if joinTime, ok := utils.ParseInt64Value(data["join_time"]); ok {
-		info.JoinTime = joinTime
-	}
-	if lastSentTime, ok := utils.ParseInt64Value(data["last_sent_time"]); ok {
-		info.LastSentTime = lastSentTime
-	}
-	if level, ok := data["level"].(string); ok {
-		info.Level = level
-	}
-	if title, ok := data["title"].(string); ok {
-		info.Title = title
-	}
-	return info, nil
-}
-
 // SetMsgEmojiLike 对消息贴表情
 func (c *Client) SetMsgEmojiLike(ctx context.Context, messageID int64, emojiID int) error {
-	_, err := c.callAPI(ctx, "set_msg_emoji_like", map[string]interface{}{
-		"message_id": oneBotID(messageID),
-		"emoji_id":   emojiID,
-		"set":        true,
+	client, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	_, err = client.SetMsgEmojiLike(ctx, api.SetMsgEmojiLikeRequest{
+		MessageID: rawUnion[api.SetMsgEmojiLikeRequestMessageIDUnion](oneBotID(messageID)),
+		EmojiID:   rawUnion[api.SetMsgEmojiLikeRequestEmojiIDUnion](emojiID),
+		Set:       rawUnionPtr[api.SetMsgEmojiLikeRequestSetUnion](true),
 	})
 	return err
 }
 
 // MarkMsgAsRead 标记消息已读
 func (c *Client) MarkMsgAsRead(ctx context.Context, messageID int64) error {
-	_, err := c.callAPI(ctx, "mark_msg_as_read", map[string]interface{}{
-		"message_id": oneBotID(messageID),
-	})
+	client, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	_, err = client.MarkMsgAsRead(ctx, api.MarkMsgAsReadRequest{MessageID: message.ID(messageID)})
 	return err
 }
 
 // MarkPrivateMsgAsRead 标记好友私聊已读
 func (c *Client) MarkPrivateMsgAsRead(ctx context.Context, userID int64) error {
-	_, err := c.callAPI(ctx, "mark_private_msg_as_read", map[string]interface{}{"user_id": userID})
+	client, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	_, err = client.MarkPrivateMsgAsRead(ctx, api.MarkPrivateMsgAsReadRequest{
+		UserID: rawUnionPtr[api.MarkPrivateMsgAsReadRequestUserIDUnion](message.ID(userID)),
+	})
 	return err
 }
 
@@ -393,55 +286,44 @@ func (c *Client) FriendPoke(ctx context.Context, userID int64) error {
 	if userID <= 0 {
 		return fmt.Errorf("好友账号无效")
 	}
-	_, err := c.callAPI(ctx, "friend_poke", map[string]interface{}{
-		"user_id": userID,
-	})
+	client, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	_, err = client.FriendPoke(ctx, api.FriendPokeRequest{UserID: message.ID(userID)})
 	return err
 }
 
 // GroupPoke 群戳一戳
 func (c *Client) GroupPoke(ctx context.Context, groupID, userID int64) error {
-	_, err := c.callAPI(ctx, "group_poke", map[string]interface{}{
-		"group_id": groupID,
-		"user_id":  userID,
-	})
+	client, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	_, err = client.GroupPoke(ctx, api.GroupPokeRequest{GroupID: message.ID(groupID), UserID: message.ID(userID)})
 	return err
 }
 
 // GetGroupNotice 获取群公告
 func (c *Client) GetGroupNotice(ctx context.Context, groupID int64) ([]GroupNotice, error) {
-	resp, err := c.callAPI(ctx, "_get_group_notice", map[string]interface{}{
-		"group_id": groupID,
-	})
+	client, err := c.apiClient()
 	if err != nil {
 		return nil, err
 	}
-
-	dataList, err := responseDataList(resp, "_get_group_notice")
+	resp, err := client.UnderscoreGetGroupNotice(ctx, api.UnderscoreGetGroupNoticeRequest{GroupID: message.ID(groupID)})
 	if err != nil {
 		return nil, err
 	}
-
+	if resp == nil {
+		return nil, nil
+	}
 	var notices []GroupNotice
-	for i, item := range dataList {
-		data, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("_get_group_notice 第 %d 项不是对象", i)
-		}
-		notice := GroupNotice{}
-		if noticeID, ok := data["notice_id"].(string); ok {
-			notice.NoticeID = noticeID
-		}
-		if senderID, ok := utils.ParseInt64Value(data["sender_id"]); ok {
-			notice.SenderID = senderID
-		}
-		if publishTime, ok := utils.ParseInt64Value(data["publish_time"]); ok {
-			notice.PublishTime = publishTime
-		}
-		if msg, ok := data["message"].(map[string]interface{}); ok {
-			if text, ok := msg["text"].(string); ok {
-				notice.Content = text
-			}
+	for _, item := range *resp {
+		notice := GroupNotice{
+			NoticeID:    item.NoticeID,
+			SenderID:    int64(item.SenderID),
+			PublishTime: int64(item.PublishTime),
+			Content:     item.Message.Text,
 		}
 		notices = append(notices, notice)
 	}
@@ -450,81 +332,39 @@ func (c *Client) GetGroupNotice(ctx context.Context, groupID int64) ([]GroupNoti
 
 // GetEssenceMessages 获取群精华消息
 func (c *Client) GetEssenceMessages(ctx context.Context, groupID int64) ([]EssenceMessage, error) {
-	resp, err := c.callAPI(ctx, "get_essence_msg_list", map[string]interface{}{
-		"group_id": groupID,
-	})
+	client, err := c.apiClient()
 	if err != nil {
 		return nil, err
 	}
-
-	dataList, err := responseDataList(resp, "get_essence_msg_list")
+	resp, err := client.GetEssenceMsgList(ctx, api.GetEssenceMsgListRequest{GroupID: message.ID(groupID)})
 	if err != nil {
 		return nil, err
 	}
-
+	if resp == nil {
+		return nil, nil
+	}
 	var messages []EssenceMessage
-	for i, item := range dataList {
-		data, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("get_essence_msg_list 第 %d 项不是对象", i)
+	for i, item := range *resp {
+		if item.MessageID == 0 {
+			return nil, fmt.Errorf("get_essence_msg_list 第 %d 项返回无效的 message_id", i)
 		}
-		messageID, err := messageID(data, fmt.Sprintf("get_essence_msg_list 第 %d 项", i))
-		if err != nil {
-			return nil, err
-		}
-		msg := EssenceMessage{MessageID: messageID}
-		if senderNick, ok := data["sender_nick"].(string); ok {
-			msg.SenderNick = senderNick
-		}
-		if operatorNick, ok := data["operator_nick"].(string); ok {
-			msg.OperatorNick = operatorNick
-		}
-		if operatorTime, ok := utils.ParseInt64Value(data["operator_time"]); ok {
-			msg.OperatorTime = operatorTime
-		}
-		// 解析消息内容
-		if content, ok := data["content"].([]interface{}); ok {
-			msg.Content = extractTextFromSegments(content)
+		msg := EssenceMessage{
+			MessageID:    int64(item.MessageID),
+			SenderNick:   item.SenderNick,
+			OperatorNick: item.OperatorNick,
+			OperatorTime: int64(item.OperatorTime),
+			Content:      extractTextFromSegments(item.Content),
 		}
 		messages = append(messages, msg)
 	}
 	return messages, nil
 }
 
-// GetMessageReactions 获取消息的表情回应
-func (c *Client) GetMessageReactions(ctx context.Context, messageID int64) ([]EmojiReaction, error) {
-	// 通过 get_msg 获取消息详情，其中包含 emoji_likes_list
-	msgData, err := c.GetMsg(ctx, messageID)
+// GetMessageReactions 获取消息的表情回应，方言差异由 SDK 门面归一
+func (c *Client) GetMessageReactions(ctx context.Context, messageID int64) ([]ob.EmojiReaction, error) {
+	sdk, err := c.currentSDK()
 	if err != nil {
 		return nil, err
 	}
-
-	rawEmojiList, exists := msgData["emoji_likes_list"]
-	if !exists || rawEmojiList == nil {
-		return nil, nil
-	}
-	emojiList, ok := rawEmojiList.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("get_msg 返回的 emoji_likes_list 不是数组")
-	}
-
-	var reactions []EmojiReaction
-	for i, item := range emojiList {
-		emojiData, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("get_msg 的 emoji_likes_list 第 %d 项不是对象", i)
-		}
-		reaction := EmojiReaction{}
-		if emojiID, ok := parseInt(emojiData["emoji_id"]); ok {
-			reaction.EmojiID = emojiID
-		}
-
-		if count, ok := parseInt(emojiData["likes_cnt"]); ok {
-			reaction.Count = count
-		}
-		if reaction.EmojiID > 0 {
-			reactions = append(reactions, reaction)
-		}
-	}
-	return reactions, nil
+	return sdk.GetMessageReactions(ctx, messageID)
 }

@@ -40,6 +40,34 @@ func (m *memoryChatModel) Generate(ctx context.Context, messages []*schema.Messa
 	return response, nil
 }
 
+// webTools 提供外部资料查询工具，仅辅助理解语义，不作为证据
+func webTools() ([]tool.BaseTool, error) {
+	searchWeb, err := agenttools.NewSearchWebTool()
+	if err != nil {
+		return nil, err
+	}
+	searchMeme, err := agenttools.NewSearchMemeTool()
+	if err != nil {
+		return nil, err
+	}
+	fetchWeb, err := agenttools.NewFetchWebTool()
+	if err != nil {
+		return nil, err
+	}
+	return []tool.BaseTool{searchWeb, searchMeme, fetchWeb}, nil
+}
+
+// runUntilFinish 驱动调查直到合法提交；Generate 报错但已提交时仍视为完成
+func runUntilFinish(ctx context.Context, a *react.Agent, messages []*schema.Message, finished *bool) error {
+	if _, err := a.Generate(ctx, messages); err != nil && !*finished {
+		return err
+	}
+	if !*finished {
+		return noFinishError()
+	}
+	return nil
+}
+
 func (r *groupInvestigation) newAgent(ctx context.Context, base model.ToolCallingChatModel, maxStep int) (*react.Agent, error) {
 	available, err := r.tools()
 	if err != nil {

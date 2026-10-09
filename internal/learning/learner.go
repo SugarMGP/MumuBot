@@ -76,6 +76,16 @@ func (l *Learner) runLoop() {
 	l.nextAttempt = make(map[conversationKey]time.Time)
 	l.targetOffsets = make(map[string]int)
 	l.nextKind = memory.ConversationKindGroup
+	// 启动时恢复数据库中未到期的整理冷却，避免重启后立即重试
+	if states, err := l.memMgr.ListLearningCooldowns(l.ctx, time.Now()); err != nil {
+		zap.L().Warn("读取整理冷却失败", zap.Error(err))
+	} else {
+		for _, state := range states {
+			if state.NextAttemptAt != nil {
+				l.nextAttempt[conversationKey{kind: state.ConversationKind, targetID: state.TargetID}] = *state.NextAttemptAt
+			}
+		}
+	}
 	l.processAll()
 	for {
 		select {
@@ -116,6 +126,13 @@ func (l *Learner) processAll() {
 	}
 }
 
+// investigateContext 为一轮整理建立统一超时并绑定低档模型的任务标签
+func (l *Learner) investigateContext() (context.Context, context.CancelFunc, *config.Config) {
+	cfg := config.Get()
+	ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
+	return llm.WithTask(ctx, "memory_agent", cfg.ModelTiers.Low.Model), cancel, cfg
+}
+
 func (l *Learner) processNextConversation(kind string, selfID int64, cfg config.LearningConfig) bool {
 	targets, err := l.memMgr.ListConversationTargets(l.ctx, kind, true)
 	if err != nil {
@@ -139,7 +156,7 @@ func (l *Learner) processNextConversation(kind string, selfID int64, cfg config.
 			zap.L().Warn("读取整理消息失败", zap.String("conversation_kind", kind), zap.Int64("target_id", target.TargetID), zap.Error(err))
 			continue
 		}
-		if len(rows) == 0 || len(rows) < cfg.BatchSize && time.Since(rows[0].MessageTime) < time.Duration(cfg.MaxWaitMinutes)*time.Minute {
+		if len(rows) == 0 || (len(rows) < cfg.BatchSize && time.Since(rows[0].MessageTime) < time.Duration(cfg.MaxWaitMinutes)*time.Minute) {
 			continue
 		}
 		chars := 0
@@ -151,7 +168,6 @@ func (l *Learner) processNextConversation(kind string, selfID int64, cfg config.
 			}
 			chars += size
 		}
-		l.nextAttempt[key] = time.Now().Add(time.Duration(cfg.IntervalMinutes) * time.Minute)
 		l.targetOffsets[kind] = (index + 1) % len(targets)
 		if kind == memory.ConversationKindPrivate {
 			err = l.investigatePrivate(target.TargetID, selfID, after, rows[len(rows)-1].ID, rows)
@@ -160,6 +176,12 @@ func (l *Learner) processNextConversation(kind string, selfID int64, cfg config.
 		}
 		if err != nil {
 			zap.L().Warn("会话整理未完成，保留待处理", zap.String("conversation_kind", kind), zap.Int64("target_id", target.TargetID), zap.Error(err))
+		}
+		// 冷却按本轮整理结束时间计算，成功与失败都同样遵守间隔，避免失败时立即反复重试
+		next := time.Now().Add(time.Duration(cfg.IntervalMinutes) * time.Minute)
+		l.nextAttempt[key] = next
+		if err := l.memMgr.SetLearningNextAttempt(l.ctx, kind, target.TargetID, next); err != nil {
+			zap.L().Warn("持久化整理冷却失败", zap.String("conversation_kind", kind), zap.Int64("target_id", target.TargetID), zap.Error(err))
 		}
 		return true
 	}

@@ -79,7 +79,7 @@ templ SystemLogCount(data SystemPageData, outOfBand bool) {
 
 templ SystemLogRows(data SystemPageData) {
 	for _, line := range data.Logs {
-		<div class="admin-log-line" data-admin-log-line data-log-key={ line.Text } data-level={ line.Level }>
+		<div class="admin-log-line" data-admin-log-line data-log-key={ line.Seq } data-level={ line.Level }>
 			<time>{ line.Time }</time><strong>{ line.Level }</strong><span class="admin-log-message">{ line.Message }</span>
 			if len(line.Fields) > 0 {
 				<span class="admin-log-fields">

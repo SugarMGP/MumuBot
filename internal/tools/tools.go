@@ -271,6 +271,9 @@ func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (
 	if limit <= 0 {
 		limit = 40
 	}
+	if limit > 100 {
+		limit = 100
+	}
 
 	messages, err := tc.MemoryMgr.GetRecentMessagesScope(ctx, tc.ConversationKind, tc.TargetID, tc.SnapshotMessageID, limit, input.Offset)
 	if err != nil {
@@ -461,8 +464,8 @@ type GetMessageReactionsInput struct {
 }
 
 type ReactionSummary struct {
-	EmojiID int `json:"emoji_id"`
-	Count   int `json:"count"`
+	EmojiID string `json:"emoji_id"`
+	Count   int64  `json:"count"`
 }
 
 type GetMessageReactionsOutput struct {

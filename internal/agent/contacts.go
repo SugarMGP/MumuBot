@@ -85,9 +85,10 @@ func (a *Agent) HandleFriendRequest(ctx context.Context, id uint, approve bool) 
 }
 
 func (a *Agent) SkipConversationEvent(kind string, targetID int64, arrivalSeq uint64) {
-	if kind == memory.ConversationKindGroup {
-		a.enqueueCommitSkip(targetID, arrivalSeq)
-	} else if kind == memory.ConversationKindPrivate {
-		a.enqueuePrivateSkip(targetID, arrivalSeq)
+	item := commitItem{skip: true}
+	if kind == memory.ConversationKindPrivate {
+		a.privateCommits.enqueue(targetID, arrivalSeq, item)
+	} else {
+		a.groupCommits.enqueue(targetID, arrivalSeq, item)
 	}
 }

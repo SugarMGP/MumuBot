@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -114,7 +115,9 @@ func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int) error 
 	for _, item := range pending {
 		values, err := m.embedding.Embed(ctx, item.Content)
 		if err != nil {
-			return err
+			// 单行补全失败时跳过，避免队头失败长期阻塞其余待补全行
+			zap.L().Warn("知识向量补全失败，本轮跳过", zap.Uint("id", item.ID), zap.String("kind", item.Kind), zap.Error(err))
+			continue
 		}
 		vector, err := EmbeddingVector(values)
 		if err != nil {

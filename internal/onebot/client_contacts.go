@@ -3,9 +3,11 @@ package onebot
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"mumu-bot/internal/utils"
+	"github.com/zjutjh/onebot-sdk/api"
+	"github.com/zjutjh/onebot-sdk/message"
 )
 
 type Contact struct {
@@ -30,64 +32,94 @@ func (c *Client) GetConversationContacts(ctx context.Context) ([]Contact, error)
 }
 
 func (c *Client) getGroupContacts(ctx context.Context) ([]Contact, error) {
-	data, err := c.callAPI(ctx, "get_group_list", map[string]interface{}{"no_cache": true})
+	client, err := c.apiClient()
 	if err != nil {
 		return nil, err
 	}
-	return parseContactList(data, "group", "get_group_list")
-}
-
-func (c *Client) getFriendContacts(ctx context.Context) ([]Contact, error) {
-	data, err := c.callAPI(ctx, "get_friend_list", map[string]interface{}{"no_cache": true})
+	resp, err := client.GetGroupList(ctx, api.GetGroupListRequest{
+		NoCache: rawUnionPtr[api.GetGroupListRequestNoCacheUnion](true),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return parseContactList(data, "private", "get_friend_list")
-}
-
-// parseContactList 任一畸形项都拒绝全量同步，真实空数组仍表示联系人已清空
-func parseContactList(data interface{}, kind, action string) ([]Contact, error) {
-	rows, err := responseDataList(data, action)
-	if err != nil {
-		return nil, err
-	}
-	idKey, nameKey, remarkKey := "user_id", "nickname", "remark"
-	if kind == "group" {
-		idKey, nameKey, remarkKey = "group_id", "group_name", "group_remark"
-	}
-	result := make([]Contact, 0, len(rows))
-	seen := make(map[int64]bool, len(rows))
-	for i, raw := range rows {
-		row, ok := raw.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("%s 第 %d 项不是对象", action, i)
-		}
-		id, ok := utils.ParseInt64Value(row[idKey])
-		if !ok || id <= 0 || seen[id] {
-			return nil, fmt.Errorf("%s 第 %d 项的 %s 无效或重复", action, i, idKey)
-		}
-		name, ok := row[nameKey].(string)
-		if !ok {
-			return nil, fmt.Errorf("%s 第 %d 项的 %s 不是字符串", action, i, nameKey)
-		}
-		remark := ""
-		if value, exists := row[remarkKey]; exists {
-			remark, ok = value.(string)
-			if !ok {
-				return nil, fmt.Errorf("%s 第 %d 项的 %s 不是字符串", action, i, remarkKey)
-			}
+	result := make([]Contact, 0, len(*resp))
+	seen := make(map[int64]bool, len(*resp))
+	for i, row := range *resp {
+		id := int64(row.GroupID)
+		// 任一畸形项都拒绝全量同步，真实空数组仍表示联系人已清空
+		if id <= 0 || seen[id] {
+			return nil, fmt.Errorf("get_group_list 第 %d 项的 group_id 无效或重复", i)
 		}
 		seen[id] = true
-		result = append(result, Contact{Kind: kind, TargetID: id, Name: name, RemoteRemark: remark, Active: true, LastSeenAt: time.Now()})
+		result = append(result, Contact{
+			Kind:         "group",
+			TargetID:     id,
+			Name:         row.GroupName,
+			RemoteRemark: row.GroupRemark,
+			Active:       true,
+			LastSeenAt:   time.Now(),
+		})
 	}
 	return result, nil
 }
 
-func (c *Client) SetFriendRequest(ctx context.Context, flag string, approve bool, remark string) error {
-	_, err := c.callAPI(ctx, "set_friend_add_request", map[string]interface{}{
-		"flag":    flag,
-		"approve": approve,
-		"remark":  remark,
+func (c *Client) getFriendContacts(ctx context.Context) ([]Contact, error) {
+	client, err := c.apiClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.GetFriendList(ctx, api.GetFriendListRequest{
+		NoCache: rawUnionPtr[api.GetFriendListRequestNoCacheUnion](true),
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Contact, 0, len(*resp))
+	seen := make(map[int64]bool, len(*resp))
+	for i, row := range *resp {
+		id := int64(row.UserID)
+		// 任一畸形项都拒绝全量同步，真实空数组仍表示联系人已清空
+		if id <= 0 || seen[id] {
+			return nil, fmt.Errorf("get_friend_list 第 %d 项的 user_id 无效或重复", i)
+		}
+		seen[id] = true
+		remark := ""
+		if row.Remark != nil {
+			remark = *row.Remark
+		}
+		result = append(result, Contact{
+			Kind:         "private",
+			TargetID:     id,
+			Name:         row.Nickname,
+			RemoteRemark: remark,
+			Active:       true,
+			LastSeenAt:   time.Now(),
+		})
+	}
+	return result, nil
+}
+
+// GetStrangerNickname 查询陌生人昵称，供好友申请展示补全；查询失败返回空串由上层回退
+func (c *Client) GetStrangerNickname(ctx context.Context, userID int64) string {
+	client, err := c.apiClient()
+	if err != nil {
+		return ""
+	}
+	resp, err := client.GetStrangerInfo(ctx, api.GetStrangerInfoRequest{
+		UserID:  message.ID(userID),
+		NoCache: rawUnion[api.GetStrangerInfoRequestNoCacheUnion](false),
+	})
+	if err != nil || resp == nil {
+		return ""
+	}
+	return strings.TrimSpace(resp.Nickname)
+}
+
+// SetFriendRequest 处理好友请求，remark 的方言差异由 SDK 门面归一
+func (c *Client) SetFriendRequest(ctx context.Context, flag string, approve bool, remark string) error {
+	sdk, err := c.currentSDK()
+	if err != nil {
+		return err
+	}
+	return sdk.SetFriendRequest(ctx, flag, approve, remark)
 }

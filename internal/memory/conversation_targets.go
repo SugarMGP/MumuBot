@@ -37,7 +37,12 @@ func (m *Manager) UpsertConversationTarget(ctx context.Context, target Conversat
 	}).Create(&target).Error
 }
 
-func (m *Manager) SyncConversationContacts(ctx context.Context, contacts []ContactSnapshot) error {
+// SyncConversationContacts 用联系人快照纠正会话状态；fetchedAt 是快照拉取时刻，
+// 停用判定只作用于该时刻之后未被再次更新的行，避免快照落后于 friend_add 等即时事件时误停用新会话
+func (m *Manager) SyncConversationContacts(ctx context.Context, contacts []ContactSnapshot, fetchedAt time.Time) error {
+	if fetchedAt.IsZero() {
+		fetchedAt = time.Now()
+	}
 	seen := make(map[string]struct{}, len(contacts))
 	for _, contact := range contacts {
 		key := contact.Kind + ":" + fmt.Sprint(contact.TargetID)
@@ -63,7 +68,9 @@ func (m *Manager) SyncConversationContacts(ctx context.Context, contacts []Conta
 			if _, ok := seen[kind+":"+fmt.Sprint(row.TargetID)]; ok {
 				continue
 			}
-			if err := m.db.WithContext(ctx).Model(&ConversationTarget{}).Where("conversation_kind=? AND target_id=?", kind, row.TargetID).Updates(map[string]any{"active": false, "updated_at": time.Now()}).Error; err != nil {
+			if err := m.db.WithContext(ctx).Model(&ConversationTarget{}).
+				Where("conversation_kind=? AND target_id=? AND updated_at < ?", kind, row.TargetID, fetchedAt).
+				Updates(map[string]any{"active": false, "updated_at": time.Now()}).Error; err != nil {
 				return err
 			}
 		}

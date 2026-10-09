@@ -11,7 +11,7 @@
 ## 目录地图
 
 - `internal/agent/`：运行编排层，连接 OneBot、话题、学习、工具、模型和思考循环。
-- `internal/onebot/`：napcat-sdk 接入、OneBot 11 Adapter、消息事件解析和发送 API。
+- `internal/onebot/`：onebot-sdk 接入、OneBot 11 Adapter、消息事件解析和发送 API。
 - `internal/topic/`：话题工作记忆读取、消息持久化、归档检索和提示词上下文；没有独立模型任务。
 - `internal/memory/`：PostgreSQL 数据模型、pgvector/pg_trgm 检索、长期记忆、消息日志、成员画像。
 - `internal/migration/`：数据库 schema 版本与一次性数据迁移，只依赖 GORM 和 memory 的模型。
@@ -208,7 +208,7 @@ go vet ./...
 - 话题与主动长期记忆检索共用固定消息快照生成的一份混合查询：拼接原文只用于单次向量查询，逐条原文用于 pg_trgm 文本召回，再由 RRF 融合；不要增加关键词提取模型、手写中文分词或第二份检索上下文。
 - 持久化使用 PostgreSQL。OneBot 首次连接并取得 `self_id` 后才允许打开数据库；连接已建立但业务事件必须由闸门阻塞，直到 schema 迁移、Agent 恢复和后台初始化全部完成。
 - schema 版本由 `schema_migrations` 记录并在后端启动时顺序执行。完全空库只走 `initializeV1Schema`；无版本表但全部已知旧业务表存在时只走 `migrateV1`；部分表、未知结构、版本断档或数据库版本高于程序时拒绝启动。迁移使用事务级 advisory lock 和显式 SQL，不使用 `AutoMigrate`。
-- 当前 NapCat 将原始 `msgId`、会话类型和对端标识拼接后做 MD5，并截取为 31 位正整数 OneBot `message_id`；没有同时覆盖消息、回复和撤回链路的更稳定上报字段，项目按碰撞概率可忽略的前提将它视为不重复，但绝不假设递增。`one_bot_message_id` 只能做等值匹配，禁止用于排序、范围比较或水位；数据库中的消息范围使用内部自增 `message_logs.id`，进程内到达顺序使用 `ArrivalSeq`。`0` 表示缺失，接入层仍接受其他 OneBot 实现可能返回的负数 ID。
+- 项目同时兼容 NapCat 与 SnowLuma 后端，方言由 onebot-sdk 在连接时通过 `get_version_info` 自动检测；SnowLuma 的 forward 段只带转发 ID，由 SDK 归一化管线回源拉取完整节点，消息解析路径只消费补拉结果，不重复兜底。当前 NapCat 将原始 `msgId`、会话类型和对端标识拼接后做 MD5，并截取为 31 位正整数 OneBot `message_id`；SnowLuma 则使用带符号 int32 `message_id`。没有同时覆盖消息、回复和撤回链路的更稳定上报字段，项目按碰撞概率可忽略的前提将 `message_id` 视为不重复，但绝不假设递增，也不假设正负号以外的取值规律。`one_bot_message_id` 只能做等值匹配，禁止用于排序、范围比较或水位；数据库中的消息范围使用内部自增 `message_logs.id`，进程内到达顺序使用 `ArrivalSeq`。`0` 表示缺失，接入层仍接受其他 OneBot 实现可能返回的负数 ID。
 - 自动长期记忆召回先用当前会话的群级/好友、自身、消息作者和回复目标作者做主体硬过滤，再执行 pgvector + pg_trgm + RRF；群聊不足时只补其他群聊的自身记忆。主动查询默认当前会话，查询 `-1` 或真实自身 ID 时自动跨会话。
 - 管理后台日志每秒刷新内存中完整 300 条 buffer，搜索、最低级别和下载必须共用同一过滤逻辑；日志滚动以是否接近列表底部决定自动跟随，用户向上回看时自动暂停，回到底部自动恢复。用户选中日志文本时暂停轮询交换以保留选区，清除选区后自动恢复。日志高亮直接使用服务端已解析的时间、级别、消息与字段，格式化视图展开字段并保留真实换行，不引入第二套文本解析器。模型观测只保存按小时的任务/模型请求数、失败、耗时和 provider Token 聚合，不保存 prompt/response，不估算 Token 或成本。
 - 视觉模型调用失败或返回空响应时必须记录错误并向调用方返回失败，禁止静默降级成空描述；上层可以继续使用既有图片或视频占位展示。

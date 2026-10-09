@@ -13,9 +13,10 @@ import (
 )
 
 type logBuffer struct {
-	mu    sync.RWMutex
-	lines []string
-	max   int
+	mu      sync.RWMutex
+	lines   []string
+	written uint64
+	max     int
 }
 
 func newLogBuffer(max int) *logBuffer { return &logBuffer{max: max} }
@@ -27,6 +28,7 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 	}
 	b.mu.Lock()
 	b.lines = append(b.lines, line)
+	b.written++
 	if len(b.lines) > b.max {
 		b.lines = b.lines[len(b.lines)-b.max:]
 	}
@@ -36,12 +38,13 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 
 func (b *logBuffer) Sync() error { return nil }
 
-func (b *logBuffer) Snapshot() []string {
+// Snapshot 返回缓冲副本和首行对应的绝对序号，保证同一行内容重复出现时也能唯一定位
+func (b *logBuffer) Snapshot() ([]string, uint64) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	result := make([]string, len(b.lines))
 	copy(result, b.lines)
-	return result
+	return result, b.written - uint64(len(b.lines))
 }
 
 var recentLogs = newLogBuffer(300)
@@ -102,6 +105,7 @@ type QueryResult struct {
 }
 
 type Line struct {
+	Seq     uint64
 	Time    string
 	Level   string
 	Message string
@@ -115,14 +119,14 @@ type Field struct {
 }
 
 func Query(keyword, minimumLevel string) QueryResult {
-	raw := recentLogs.Snapshot()
+	raw, firstSeq := recentLogs.Snapshot()
 	result := QueryResult{Total: len(raw), Lines: make([]Line, 0, len(raw))}
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	minimum := zapcore.DebugLevel
 	if err := minimum.UnmarshalText([]byte(strings.ToLower(strings.TrimSpace(minimumLevel)))); err != nil {
 		minimum = zapcore.DebugLevel
 	}
-	for _, line := range raw {
+	for i, line := range raw {
 		var fields map[string]any
 		if err := logJSONAPI.UnmarshalFromString(line, &fields); err != nil {
 			continue
@@ -136,6 +140,7 @@ func Query(keyword, minimumLevel string) QueryResult {
 		if keyword != "" && !strings.Contains(strings.ToLower(formatted.Text), keyword) {
 			continue
 		}
+		formatted.Seq = firstSeq + uint64(i)
 		result.Lines = append(result.Lines, formatted)
 	}
 	result.Filtered = len(result.Lines)

@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	activeContextVectorThreshold = 0.7
-	contextTextThreshold         = 0.1
+	contextVectorThreshold = 0.3
+	contextTextThreshold   = 0.1
 )
 
 // HybridQuery 是基于固定消息快照构造的语义查询，由话题和记忆检索共用

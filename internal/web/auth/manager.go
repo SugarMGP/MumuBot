@@ -58,6 +58,13 @@ func (m *Manager) CreateSession() (string, time.Time, error) {
 	expiresAt := time.Now().Add(m.ttl)
 
 	m.mu.Lock()
+	// 顺手清理其他已过期的会话，避免长期运行时无访问的过期令牌堆积
+	now := time.Now()
+	for token, expires := range m.sessions {
+		if now.After(expires) {
+			delete(m.sessions, token)
+		}
+	}
 	m.sessions[token] = expiresAt
 	m.mu.Unlock()
 

@@ -29,6 +29,7 @@ const contactSyncInterval = 5 * time.Minute
 
 // syncConversationContacts 拉取并保存 QQ 联系人与群列表，允许真实空列表更新会话状态
 func syncConversationContacts(botClient *onebot.Client, memoryMgr *memory.Manager) error {
+	fetchedAt := time.Now()
 	contacts, err := botClient.GetConversationContacts(context.Background())
 	if err != nil {
 		return err
@@ -43,7 +44,7 @@ func syncConversationContacts(botClient *onebot.Client, memoryMgr *memory.Manage
 			RemoteRemark: contact.RemoteRemark, Active: contact.Active, LastSeenAt: contact.LastSeenAt,
 		})
 	}
-	return memoryMgr.SyncConversationContacts(context.Background(), rows)
+	return memoryMgr.SyncConversationContacts(context.Background(), rows, fetchedAt)
 }
 
 func main() {

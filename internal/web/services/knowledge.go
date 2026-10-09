@@ -16,14 +16,19 @@ type KnowledgeFilter struct {
 	UserID, AuthorID int64
 }
 
-const knowledgeParticipationSQL = `EXISTS (
+// knowledgeParticipationSQL 返回知识条目与原文参与关联的 EXISTS 条件
+// authorExpr 在子查询内以 message_logs 的 user_id 匹配作者：列表筛选传 "?"（参数绑定），
+// 成员页统计传相关外层列（如 "mp.user_id"），不能引用子查询作用域之外的其他别名
+func knowledgeParticipationSQL(authorExpr string) string {
+	return `EXISTS (
  SELECT 1 FROM knowledge_evidence_sets es
  JOIN knowledge_evidence_messages em ON em.evidence_set_id=es.id
  JOIN message_logs ml ON ml.id=em.message_log_id
  LEFT JOIN knowledge_relations kr ON kr.id=es.relation_id
  WHERE (es.item_id=ki.id OR kr.source_item_id=ki.id OR kr.target_item_id=ki.id)
- AND ml.user_id=? AND ` + memory.KnowledgeEvidenceSetValiditySQL + `
+ AND ml.user_id=` + authorExpr + ` AND ` + memory.KnowledgeEvidenceSetValiditySQL + `
 )`
+}
 
 type KnowledgeDetail struct {
 	Page     int
@@ -72,7 +77,7 @@ func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
 		q = q.Where("ki.subject_user_id=?", f.UserID)
 	}
 	if f.AuthorID > 0 {
-		q = q.Where(knowledgeParticipationSQL, f.AuthorID)
+		q = q.Where(knowledgeParticipationSQL("?"), f.AuthorID)
 	}
 	if f.Kind != "" {
 		q = q.Where("ki.kind=?", f.Kind)
