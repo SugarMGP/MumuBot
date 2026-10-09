@@ -269,14 +269,15 @@ func (c *Client) MarkMsgAsRead(ctx context.Context, messageID int64) error {
 	return err
 }
 
-// MarkPrivateMsgAsRead 标记好友私聊已读
-func (c *Client) MarkPrivateMsgAsRead(ctx context.Context, userID int64) error {
+// MarkPrivateMsgAsRead 标记好友私聊消息已读
+func (c *Client) MarkPrivateMsgAsRead(ctx context.Context, userID, messageID int64) error {
 	client, err := c.apiClient()
 	if err != nil {
 		return err
 	}
 	_, err = client.MarkPrivateMsgAsRead(ctx, api.MarkPrivateMsgAsReadRequest{
-		UserID: rawUnionPtr[api.MarkPrivateMsgAsReadRequestUserIDUnion](message.ID(userID)),
+		UserID:    rawUnionPtr[api.MarkPrivateMsgAsReadRequestUserIDUnion](message.ID(userID)),
+		MessageID: message.ID(messageID),
 	})
 	return err
 }

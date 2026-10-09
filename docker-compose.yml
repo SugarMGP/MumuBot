@@ -35,6 +35,7 @@ services:
       SNOWLUMA_WEBUI_HOST: 0.0.0.0
       SNOWLUMA_WEBUI_PORT: ${SNOWLUMA_WEBUI_PORT:-5099}
       SNOWLUMA_HOOK_AUTOLOAD: "1"
+      SNOWLUMA_QQ_FLAGS: "--disable-gpu --disable-software-rasterizer --disable-gpu-compositing"
       TZ: Asia/Shanghai
     ports:
       - ${NOVNC_PORT:-6081}:6081

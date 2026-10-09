@@ -337,10 +337,19 @@
 
   .admin-log-field {
 	display: inline-flex;
+	min-width: 0;
   }
 
   .admin-log-field b {
 	font-weight: 600;
+	white-space: nowrap;
+	flex: none;
+  }
+
+  .admin-log-field > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
   }
 
   .admin-log-field b::after {

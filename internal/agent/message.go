@@ -127,7 +127,7 @@ func (a *Agent) markMessageRead(msg *onebot.ConversationMessage) error {
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
 	if msg.ConversationKind == memory.ConversationKindPrivate {
-		return a.bot.MarkPrivateMsgAsRead(ctx, msg.TargetID)
+		return a.bot.MarkPrivateMsgAsRead(ctx, msg.TargetID, msg.MessageID)
 	}
 	return a.bot.MarkMsgAsRead(ctx, msg.MessageID)
 }
