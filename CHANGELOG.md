@@ -12,6 +12,7 @@
 
 ### 变更
 
+- **Docker Compose 默认改用 SnowLuma**：一键部署现在启动 SnowLuma 并连接其内部 WebSocket，替代 NapCat 服务；首次部署需按容器日志完成 QQ 登录并同步 WebSocket 访问令牌。
 - **OneBot 接入迁移到 onebot-sdk**：依赖从 napcat-sdk 切换到其升级更名后的 onebot-sdk（v1.1.0），适配后保留原有自动重连、事件保序、背压重建、登录账号校验和全部 OneBot 11 业务接口；表情回应和好友申请处理改用 SDK 方言门面，后端方言由 SDK 在连接时自动检测，不再限定单一实现。
 - **OneBot 调用全面改用强类型接口**：事件消费与全部 OneBot 11 API 改用 SDK 生成的强类型方法和事件结构，不再手工解析原始 JSON；合并转发内容由 SDK 按方言自动补拉，减少解析层与后端实现之间的重复兜底。
 

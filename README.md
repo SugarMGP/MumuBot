@@ -56,22 +56,22 @@
 | Go 1.26.5+ | 编译运行 |
 | Bun 1.3.14+ | 构建前端资源（仅从源码构建时需要） |
 | PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量 |
-| NapCat | OneBot 11 协议实现 |
+| SnowLuma | OneBot 11 协议实现 |
 | 大语言模型 API | 兼容 OpenAI 格式，需支持工具调用 |
 
 ### Docker Compose
 
-Compose 会一并启动 MumuBot、PostgreSQL/pgvector 和 NapCat：
+Compose 会一并启动 MumuBot、PostgreSQL/pgvector 和 SnowLuma：
 
 ```bash
 cp .env.example .env
-# 填写 .env 中的数据库、后台、模型和 NapCat 管理后台密码（NAPCAT_WEBUI_SECRET_KEY）配置
+# 填写 .env 中的数据库、后台和模型配置
 docker compose up -d
 ```
 
 Compose 会直接拉取 GHCR 上的 `latest` 镜像。首次启动时，容器会在配置目录中补齐缺失的 `config.yaml`、`persona_group.prompt`、`persona_private.prompt` 和 `mcp.json`，已有文件不会被覆盖。
 
-编辑生成的配置文件后，重启服务使其生效。随后访问 `http://localhost:6099/webui` 进入 NapCat 管理后台登录 QQ 即可。
+编辑生成的配置文件后，重启服务使其生效。从容器日志获取 SnowLuma WebUI 与 noVNC 的首次密码，通过 `http://localhost:6081` 登录 QQ，再访问 `http://localhost:5099` 配置 WebSocket 的访问令牌；将同一个令牌填入 `.env` 的 `MUMU_ONEBOT_TOKEN` 后重启 MumuBot。
 
 ### 使用发布包
 
@@ -190,5 +190,5 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ## ❤️ 致谢
 
 - **[cloudwego/eino](https://github.com/cloudwego/eino)** — 字节跳动开源 AI Agent 框架
-- **[NapNeko/NapCatQQ](https://github.com/NapNeko/NapCatQQ)** — 现代化 OneBot 协议实现
+- **[SnowLuma/SnowLuma](https://github.com/SnowLuma/SnowLuma)** — 现代化 OneBot 协议实现
 - **[Mai-with-u/MaiBot](https://github.com/Mai-with-u/MaiBot)** — 灵感来源和设计参考

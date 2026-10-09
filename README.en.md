@@ -56,22 +56,22 @@ Core capabilities of this project:
 | Go 1.26.5+ | Build and run |
 | Bun 1.3.14+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL + pgvector | Store messages, memories, topics, group culture, and vectors |
-| NapCat | OneBot 11 protocol implementation |
+| SnowLuma | OneBot 11 protocol implementation |
 | LLM API | OpenAI-compatible, must support tool calling |
 
 ### Docker Compose
 
-Compose starts MumuBot, PostgreSQL/pgvector, and NapCat together:
+Compose starts MumuBot, PostgreSQL/pgvector, and SnowLuma together:
 
 ```bash
 cp .env.example .env
-# Fill in database, admin, model, and NapCat WebUI password (NAPCAT_WEBUI_SECRET_KEY) settings in .env
+# Fill in database, admin, and model settings in .env
 docker compose up -d
 ```
 
 Compose pulls the `latest` image directly from GHCR. On first start, the container creates any missing `config.yaml`, `persona_group.prompt`, `persona_private.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
 
-Restart the service after editing the generated configuration files. Then visit `http://localhost:6099/webui` to open the NapCat admin panel and sign in to QQ.
+Restart the service after editing the generated configuration files. Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
 
 ### Using Release Packages
 
@@ -190,5 +190,5 @@ Edit `config/mcp.json` to connect external MCP servers, supporting both SSE and 
 ## ❤️ Acknowledgements
 
 - **[cloudwego/eino](https://github.com/cloudwego/eino)** — Open-source AI Agent framework by ByteDance
-- **[NapNeko/NapCatQQ](https://github.com/NapNeko/NapCatQQ)** — Modern OneBot protocol implementation
+- **[SnowLuma/SnowLuma](https://github.com/SnowLuma/SnowLuma)** — Modern OneBot protocol implementation
 - **[Mai-with-u/MaiBot](https://github.com/Mai-with-u/MaiBot)** — Inspiration and design reference

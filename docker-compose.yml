@@ -16,21 +16,33 @@ services:
       retries: 12
       start_period: 10s
 
-  napcat:
-    image: mlikiowa/napcat-docker:latest
+  snowluma:
+    image: motricseven7/snowluma:latest
     restart: unless-stopped
+    shm_size: 1gb
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
     environment:
-      MODE: ws
-      NAPCAT_UID: 1000
-      NAPCAT_GID: 1000
-      NAPCAT_WEBUI_SECRET_KEY: ${NAPCAT_WEBUI_SECRET_KEY:?set NAPCAT_WEBUI_SECRET_KEY in .env}
+      SNOWLUMA_ONEBOT_HOST: 0.0.0.0
+      SNOWLUMA_UID: 1000
+      SNOWLUMA_GID: 1000
+      SNOWLUMA_WEBUI_HOST: 0.0.0.0
+      SNOWLUMA_WEBUI_PORT: ${SNOWLUMA_WEBUI_PORT:-5099}
+      SNOWLUMA_HOOK_AUTOLOAD: "1"
       TZ: Asia/Shanghai
     ports:
-      - ${NAPCAT_WEBUI_PORT:-6099}:6099
+      - ${NOVNC_PORT:-6081}:6081
+      - ${SNOWLUMA_WEBUI_PORT:-5099}:${SNOWLUMA_WEBUI_PORT:-5099}
     volumes:
-      - napcat-config:/app/napcat/config
-      - napcat-qq:/app/.config/QQ
-      - napcat-plugin:/app/napcat/plugins
+      - snowluma-gateway-data:/app/data
+      - snowluma-client-config:/app/.config
+      - snowluma-client-data:/app/.local/share
 
   mumu-bot:
     image: ghcr.io/sugarmgp/mumubot:latest
@@ -41,11 +53,11 @@ services:
     depends_on:
       database:
         condition: service_healthy
-      napcat:
+      snowluma:
         condition: service_started
     environment:
       MUMU_DATABASE_DSN: postgres://${POSTGRES_USER:-mumu}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@database:5432/${POSTGRES_DB:-mumu_bot}?sslmode=disable
-      MUMU_ONEBOT_WS_URL: ${MUMU_ONEBOT_WS_URL:-ws://napcat:3001}
+      MUMU_ONEBOT_WS_URL: ${MUMU_ONEBOT_WS_URL:-ws://snowluma:3001}
       MUMU_ONEBOT_TOKEN: ${MUMU_ONEBOT_TOKEN:-}
       MUMU_WEB_ADMIN_KEY: ${MUMU_WEB_ADMIN_KEY:?set MUMU_WEB_ADMIN_KEY in .env}
       MUMU_MODEL_HIGH_BASE_URL: ${MUMU_MODEL_HIGH_BASE_URL:?set MUMU_MODEL_HIGH_BASE_URL in .env}
@@ -80,7 +92,7 @@ services:
 
 volumes:
   postgres-data:
-  napcat-config:
-  napcat-qq:
-  napcat-plugin:
+  snowluma-gateway-data:
+  snowluma-client-config:
+  snowluma-client-data:
   stickers:
