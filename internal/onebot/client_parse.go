@@ -1,6 +1,8 @@
 package onebot
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,7 +12,13 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/zjutjh/onebot-sdk/event"
 	"github.com/zjutjh/onebot-sdk/message"
+	"go.uber.org/zap"
 )
+
+const nestedForwardFetchTimeout = 10 * time.Second
+
+// shortcut: 3 层嵌套上限，异常循环或更深资源保留未解析占位；需要更深结构时再提升
+const maxForwardDepth = 3
 
 // parseGroupMessage 按群目标解析群消息
 func (c *Client) parseGroupMessage(ev *event.GroupMessage) *ConversationMessage {
@@ -34,6 +42,7 @@ func (c *Client) parsePrivateMessage(ev *event.PrivateMessage) *ConversationMess
 
 // parseConversationMessage 填充公共字段并解析消息段，进入前已确定会话作用域
 func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime int64, messageID, userID int64, nickname, groupCard string, chain message.Chain) {
+	c.resolveNestedForwards(chain)
 	if eventTime > 0 {
 		msg.Time = time.Unix(eventTime, 0)
 	} else {
@@ -50,6 +59,75 @@ func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime in
 			msg.IsMentioned = true
 			break
 		}
+	}
+}
+
+// resolveNestedForwards 递归补齐转发节点中的嵌套转发内容
+func (c *Client) resolveNestedForwards(chain message.Chain) {
+	c.connMu.RLock()
+	sdk := c.sdk
+	c.connMu.RUnlock()
+	if sdk == nil {
+		return
+	}
+
+	cache := make(map[string]forwardFetchResult)
+	expanded := make(map[string]bool)
+	resolveForwardChain(sdk, chain, cache, expanded, 0)
+}
+
+type forwardFetchResult struct {
+	content []message.ForwardNode
+	err     error
+}
+
+type forwardContentFetcher interface {
+	GetForwardContent(context.Context, string) ([]message.ForwardNode, error)
+}
+
+func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache map[string]forwardFetchResult, expanded map[string]bool, depth int) {
+	for i, seg := range chain {
+		data, ok := seg.Data.(message.ForwardData)
+		if !ok {
+			continue
+		}
+		if depth >= maxForwardDepth {
+			data.FetchErr = fmt.Errorf("合并转发嵌套层级超过 %d", maxForwardDepth)
+			chain[i].Data = data
+			zap.L().Warn("合并转发嵌套层级过深", zap.Int("depth", depth), zap.String("forward_id", data.ID))
+			continue
+		}
+		if len(data.Content) == 0 && data.FetchErr == nil && strings.TrimSpace(data.ID) != "" {
+			result, exists := cache[data.ID]
+			if !exists {
+				ctx, cancel := context.WithTimeout(context.Background(), nestedForwardFetchTimeout)
+				content, err := sdk.GetForwardContent(ctx, data.ID)
+				cancel()
+				result = forwardFetchResult{content: content, err: err}
+				cache[data.ID] = result
+			}
+			if result.err != nil {
+				data.FetchErr = result.err
+			} else {
+				data.Content = result.content
+			}
+			chain[i].Data = data
+		}
+		if len(data.Content) > 0 {
+			if strings.TrimSpace(data.ID) != "" && expanded[data.ID] {
+				continue
+			}
+			if strings.TrimSpace(data.ID) != "" {
+				expanded[data.ID] = true
+			}
+			resolveForwardNodes(sdk, data.Content, cache, expanded, depth+1)
+		}
+	}
+}
+
+func resolveForwardNodes(sdk forwardContentFetcher, nodes []message.ForwardNode, cache map[string]forwardFetchResult, expanded map[string]bool, depth int) {
+	for i := range nodes {
+		resolveForwardChain(sdk, nodes[i].Message, cache, expanded, depth)
 	}
 }
 

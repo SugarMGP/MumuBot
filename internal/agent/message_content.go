@@ -8,6 +8,7 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/onebot"
 
+	"github.com/zjutjh/onebot-sdk/message"
 	"go.uber.org/zap"
 )
 
@@ -29,6 +30,29 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 
 	var content strings.Builder
 	hasForward := false
+	var allForward []message.ForwardNode
+	forwardTotal := 0
+	for _, part := range parts {
+		if part.Kind != "forward" {
+			continue
+		}
+		start := max(part.Index, 0)
+		end := min(start+max(part.Count, 0), len(msg.ForwardContent))
+		if start >= end {
+			continue
+		}
+		allForward = append(allForward, msg.ForwardContent[start:end]...)
+		forwardTotal += end - start
+	}
+	forwardSummary := ""
+	if len(allForward) > 0 {
+		var err error
+		forwardSummary, err = a.summarizeForwardMessages(ctx, allForward)
+		if err != nil {
+			zap.L().Error("总结合并转发消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
+		}
+	}
+	forwardSummaryWritten := false
 	for _, part := range parts {
 		switch part.Kind {
 		case "text":
@@ -91,15 +115,15 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 				continue
 			}
 			hasForward = true
-			forward := msg.ForwardContent[start:end]
-			summary, err := a.summarizeForwardMessages(ctx, forward)
-			if err != nil {
-				zap.L().Error("总结合并转发消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-			}
-			if summary != "" {
-				content.WriteString(fmt.Sprintf(" [合并转发，共%d条:%s]", len(forward), summary))
+			if !forwardSummaryWritten {
+				forwardSummaryWritten = true
+				if forwardSummary != "" {
+					content.WriteString(fmt.Sprintf(" [合并转发，共%d条:%s]", forwardTotal, forwardSummary))
+				} else {
+					content.WriteString(fmt.Sprintf(" [合并转发，共%d条]", forwardTotal))
+				}
 			} else {
-				content.WriteString(fmt.Sprintf(" [合并转发，共%d条]", len(forward)))
+				content.WriteString(fmt.Sprintf(" [合并转发，共%d条]", end-start))
 			}
 		}
 	}
