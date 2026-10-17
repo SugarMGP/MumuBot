@@ -7,7 +7,7 @@
 - `client.go`：SDK 连接与自动重连、强类型事件分流和消息回调。
 - `client_parse.go`：消息段解析、基础展示文本、回复 ID、图片和转发内容解析。
 - `client_api.go`：发送群聊/私聊消息、戳一戳、群信息、群成员、公告和精华相关 API。
-- `client_contacts.go`：联系人（群聊/好友）同步和好友申请处理 API。
+- `client_contacts.go`：联系人（群聊/好友）同步 API。
 - `client_types.go`：消息段、会话消息和动态 API 解析结果类型。
 
 ## 原文与展示边界

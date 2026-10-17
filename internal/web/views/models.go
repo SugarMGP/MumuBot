@@ -141,10 +141,9 @@ type MemberListPageData struct {
 }
 
 type ContactsPageData struct {
-	Groups         []memory.ConversationTarget
-	Friends        []memory.ConversationTarget
-	FriendRequests []memory.FriendRequest
-	Flash          *FlashMessage
+	Groups  []memory.ConversationTarget
+	Friends []memory.ConversationTarget
+	Flash   *FlashMessage
 }
 
 type SystemField struct {

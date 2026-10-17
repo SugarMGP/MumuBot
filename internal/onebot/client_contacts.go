@@ -3,11 +3,9 @@ package onebot
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/zjutjh/onebot-sdk/api"
-	"github.com/zjutjh/onebot-sdk/message"
 )
 
 type Contact struct {
@@ -97,29 +95,4 @@ func (c *Client) getFriendContacts(ctx context.Context) ([]Contact, error) {
 		})
 	}
 	return result, nil
-}
-
-// GetStrangerNickname 查询陌生人昵称，供好友申请展示补全；查询失败返回空串由上层回退
-func (c *Client) GetStrangerNickname(ctx context.Context, userID int64) string {
-	client, err := c.apiClient()
-	if err != nil {
-		return ""
-	}
-	resp, err := client.GetStrangerInfo(ctx, api.GetStrangerInfoRequest{
-		UserID:  message.ID(userID),
-		NoCache: rawUnion[api.GetStrangerInfoRequestNoCacheUnion](false),
-	})
-	if err != nil || resp == nil {
-		return ""
-	}
-	return strings.TrimSpace(resp.Nickname)
-}
-
-// SetFriendRequest 处理好友请求，remark 的方言差异由 SDK 门面归一
-func (c *Client) SetFriendRequest(ctx context.Context, flag string, approve bool, remark string) error {
-	sdk, err := c.currentSDK()
-	if err != nil {
-		return err
-	}
-	return sdk.SetFriendRequest(ctx, flag, approve, remark)
 }

@@ -488,10 +488,10 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	return nil
 }
 
-func (a *Agent) doSendSticker(ctx context.Context, groupID int64, filePath string, description string) error {
-	msgID, arrivalSeq, err := a.bot.SendImageMessage(ctx, groupID, filePath, true)
+func (a *Agent) doSendSticker(ctx context.Context, groupID int64, fileName string, description string) error {
+	msgID, arrivalSeq, err := a.bot.SendImageMessage(ctx, groupID, fileName, true)
 	if err != nil {
-		zap.L().Error("发送表情包失败", zap.Int64("group_id", groupID), zap.String("path", filePath), zap.Error(err))
+		zap.L().Error("发送表情包失败", zap.Int64("group_id", groupID), zap.String("file_name", fileName), zap.Error(err))
 		return err
 	}
 	tools.GetToolContext(ctx).MarkActionSucceeded()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -100,7 +99,7 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 
 	switch cfg.Type {
 	case "sse":
-		cli, err = client.NewSSEMCPClient(cfg.URL)
+		cli, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.CustomHeaders))
 		if err != nil {
 			return fmt.Errorf("创建 SSE 客户端失败: %w", err)
 		}
@@ -134,9 +133,8 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 
 	// 获取工具 - 使用 MCPClient 接口
 	mcpToolCfg := &mcptool.Config{
-		Cli:           cli,
-		ToolNameList:  cfg.ToolNameList,
-		CustomHeaders: cfg.CustomHeaders,
+		Cli:          cli,
+		ToolNameList: cfg.ToolNameList,
 	}
 
 	baseTools, err := mcptool.GetTools(ctx, mcpToolCfg)
@@ -167,11 +165,7 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 // listReadOnlyTools 读取 MCP 自带的只读标注；未标注或读取失败按可能有副作用处理
 func listReadOnlyTools(ctx context.Context, cli *client.Client, cfg *ServerConfig) map[string]bool {
 	result := make(map[string]bool)
-	header := http.Header{}
-	for k, v := range cfg.CustomHeaders {
-		header.Set(k, v)
-	}
-	list, err := cli.ListTools(ctx, mcp.ListToolsRequest{Header: header})
+	list, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		zap.L().Warn("读取 MCP 工具只读标注失败，按可能有副作用处理", zap.String("server", cfg.Name), zap.Error(err))
 		return result

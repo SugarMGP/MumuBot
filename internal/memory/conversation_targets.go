@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -18,64 +17,51 @@ type ContactSnapshot struct {
 	LastSeenAt   time.Time
 }
 
-func (m *Manager) UpsertConversationTarget(ctx context.Context, target ConversationTarget) error {
-	if target.ConversationKind == "" || target.TargetID <= 0 {
-		return gorm.ErrInvalidData
-	}
-	if target.UpdatedAt.IsZero() {
-		target.UpdatedAt = time.Now()
-	}
-	return m.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "conversation_kind"}, {Name: "target_id"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"name":          target.Name,
-			"remote_remark": target.RemoteRemark,
-			"active":        target.Active,
-			"last_seen_at":  target.LastSeenAt,
-			"updated_at":    target.UpdatedAt,
-		}),
-	}).Create(&target).Error
-}
-
-// SyncConversationContacts 用联系人快照纠正会话状态；fetchedAt 是快照拉取时刻，
-// 停用判定只作用于该时刻之后未被再次更新的行，避免快照落后于 friend_add 等即时事件时误停用新会话
+// SyncConversationContacts 原子应用联系人快照；启用和停用均不能覆盖快照开始之后的状态更新
 func (m *Manager) SyncConversationContacts(ctx context.Context, contacts []ContactSnapshot, fetchedAt time.Time) error {
 	if fetchedAt.IsZero() {
 		fetchedAt = time.Now()
 	}
-	seen := make(map[string]struct{}, len(contacts))
+	seen := map[string][]int64{}
+	rows := make([]ConversationTarget, 0, len(contacts))
 	for _, contact := range contacts {
-		key := contact.Kind + ":" + fmt.Sprint(contact.TargetID)
-		seen[key] = struct{}{}
-		if err := m.UpsertConversationTarget(ctx, ConversationTarget{
+		if contact.TargetID <= 0 || (contact.Kind != ConversationKindGroup && contact.Kind != ConversationKindPrivate) {
+			return gorm.ErrInvalidData
+		}
+		seen[contact.Kind] = append(seen[contact.Kind], contact.TargetID)
+		rows = append(rows, ConversationTarget{
 			ConversationKind: contact.Kind,
 			TargetID:         contact.TargetID,
 			Name:             contact.Name,
 			RemoteRemark:     contact.RemoteRemark,
 			Active:           contact.Active,
 			LastSeenAt:       &contact.LastSeenAt,
-			UpdatedAt:        time.Now(),
-		}); err != nil {
-			return err
-		}
+			UpdatedAt:        fetchedAt,
+		})
 	}
-	for _, kind := range []string{ConversationKindGroup, ConversationKindPrivate} {
-		var rows []ConversationTarget
-		if err := m.db.WithContext(ctx).Where("conversation_kind=?", kind).Find(&rows).Error; err != nil {
-			return err
-		}
-		for _, row := range rows {
-			if _, ok := seen[kind+":"+fmt.Sprint(row.TargetID)]; ok {
-				continue
-			}
-			if err := m.db.WithContext(ctx).Model(&ConversationTarget{}).
-				Where("conversation_kind=? AND target_id=? AND updated_at < ?", kind, row.TargetID, fetchedAt).
-				Updates(map[string]any{"active": false, "updated_at": time.Now()}).Error; err != nil {
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if len(rows) > 0 {
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "conversation_kind"}, {Name: "target_id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"name", "remote_remark", "active", "last_seen_at", "updated_at"}),
+				Where: clause.Where{Exprs: []clause.Expression{
+					clause.Expr{SQL: "conversation_targets.updated_at <= EXCLUDED.updated_at"},
+				}},
+			}).CreateInBatches(rows, 200).Error; err != nil {
 				return err
 			}
 		}
-	}
-	return nil
+		for _, kind := range []string{ConversationKindGroup, ConversationKindPrivate} {
+			q := tx.Model(&ConversationTarget{}).Where("conversation_kind=? AND updated_at <= ?", kind, fetchedAt)
+			if len(seen[kind]) > 0 {
+				q = q.Where("target_id NOT IN ?", seen[kind])
+			}
+			if err := q.Updates(map[string]any{"active": false, "updated_at": fetchedAt}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // MarkConversationActive 只更新会话活跃状态：active=false 只改已有记录；

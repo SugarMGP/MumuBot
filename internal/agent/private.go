@@ -203,10 +203,10 @@ func (a *Agent) doPrivateSpeak(ctx context.Context, targetID int64, content stri
 	return nil
 }
 
-func (a *Agent) doPrivateSticker(ctx context.Context, targetID int64, filePath string, description string) error {
-	messageID, seq, err := a.bot.SendPrivateImageMessage(ctx, targetID, filePath, true)
+func (a *Agent) doPrivateSticker(ctx context.Context, targetID int64, fileName string, description string) error {
+	messageID, seq, err := a.bot.SendPrivateImageMessage(ctx, targetID, fileName, true)
 	if err != nil {
-		zap.L().Error("发送私聊表情包失败", zap.Int64("target_id", targetID), zap.String("path", filePath), zap.Error(err))
+		zap.L().Error("发送私聊表情包失败", zap.Int64("target_id", targetID), zap.String("file_name", fileName), zap.Error(err))
 		return err
 	}
 	tools.GetToolContext(ctx).MarkActionSucceeded()

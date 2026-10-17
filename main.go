@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -119,20 +118,6 @@ func main() {
 	botClient.OnFriendAdd(func(userID int64) {
 		if err := memoryMgr.MarkConversationActive(context.Background(), memory.ConversationKindPrivate, userID, true); err != nil {
 			zap.L().Warn("标记新好友可用失败", zap.Int64("user_id", userID), zap.Error(err))
-		}
-	})
-	botClient.OnFriendRequest(func(request onebot.FriendRequestEvent) {
-		if request.UserID <= 0 || strings.TrimSpace(request.Flag) == "" {
-			return
-		}
-		// 好友申请不去重：flag 是申请发起时间戳，不同的人可能落在同一秒；
-		// 过期或已在别处处理的申请会在后台处理失败时删除，对方重新申请会作为新事件入库
-		row := memory.FriendRequest{
-			Flag: request.Flag, UserID: request.UserID, Nickname: request.Nickname,
-			Comment: request.Comment, Status: "pending", ReceivedAt: request.ReceivedAt,
-		}
-		if err := db.WithContext(context.Background()).Create(&row).Error; err != nil {
-			zap.L().Warn("保存好友申请失败", zap.Error(err))
 		}
 	})
 

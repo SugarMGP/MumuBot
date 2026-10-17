@@ -123,11 +123,7 @@ func (a *App) contactsPageData(ctx context.Context, flash *views.FlashMessage) (
 	if err != nil {
 		return views.ContactsPageData{}, err
 	}
-	requests, err := a.admin.ListFriendRequests(ctx, "")
-	if err != nil {
-		return views.ContactsPageData{}, err
-	}
-	return views.ContactsPageData{Groups: groups, Friends: friends, FriendRequests: requests, Flash: flash}, nil
+	return views.ContactsPageData{Groups: groups, Friends: friends, Flash: flash}, nil
 }
 
 func (a *App) handleContacts(w http.ResponseWriter, r *http.Request) {

@@ -72,14 +72,14 @@ type Agent struct {
 	groupBuffersMu  sync.RWMutex
 
 	recallMu       sync.Mutex
-	pendingRecalls map[string]map[int64]time.Time
+	pendingRecalls map[recallCommit]pendingRecall
+	recallWG       sync.WaitGroup
 
 	pendingGroupThinks map[int64]*pendingThink
 	pendingGroupMu     sync.Mutex
 
-	stopping         atomic.Bool
-	friendRequestsMu sync.Mutex
-	wg               sync.WaitGroup
+	stopping atomic.Bool
+	wg       sync.WaitGroup
 }
 
 type pendingThink struct {
@@ -123,7 +123,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		vision:               visionClient,
 		bot:                  botClient,
 		groupBuffers:         make(map[int64][]*onebot.ConversationMessage),
-		pendingRecalls:       make(map[string]map[int64]time.Time),
+		pendingRecalls:       make(map[recallCommit]pendingRecall),
 		pendingGroupThinks:   make(map[int64]*pendingThink),
 		groupReadSeq:         make(map[int64]uint64),
 		privateBuffers:       make(map[int64][]*onebot.ConversationMessage),
@@ -170,8 +170,8 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 	}
 	go a.replyCache.Start()
 	go a.visionCache.Start()
-	a.wg.Add(1)
-	go a.recallPruneLoop()
+	a.recallWG.Add(1)
+	go a.recallRetryLoop()
 	constructed = true
 	return a, nil
 }
@@ -439,6 +439,7 @@ func (a *Agent) shutdown() {
 		a.groupConcurrency.Close()
 	}
 	a.thinkWG.Wait()
+	a.recallWG.Wait()
 	// 3. 关闭提交队列并排空：此时没有生产者，队列消息以排空上下文完成落库
 	a.groupCommits.close()
 	a.privateCommits.close()

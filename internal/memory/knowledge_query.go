@@ -112,7 +112,7 @@ func (m *Manager) SearchKnowledge(ctx context.Context, opts KnowledgeSearchOptio
 	if err := m.db.WithContext(ctx).Raw(sql, values...).Scan(&labels).Error; err != nil {
 		return nil, err
 	}
-	ids := fuseRRF(rankRows(labels), rankRows(vectors), rankRows(texts))
+	ids := FuseRanks(rankRows(labels), rankRows(vectors), rankRows(texts))
 	if opts.Offset > 0 {
 		if opts.Offset >= len(ids) {
 			return nil, nil

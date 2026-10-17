@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
@@ -9,75 +10,103 @@ import (
 	"mumu-bot/internal/onebot"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
-// commitRecall 先保留待补偿记录，再用有界事务标记；数据库失败不能丢失撤回请求。
-// 与消息持久化不同，这里不复查会话许可：撤回是对已落库数据的修正，会话中途被拉黑时仍应清空原文并失效证据
-func (a *Agent) commitRecall(recall *recallCommit) {
-	if recall.kind == "" {
-		recall.kind = memory.ConversationKindGroup
+// shortcut: 撤回补偿只保存在当前进程，明确需要跨重启恢复时再持久化
+type pendingRecall struct {
+	expiresAt time.Time
+	queued    bool
+}
+
+// refreshReplyRecall 在按序发布前核对并行解析的引用，读取失败只省略引用原文，不丢弃消息正文
+func (a *Agent) refreshReplyRecall(ctx context.Context, msg *onebot.ConversationMessage) error {
+	if msg.Reply == nil || msg.Reply.MessageID == 0 {
+		return nil
 	}
-	key := recallScopeKey(recall.kind, recall.targetID)
+	key := recallCommit{kind: msg.ConversationKind, targetID: msg.TargetID, messageID: msg.Reply.MessageID}
 	a.recallMu.Lock()
-	if a.pendingRecalls[key] == nil {
-		a.pendingRecalls[key] = make(map[int64]time.Time)
-	}
-	a.pendingRecalls[key][recall.messageID] = time.Now().Add(recallPendingTTL)
+	_, recalled := a.pendingRecalls[key]
 	a.recallMu.Unlock()
+	var err error
+	if !recalled {
+		replyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		var log memory.MessageLog
+		err = a.memory.GetDB().WithContext(replyCtx).Select("recalled_at").Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", key.kind, key.targetID, key.messageID).Take(&log).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			err = nil
+		}
+		recalled = log.RecalledAt != nil
+	}
+	if recalled || err != nil {
+		reply := *msg.Reply
+		reply.Content = ""
+		if recalled {
+			reply.Content = memory.RecalledMessageDisplayContent
+		}
+		msg.Reply = &reply
+	}
+	return err
+}
+
+// commitRecall 先更新已确认撤回的运行时展示，再登记补偿；所有数据库操作由会话提交协程执行
+func (a *Agent) commitRecall(recall *recallCommit) {
+	a.recallMu.Lock()
+	if _, exists := a.pendingRecalls[*recall]; !exists {
+		a.pendingRecalls[*recall] = pendingRecall{expiresAt: time.Now().Add(recallPendingTTL)}
+	}
+	a.recallMu.Unlock()
+	a.syncRecalledMessage(recall.kind, recall.targetID, recall.messageID)
 	ctx, cancel := a.persistenceContext()
 	defer cancel()
 	a.applyPendingRecall(ctx, &onebot.ConversationMessage{ConversationKind: recall.kind, TargetID: recall.targetID, MessageID: recall.messageID})
 }
 
-// applyPendingRecall 仅在数据库确认已撤回后移除待补偿项，不修改已发布的消息指针
+// applyPendingRecall 数据库失败保留待处理；只有确认原消息仍缺失时才按 TTL 清理
 func (a *Agent) applyPendingRecall(ctx context.Context, msg *onebot.ConversationMessage) *onebot.ConversationMessage {
-	key := recallScopeKey(msg.ConversationKind, msg.TargetID)
+	key := recallCommit{kind: msg.ConversationKind, targetID: msg.TargetID, messageID: msg.MessageID}
 	a.recallMu.Lock()
-	deadline, ok := a.pendingRecalls[key][msg.MessageID]
+	pending, ok := a.pendingRecalls[key]
 	a.recallMu.Unlock()
-	if !ok || time.Now().After(deadline) {
+	if !ok {
 		return msg
 	}
-	mem := a.memory.WithContext(ctx)
-	log, changed, err := mem.MarkMessageRecalledScope(msg.ConversationKind, msg.TargetID, msg.MessageID)
-	if err == nil && !changed {
-		log, err = mem.GetMessageLogByScope(msg.ConversationKind, msg.TargetID, msg.MessageID)
-	}
+	log, _, err := a.memory.WithContext(ctx).MarkMessageRecalledScope(key.kind, key.targetID, key.messageID)
 	if err != nil {
-		zap.L().Warn("补记消息撤回失败，保留待补偿", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-		return msg
+		zap.L().Warn("补记消息撤回失败，等待重试", zap.String("conversation_kind", key.kind), zap.Int64("target_id", key.targetID), zap.Int64("message_id", key.messageID), zap.Error(err))
+		return recalledConversationMessage(msg)
 	}
-	if log == nil || log.RecalledAt == nil {
-		return msg
+	if log != nil || time.Now().After(pending.expiresAt) {
+		a.recallMu.Lock()
+		delete(a.pendingRecalls, key)
+		a.recallMu.Unlock()
 	}
-	a.recallMu.Lock()
-	if a.pendingRecalls[key][msg.MessageID] == deadline {
-		delete(a.pendingRecalls[key], msg.MessageID)
-		if len(a.pendingRecalls[key]) == 0 {
-			delete(a.pendingRecalls, key)
-		}
-	}
-	a.recallMu.Unlock()
-	a.syncRecalledMessage(log)
-	return recalledConversationMessage(msg, log)
+	return recalledConversationMessage(msg)
 }
 
-func recalledConversationMessage(msg *onebot.ConversationMessage, log *memory.MessageLog) *onebot.ConversationMessage {
-	replacement := *msg
-	replacement.Content = log.TextContent
-	replacement.FinalContent = log.DisplayContent
-	replacement.Reply = nil
-	replacement.IsMentioned = false
-	return &replacement
+func recalledConversationMessage(msg *onebot.ConversationMessage) *onebot.ConversationMessage {
+	return &onebot.ConversationMessage{
+		ConversationKind: msg.ConversationKind,
+		TargetID:         msg.TargetID,
+		MessageID:        msg.MessageID,
+		UserID:           msg.UserID,
+		Nickname:         msg.Nickname,
+		GroupCard:        msg.GroupCard,
+		Time:             msg.Time,
+		ReceivedAt:       msg.ReceivedAt,
+		ArrivalSeq:       msg.ArrivalSeq,
+		FinalContent:     memory.RecalledMessageDisplayContent,
+	}
 }
 
 func recallScopeKey(kind string, targetID int64) string {
 	return kind + ":" + strconv.FormatInt(targetID, 10)
 }
 
-// recallPruneLoop 定期清理过期的待补偿记录，保留有限 TTL
-func (a *Agent) recallPruneLoop() {
-	defer a.wg.Done()
+// recallRetryLoop 只投递补偿任务，不与会话提交协程并发修改原文和缓冲
+func (a *Agent) recallRetryLoop() {
+	defer a.recallWG.Done()
 	ticker := time.NewTicker(recallPendingTTL / 2)
 	defer ticker.Stop()
 	for {
@@ -85,23 +114,31 @@ func (a *Agent) recallPruneLoop() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			a.prunePendingRecalls()
+			a.retryPendingRecalls()
 		}
 	}
 }
 
-func (a *Agent) prunePendingRecalls() {
-	now := time.Now()
+func (a *Agent) retryPendingRecalls() {
 	a.recallMu.Lock()
-	defer a.recallMu.Unlock()
-	for key, recalls := range a.pendingRecalls {
-		for messageID, deadline := range recalls {
-			if now.After(deadline) {
-				delete(recalls, messageID)
-			}
+	var recalls []recallCommit
+	for key, pending := range a.pendingRecalls {
+		if !pending.queued {
+			pending.queued = true
+			a.pendingRecalls[key] = pending
+			recalls = append(recalls, key)
 		}
-		if len(recalls) == 0 {
-			delete(a.pendingRecalls, key)
+	}
+	a.recallMu.Unlock()
+	for _, recall := range recalls {
+		if a.ctx.Err() != nil {
+			return
+		}
+		item := commitItem{retry: &recall}
+		if recall.kind == memory.ConversationKindPrivate {
+			a.privateCommits.enqueue(recall.targetID, 0, item)
+		} else {
+			a.groupCommits.enqueue(recall.targetID, 0, item)
 		}
 	}
 }

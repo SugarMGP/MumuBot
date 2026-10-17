@@ -38,7 +38,6 @@ type Client struct {
 	onRecall        func(kind string, targetID, messageID int64, arrivalSeq uint64)
 	connectedMu     sync.RWMutex
 	onConnected     []func()
-	onFriendRequest func(FriendRequestEvent)
 	onGroupLeft     func(groupID int64)
 	onFriendAdd     func(userID int64)
 	transportWG     sync.WaitGroup
@@ -244,10 +243,9 @@ func (c *Client) runConnectedHandlers() {
 	}
 }
 
-func (c *Client) OnFriendRequest(handler func(FriendRequestEvent)) { c.onFriendRequest = handler }
-func (c *Client) OnGroupLeft(handler func(groupID int64))          { c.onGroupLeft = handler }
-func (c *Client) OnFriendAdd(handler func(userID int64))           { c.onFriendAdd = handler }
-func (c *Client) GetSelfID() int64                                 { return c.selfID.Load() }
+func (c *Client) OnGroupLeft(handler func(groupID int64)) { c.onGroupLeft = handler }
+func (c *Client) OnFriendAdd(handler func(userID int64))  { c.onFriendAdd = handler }
+func (c *Client) GetSelfID() int64                        { return c.selfID.Load() }
 func (c *Client) WaitSelfID(ctx context.Context) (int64, error) {
 	if selfID := c.GetSelfID(); selfID > 0 {
 		return selfID, nil

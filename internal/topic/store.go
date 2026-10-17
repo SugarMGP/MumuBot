@@ -3,7 +3,6 @@ package topic
 import (
 	"context"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -122,35 +121,15 @@ func (s *DBStore) SearchTopicHits(ctx context.Context, query memory.HybridQuery,
 	for i, row := range textRows {
 		textIDs[i] = row.TopicID
 	}
-	items := fuseTopicRanks(limit, vectorIDs, textIDs)
+	items := memory.FuseRanks(vectorIDs, textIDs)
+	if len(items) > limit {
+		items = items[:limit]
+	}
 	hits := make([]memory.TopicThread, 0, len(items))
 	for _, id := range items {
 		hits = append(hits, memory.TopicThread{ID: id, GroupID: groupID})
 	}
 	return hits, nil
-}
-
-func fuseTopicRanks(limit int, lists ...[]uint) []uint {
-	scores := make(map[uint]float64)
-	for _, list := range lists {
-		for i, id := range list {
-			scores[id] += 1 / float64(61+i)
-		}
-	}
-	items := make([]uint, 0, len(scores))
-	for id := range scores {
-		items = append(items, id)
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if scores[items[i]] == scores[items[j]] {
-			return items[i] < items[j]
-		}
-		return scores[items[i]] > scores[items[j]]
-	})
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	return items
 }
 
 // TopicReferencePeriod 使用本次摘要来源和展示原文的发生时间，避免把摘要更新时间当成事件时间

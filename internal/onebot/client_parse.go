@@ -3,6 +3,7 @@ package onebot
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,9 +17,6 @@ import (
 )
 
 const nestedForwardFetchTimeout = 10 * time.Second
-
-// shortcut: 3 层嵌套上限，异常循环或更深资源保留未解析占位；需要更深结构时再提升
-const maxForwardDepth = 3
 
 // parseGroupMessage 按群目标解析群消息
 func (c *Client) parseGroupMessage(ev *event.GroupMessage) *ConversationMessage {
@@ -72,8 +70,7 @@ func (c *Client) resolveNestedForwards(chain message.Chain) {
 	}
 
 	cache := make(map[string]forwardFetchResult)
-	expanded := make(map[string]bool)
-	resolveForwardChain(sdk, chain, cache, expanded, 0)
+	resolveForwardChain(sdk, chain, cache, 1)
 }
 
 type forwardFetchResult struct {
@@ -85,14 +82,15 @@ type forwardContentFetcher interface {
 	GetForwardContent(context.Context, string) ([]message.ForwardNode, error)
 }
 
-func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache map[string]forwardFetchResult, expanded map[string]bool, depth int) {
+func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache map[string]forwardFetchResult, depth int) {
 	for i, seg := range chain {
 		data, ok := seg.Data.(message.ForwardData)
 		if !ok {
 			continue
 		}
-		if depth >= maxForwardDepth {
-			data.FetchErr = fmt.Errorf("合并转发嵌套层级超过 %d", maxForwardDepth)
+		if depth > MaxForwardDepth {
+			data.Content = nil
+			data.FetchErr = fmt.Errorf("合并转发嵌套层级超过 %d", MaxForwardDepth)
 			chain[i].Data = data
 			zap.L().Warn("合并转发嵌套层级过深", zap.Int("depth", depth), zap.String("forward_id", data.ID))
 			continue
@@ -111,23 +109,17 @@ func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache m
 			} else {
 				data.Content = result.content
 			}
-			chain[i].Data = data
 		}
 		if len(data.Content) > 0 {
-			if strings.TrimSpace(data.ID) != "" && expanded[data.ID] {
-				continue
+			// 同一转发可能出现在不同深度，按路径复制后裁剪，避免污染补拉缓存和其他引用
+			data.Content = slices.Clone(data.Content)
+			for j := range data.Content {
+				node := &data.Content[j]
+				node.Message = slices.Clone(node.Message)
+				resolveForwardChain(sdk, node.Message, cache, depth+1)
 			}
-			if strings.TrimSpace(data.ID) != "" {
-				expanded[data.ID] = true
-			}
-			resolveForwardNodes(sdk, data.Content, cache, expanded, depth+1)
 		}
-	}
-}
-
-func resolveForwardNodes(sdk forwardContentFetcher, nodes []message.ForwardNode, cache map[string]forwardFetchResult, expanded map[string]bool, depth int) {
-	for i := range nodes {
-		resolveForwardChain(sdk, nodes[i].Message, cache, expanded, depth)
+		chain[i].Data = data
 	}
 }
 

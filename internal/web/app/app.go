@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -133,42 +131,31 @@ func (a *App) handleStickerFile(w http.ResponseWriter, r *http.Request) {
 
 	baseDir := strings.TrimSpace(a.admin.StickerDir())
 	rawPath := strings.TrimSpace(chi.URLParam(r, "*"))
-	if baseDir == "" || rawPath == "" || strings.Contains(rawPath, `\`) {
+	if baseDir == "" || rawPath == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	cleanPath := path.Clean("/" + rawPath)
-	if cleanPath == "/" || strings.HasPrefix(cleanPath, "/../") || strings.HasSuffix(rawPath, "/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	relativePath := strings.TrimPrefix(cleanPath, "/")
-	filePath := filepath.Join(baseDir, filepath.FromSlash(relativePath))
-	absBase, err := filepath.Abs(baseDir)
+	root, err := os.OpenRoot(baseDir)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	absFile, err := filepath.Abs(filePath)
+	defer root.Close()
+	file, err := root.Open(rawPath)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	if absFile != absBase && !strings.HasPrefix(absFile, absBase+string(os.PathSeparator)) {
-		http.NotFound(w, r)
-		return
-	}
-
-	info, err := os.Stat(absFile)
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil || info.IsDir() {
 		http.NotFound(w, r)
 		return
 	}
 
 	w.Header().Set("Cache-Control", "private, max-age=3600")
-	http.ServeFile(w, r, absFile)
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
 func (a *App) handleLoginPage(w http.ResponseWriter, r *http.Request) {

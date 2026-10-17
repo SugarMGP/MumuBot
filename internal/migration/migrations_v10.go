@@ -43,10 +43,10 @@ func validateConversationScopeSchema(db *gorm.DB) error {
 		return fmt.Errorf("会话作用域字段不完整")
 	}
 	var tables int64
-	if err := db.Raw(`SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name IN ('conversation_targets','friend_requests')`).Scan(&tables).Error; err != nil {
+	if err := db.Raw(`SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='conversation_targets'`).Scan(&tables).Error; err != nil {
 		return err
 	}
-	if tables != 2 {
+	if tables != 1 {
 		return fmt.Errorf("会话管理表不完整")
 	}
 	var messageIndex bool

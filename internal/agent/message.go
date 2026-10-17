@@ -12,7 +12,6 @@ import (
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
-	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 )
 
@@ -67,16 +66,7 @@ func (a *Agent) onRecall(kind string, targetID, messageID int64, arrivalSeq uint
 		a.SkipConversationEvent(kind, targetID, arrivalSeq)
 		return
 	}
-	ctx, cancel := a.persistenceContext()
-	defer cancel()
-	allowed, err := a.memory.ConversationAllowed(ctx, kind, targetID)
-	if err != nil {
-		zap.L().Warn("撤回许可检查失败，按未启用处理", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
-	}
-	if err != nil || !allowed {
-		a.SkipConversationEvent(kind, targetID, arrivalSeq)
-		return
-	}
+	// 撤回修正已有原文，不受会话拉黑、退群或数据库暂时不可用影响
 	recall := &recallCommit{kind: kind, targetID: targetID, messageID: messageID}
 	if kind == memory.ConversationKindPrivate {
 		a.privateCommits.enqueue(targetID, arrivalSeq, commitItem{recall: recall})
@@ -138,7 +128,6 @@ func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMe
 	}
 	key := replyCacheKey(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID)
 	if msg.Reply.Content != "" && msg.Reply.SenderID != 0 {
-		a.replyCache.Set(key, *msg.Reply, ttlcache.DefaultTTL)
 		return nil
 	}
 
@@ -151,7 +140,6 @@ func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMe
 	buffer, _, _ := a.getConversationSnapshot(msg.ConversationKind, msg.TargetID)
 	if reply := findReplyInfoInMessages(buffer, msg.Reply.MessageID); reply != nil {
 		msg.Reply = reply
-		a.replyCache.Set(key, *reply, ttlcache.DefaultTTL)
 		return nil
 	}
 
@@ -159,7 +147,6 @@ func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMe
 	if err == nil {
 		if reply := replyInfoFromMessageLog(log); reply != nil {
 			msg.Reply = reply
-			a.replyCache.Set(key, *reply, ttlcache.DefaultTTL)
 			return nil
 		}
 	}
@@ -170,7 +157,6 @@ func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMe
 	}
 	if reply != nil {
 		msg.Reply = reply
-		a.replyCache.Set(key, *reply, ttlcache.DefaultTTL)
 	}
 	return nil
 }
@@ -267,32 +253,34 @@ func replyCacheKey(kind string, targetID, messageID int64) string {
 	return recallScopeKey(kind, targetID) + ":" + strconv.FormatInt(messageID, 10)
 }
 
-func (a *Agent) syncRecalledMessage(log *memory.MessageLog) {
-	if log == nil {
-		return
-	}
+func (a *Agent) syncRecalledMessage(kind string, targetID, messageID int64) {
 	replace := func(messages []*onebot.ConversationMessage) []*onebot.ConversationMessage {
 		for i, msg := range messages {
-			if msg == nil || msg.MessageID != log.OneBotMessageID {
+			if msg == nil {
 				continue
 			}
-			replacement := messageLogToBufferedConversationMessage(*log)
-			replacement.ArrivalSeq = msg.ArrivalSeq
-			messages[i] = replacement
-			break
+			if msg.MessageID == messageID {
+				messages[i] = recalledConversationMessage(msg)
+			} else if msg.Reply != nil && msg.Reply.MessageID == messageID {
+				replacement := *msg
+				reply := *msg.Reply
+				reply.Content = memory.RecalledMessageDisplayContent
+				replacement.Reply = &reply
+				messages[i] = &replacement
+			}
 		}
 		return messages
 	}
-	if log.ConversationKind == memory.ConversationKindPrivate {
+	if kind == memory.ConversationKindPrivate {
 		a.privateMu.Lock()
-		a.privateBuffers[log.TargetID] = replace(a.privateBuffers[log.TargetID])
+		a.privateBuffers[targetID] = replace(a.privateBuffers[targetID])
 		a.privateMu.Unlock()
 	} else {
 		a.groupBuffersMu.Lock()
-		a.groupBuffers[log.TargetID] = replace(a.groupBuffers[log.TargetID])
+		a.groupBuffers[targetID] = replace(a.groupBuffers[targetID])
 		a.groupBuffersMu.Unlock()
 	}
-	a.replyCache.Delete(replyCacheKey(log.ConversationKind, log.TargetID, log.OneBotMessageID))
+	a.replyCache.Delete(replyCacheKey(kind, targetID, messageID))
 }
 
 func (a *Agent) updateMember(ctx context.Context, msg *onebot.ConversationMessage) {

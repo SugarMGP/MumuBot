@@ -11,7 +11,6 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -320,6 +319,9 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if tc.Bot == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
 	}
+	if tc.RecallCallback == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("撤回提交能力未初始化"))
+	}
 	if input == nil {
 		return nil, fmt.Errorf("撤回参数不能为空")
 	}
@@ -351,20 +353,12 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 		return nil, fmt.Errorf("消息已超过两分钟，无法撤回")
 	}
 
-	if err := tc.Bot.DeleteMsg(ctx, messageID); err != nil {
+	arrivalSeq, err := tc.Bot.DeleteMsg(ctx, tc.ConversationKind, tc.TargetID, messageID)
+	if err != nil {
 		return nil, NewTerminalToolError(err)
 	}
 	tc.MarkActionSucceeded()
-	storeCtx, storeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer storeCancel()
-	recalled, changed, syncErr := tc.MemoryMgr.WithContext(storeCtx).MarkMessageRecalledScope(tc.ConversationKind, log.TargetID, messageID)
-	if syncErr != nil {
-		zap.L().Error("主动撤回成功但同步本地状态失败", zap.String("conversation_kind", tc.ConversationKind), zap.Int64("target_id", log.TargetID), zap.Int64("message_id", messageID), zap.Error(syncErr))
-		return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
-	}
-	if changed && tc.MessageRecalledCallback != nil {
-		tc.MessageRecalledCallback(recalled)
-	}
+	tc.RecallCallback(messageID, arrivalSeq)
 
 	return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil
 }

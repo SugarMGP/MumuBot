@@ -82,7 +82,12 @@ func (s *commitQueueSet[T]) worker(targetID int64, queue chan queuedCommit[T], n
 				}
 			}
 			idle.Reset(commitWorkerIdleTTL)
-			reorder.push(item.seq, targetID, item.item, s.handle)
+			if item.seq == 0 {
+				// 维护任务与落库串行执行，但不占用外部事件的到达序号
+				s.handle(item.item)
+			} else {
+				reorder.push(item.seq, targetID, item.item, s.handle)
+			}
 		case <-idle.C:
 			if s.reap(targetID, queue, reorder) {
 				reorder.warnLeftover()

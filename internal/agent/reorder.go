@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"math"
+
 	"go.uber.org/zap"
 )
 
@@ -40,7 +42,7 @@ func (b *reorderBuffer[T]) push(seq uint64, targetID int64, item T, commit func(
 				b.drain(commit)
 				return
 			}
-			minSeq := seq
+			minSeq := uint64(math.MaxUint64)
 			for pendingSeq := range b.pending {
 				if pendingSeq < minSeq {
 					minSeq = pendingSeq

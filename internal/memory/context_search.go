@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -64,4 +65,25 @@ func int64Array(values []int64) pgtype.Array[int64] {
 		Dims:     []pgtype.ArrayDimension{{Length: int32(len(values)), LowerBound: 1}},
 		Valid:    true,
 	}
+}
+
+// FuseRanks 融合按相关性排列的召回列表，同分时按内部 ID 保持稳定顺序
+func FuseRanks(lists ...[]uint) []uint {
+	scores := make(map[uint]float64)
+	for _, list := range lists {
+		for i, id := range list {
+			scores[id] += 1 / float64(61+i)
+		}
+	}
+	ids := make([]uint, 0, len(scores))
+	for id := range scores {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if scores[ids[i]] == scores[ids[j]] {
+			return ids[i] < ids[j]
+		}
+		return scores[ids[i]] > scores[ids[j]]
+	})
+	return ids
 }

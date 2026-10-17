@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 11
+const latestSchemaVersion = 12
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -106,6 +106,7 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		{"member_intimacy", func() error { return migrateV9(db) }},
 		{"conversation_targets_and_memory_model", func() error { return migrateV10(db) }},
 		{"learning_cooldown", func() error { return migrateV11(db) }},
+		{"drop_friend_requests", func() error { return migrateV12(db) }},
 	}
 	if len(migrations) != latestSchemaVersion {
 		return fmt.Errorf("程序迁移定义不完整：声明 v%d，实际 %d 个版本", latestSchemaVersion, len(migrations))
@@ -178,7 +179,10 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 	if err := validateV10Schema(db); err != nil {
 		return err
 	}
-	return validateV11Schema(db)
+	if err := validateV11Schema(db); err != nil {
+		return err
+	}
+	return validateV12Schema(db)
 }
 
 func recordSchemaVersion(db *gorm.DB, version int, name string) error {

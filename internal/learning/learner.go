@@ -16,17 +16,18 @@ import (
 )
 
 type Learner struct {
-	memMgr        *memory.Manager
-	model         model.ToolCallingChatModel
-	selfID        func() int64
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	mu            sync.Mutex
-	running       bool
-	nextAttempt   map[conversationKey]time.Time
-	nextKind      string
-	targetOffsets map[string]int
+	memMgr          *memory.Manager
+	model           model.ToolCallingChatModel
+	selfID          func() int64
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	mu              sync.Mutex
+	running         bool
+	nextAttempt     map[conversationKey]time.Time
+	nextKind        string
+	targetOffsets   map[string]int
+	embeddingCursor memory.EmbeddingCursor
 }
 
 type conversationKey struct {
@@ -120,7 +121,9 @@ func (l *Learner) processAll() {
 	if l.ctx.Err() == nil {
 		ctx, cancel := context.WithTimeout(l.ctx, time.Duration(cfg.Learning.TimeoutSeconds)*time.Second)
 		defer cancel()
-		if err := l.memMgr.FillKnowledgeEmbeddings(ctx, 2); err != nil {
+		next, err := l.memMgr.FillKnowledgeEmbeddings(ctx, 2, l.embeddingCursor)
+		l.embeddingCursor = next
+		if err != nil {
 			zap.L().Warn("记忆向量补全失败", zap.Error(err))
 		}
 	}

@@ -7,15 +7,10 @@ import (
 	"github.com/zjutjh/onebot-sdk/message"
 )
 
-type FriendRequestEvent struct {
-	Flag       string
-	UserID     int64
-	Nickname   string
-	Comment    string
-	ReceivedAt time.Time
-}
-
 const AtAllUserID int64 = -1
+
+// MaxForwardDepth 限制补拉和展示的转发层数，最外层转发计为第 1 层
+const MaxForwardDepth = 3
 
 // MessagePart 保存消息段的原始顺序和对应分类数据索引
 type MessagePart struct {

@@ -21,28 +21,28 @@ import (
 type SpeakCallback func(ctx context.Context, targetID int64, content string, replyTo int64, mentions []int64) error
 
 // SendStickerCallback 发送表情包回调函数类型
-type SendStickerCallback func(ctx context.Context, targetID int64, filePath string, description string) error
+type SendStickerCallback func(ctx context.Context, targetID int64, fileName string, description string) error
 type InspectImageCallback func(ctx context.Context, imageURL string) (string, error)
 type SendImageURLCallback func(ctx context.Context, imageURL string) error
 type GetNewMessagesCallback func(ctx context.Context) (any, error)
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	ConversationKind        string
-	TargetID                int64
-	MemoryMgr               *memory.Manager
-	Bot                     *onebot.Client
-	SnapshotMessageID       int64
-	SpeakCallback           SpeakCallback       // 发言回调
-	SendStickerCallback     SendStickerCallback // 发送表情包回调
-	InspectImageCallback    InspectImageCallback
-	SendImageURLCallback    SendImageURLCallback
-	GetNewMessagesCallback  GetNewMessagesCallback
-	ThinkStartArrivalSeq    uint64
-	ObservedThroughSeq      uint64
-	ObservationIncomplete   bool
-	MessageRecalledCallback func(*memory.MessageLog)
-	actionSucceeded         bool
+	ConversationKind       string
+	TargetID               int64
+	MemoryMgr              *memory.Manager
+	Bot                    *onebot.Client
+	SnapshotMessageID      int64
+	SpeakCallback          SpeakCallback       // 发言回调
+	SendStickerCallback    SendStickerCallback // 发送表情包回调
+	InspectImageCallback   InspectImageCallback
+	SendImageURLCallback   SendImageURLCallback
+	GetNewMessagesCallback GetNewMessagesCallback
+	ThinkStartArrivalSeq   uint64
+	ObservedThroughSeq     uint64
+	ObservationIncomplete  bool
+	RecallCallback         func(messageID int64, arrivalSeq uint64)
+	actionSucceeded        bool
 
 	messageRefs map[int64]string
 	messageIDs  map[string]int64

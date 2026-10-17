@@ -13,44 +13,9 @@ templ ContactsPage(data ContactsPageData, currentPath string) {
 
 templ ContactsBody(data ContactsPageData) {
 	<div class="space-y-6">
-		@PageHeader("会话管理", "统一管理群聊、好友和好友申请。", "联系人中心")
+		@PageHeader("会话管理", "统一管理群聊与好友，调整拉黑状态和群聊提示。", "联系人中心")
 		@ContactSection("群聊", data.Groups, true)
 		@ContactSection("好友", data.Friends, false)
-		<section class="card">
-			<div class="card-body gap-4 p-5">
-				<div><h2 class="text-lg font-semibold text-base-content">好友申请</h2><p class="mt-1 text-sm text-base-content/60">处理收到的好友申请。</p></div>
-				<div class="overflow-x-auto">
-					<table class="table">
-						<thead><tr><th>申请人</th><th>附言</th><th>收到时间</th><th>状态</th><th>操作</th></tr></thead>
-						<tbody>
-							for _, request := range data.FriendRequests {
-								<tr>
-									<td><span class="font-medium">{ contactRequestName(request.Nickname) }</span><div class="admin-number text-xs text-base-content/45">{ fmt.Sprintf("%d", request.UserID) }</div></td>
-									<td class="max-w-80 whitespace-normal break-words text-base-content/75">{ contactRequestComment(request.Comment) }</td>
-									<td class="admin-number whitespace-nowrap text-base-content/60">{ request.ReceivedAt.Format("2006-01-02 15:04") }</td>
-									<td class="whitespace-nowrap">
-										@FriendRequestStatusBadge(request.Status)
-									</td>
-									<td>
-										if request.Status == "pending" {
-											<form method="post" action="/admin/contacts/actions" class="flex items-center gap-2" hx-post="/admin/contacts/actions" hx-target="#admin-page-body" hx-swap="outerHTML">
-												<input type="hidden" name="action" value="friend-request"/>
-												<input type="hidden" name="request_id" value={ fmt.Sprint(request.ID) }/>
-												<button class="btn btn-primary btn-xs" type="submit" name="approve" value="true" data-loading-label="处理中">同意</button>
-												<button class="btn btn-ghost btn-xs border-base-300" type="submit" name="approve" value="false" data-loading-label="处理中">拒绝</button>
-											</form>
-										}
-									</td>
-								</tr>
-							}
-							if len(data.FriendRequests) == 0 {
-								<tr><td colspan="5" class="py-8 text-center text-base-content/60">暂无好友申请</td></tr>
-							}
-						</tbody>
-					</table>
-				</div>
-			</div>
-		</section>
 	</div>
 }
 
@@ -137,16 +102,6 @@ templ ContactSection(title string, items []memory.ConversationTarget, group bool
 	</section>
 }
 
-templ FriendRequestStatusBadge(status string) {
-	if status == "approved" {
-		<span class="badge badge-success badge-soft badge-sm">已同意</span>
-	} else if status == "rejected" {
-		<span class="badge badge-ghost badge-sm">已拒绝</span>
-	} else {
-		<span class="badge badge-warning badge-sm badge-soft">待处理</span>
-	}
-}
-
 func contactDisplayName(item memory.ConversationTarget) string {
 	if remark := strings.TrimSpace(item.RemoteRemark); remark != "" {
 		return remark
@@ -159,18 +114,4 @@ func contactDisplayName(item memory.ConversationTarget) string {
 
 func contactExtraPromptLabel(item memory.ConversationTarget) string {
 	return contactDisplayName(item) + "的群聊额外提示"
-}
-
-func contactRequestName(nickname string) string {
-	if name := strings.TrimSpace(nickname); name != "" {
-		return name
-	}
-	return "未知申请人"
-}
-
-func contactRequestComment(comment string) string {
-	if text := strings.TrimSpace(comment); text != "" {
-		return text
-	}
-	return "无"
 }

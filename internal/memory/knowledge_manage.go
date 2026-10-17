@@ -100,36 +100,66 @@ func (m *Manager) SetKnowledgeStatusScope(ctx context.Context, kind string, targ
 	})
 }
 
-func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int) error {
+// EmbeddingCursor 保存补全任务的轮转位置，失败记录留待下一轮扫描
+type EmbeddingCursor struct {
+	CreatedAt time.Time
+	ID        uint
+	Kind      string
+}
+
+func (m *Manager) FillKnowledgeEmbeddings(ctx context.Context, limit int, after EmbeddingCursor) (EmbeddingCursor, error) {
 	var pending []struct {
-		ID      uint
-		Kind    string
-		Content string
+		ID        uint
+		Kind      string
+		Content   string
+		CreatedAt time.Time
 	}
-	if err := m.db.WithContext(ctx).Raw(`SELECT id,kind,content FROM (
+	for attempt := 0; attempt < 2; attempt++ {
+		query := `SELECT id,kind,content,created_at FROM (
  SELECT id,'knowledge' kind,concat_ws(': ',nullif(label,''),content) content,created_at FROM knowledge_items WHERE embedding IS NULL AND status='active'
- UNION ALL SELECT ts.id,'topic' kind,`+TopicSummaryTextSQL+` content,ts.created_at FROM topic_summaries ts WHERE ts.embedding IS NULL
- ) pending ORDER BY created_at,id LIMIT ?`, max(1, min(limit, 10))).Scan(&pending).Error; err != nil {
-		return err
+ UNION ALL SELECT ts.id,'topic' kind,` + TopicSummaryTextSQL + ` content,ts.created_at FROM topic_summaries ts WHERE ts.embedding IS NULL
+		) pending`
+		args := []any{}
+		if !after.CreatedAt.IsZero() {
+			query += " WHERE (created_at,id,kind) > (?,?,?)"
+			args = append(args, after.CreatedAt, after.ID, after.Kind)
+		}
+		query += " ORDER BY created_at,id,kind LIMIT ?"
+		args = append(args, max(1, min(limit, 10)))
+		if err := m.db.WithContext(ctx).Raw(query, args...).Scan(&pending).Error; err != nil {
+			return after, err
+		}
+		if len(pending) > 0 || after.CreatedAt.IsZero() {
+			break
+		}
+		after = EmbeddingCursor{}
 	}
 	for _, item := range pending {
+		if err := ctx.Err(); err != nil {
+			return after, err
+		}
 		values, err := m.embedding.Embed(ctx, item.Content)
+		// 游标记录已尝试的位置，超时或写入失败的记录留到扫描回绕后重试
+		after = EmbeddingCursor{CreatedAt: item.CreatedAt, ID: item.ID, Kind: item.Kind}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return after, ctxErr
+		}
 		if err != nil {
-			// 单行补全失败时跳过，避免队头失败长期阻塞其余待补全行
 			zap.L().Warn("知识向量补全失败，本轮跳过", zap.Uint("id", item.ID), zap.String("kind", item.Kind), zap.Error(err))
 			continue
 		}
 		vector, err := EmbeddingVector(values)
 		if err != nil {
-			return err
+			zap.L().Warn("知识向量维度校验失败，本轮跳过", zap.Uint("id", item.ID), zap.String("kind", item.Kind), zap.Error(err))
+			continue
 		}
 		var row any = &KnowledgeItem{}
 		if item.Kind == "topic" {
 			row = &TopicSummaryRecord{}
 		}
 		if err := m.db.WithContext(ctx).Model(row).Where("id=? AND embedding IS NULL", item.ID).UpdateColumn("embedding", vector).Error; err != nil {
-			return err
+			return after, err
 		}
 	}
-	return nil
+	return after, nil
 }

@@ -17,7 +17,7 @@
 - `internal/migration/`：数据库 schema 版本与一次性数据迁移，只依赖 GORM 和 memory 的模型。
 - `internal/learning/`：统一 Memory Agent、群聊与私聊轮转、批处理与冷却。
 - `internal/tools/`：暴露给 ReAct agent 和学习审核流程使用的工具。
-- `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务（含会话与好友申请管理）。
+- `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务（含会话管理）。
 - `config/`：运行配置、群聊人格提示词、私聊提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
 
 ## 常用入口
@@ -32,7 +32,7 @@
 | 看数据库启动迁移 | `internal/migration/`、`main.go` |
 | 看群文化学习 | `internal/learning/learner.go` |
 | 看私聊收发与整理 | `internal/agent/private.go`、`internal/learning/private_learner.go` |
-| 看会话与黑名单 | `internal/memory/conversation_targets.go`、`internal/agent/contacts.go` |
+| 看会话与黑名单 | `internal/memory/conversation_targets.go`、`internal/agent/commit.go` |
 | 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
 
 ## 运行与验证命令

@@ -3,10 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	"mumu-bot/internal/config"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -103,26 +99,8 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 		return nil, fmt.Errorf("获取表情包信息失败: %w", err)
 	}
 
-	// 构建文件路径，文件名只取基名并校验结果仍位于表情包目录内，不允许携带路径
-	base, err := filepath.Abs(config.Get().Sticker.StoragePath)
-	if err != nil {
-		return nil, fmt.Errorf("获取文件路径失败: %w", err)
-	}
-	filePath, err := filepath.Abs(filepath.Join(base, filepath.Base(sticker.FileName)))
-	if err != nil {
-		return nil, fmt.Errorf("获取文件路径失败: %w", err)
-	}
-	if filepath.Dir(filePath) != base {
-		return nil, fmt.Errorf("表情包文件路径无效")
-	}
-
-	// 检查文件是否存在
-	if _, err := os.Stat(filePath); err != nil {
-		return nil, fmt.Errorf("读取表情包文件失败: %w", err)
-	}
-
-	// 发送表情包（使用回调以记录消息）
-	if err := tc.SendStickerCallback(ctx, tc.TargetID, filePath, sticker.Description); err != nil {
+	// 文件由发送入口通过 os.Root 读取，工具层只传保存的相对文件名
+	if err := tc.SendStickerCallback(ctx, tc.TargetID, sticker.FileName, sticker.Description); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
 

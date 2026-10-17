@@ -17,13 +17,12 @@ type Page[T any] struct {
 }
 
 type ListFilter struct {
-	GroupID                      int64
-	Status, Keyword, Sort, Order string
-	Page, PageSize               int
+	GroupID              int64
+	Keyword, Sort, Order string
+	Page, PageSize       int
 }
 
 type MemoryFilter struct {
-	GroupID                            int64
 	Kind, Status, Keyword, Sort, Order string
 	Page, PageSize                     int
 }

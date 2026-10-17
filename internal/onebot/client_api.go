@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"mumu-bot/internal/config"
+
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	ob "github.com/zjutjh/onebot-sdk"
@@ -70,6 +72,9 @@ func (c *Client) sendChain(ctx context.Context, kind string, targetID int64, cha
 	default:
 		return 0, 0, fmt.Errorf("未知会话类型: %s", kind)
 	}
+	if msgID == 0 {
+		return 0, 0, fmt.Errorf("发送接口未返回有效消息编号")
+	}
 	return msgID, c.nextArrivalSeq(kind, targetID), nil
 }
 
@@ -104,12 +109,23 @@ func (c *Client) SendPrivateMessage(ctx context.Context, userID int64, content s
 	return c.sendChain(ctx, "private", userID, chain)
 }
 
-// buildImageSegment 构造图片/表情包消息段：本地文件统一转 base64，避免后端读不到路径
+// buildImageSegment 构造图片/表情包消息段；表情包相对文件名只在保存目录内读取，本地内容统一转 base64
 func buildImageSegment(filePath string, isSticker bool) (message.Segment, error) {
 	file := filePath
 	trimmed := strings.ToLower(strings.TrimSpace(filePath))
 	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
-		data, err := os.ReadFile(filePath)
+		var data []byte
+		var err error
+		if isSticker {
+			root, openErr := os.OpenRoot(config.Get().Sticker.StoragePath)
+			if openErr != nil {
+				return message.Segment{}, fmt.Errorf("打开表情包目录失败: %w", openErr)
+			}
+			defer root.Close()
+			data, err = root.ReadFile(filePath)
+		} else {
+			data, err = os.ReadFile(filePath)
+		}
 		if err != nil {
 			return message.Segment{}, fmt.Errorf("读取待发送图片失败: %w", err)
 		}
@@ -126,7 +142,7 @@ func buildImageSegment(filePath string, isSticker bool) (message.Segment, error)
 }
 
 // SendImageMessage 发送图片/表情包到群聊
-// filePath: 本地文件绝对路径或图片 URL
+// filePath: 图片 URL；本地表情包使用保存目录中的相对文件名，普通图片使用本地路径
 // isSticker: true 时作为表情包发送 (sub_type=1)
 func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, uint64, error) {
 	segment, err := buildImageSegment(filePath, isSticker)
@@ -148,17 +164,23 @@ func (c *Client) SendPrivateImageMessage(ctx context.Context, userID int64, file
 	return c.sendChain(ctx, "private", userID, message.ChainOf(segment))
 }
 
-// DeleteMsg 撤回消息
-func (c *Client) DeleteMsg(ctx context.Context, messageID int64) error {
+// DeleteMsg 撤回成功后取得会话到达序号，供业务层与消息共用提交队列
+func (c *Client) DeleteMsg(ctx context.Context, kind string, targetID, messageID int64) (uint64, error) {
+	if targetID <= 0 || messageID == 0 || (kind != "group" && kind != "private") {
+		return 0, fmt.Errorf("撤回会话或消息编号无效")
+	}
 	client, err := c.apiClient()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	// message_id 是不透明外部定位符，保持字符串形态等值传递
 	_, err = client.DeleteMsg(ctx, api.DeleteMsgRequest{
 		MessageID: rawUnion[api.DeleteMsgRequestMessageIDUnion](oneBotID(messageID)),
 	})
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return c.nextArrivalSeq(kind, targetID), nil
 }
 
 // GetMsg 获取消息详情

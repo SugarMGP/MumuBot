@@ -43,7 +43,7 @@ Core capabilities of this project:
 - 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
-- 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and friend requests; browse remembered knowledge per conversation and group topics
+- 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
 - 💬 **Friend DMs** — One-on-one friend chats with a dedicated prompt, conversation queue, and a single linear topic summary per friend
 - 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 

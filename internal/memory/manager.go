@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -107,39 +106,14 @@ func (m *Manager) GetMessageCountByTime(groupID, userID int64, start time.Time) 
 	return count, err
 }
 
-type rankedID struct {
-	ID   uint
-	Rank int
-}
-
 type rankedIDRow struct{ ID uint }
 
-func rankRows(rows []rankedIDRow) []rankedID {
-	result := make([]rankedID, len(rows))
+func rankRows(rows []rankedIDRow) []uint {
+	result := make([]uint, len(rows))
 	for i, row := range rows {
-		result[i] = rankedID{ID: row.ID, Rank: i + 1}
+		result[i] = row.ID
 	}
 	return result
-}
-
-func fuseRRF(lists ...[]rankedID) []uint {
-	scores := make(map[uint]float64)
-	for _, list := range lists {
-		for _, item := range list {
-			scores[item.ID] += 1 / float64(60+item.Rank)
-		}
-	}
-	ids := make([]uint, 0, len(scores))
-	for id := range scores {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		if scores[ids[i]] == scores[ids[j]] {
-			return ids[i] < ids[j]
-		}
-		return scores[ids[i]] > scores[ids[j]]
-	})
-	return ids
 }
 
 func requireAffected(result *gorm.DB) error {
@@ -207,18 +181,22 @@ func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int6
 		return nil, false, nil
 	}
 	var item MessageLog
+	changed := false
 	err := m.db.Transaction(func(tx *gorm.DB) error {
 		if err := LockKnowledgeScope(tx, kind, targetID); err != nil {
 			return err
 		}
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ? AND recalled_at IS NULL", kind, targetID, messageID).
+			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ?", kind, targetID, messageID).
 			First(&item)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		if result.Error != nil {
 			return result.Error
+		}
+		if item.RecalledAt != nil {
+			return nil
 		}
 
 		recalledAt := time.Now()
@@ -240,7 +218,11 @@ func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int6
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error; err != nil {
 			return err
 		}
-		return InvalidateKnowledgeEvidenceScope(tx, kind, targetID)
+		if err := InvalidateKnowledgeEvidenceScope(tx, kind, targetID); err != nil {
+			return err
+		}
+		changed = true
+		return nil
 	})
 	if err != nil {
 		return nil, false, err
@@ -248,7 +230,7 @@ func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int6
 	if item.ID == 0 {
 		return nil, false, nil
 	}
-	return &item, true, nil
+	return &item, changed, nil
 }
 
 func (m *Manager) Close() error {

@@ -1,7 +1,6 @@
 package onebot
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -69,8 +68,6 @@ func (c *Client) enqueueEvent(ev event.Event) {
 		c.handleGroupDecrease(e)
 	case *event.FriendAdd:
 		c.handleFriendAdd(e)
-	case *event.FriendRequest:
-		c.handleFriendRequest(e)
 	}
 }
 
@@ -212,19 +209,4 @@ func (c *Client) handleFriendAdd(e *event.FriendAdd) {
 		return
 	}
 	c.onFriendAdd(int64(e.UserID))
-}
-
-func (c *Client) handleFriendRequest(e *event.FriendRequest) {
-	zap.L().Debug("收到请求", zap.String("type", "friend"))
-	if c.onFriendRequest == nil || e.UserID <= 0 {
-		return
-	}
-	// 好友申请事件只上报 user_id/comment/flag，昵称需补查；事件流水线是串行的，
-	// 补查放到独立协程执行，失败时昵称留空由后台回退展示 QQ 号
-	go func() {
-		ctx, cancel := context.WithTimeout(c.transportCtx, 5*time.Second)
-		defer cancel()
-		nickname := c.GetStrangerNickname(ctx, int64(e.UserID))
-		c.onFriendRequest(FriendRequestEvent{Flag: e.Flag, UserID: int64(e.UserID), Nickname: nickname, Comment: e.Comment, ReceivedAt: time.Now()})
-	}()
 }

@@ -3,7 +3,6 @@ package memory
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -84,6 +83,7 @@ func (m *Manager) cleanupConversationLogs(kind string, keepLatest int) {
 			AND NOT EXISTS (SELECT 1 FROM topic_assignments ta WHERE ta.message_log_id = ml.id AND ta.topic_id IS NOT NULL)
 			AND NOT EXISTS (SELECT 1 FROM knowledge_evidence_messages e WHERE e.message_log_id = ml.id)
 			AND NOT EXISTS (SELECT 1 FROM topic_summary_sources s WHERE s.message_log_id = ml.id)
+			AND NOT EXISTS (SELECT 1 FROM private_topic_sources s WHERE s.message_log_id = ml.id)
 			ORDER BY ml.id LIMIT 500
 		) DELETE FROM message_logs WHERE id IN (SELECT id FROM deletable)`, kind, targetID, state.LastMessageLogID, keepFloor)
 		if result.Error != nil {
@@ -107,10 +107,15 @@ func (m *Manager) cleanupUnusedStickers() {
 	}
 	dir := strings.TrimSpace(config.Get().Sticker.StoragePath)
 	if dir != "" {
-		for _, item := range stickers {
-			path := filepath.Join(dir, item.FileName)
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				zap.L().Warn("清理表情包文件失败", zap.String("path", path), zap.Error(err))
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			zap.L().Warn("打开表情包目录失败", zap.Error(err))
+		} else {
+			defer root.Close()
+			for _, item := range stickers {
+				if err := root.Remove(item.FileName); err != nil && !errors.Is(err, os.ErrNotExist) {
+					zap.L().Warn("清理表情包文件失败", zap.String("file_name", item.FileName), zap.Error(err))
+				}
 			}
 		}
 	}
