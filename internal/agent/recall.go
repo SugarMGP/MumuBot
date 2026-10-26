@@ -57,7 +57,7 @@ func (a *Agent) commitRecall(recall *recallCommit) {
 		a.pendingRecalls[*recall] = pendingRecall{expiresAt: time.Now().Add(recallPendingTTL)}
 	}
 	a.recallMu.Unlock()
-	a.syncRecalledMessage(recall.kind, recall.targetID, recall.messageID)
+	a.markSessionRecalled(recall.kind, recall.targetID, recall.messageID)
 	ctx, cancel := a.persistenceContext()
 	defer cancel()
 	a.applyPendingRecall(ctx, &onebot.ConversationMessage{ConversationKind: recall.kind, TargetID: recall.targetID, MessageID: recall.messageID})

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/topic"
@@ -55,7 +56,7 @@ func (a *Agent) messageAllowed(ctx context.Context, msg *onebot.ConversationMess
 }
 
 // persistConversationMessage 在队列消费时锁住会话许可，已成功发送的自身消息必须保留
-func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.ConversationMessage) (*memory.MessageLog, bool, error) {
+func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.ConversationMessage, mediaRefs []media.Ref) (*memory.MessageLog, bool, error) {
 	var log *memory.MessageLog
 	created := false
 	err := a.memory.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -70,10 +71,10 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 		}
 		if msg.ConversationKind == memory.ConversationKindGroup {
 			var err error
-			log, created, err = topic.NewManager(tx.Session(&gorm.Session{DisableNestedTransaction: true})).PersistMessage(ctx, msg, msg.IsMentioned)
+			log, created, err = topic.NewManager(tx.Session(&gorm.Session{DisableNestedTransaction: true})).PersistMessage(ctx, msg, msg.IsMentioned, mediaRefs)
 			return err
 		}
-		log = &memory.MessageLog{ConversationKind: memory.ConversationKindPrivate, OneBotMessageID: msg.MessageID, TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname, TextContent: msg.Content, DisplayContent: msg.FinalContent, IsMentioned: msg.IsMentioned, MessageTime: msg.Time}
+		log = &memory.MessageLog{ConversationKind: memory.ConversationKindPrivate, OneBotMessageID: msg.MessageID, TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname, TextContent: msg.Content, DisplayContent: msg.FinalContent, IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs}
 		if msg.Reply != nil && msg.Reply.MessageID != 0 {
 			replyTo := msg.Reply.MessageID
 			log.ReplyToMessageID = &replyTo
@@ -92,7 +93,8 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 }
 
 // commitConversationMessage 群私消息、观察与重复事件共用持久化、撤回补偿及发布边界
-func (a *Agent) commitConversationMessage(msg *onebot.ConversationMessage) {
+func (a *Agent) commitConversationMessage(item commitItem) {
+	msg := item.msg
 	if msg == nil {
 		return
 	}
@@ -102,7 +104,7 @@ func (a *Agent) commitConversationMessage(msg *onebot.ConversationMessage) {
 	if replyErr != nil {
 		zap.L().Warn("核对引用撤回状态失败，省略引用原文", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(replyErr))
 	}
-	log, created, err := a.persistConversationMessage(ctx, msg)
+	log, created, err := a.persistConversationMessage(ctx, msg, item.media)
 	if errors.Is(err, memory.ErrConversationUnavailable) {
 		return
 	}
@@ -112,7 +114,7 @@ func (a *Agent) commitConversationMessage(msg *onebot.ConversationMessage) {
 	}
 	if log != nil && log.RecalledAt != nil {
 		msg = recalledConversationMessage(msg)
-		a.syncRecalledMessage(msg.ConversationKind, msg.TargetID, msg.MessageID)
+		a.markSessionRecalled(msg.ConversationKind, msg.TargetID, msg.MessageID)
 	}
 	if msg.MessageID != 0 {
 		msg = a.applyPendingRecall(ctx, msg)
@@ -124,11 +126,7 @@ func (a *Agent) commitConversationMessage(msg *onebot.ConversationMessage) {
 	if replyErr == nil && msg.Reply != nil && msg.Reply.MessageID != 0 {
 		a.replyCache.Set(replyCacheKey(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID), *msg.Reply, ttlcache.DefaultTTL)
 	}
-	if msg.ConversationKind == memory.ConversationKindPrivate {
-		a.addPrivateBuffer(msg)
-	} else {
-		a.addBuffer(msg)
-	}
+	a.appendSessionMessage(msg, item.media, log)
 	if msg.MessageID == 0 || msg.UserID == a.bot.GetSelfID() || a.stopping.Load() || a.ctx.Err() != nil {
 		return
 	}
@@ -136,7 +134,7 @@ func (a *Agent) commitConversationMessage(msg *onebot.ConversationMessage) {
 	if msg.ConversationKind == memory.ConversationKindPrivate {
 		a.schedulePrivateThink(msg.TargetID, msg.ReceivedAt)
 	} else {
-		a.scheduleGroupThink(msg.TargetID, msg.IsMentioned, false, msg.ReceivedAt)
+		a.scheduleGroupThink(msg.TargetID, msg.IsMentioned, msg.ReceivedAt)
 	}
 }
 
@@ -147,6 +145,7 @@ type commitItem struct {
 	recall *recallCommit
 	retry  *recallCommit
 	msg    *onebot.ConversationMessage
+	media  []media.Ref
 }
 
 // commitOne 群聊与私聊提交队列共用的分发逻辑，会话隔离由各自队列实例保证
@@ -166,6 +165,6 @@ func (a *Agent) commitOne(item commitItem) {
 		}
 		a.recallMu.Unlock()
 	default:
-		a.commitConversationMessage(item.msg)
+		a.commitConversationMessage(item)
 	}
 }

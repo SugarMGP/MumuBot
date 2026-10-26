@@ -3,7 +3,7 @@ module mumu-bot
 go 1.26.5
 
 require (
-	github.com/cloudwego/eino v0.9.1
+	github.com/cloudwego/eino v0.9.22
 	github.com/pgvector/pgvector-go v0.3.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/postgres v1.6.0
@@ -11,6 +11,8 @@ require (
 )
 
 require (
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.17.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0 // indirect
 	github.com/andybalholm/brotli v1.2.6 // indirect
 	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -24,13 +26,13 @@ require (
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
 	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
-	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.17 // indirect
+	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.18-0.20260924031408-10df7cac3f6d // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/evanphx/json-patch v5.9.11+incompatible // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -42,10 +44,11 @@ require (
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
-	github.com/meguminnnnnnnnn/go-openai v0.1.5 // indirect
+	github.com/meguminnnnnnnnn/go-openai v0.1.6 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/nikolalohinski/gonja v1.5.3 // indirect
+	github.com/openai/openai-go/v3 v3.44.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -60,6 +63,10 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xyproto/randomstring v1.2.0 // indirect
@@ -83,16 +90,19 @@ require (
 	github.com/bogdanfinn/tls-client v1.16.0
 	github.com/bytedance/sonic v1.15.4
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260527130239-95019b303cc6
-	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
+	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.4
 	github.com/cloudwego/eino-ext/components/tool/mcp v0.0.8
+	github.com/disintegration/imaging v1.6.2
 	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jellydator/ttlcache/v3 v3.4.0
+	github.com/kolesa-team/go-webp v1.0.4
 	github.com/mark3labs/mcp-go v0.54.1
 	github.com/spf13/viper v1.21.0
 	github.com/zjutjh/onebot-sdk v1.1.0
 	go.uber.org/zap v1.28.0
+	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d
 	golang.org/x/net v0.59.0
 )

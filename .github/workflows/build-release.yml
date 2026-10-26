@@ -12,36 +12,11 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
-    name: Build
-    needs: prepare-release
+  prepare:
+    name: Prepare Release Assets
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            output_name: mumu-bot
-            asset_name: mumu-bot-linux-amd64
-            archive_ext: .tar.gz
-          - goos: windows
-            goarch: amd64
-            output_name: mumu-bot.exe
-            asset_name: mumu-bot-windows-amd64
-            archive_ext: .zip
-          - goos: darwin
-            goarch: amd64
-            output_name: mumu-bot
-            asset_name: mumu-bot-darwin-amd64
-            archive_ext: .tar.gz
-          - goos: darwin
-            goarch: arm64
-            output_name: mumu-bot
-            asset_name: mumu-bot-darwin-arm64
-            archive_ext: .tar.gz
-
+      contents: read
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
@@ -63,7 +38,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version-file: 'go.mod'
+        go-version-file: go.mod
 
     - name: Install templ
       run: go install github.com/a-h/templ/cmd/templ@v0.3.1020
@@ -81,22 +56,130 @@ jobs:
         cp README.md dist/
         cp LICENSE dist/
 
+    - name: Upload prepared assets
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-assets
+        path: |
+          dist
+          internal/web/assets/dist
+          internal/web/views
+        retention-days: 1
+
+  build:
+    name: Build ${{ matrix.asset_name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            output_name: mumu-bot
+            asset_name: mumu-bot-linux-amd64
+            archive_ext: .tar.gz
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            output_name: mumu-bot.exe
+            asset_name: mumu-bot-windows-amd64
+            archive_ext: .zip
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            output_name: mumu-bot
+            asset_name: mumu-bot-darwin-amd64
+            archive_ext: .tar.gz
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            output_name: mumu-bot
+            asset_name: mumu-bot-darwin-arm64
+            archive_ext: .tar.gz
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Download prepared assets
+      uses: actions/download-artifact@v4
+      with:
+        name: release-assets
+        path: .
+
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version-file: go.mod
+
+    - name: Install libwebp (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebp-dev
+
+    - name: Install libwebp (macOS)
+      if: runner.os == 'macOS'
+      run: brew install webp pkgconf
+
+    - name: Install MSYS2 and libwebp (Windows)
+      if: runner.os == 'Windows'
+      id: msys2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-libwebp
+
+    - name: Set Windows build environment
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+      run: |
+        echo "CGO_ENABLED=1" >> $env:GITHUB_ENV
+        echo "CC=$env:MSYS2_LOCATION\mingw64\bin\gcc.exe" >> $env:GITHUB_ENV
+        echo "PKG_CONFIG_PATH=$env:MSYS2_LOCATION\mingw64\lib\pkgconfig" >> $env:GITHUB_ENV
+        echo "$env:MSYS2_LOCATION\mingw64\bin" >> $env:GITHUB_PATH
+
     - name: Build
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 0
+        CGO_ENABLED: 1
+        CGO_LDFLAGS: "-Wl,-Bstatic -lwebp -Wl,-Bdynamic"
       run: |
         go build -v -trimpath -ldflags "-s -w -X mumu-bot/internal/version.Build=${GITHUB_REF_NAME}" -o dist/${{ matrix.output_name }} .
 
-    - name: Archive
+    - name: Verify libwebp is statically linked
+      shell: bash
+      run: |
+        set -euo pipefail
+        binary="dist/${{ matrix.output_name }}"
+        case "${{ matrix.goos }}" in
+          linux) deps="$(ldd "$binary" 2>/dev/null || true)" ;;
+          darwin) deps="$(otool -L "$binary" 2>/dev/null || true)" ;;
+          windows) deps="$(objdump -p "$binary" 2>/dev/null || true)" ;;
+        esac
+        if echo "$deps" | grep -i "webp"; then
+          echo "产物仍动态依赖 libwebp："
+          echo "$deps" | grep -i "webp"
+          exit 1
+        fi
+
+    - name: Archive (Unix)
+      if: runner.os != 'Windows'
       run: |
         cd dist
-        if [ "${{ matrix.goos }}" == "windows" ]; then
-          zip -r ../${{ matrix.asset_name }}${{ matrix.archive_ext }} .
-        else
-          tar -czvf ../${{ matrix.asset_name }}${{ matrix.archive_ext }} .
-        fi
+        tar -czvf ../${{ matrix.asset_name }}${{ matrix.archive_ext }} .
+
+    - name: Archive (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: Compress-Archive -Path dist/* -DestinationPath ${{ matrix.asset_name }}${{ matrix.archive_ext }}
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v3

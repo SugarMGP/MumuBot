@@ -70,9 +70,6 @@ services:
       MUMU_EMBEDDING_BASE_URL: ${MUMU_EMBEDDING_BASE_URL:?set MUMU_EMBEDDING_BASE_URL in .env}
       MUMU_EMBEDDING_API_KEY: ${MUMU_EMBEDDING_API_KEY:?set MUMU_EMBEDDING_API_KEY in .env}
       MUMU_EMBEDDING_MODEL: ${MUMU_EMBEDDING_MODEL:?set MUMU_EMBEDDING_MODEL in .env}
-      MUMU_VISION_BASE_URL: ${MUMU_VISION_BASE_URL:?set MUMU_VISION_BASE_URL in .env}
-      MUMU_VISION_API_KEY: ${MUMU_VISION_API_KEY:?set MUMU_VISION_API_KEY in .env}
-      MUMU_VISION_MODEL: ${MUMU_VISION_MODEL:?set MUMU_VISION_MODEL in .env}
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
@@ -82,6 +79,7 @@ services:
         source: ${MUMU_CONFIG_DIR:-./config}
         target: /app/config
       - stickers:/app/stickers
+      - media:/app/media
     tmpfs:
       - /tmp
     healthcheck:
@@ -97,3 +95,4 @@ volumes:
   snowluma-client-config:
   snowluma-client-data:
   stickers:
+  media:

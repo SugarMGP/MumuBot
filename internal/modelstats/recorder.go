@@ -149,11 +149,11 @@ type startedAtKey struct{}
 func Handler(task, modelName string) callbacks.Handler {
 	recorder := defaultRecorder.Load()
 	return callbacktpl.NewHandlerHelper().
-		ChatModel(&callbacktpl.ModelCallbackHandler{
-			OnStart: func(ctx context.Context, _ *callbacks.RunInfo, _ *model.CallbackInput) context.Context {
+		AgenticModel(&callbacktpl.AgenticModelCallbackHandler{
+			OnStart: func(ctx context.Context, _ *callbacks.RunInfo, _ *model.AgenticCallbackInput) context.Context {
 				return context.WithValue(ctx, startedAtKey{}, time.Now())
 			},
-			OnEnd: func(ctx context.Context, _ *callbacks.RunInfo, output *model.CallbackOutput) context.Context {
+			OnEnd: func(ctx context.Context, _ *callbacks.RunInfo, output *model.AgenticCallbackOutput) context.Context {
 				total, reported := 0, false
 				if output != nil && output.TokenUsage != nil {
 					total, reported = output.TokenUsage.TotalTokens, true

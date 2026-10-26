@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"mumu-bot/internal/media"
+
 	"strings"
 	"time"
 
@@ -57,6 +59,7 @@ type MessageLog struct {
 	IsMentioned      bool       `gorm:"not null" json:"is_mentioned"`
 	MessageTime      time.Time  `gorm:"index;not null" json:"message_time"`
 	RecalledAt       *time.Time `json:"recalled_at,omitempty"`
+	MediaRefs        media.Refs `gorm:"column:media_refs;type:jsonb" json:"media_refs,omitempty"`
 }
 
 func (MessageLog) TableName() string { return "message_logs" }

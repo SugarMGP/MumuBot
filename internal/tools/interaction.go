@@ -54,7 +54,7 @@ func speakContent(ctx context.Context, content, replyRef string, inputMentions [
 	replyTo := int64(0)
 	if replyRef != "" {
 		var ok bool
-		replyTo, ok = tc.ResolveMessageRef(replyRef)
+		replyTo, ok = tc.Session.ResolveMessageRef(replyRef)
 		if !ok {
 			return nil, fmt.Errorf("reply_to 不是当前对话中的消息编号")
 		}
@@ -270,7 +270,7 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	if input == nil {
 		return nil, fmt.Errorf("消息回应参数不能为空")
 	}
-	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
+	messageID, ok := tc.Session.ResolveMessageRef(input.MessageRef)
 	if !ok {
 		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
 	}
@@ -325,7 +325,7 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if input == nil {
 		return nil, fmt.Errorf("撤回参数不能为空")
 	}
-	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
+	messageID, ok := tc.Session.ResolveMessageRef(input.MessageRef)
 	if !ok {
 		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
 	}

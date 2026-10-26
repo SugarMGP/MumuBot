@@ -39,8 +39,8 @@ Core capabilities of this project:
 - 📝 **Long-term Memory** — Unifies facts, preferences, constraints, goals, group terms, and expressions with pgvector and pg_trgm
 - 👤 **Member Profiles** — Shows evidence-backed member knowledge and participation; a background memory agent investigates historical context
 - 🎭 **Emotion System** — Three-dimensional mood (valence, energy, sociability) shifts naturally during conversation, affecting tone and activity
-- 👀 **Multimodal Understanding** — Vision model recognizes image and video content
-- 🖼️ **Sticker System** — Automatically collects stickers from the group; the agent decides when to use them
+- 🖼️ **Sticker System** — The agent inspects and collects stickers on demand; originals are kept
+- 🔎 **Active Retrieval** — The agent searches long-term memory and chat history itself instead of having them injected every turn
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
@@ -57,7 +57,8 @@ Core capabilities of this project:
 | Bun 1.3.14+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL + pgvector | Store messages, memories, topics, group culture, and vectors |
 | SnowLuma | OneBot 11 protocol implementation |
-| LLM API | OpenAI-compatible, must support tool calling |
+| LLM API | OpenAI Responses compatible (`/responses`), must support tool calling |
+| libwebp | Image transcoding dependency: `libwebp-dev` on Linux, `brew install webp` on macOS, mingw-w64 on Windows |
 
 ### Docker Compose
 
@@ -119,7 +120,6 @@ cp config/mcp.example.json config/mcp.json
 #   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - Complete high-tier model endpoint
 #   MUMU_MODEL_LOW_BASE_URL / API_KEY / MODEL  - Complete low-tier model endpoint
 #   MUMU_EMBEDDING_BASE_URL / API_KEY / MODEL  - Complete embedding model endpoint
-#   MUMU_VISION_BASE_URL / API_KEY / MODEL     - Complete vision model endpoint
 #   MUMU_ONEBOT_TOKEN                   - OneBot access token
 #   MUMU_DATABASE_DSN                   - PostgreSQL connection string
 

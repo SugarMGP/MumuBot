@@ -12,25 +12,26 @@ import (
 	"mumu-bot/internal/learning"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/mcp"
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
-	"mumu-bot/internal/topic"
 
+	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/flow/agent/react"
+	"github.com/cloudwego/eino/schema"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 )
 
 const (
-	replyCacheTTL       = 30 * time.Minute
-	replyCacheCapacity  = 1024
-	visionCacheTTL      = 6 * time.Hour
-	visionCacheCapacity = 512
+	replyCacheTTL      = 30 * time.Minute
+	replyCacheCapacity = 1024
+	// restoreMessageLimit 重启后从消息库恢复的会话消息条数
+	restoreMessageLimit = 50
 )
 
 type Agent struct {
@@ -38,38 +39,25 @@ type Agent struct {
 	cancel           context.CancelFunc
 	persona          *persona.Persona
 	memory           *memory.Manager
-	model            model.ToolCallingChatModel
-	vision           *llm.VisionClient
+	model            model.AgenticModel
 	bot              *onebot.Client
-	groupReact       *react.Agent
-	privateReact     *react.Agent
+	groupAgent       *adk.TypedChatModelAgent[*schema.AgenticMessage]
+	privateAgent     *adk.TypedChatModelAgent[*schema.AgenticMessage]
 	groupTools       []tool.BaseTool
 	privateTools     []tool.BaseTool
 	mcpMgr           *mcp.Manager
 	groupConcurrency *GroupThinkConcurrency
 	groupCommits     *commitQueueSet[commitItem]
 	privateCommits   *commitQueueSet[commitItem]
+	sessions         *sessionStore
+	media            *media.Manager
+	gates            *gateStore
 
 	learner *learning.Learner
 
 	toolNames []string
 
-	replyCache           *ttlcache.Cache[string, onebot.ReplyInfo]
-	visionCache          *ttlcache.Cache[string, string]
-	topicMgr             *topic.Manager
-	privateMu            sync.Mutex
-	privateBuffers       map[int64][]*onebot.ConversationMessage
-	pendingPrivateThinks map[int64]*pendingThink
-	privateRunning       map[int64]bool
-	privateReadSeq       map[int64]uint64
-	privateTrimmedSeq    map[int64]uint64
-	privateStopped       bool
-	thinkWG              sync.WaitGroup
-
-	groupBuffers    map[int64][]*onebot.ConversationMessage
-	groupReadSeq    map[int64]uint64
-	groupTrimmedSeq map[int64]uint64
-	groupBuffersMu  sync.RWMutex
+	replyCache *ttlcache.Cache[string, onebot.ReplyInfo]
 
 	recallMu       sync.Mutex
 	pendingRecalls map[recallCommit]pendingRecall
@@ -77,6 +65,12 @@ type Agent struct {
 
 	pendingGroupThinks map[int64]*pendingThink
 	pendingGroupMu     sync.Mutex
+
+	pendingPrivateThinks map[int64]*pendingThink
+	privateMu            sync.Mutex
+	privateRunning       map[int64]bool
+	privateStopped       bool
+	thinkWG              sync.WaitGroup
 
 	stopping atomic.Bool
 	wg       sync.WaitGroup
@@ -107,12 +101,6 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		return nil, fmt.Errorf("创建 LLM 客户端失败: %w", err)
 	}
 
-	visionClient, err := llm.NewVisionClient()
-	if err != nil {
-		return nil, fmt.Errorf("创建视觉模型客户端失败: %w", err)
-	}
-	zap.L().Info("Vision 已启用", zap.String("model", cfg.VisionLLM.Model))
-
 	rootCtx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
 		ctx:                  rootCtx,
@@ -120,24 +108,22 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		persona:              p,
 		memory:               mem,
 		model:                chatModel,
-		vision:               visionClient,
 		bot:                  botClient,
-		groupBuffers:         make(map[int64][]*onebot.ConversationMessage),
-		pendingRecalls:       make(map[recallCommit]pendingRecall),
+		sessions:             newSessionStore(),
+		gates:                newGateStore(),
 		pendingGroupThinks:   make(map[int64]*pendingThink),
-		groupReadSeq:         make(map[int64]uint64),
-		privateBuffers:       make(map[int64][]*onebot.ConversationMessage),
 		pendingPrivateThinks: make(map[int64]*pendingThink),
 		privateRunning:       make(map[int64]bool),
-		privateReadSeq:       make(map[int64]uint64),
-		privateTrimmedSeq:    make(map[int64]uint64),
-		groupTrimmedSeq:      make(map[int64]uint64),
 		replyCache:           newAgentTTLCache[string, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
-		visionCache:          newAgentTTLCache[string, string](visionCacheCapacity, visionCacheTTL),
+		media: media.New(media.Options{
+			Dir:        cfg.Media.StoragePath,
+			MaxBytesMB: cfg.Media.MaxBytesMB,
+			Quality:    float32(cfg.Media.ImageQuality),
+			NarrowEdge: cfg.Media.NarrowEdge,
+		}),
 	}
 	a.groupCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("group_id", targetID) })
 	a.privateCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("target_id", targetID) })
-	a.topicMgr = topic.NewManager(mem.GetDB())
 	constructed := false
 	defer func() {
 		if constructed {
@@ -162,16 +148,10 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 	if err := a.initTools(); err != nil {
 		return nil, err
 	}
-	if err := a.initGroupReact(); err != nil {
-		return nil, err
-	}
-	if err := a.initPrivateReact(); err != nil {
+	if err := a.initAgents(); err != nil {
 		return nil, err
 	}
 	go a.replyCache.Start()
-	go a.visionCache.Start()
-	a.recallWG.Add(1)
-	go a.recallRetryLoop()
 	constructed = true
 	return a, nil
 }
@@ -207,8 +187,10 @@ func (a *Agent) initGroupTools() error {
 	return a.buildTools(&a.groupTools, []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewUpdateMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewDeleteMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveWorkingNoteTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchHistoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -219,6 +201,7 @@ func (a *Agent) initGroupTools() error {
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchStickersTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendStickerTool() },
+		func() (tool.BaseTool, error) { return tools.NewSaveStickerTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetGroupNoticesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
@@ -226,8 +209,8 @@ func (a *Agent) initGroupTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemeTool() },
 		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
-		func() (tool.BaseTool, error) { return tools.NewInspectImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
+		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 	})
 }
 
@@ -236,23 +219,25 @@ func (a *Agent) initPrivateTools() error {
 	return a.buildTools(&a.privateTools, []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewUpdateMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewDeleteMemoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveWorkingNoteTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetRecentMessagesTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchHistoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewPrivateSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
 		func() (tool.BaseTool, error) { return tools.NewPrivateUpdateMemberIntimacyTool() },
-		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
 		func() (tool.BaseTool, error) { return tools.NewPrivatePokeTool() },
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchStickersTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendStickerTool() },
+		func() (tool.BaseTool, error) { return tools.NewSaveStickerTool() },
+		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemeTool() },
 		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
-		func() (tool.BaseTool, error) { return tools.NewInspectImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchPrivateMessagesTool() },
+		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 	})
 }
 
@@ -276,24 +261,23 @@ func (a *Agent) buildTools(dst *[]tool.BaseTool, builders []func() (tool.BaseToo
 	return nil
 }
 
-func (a *Agent) initGroupReact() error {
-	agent, err := a.newChatReact(a.groupTools)
-	if err == nil {
-		a.groupReact = agent
+// initAgents 构造群聊与私聊两个 Agent
+func (a *Agent) initAgents() error {
+	groupAgent, err := a.newChatAgent(a.groupTools)
+	if err != nil {
+		return err
 	}
-	return err
+	privateAgent, err := a.newChatAgent(a.privateTools)
+	if err != nil {
+		return err
+	}
+	a.groupAgent = groupAgent
+	a.privateAgent = privateAgent
+	return nil
 }
 
-func (a *Agent) initPrivateReact() error {
-	agent, err := a.newChatReact(a.privateTools)
-	if err == nil {
-		a.privateReact = agent
-	}
-	return err
-}
-
-// newChatReact 两种会话共用步数、错误处理与执行约束，工具清单各自独立
-func (a *Agent) newChatReact(chatTools []tool.BaseTool) (*react.Agent, error) {
+// newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立
+func (a *Agent) newChatAgent(chatTools []tool.BaseTool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	cfg := config.Get()
 	maxStep := cfg.Agent.MaxStep
 	if maxStep <= 0 {
@@ -303,22 +287,31 @@ func (a *Agent) newChatReact(chatTools []tool.BaseTool) (*react.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return react.NewAgent(a.ctx, &react.AgentConfig{
-		ToolCallingModel: a.model,
-		ToolsConfig: compose.ToolsNodeConfig{
-			Tools:                chatTools,
-			ExecuteSequentially:  true,
-			UnknownToolsHandler:  tools.UnknownToolHandler,
-			ToolArgumentsHandler: argumentsHandler,
-			ToolCallMiddlewares:  []compose.ToolMiddleware{{Invokable: tools.ToolErrorMiddleware()}, {Invokable: tools.ToolActionMiddleware(a.mcpMgr.ReadOnlyTools())}, {Invokable: tools.ToolDedupMiddleware()}},
+	return adk.NewTypedChatModelAgent[*schema.AgenticMessage](a.ctx, &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
+		Model: a.model,
+		ToolsConfig: adk.ToolsConfig{
+			ToolsNodeConfig: compose.ToolsNodeConfig{
+				Tools:                chatTools,
+				ExecuteSequentially:  true,
+				UnknownToolsHandler:  tools.UnknownToolHandler,
+				ToolArgumentsHandler: argumentsHandler,
+				ToolCallMiddlewares: []compose.ToolMiddleware{
+					{Invokable: tools.ToolErrorMiddleware()},
+					{Invokable: tools.ToolActionMiddleware(a.mcpMgr.ReadOnlyTools())},
+					{Invokable: tools.ToolDedupMiddleware()},
+				},
+			},
+			ReturnDirectly: map[string]bool{"stayQuiet": true},
 		},
-		MaxStep:            maxStep,
-		ToolReturnDirectly: map[string]struct{}{"stayQuiet": {}},
+		MaxIterations: maxStep,
+		Handlers: []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
+			&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
+		},
 	})
 }
 
 func (a *Agent) Start() error {
-	if err := a.loadConversationBuffersFromDB(); err != nil {
+	if err := a.restoreSessions(); err != nil {
 		return err
 	}
 	a.bot.OnMessage(a.onMessage)
@@ -333,28 +326,19 @@ func (a *Agent) Start() error {
 	return nil
 }
 
-func (a *Agent) loadConversationBuffersFromDB() error {
-	bufSize := messageBufferLimit()
+// restoreSessions 从消息库重建会话最近消息，重启后仍能接上话
+func (a *Agent) restoreSessions() error {
+	bufSize := restoreMessageLimit
 	groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx)
 	if err != nil {
 		return fmt.Errorf("读取可恢复群聊失败: %w", err)
 	}
 	for _, groupID := range groupIDs {
-
 		logs, err := a.memory.GetRecentMessages(a.ctx, groupID, 0, bufSize, 0)
 		if err != nil {
 			return fmt.Errorf("恢复群 %d 消息失败: %w", groupID, err)
 		}
-		if len(logs) == 0 {
-			continue
-		}
-
-		messages := a.restoreMessageBuffer(logs)
-		a.groupBuffersMu.Lock()
-		a.groupBuffers[groupID] = messages
-		a.groupBuffersMu.Unlock()
-
-		zap.L().Info("已从数据库加载消息历史", zap.Int64("group_id", groupID), zap.Int("count", len(logs)))
+		a.restoreSession(memory.ConversationKindGroup, groupID, logs)
 	}
 	privateTargets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true)
 	if err != nil {
@@ -365,56 +349,43 @@ func (a *Agent) loadConversationBuffersFromDB() error {
 		if err != nil {
 			return fmt.Errorf("恢复好友 %d 消息失败: %w", target.TargetID, err)
 		}
-		if len(logs) == 0 {
-			continue
-		}
-		messages := a.restoreMessageBuffer(logs)
-		a.privateMu.Lock()
-		a.privateBuffers[target.TargetID] = messages
-		a.privateMu.Unlock()
+		a.restoreSession(memory.ConversationKindPrivate, target.TargetID, logs)
 	}
 	return nil
 }
 
-// restoreMessageBuffer 只补全窗口外的回复，窗口内消息由本轮编号关联
-func (a *Agent) restoreMessageBuffer(logs []memory.MessageLog) []*onebot.ConversationMessage {
-	loadedIDs := make(map[int64]bool, len(logs))
-	for _, log := range logs {
-		loadedIDs[log.OneBotMessageID] = true
+// restoreSession 重建单个会话的最近消息
+func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.MessageLog) {
+	if len(logs) == 0 {
+		return
 	}
-	messages := make([]*onebot.ConversationMessage, 0, len(logs))
+	session := a.sessions.get(kind, targetID)
 	for _, log := range logs {
-		msg := messageLogToBufferedConversationMessage(log)
-		if msg.Reply != nil && !loadedIDs[msg.Reply.MessageID] {
-			if replyLog, err := a.memory.GetMessageLogByScope(log.ConversationKind, log.TargetID, msg.Reply.MessageID); err == nil {
-				msg.Reply = replyInfoFromMessageLog(replyLog)
-			}
+		msg := messageLogToSessionMessage(log)
+		if msg == nil {
+			continue
 		}
-		messages = append(messages, msg)
+		user := session.AppendUser(msg, log.ID, log.MediaRefs)
+		user.ArrivalSeq = 0
 	}
-	return messages
+	// 重建的消息视为已消费，避免重启后重复触发
+	session.MarkConsumed(^uint64(0))
+	session.MarkInjected(^uint64(0))
 }
 
-func messageLogToBufferedConversationMessage(log memory.MessageLog) *onebot.ConversationMessage {
-	displayContent := log.DisplayContent
-	if log.RecalledAt != nil {
-		displayContent = memory.RecalledMessageDisplayContent
-	}
-	msg := &onebot.ConversationMessage{
-		ConversationKind: log.ConversationKind,
+// messageLogToSessionMessage 把消息库记录转成会话消息
+func messageLogToSessionMessage(log memory.MessageLog) *onebot.ConversationMessage {
+	return &onebot.ConversationMessage{
 		MessageID:        log.OneBotMessageID,
+		ConversationKind: log.ConversationKind,
 		TargetID:         log.TargetID,
 		UserID:           log.UserID,
 		Nickname:         log.Nickname,
 		Content:          log.TextContent,
-		FinalContent:     displayContent,
+		FinalContent:     log.DisplayContent,
 		IsMentioned:      log.IsMentioned,
 		Time:             log.MessageTime,
 	}
-	if log.ReplyToMessageID != nil {
-		msg.Reply = &onebot.ReplyInfo{MessageID: *log.ReplyToMessageID}
-	}
-	return msg
 }
 
 func (a *Agent) Stop() {
@@ -430,8 +401,7 @@ func (a *Agent) shutdown() {
 			zap.L().Warn("关闭 OneBot 连接失败", zap.Error(err))
 		}
 	}
-	// 2. 取消 Agent 上下文并停止思考调度，等待所有 thinkGroup（含本地发言生产者）退出，
-	//    推理结束后不会再有发言提交生产者
+	// 2. 取消 Agent 上下文并停止思考调度，等待所有 thinkGroup（含本地发言生产者）退出
 	a.cancel()
 	a.clearPendingThinks()
 	a.stopPrivateTimers()
@@ -476,9 +446,6 @@ func newAgentTTLCache[K comparable, V any](capacity int, ttl time.Duration) *ttl
 func (a *Agent) stopCaches() {
 	if a.replyCache != nil {
 		a.replyCache.Stop()
-	}
-	if a.visionCache != nil {
-		a.visionCache.Stop()
 	}
 }
 

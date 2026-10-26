@@ -3,12 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"mumu-bot/internal/config"
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
@@ -25,6 +24,7 @@ func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 	}
 	ctx, cancel := a.persistenceContext()
 	defer cancel()
+	var mediaRefs []media.Ref
 	if msg.ParseFailed || msg.UserID <= 0 || !a.messageAllowed(ctx, msg) {
 		a.SkipConversationEvent(msg.ConversationKind, msg.TargetID, msg.ArrivalSeq)
 		return
@@ -38,19 +38,19 @@ func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 			return
 		}
 	} else {
-		a.prepareMessageContent(ctx, msg)
+		mediaRefs = a.prepareMessageContent(ctx, msg)
 		selfID := a.bot.GetSelfID()
 		msg.IsMentioned = msg.IsMentioned || a.persona.IsMentioned(msg.Content) || (msg.Reply != nil && msg.Reply.SenderID == selfID)
 	}
 	if msg.ConversationKind == memory.ConversationKindPrivate {
-		a.onPrivateMessage(msg)
+		a.onPrivateMessage(msg, mediaRefs)
 		return
 	}
-	a.onGroupMessage(msg)
+	a.onGroupMessage(msg, mediaRefs)
 }
 
-func (a *Agent) onGroupMessage(msg *onebot.ConversationMessage) {
-	a.groupCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg})
+func (a *Agent) onGroupMessage(msg *onebot.ConversationMessage, mediaRefs []media.Ref) {
+	a.groupCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg, media: mediaRefs})
 }
 
 // onRecall 撤回事件入口：带到达序号进入提交队列，与会话内消息保持顺序
@@ -137,12 +137,6 @@ func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMe
 		return nil
 	}
 
-	buffer, _, _ := a.getConversationSnapshot(msg.ConversationKind, msg.TargetID)
-	if reply := findReplyInfoInMessages(buffer, msg.Reply.MessageID); reply != nil {
-		msg.Reply = reply
-		return nil
-	}
-
 	log, err := a.memory.WithContext(ctx).GetMessageLogByScope(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID)
 	if err == nil {
 		if reply := replyInfoFromMessageLog(log); reply != nil {
@@ -191,96 +185,11 @@ func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.Re
 	return reply, nil
 }
 
-// messageBufferLimit 读取会话缓冲窗口大小，未配置时回退默认值
-func messageBufferLimit() int {
-	limit := config.Get().Agent.MessageBufferSize
-	if limit <= 0 {
-		return 30
-	}
-	return limit
-}
-
-// appendMessageBuffer 追加一条消息并按窗口上限裁剪，返回新缓冲与被裁剪消息的最大到达序号（0 表示未裁剪）
-func appendMessageBuffer(messages []*onebot.ConversationMessage, msg *onebot.ConversationMessage, limit int) ([]*onebot.ConversationMessage, uint64) {
-	// 提交队列保证消息按到达顺序写入缓冲，直接追加即可
-	messages = append(messages, msg)
-	if len(messages) <= limit {
-		return messages, 0
-	}
-	trimmed := messages[:len(messages)-limit]
-	trimmedSeq := uint64(0)
-	if last := trimmed[len(trimmed)-1]; last != nil {
-		trimmedSeq = last.ArrivalSeq
-	}
-	return slices.Delete(messages, 0, len(messages)-limit), trimmedSeq
-}
-
-func (a *Agent) addBuffer(msg *onebot.ConversationMessage) {
-	a.groupBuffersMu.Lock()
-	defer a.groupBuffersMu.Unlock()
-	messages, trimmedSeq := appendMessageBuffer(a.groupBuffers[msg.TargetID], msg, messageBufferLimit())
-	a.groupBuffers[msg.TargetID] = messages
-	if trimmedSeq > 0 {
-		a.groupTrimmedSeq[msg.TargetID] = max(a.groupTrimmedSeq[msg.TargetID], trimmedSeq)
-	}
-	if msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID() {
-		// 自身消息是缓冲边界，同序号及此前群事件不再留到下一轮处理
-		a.groupReadSeq[msg.TargetID] = max(a.groupReadSeq[msg.TargetID], msg.ArrivalSeq)
-	}
-}
-
-// getConversationSnapshot 同时取得缓冲、已读与裁剪水位，避免观察期间分次取值
-func (a *Agent) getConversationSnapshot(kind string, targetID int64) ([]*onebot.ConversationMessage, uint64, uint64) {
-	if kind == memory.ConversationKindPrivate {
-		a.privateMu.Lock()
-		defer a.privateMu.Unlock()
-		return slices.Clone(a.privateBuffers[targetID]), a.privateReadSeq[targetID], a.privateTrimmedSeq[targetID]
-	}
-	a.groupBuffersMu.RLock()
-	defer a.groupBuffersMu.RUnlock()
-	return slices.Clone(a.groupBuffers[targetID]), a.groupReadSeq[targetID], a.groupTrimmedSeq[targetID]
-}
-
-func (a *Agent) getMessageSnapshot(groupID int64) ([]*onebot.ConversationMessage, uint64) {
-	buffer, readSeq, _ := a.getConversationSnapshot(memory.ConversationKindGroup, groupID)
-	return buffer, readSeq
-}
-
 func replyCacheKey(kind string, targetID, messageID int64) string {
 	if kind == "" {
 		kind = memory.ConversationKindGroup
 	}
 	return recallScopeKey(kind, targetID) + ":" + strconv.FormatInt(messageID, 10)
-}
-
-func (a *Agent) syncRecalledMessage(kind string, targetID, messageID int64) {
-	replace := func(messages []*onebot.ConversationMessage) []*onebot.ConversationMessage {
-		for i, msg := range messages {
-			if msg == nil {
-				continue
-			}
-			if msg.MessageID == messageID {
-				messages[i] = recalledConversationMessage(msg)
-			} else if msg.Reply != nil && msg.Reply.MessageID == messageID {
-				replacement := *msg
-				reply := *msg.Reply
-				reply.Content = memory.RecalledMessageDisplayContent
-				replacement.Reply = &reply
-				messages[i] = &replacement
-			}
-		}
-		return messages
-	}
-	if kind == memory.ConversationKindPrivate {
-		a.privateMu.Lock()
-		a.privateBuffers[targetID] = replace(a.privateBuffers[targetID])
-		a.privateMu.Unlock()
-	} else {
-		a.groupBuffersMu.Lock()
-		a.groupBuffers[targetID] = replace(a.groupBuffers[targetID])
-		a.groupBuffersMu.Unlock()
-	}
-	a.replyCache.Delete(replyCacheKey(kind, targetID, messageID))
 }
 
 func (a *Agent) updateMember(ctx context.Context, msg *onebot.ConversationMessage) {

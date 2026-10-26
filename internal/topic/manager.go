@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
@@ -14,7 +15,7 @@ type Manager struct{ store *DBStore }
 
 func NewManager(db *gorm.DB) *Manager { return &Manager{store: &DBStore{db: db}} }
 
-func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.ConversationMessage, isMentioned bool) (*memory.MessageLog, bool, error) {
+func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.ConversationMessage, isMentioned bool, mediaRefs []media.Ref) (*memory.MessageLog, bool, error) {
 	if msg == nil || msg.MessageID == 0 || msg.TargetID == 0 {
 		return nil, false, nil
 	}
@@ -26,7 +27,7 @@ func (m *Manager) PersistMessage(ctx context.Context, msg *onebot.ConversationMe
 	item, created, err := m.store.PersistMessageLog(ctx, memory.MessageLog{
 		OneBotMessageID: msg.MessageID, ConversationKind: memory.ConversationKindGroup, TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname,
 		TextContent: strings.TrimSpace(msg.Content), DisplayContent: msg.FinalContent,
-		ReplyToMessageID: replyTo, IsMentioned: isMentioned, MessageTime: msg.Time,
+		ReplyToMessageID: replyTo, IsMentioned: isMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs,
 	})
 	if err != nil {
 		return nil, false, err

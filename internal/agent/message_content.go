@@ -5,34 +5,62 @@ import (
 	"fmt"
 	"strings"
 
-	"mumu-bot/internal/config"
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/onebot"
 
 	"github.com/zjutjh/onebot-sdk/message"
 	"go.uber.org/zap"
 )
 
+// pendingMedia 待下载缓存的媒体
+type pendingMedia struct {
+	URL     string
+	File    string
+	Sticker bool
+}
+
 // prepareMessageContent 群聊与私聊复用回复补全和展示处理，原文保持独立
-func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.ConversationMessage) {
+func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.ConversationMessage) []media.Ref {
 	if err := a.resolveReplyInfo(ctx, msg); err != nil {
 		zap.L().Debug("解析回复消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
-	content := a.parseMessageContent(ctx, msg)
+	content, pending := a.parseMessageContent(ctx, msg)
 	for _, name := range a.toolNames {
 		content = strings.ReplaceAll(content, name, "\"危险指令，已屏蔽\"")
 	}
 	msg.FinalContent = content
+	return a.cacheMedia(ctx, pending)
 }
 
-func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) string {
-	cfg := config.Get()
-	parts := msg.MessageParts
+// cacheMedia 下载并缓存消息里的媒体，失败时只保留文字占位
+func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.Ref {
+	if len(pending) == 0 {
+		return nil
+	}
+	refs := make([]media.Ref, 0, len(pending))
+	for index, item := range pending {
+		if ctx.Err() != nil {
+			break
+		}
+		ref, err := a.media.Ensure(ctx, media.Source{URL: item.URL, File: item.File, Sticker: item.Sticker})
+		if err != nil {
+			zap.L().Debug("缓存媒体失败", zap.String("url", item.URL), zap.Error(err))
+			continue
+		}
+		ref.Index = index
+		refs = append(refs, ref)
+	}
+	return refs
+}
 
+// parseMessageContent 解析消息段，产出展示文本与待缓存的媒体
+func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) (string, []pendingMedia) {
 	var content strings.Builder
-	hasForward := false
+	var pending []pendingMedia
+
 	var allForward []message.ForwardNode
 	forwardTotal := 0
-	for _, part := range parts {
+	for _, part := range msg.MessageParts {
 		if part.Kind != "forward" {
 			continue
 		}
@@ -44,16 +72,8 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 		allForward = append(allForward, msg.ForwardContent[start:end]...)
 		forwardTotal += end - start
 	}
-	forwardSummary := ""
-	if len(allForward) > 0 {
-		var err error
-		forwardSummary, err = a.summarizeForwardMessages(ctx, allForward)
-		if err != nil {
-			zap.L().Error("总结合并转发消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
-		}
-	}
-	forwardSummaryWritten := false
-	for _, part := range parts {
+	forwardWritten := false
+	for _, part := range msg.MessageParts {
 		switch part.Kind {
 		case "text":
 			content.WriteString(part.Text)
@@ -81,16 +101,16 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			if part.Index < 0 || part.Index >= len(msg.Images) {
 				continue
 			}
-			a.appendImageContent(ctx, cfg, msg.Images[part.Index], &content)
-		case "video":
-			if part.Index < 0 || part.Index >= len(msg.Videos) {
-				continue
-			}
-			if desc, err := a.describeVideoCached(ctx, msg.Videos[part.Index]); err == nil && desc != "" {
-				content.WriteString(fmt.Sprintf(" [视频:%s]", desc))
+			image := msg.Images[part.Index]
+			sticker := image.SubType == 1
+			if sticker {
+				content.WriteString(" [表情]")
 			} else {
-				content.WriteString(" [视频]")
+				content.WriteString(" [图片]")
 			}
+			pending = append(pending, pendingMedia{URL: image.URL, File: image.File, Sticker: sticker})
+		case "video":
+			content.WriteString(" [视频，无法查看]")
 		case "record":
 			content.WriteString(" [语音]")
 		case "file":
@@ -98,76 +118,35 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 				continue
 			}
 			fileName := strings.TrimSpace(msg.FileNames[part.Index])
-			if fileName == "" {
+			if fileName != "" {
 				content.WriteString(" [文件]")
 			} else {
-				content.WriteString(fmt.Sprintf(" [文件:%s]", fileName))
+				content.WriteString(" [文件]")
 			}
 		case "card":
-			if part.Index >= 0 && part.Index < len(msg.Cards) {
-				content.WriteByte(' ')
-				content.WriteString(msg.Cards[part.Index].Format())
+			if part.Index < 0 || part.Index >= len(msg.Cards) {
+				continue
 			}
+			content.WriteString(" ")
+			content.WriteString(msg.Cards[part.Index].Format())
 		case "forward":
 			start := max(part.Index, 0)
 			end := min(start+max(part.Count, 0), len(msg.ForwardContent))
 			if start >= end {
 				continue
 			}
-			hasForward = true
-			if !forwardSummaryWritten {
-				forwardSummaryWritten = true
-				if forwardSummary != "" {
-					content.WriteString(fmt.Sprintf(" [合并转发，共%d条:%s]", forwardTotal, forwardSummary))
-				} else {
-					content.WriteString(fmt.Sprintf(" [合并转发，共%d条]", forwardTotal))
-				}
+			if !forwardWritten {
+				forwardWritten = true
+				nodes := flattenForwardNodes(msg.ForwardContent[start:end])
+				content.WriteString(formatForwardNodes(nodes))
+				pending = append(pending, forwardMedia(nodes)...)
 			} else {
 				content.WriteString(fmt.Sprintf(" [合并转发，共%d条]", end-start))
 			}
 		}
 	}
-	if hasForward {
+	if forwardTotal > 0 {
 		msg.ForwardContent = nil
 	}
-	return strings.TrimSpace(content.String())
-}
-
-func (a *Agent) appendImageContent(ctx context.Context, cfg *config.Config, img onebot.ImageInfo, content *strings.Builder) {
-	if img.SubType == 1 {
-		if img.Desc != "" {
-			content.WriteString(fmt.Sprintf(" [表情包:%s]", img.Desc))
-			return
-		}
-		visionDesc := ""
-		if d, err := a.describeImageCached(ctx, img); err == nil {
-			visionDesc = d
-		}
-		if img.URL != "" && visionDesc != "" && cfg != nil && cfg.Sticker.AutoSave && a.ctx.Err() == nil {
-			a.wg.Add(1)
-			go func(url string, stickerDesc string) {
-				defer a.wg.Done()
-				a.autoSaveSticker(a.ctx, url, stickerDesc)
-			}(img.URL, visionDesc)
-		}
-		if visionDesc != "" {
-			content.WriteString(fmt.Sprintf(" [表情包:%s]", visionDesc))
-		} else {
-			content.WriteString(" [表情包]")
-		}
-		return
-	}
-	if img.Desc != "" {
-		content.WriteString(fmt.Sprintf(" [图片:%s]", img.Desc))
-		return
-	}
-	visionDesc := ""
-	if d, err := a.describeImageCached(ctx, img); err == nil {
-		visionDesc = d
-	}
-	if visionDesc != "" {
-		content.WriteString(fmt.Sprintf(" [图片:%s]", visionDesc))
-	} else {
-		content.WriteString(" [图片]")
-	}
+	return strings.TrimSpace(content.String()), pending
 }

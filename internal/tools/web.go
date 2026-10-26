@@ -253,22 +253,3 @@ func NewFetchWebTool() (tool.InvokableTool, error) {
 type InspectImageInput struct {
 	URL string `json:"url" jsonschema:"description=普通网页图片的 HTTP/HTTPS 地址"`
 }
-
-func inspectImage(ctx context.Context, input *InspectImageInput) (any, error) {
-	tc := GetToolContext(ctx)
-	if tc == nil || tc.InspectImageCallback == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("图片识别能力未初始化"))
-	}
-	imageURL := ""
-	if input != nil {
-		imageURL = strings.TrimSpace(input.URL)
-	}
-	if _, err := projectutils.ParseHTTPURL(imageURL); err != nil {
-		return nil, fmt.Errorf("图片 URL 无效：%w", err)
-	}
-	return tc.InspectImageCallback(ctx, imageURL)
-}
-
-func NewInspectImageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("inspectImage", "识别普通网页图片 URL 并转成中文描述，不处理 QQ 表情包。", inspectImage)
-}

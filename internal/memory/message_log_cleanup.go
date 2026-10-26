@@ -3,6 +3,7 @@ package memory
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ func (m *Manager) startMessageLogCleanup() {
 			case <-ticker.C:
 				m.cleanupMessageLogs(keepLatest)
 				m.cleanupUnusedStickers()
+				m.cleanupMediaFiles()
 			case <-m.cleanupStop:
 				return
 			}
@@ -120,4 +122,37 @@ func (m *Manager) cleanupUnusedStickers() {
 		}
 	}
 	zap.L().Info("清理未使用表情包完成", zap.Int("count", len(stickers)))
+}
+
+// cleanupMediaFiles 清理不再被任何消息引用的媒体缓存文件
+func (m *Manager) cleanupMediaFiles() {
+	dir := config.Get().Media.StoragePath
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	used := map[string]bool{}
+	if err := m.db.Raw(`SELECT DISTINCT elem->>'hash' FROM message_logs ml, jsonb_array_elements(ml.media_refs) elem WHERE ml.media_refs IS NOT NULL`).Scan(&used).Error; err != nil {
+		zap.L().Warn("读取媒体引用失败，跳过媒体清理", zap.Error(err))
+		return
+	}
+	for _, sub := range []string{"image", "sticker"} {
+		root := filepath.Join(dir, sub)
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			hash := strings.TrimSuffix(name, filepath.Ext(name))
+			if used[hash] {
+				continue
+			}
+			if err := os.Remove(filepath.Join(root, name)); err != nil {
+				zap.L().Debug("删除无引用媒体失败", zap.String("file", name), zap.Error(err))
+			}
+		}
+	}
 }

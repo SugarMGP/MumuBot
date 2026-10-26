@@ -8,7 +8,7 @@ import (
 
 	"mumu-bot/internal/config"
 
-	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino-ext/components/model/agenticopenai"
 	"github.com/cloudwego/eino/components/model"
 )
 
@@ -25,7 +25,7 @@ const (
 )
 
 type tierClientSlot struct {
-	client model.ToolCallingChatModel
+	client model.AgenticModel
 	err    error
 	once   sync.Once
 }
@@ -41,7 +41,8 @@ func TierDisplayName(tier Tier) string {
 	}
 }
 
-func NewClientForTier(tier Tier) (model.ToolCallingChatModel, error) {
+// NewClientForTier 创建 Responses 端点模型客户端，只支持支持 /responses 的服务商
+func NewClientForTier(tier Tier) (model.AgenticModel, error) {
 	cfg := config.Get()
 	if cfg == nil {
 		return nil, fmt.Errorf("配置未加载")
@@ -69,18 +70,17 @@ func NewClientForTier(tier Tier) (model.ToolCallingChatModel, error) {
 			return
 		}
 
-		chatConfig := &openai.ChatModelConfig{
+		client, err := agenticopenai.NewResponsesModel(context.Background(), &agenticopenai.ResponsesConfig{
 			BaseURL:     baseURL,
 			APIKey:      apiKey,
 			Model:       modelName,
 			ExtraFields: modelCfg.ExtraFields,
-		}
-		chatModel, err := openai.NewChatModel(context.Background(), chatConfig)
+		})
 		if err != nil {
 			slot.err = fmt.Errorf("创建%s失败: %w", TierDisplayName(tier), err)
 			return
 		}
-		slot.client = chatModel
+		slot.client = client
 	})
 
 	return slot.client, slot.err

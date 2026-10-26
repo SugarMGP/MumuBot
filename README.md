@@ -39,8 +39,8 @@
 - 📝 **长期记忆** — 基于 pgvector 与 pg_trgm 统一检索事实、偏好、约束、目标、群术语和表达方式
 - 👤 **群友画像** — 聚合有消息证据的成员知识与参与讨论，后台记忆 Agent 按需调查历史语境
 - 🎭 **情绪系统** — 心情、精力、社交意愿三维情绪状态随对话自然变化，影响说话方式和活跃度
-- 👀 **多模态理解** — 支持视觉模型识别图片和视频内容
-- 🖼️ **表情包系统** — 自动收集群内表情包，由智能体自行决策使用
+- 🖼️ **表情包系统** — 智能体按需查看并收藏群内表情，原图留存不失真
+- 🔎 **主动检索** — 需要回忆时自己查长期记忆与历史原文，不再每轮自动塞进上下文
 - ⏰ **时段策略** — 可配置不同时间段的发言活跃度，同时支持防话痨动态限流
 - 🔌 **MCP 扩展** — 支持通过 MCP 协议接入外部工具，无限扩展能力
 - 🖥️ **管理后台** — 统一管理群聊与好友、拉黑状态和群聊额外提示，按会话查看已记住的内容与群聊话题
@@ -57,7 +57,8 @@
 | Bun 1.3.14+ | 构建前端资源（仅从源码构建时需要） |
 | PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量 |
 | SnowLuma | OneBot 11 协议实现 |
-| 大语言模型 API | 兼容 OpenAI 格式，需支持工具调用 |
+| 大语言模型 API | 兼容 OpenAI Responses 格式（`/responses`），需支持工具调用 |
+| libwebp | 图片转码依赖，Linux 装 `libwebp-dev`，macOS `brew install webp`，Windows 用 MSYS2 的 mingw-w64 |
 
 ### Docker Compose
 
@@ -101,7 +102,11 @@ bun run build
 # 3. 生成 templ 视图代码
 go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate ./internal/web/views
 
-# 4. 编译
+# 4. 安装图片转码依赖
+#   Debian/Ubuntu: sudo apt-get install -y libwebp-dev
+#   macOS:         brew install webp pkgconf
+
+# 5. 编译
 go build -o mumu-bot .
 ```
 
@@ -116,10 +121,9 @@ cp config/mcp.example.json config/mcp.json
 
 # 2. 编辑配置（填入模型、数据库、OneBot 等信息）
 # 也可通过环境变量配置敏感信息：
-#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - 高档模型完整端点
-#   MUMU_MODEL_LOW_BASE_URL / API_KEY / MODEL  - 轻量模型完整端点
+#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - 高档模型完整端点（需支持 /responses）
+#   MUMU_MODEL_LOW_BASE_URL / API_KEY / MODEL  - 轻量模型完整端点（需支持 /responses）
 #   MUMU_EMBEDDING_BASE_URL / API_KEY / MODEL  - Embedding 模型完整端点
-#   MUMU_VISION_BASE_URL / API_KEY / MODEL     - 视觉模型完整端点
 #   MUMU_ONEBOT_TOKEN                   - OneBot 访问令牌
 #   MUMU_DATABASE_DSN                   - PostgreSQL 连接串
 

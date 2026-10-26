@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,18 +34,14 @@ type ToolContext struct {
 	SnapshotMessageID      int64
 	SpeakCallback          SpeakCallback       // 发言回调
 	SendStickerCallback    SendStickerCallback // 发送表情包回调
-	InspectImageCallback   InspectImageCallback
 	SendImageURLCallback   SendImageURLCallback
 	GetNewMessagesCallback GetNewMessagesCallback
+	Session                SessionContext
 	ThinkStartArrivalSeq   uint64
 	ObservedThroughSeq     uint64
 	ObservationIncomplete  bool
 	RecallCallback         func(messageID int64, arrivalSeq uint64)
 	actionSucceeded        bool
-
-	messageRefs map[int64]string
-	messageIDs  map[string]int64
-	nextMessage int
 
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
@@ -69,39 +64,6 @@ func (tc *ToolContext) ReadThroughSeq(thinkSucceeded bool) uint64 {
 		seq = max(seq, tc.ObservedThroughSeq)
 	}
 	return seq
-}
-
-func (tc *ToolContext) RegisterMessage(messageID int64) string {
-	if tc == nil || messageID == 0 {
-		return ""
-	}
-	if ref := tc.messageRefs[messageID]; ref != "" {
-		return ref
-	}
-	if tc.messageRefs == nil {
-		tc.messageRefs = make(map[int64]string)
-		tc.messageIDs = make(map[string]int64)
-	}
-	tc.nextMessage++
-	ref := "m" + strconv.Itoa(tc.nextMessage)
-	tc.messageRefs[messageID] = ref
-	tc.messageIDs[ref] = messageID
-	return ref
-}
-
-func (tc *ToolContext) MessageRef(messageID int64) string {
-	if tc == nil || messageID == 0 {
-		return ""
-	}
-	return tc.messageRefs[messageID]
-}
-
-func (tc *ToolContext) ResolveMessageRef(ref string) (int64, bool) {
-	if tc == nil {
-		return 0, false
-	}
-	messageID, ok := tc.messageIDs[strings.TrimSpace(ref)]
-	return messageID, ok
 }
 
 // ctxKey 上下文键类型
@@ -247,74 +209,6 @@ func NewGetGroupMemberDetailTool() (tool.InvokableTool, error) {
 
 // ==================== 获取短期记忆工具 ====================
 
-type GetRecentMessagesInput struct {
-	Limit  int `json:"limit,omitempty" jsonschema:"description=返回消息条数，默认40"`
-	Offset int `json:"offset,omitempty" jsonschema:"description=偏移量，用于跳过近期的记录。例如 offset=10 表示跳过最近的10条消息"`
-}
-
-type GetRecentMessagesOutput struct {
-	Success  bool                     `json:"success"`
-	Messages []map[string]interface{} `json:"messages,omitempty"`
-	Message  string                   `json:"message,omitempty"`
-}
-
-func getRecentMessagesFunc(ctx context.Context, input *GetRecentMessagesInput) (*GetRecentMessagesOutput, error) {
-	tc := GetToolContext(ctx)
-	if tc == nil || tc.MemoryMgr == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
-	}
-	if input == nil {
-		return nil, fmt.Errorf("读取参数不能为空")
-	}
-
-	limit := input.Limit
-	if limit <= 0 {
-		limit = 40
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	messages, err := tc.MemoryMgr.GetRecentMessagesScope(ctx, tc.ConversationKind, tc.TargetID, tc.SnapshotMessageID, limit, input.Offset)
-	if err != nil {
-		return nil, fmt.Errorf("读取最近消息失败：%w", err)
-	}
-	results := make([]map[string]interface{}, 0, len(messages))
-	for _, m := range messages {
-		messageRef := tc.RegisterMessage(m.OneBotMessageID)
-		replyRef := ""
-		if m.ReplyToMessageID != nil {
-			replyRef = tc.RegisterMessage(*m.ReplyToMessageID)
-		}
-		content := m.DisplayContent
-		if m.RecalledAt != nil {
-			content = memory.RecalledMessageDisplayContent
-		}
-		results = append(results, map[string]interface{}{
-			"message_ref":  messageRef,
-			"reply_ref":    replyRef,
-			"user_id":      m.UserID,
-			"nickname":     m.Nickname,
-			"content":      content,
-			"time":         m.MessageTime.Format("15:04:05"),
-			"is_mentioned": m.IsMentioned,
-		})
-	}
-
-	return &GetRecentMessagesOutput{
-		Success:  true,
-		Messages: results,
-	}, nil
-}
-
-func NewGetRecentMessagesTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
-		"getRecentMessages",
-		"获取最近的聊天记录。当你需要了解更早之前的对话时使用。",
-		getRecentMessagesFunc,
-	)
-}
-
 func NewGetNewMessagesTool() (tool.InvokableTool, error) {
 	return utils.InferTool("getNewMessages", "读取本轮思考开始后已经收到的新消息；不会等待。", func(ctx context.Context, _ *struct{}) (any, error) {
 		tc := GetToolContext(ctx)
@@ -438,7 +332,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 	results := make([]EssenceMessageSummary, 0, len(messages))
 	for _, m := range messages {
 		results = append(results, EssenceMessageSummary{
-			MessageRef:   tc.RegisterMessage(m.MessageID),
+			MessageRef:   tc.Session.RegisterMessage(m.MessageID),
 			SenderNick:   m.SenderNick,
 			OperatorNick: m.OperatorNick,
 			OperatorTime: time.Unix(m.OperatorTime, 0).Format("2006-01-02 15:04:05"),
@@ -485,7 +379,7 @@ func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInpu
 	if input == nil {
 		return nil, fmt.Errorf("表情回应查询参数不能为空")
 	}
-	messageID, ok := tc.ResolveMessageRef(input.MessageRef)
+	messageID, ok := tc.Session.ResolveMessageRef(input.MessageRef)
 	if !ok {
 		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
 	}

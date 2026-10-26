@@ -60,7 +60,6 @@ func (a *App) systemSections() []views.SystemSection {
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierHigh), cfg.ModelTiers.High.Model)
 	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierLow), cfg.ModelTiers.Low.Model)
 	modelFields = appendField(modelFields, "记忆检索", cfg.Embedding.Model)
-	modelFields = appendField(modelFields, "多模态理解", cfg.VisionLLM.Model)
 	if snapshot.MCPToolCount > 0 {
 		modelFields = append(modelFields, views.SystemField{Label: "扩展工具", Value: fmt.Sprintf("%d 个", snapshot.MCPToolCount)})
 	}
@@ -75,11 +74,11 @@ func (a *App) systemSections() []views.SystemSection {
 	if snapshot.SelfID > 0 {
 		runtimeFields = append(runtimeFields, views.SystemField{Label: "机器人 QQ", Value: fmt.Sprintf("%d", snapshot.SelfID)})
 	}
-	if cfg.Sticker.MaxSizeMB > 0 {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "表情包大小上限", Value: fmt.Sprintf("%d MB", cfg.Sticker.MaxSizeMB)})
+	if cfg.Media.MaxBytesMB > 0 {
+		runtimeFields = append(runtimeFields, views.SystemField{Label: "媒体大小上限", Value: fmt.Sprintf("%d MB", cfg.Media.MaxBytesMB)})
 	}
-	if cfg.Sticker.AutoSave {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "表情包收集", Value: "自动保存"})
+	if cfg.ModelTiers.High.ContextWindow > 0 {
+		runtimeFields = append(runtimeFields, views.SystemField{Label: "上下文窗口", Value: fmt.Sprintf("%d token", cfg.ModelTiers.High.ContextWindow)})
 	}
 
 	sections := make([]views.SystemSection, 0, 4)

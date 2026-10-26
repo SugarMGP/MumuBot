@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 12
+const latestSchemaVersion = 13
 
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
@@ -107,6 +107,7 @@ func applyVersionedMigrations(db *gorm.DB, selfID int64, dimensions int) error {
 		{"conversation_targets_and_memory_model", func() error { return migrateV10(db) }},
 		{"learning_cooldown", func() error { return migrateV11(db) }},
 		{"drop_friend_requests", func() error { return migrateV12(db) }},
+		{"message_media_refs", func() error { return migrateV13(db) }},
 	}
 	if len(migrations) != latestSchemaVersion {
 		return fmt.Errorf("程序迁移定义不完整：声明 v%d，实际 %d 个版本", latestSchemaVersion, len(migrations))

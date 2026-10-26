@@ -26,10 +26,10 @@ type Config struct {
 	Learning   LearningConfig   `mapstructure:"learning"` // 学习系统配置
 	ModelTiers ModelTiersConfig `mapstructure:"model_tiers"`
 	Embedding  EmbeddingConfig  `mapstructure:"embedding"`
-	VisionLLM  VisionLLMConfig  `mapstructure:"vision_llm"`
 	Database   DatabaseConfig   `mapstructure:"database"`
 	Memory     MemoryConfig     `mapstructure:"memory"`
 	Sticker    StickerConfig    `mapstructure:"sticker"` // 表情包配置
+	Media      MediaConfig      `mapstructure:"media"`   // 聊天媒体缓存配置
 	Server     ServerConfig     `mapstructure:"server"`
 	Web        WebConfig        `mapstructure:"web"`
 	Debug      DebugConfig      `mapstructure:"debug"` // 调试配置
@@ -59,12 +59,12 @@ type OneBotConfig struct {
 
 // AgentConfig Agent决策配置
 type AgentConfig struct {
-	ThinkTimeoutSeconds int `mapstructure:"think_timeout_seconds"` // 主 Agent 单轮超时（秒）
-	ThinkInterval       int `mapstructure:"think_interval"`        // 决策间隔（秒）
-	ThinkDebounceMS     int `mapstructure:"think_debounce_ms"`     // 思考聚合窗口（毫秒）
-	MessageBufferSize   int `mapstructure:"message_buffer_size"`   // 消息缓冲区大小
-	MaxStep             int `mapstructure:"max_step"`              // ReAct 最大步数
-	MaxCoroutine        int `mapstructure:"max_coroutine"`         // 最大并发思考进程数（0表示不限制）
+	ThinkTimeoutSeconds int     `mapstructure:"think_timeout_seconds"` // 主 Agent 单轮超时（秒）
+	ThinkInterval       int     `mapstructure:"think_interval"`        // 决策间隔（秒）
+	ThinkDebounceMS     int     `mapstructure:"think_debounce_ms"`     // 思考聚合窗口（毫秒）
+	ContextBudgetRatio  float64 `mapstructure:"context_budget_ratio"`  // 模型输入预算占上下文窗口的比例
+	MaxStep             int     `mapstructure:"max_step"`              // ReAct 最大步数
+	MaxCoroutine        int     `mapstructure:"max_coroutine"`         // 最大并发思考进程数（0表示不限制）
 }
 
 // ChatConfig 聊天行为配置
@@ -102,12 +102,21 @@ type LearningConfig struct {
 	MaxWaitMinutes   int `mapstructure:"max_wait_minutes"`
 }
 
+// MediaConfig 聊天媒体缓存配置，普通图片转 webp、表情包保留原件
+type MediaConfig struct {
+	StoragePath  string `mapstructure:"storage_path"`  // 媒体缓存目录
+	MaxBytesMB   int    `mapstructure:"max_bytes_mb"`  // 单个媒体最大体积（MB）
+	ImageQuality int    `mapstructure:"image_quality"` // webp 有损质量（1-100）
+	NarrowEdge   int    `mapstructure:"narrow_edge"`   // 普通图片窄边上限（像素）
+}
+
 // ModelConfig 对话模型配置
 type ModelConfig struct {
-	APIKey      string                 `mapstructure:"api_key"`
-	BaseURL     string                 `mapstructure:"base_url"`
-	Model       string                 `mapstructure:"model"`
-	ExtraFields map[string]interface{} `mapstructure:"extra_fields"` // 额外参数
+	APIKey        string                 `mapstructure:"api_key"`
+	BaseURL       string                 `mapstructure:"base_url"`
+	Model         string                 `mapstructure:"model"`
+	ContextWindow int                    `mapstructure:"context_window"` // 模型上下文窗口，仅高档必填
+	ExtraFields   map[string]interface{} `mapstructure:"extra_fields"`   // 额外参数
 }
 
 // ModelTiersConfig 高 / 低两档模型配置
@@ -122,14 +131,6 @@ type EmbeddingConfig struct {
 	BaseURL    string `mapstructure:"base_url"`
 	Model      string `mapstructure:"model"`
 	Dimensions int    `mapstructure:"dimensions"`
-}
-
-// VisionLLMConfig 多模态视觉模型配置
-type VisionLLMConfig struct {
-	APIKey      string                 `mapstructure:"api_key"`
-	BaseURL     string                 `mapstructure:"base_url"`
-	Model       string                 `mapstructure:"model"`
-	ExtraFields map[string]interface{} `mapstructure:"extra_fields"` // 额外参数
 }
 
 // MemoryConfig 记忆系统配置
@@ -150,9 +151,7 @@ type MessageLogCleanupConfig struct {
 
 // StickerConfig 表情包配置
 type StickerConfig struct {
-	AutoSave    bool   `mapstructure:"auto_save"`    // 是否自动保存收到的表情包，默认 true
 	StoragePath string `mapstructure:"storage_path"` // 表情包存储目录，默认 "./stickers"
-	MaxSizeMB   int    `mapstructure:"max_size_mb"`  // 单个文件最大大小(MB)，默认 2
 }
 
 // ServerConfig HTTP服务配置
@@ -203,7 +202,6 @@ func Load(path string) (*Config, error) {
 		overrideModelEndpoint("MUMU_MODEL_HIGH", &loaded.ModelTiers.High.APIKey, &loaded.ModelTiers.High.BaseURL, &loaded.ModelTiers.High.Model)
 		overrideModelEndpoint("MUMU_MODEL_LOW", &loaded.ModelTiers.Low.APIKey, &loaded.ModelTiers.Low.BaseURL, &loaded.ModelTiers.Low.Model)
 		overrideModelEndpoint("MUMU_EMBEDDING", &loaded.Embedding.APIKey, &loaded.Embedding.BaseURL, &loaded.Embedding.Model)
-		overrideModelEndpoint("MUMU_VISION", &loaded.VisionLLM.APIKey, &loaded.VisionLLM.BaseURL, &loaded.VisionLLM.Model)
 		if token := os.Getenv("MUMU_ONEBOT_TOKEN"); token != "" {
 			loaded.OneBot.AccessToken = token
 		}
@@ -251,6 +249,21 @@ func validate(c *Config) error {
 	if c.Learning.MaxStep < 1 {
 		return fmt.Errorf("learning.max_step 必须大于 0")
 	}
+	if strings.TrimSpace(c.Media.StoragePath) == "" {
+		c.Media.StoragePath = "./media"
+	}
+	if c.Media.MaxBytesMB <= 0 {
+		c.Media.MaxBytesMB = 10
+	}
+	if c.Media.ImageQuality <= 0 {
+		c.Media.ImageQuality = 75
+	}
+	if c.Media.ImageQuality > 100 {
+		return fmt.Errorf("media.image_quality 必须在 1 到 100 之间")
+	}
+	if c.Media.NarrowEdge <= 0 {
+		c.Media.NarrowEdge = 1080
+	}
 	if strings.TrimSpace(c.Sticker.StoragePath) == "" {
 		c.Sticker.StoragePath = "./stickers"
 	}
@@ -284,6 +297,15 @@ func validate(c *Config) error {
 	if c.Agent.MaxCoroutine < 0 {
 		return fmt.Errorf("agent.max_coroutine 不能小于 0")
 	}
+	if c.Agent.ContextBudgetRatio <= 0 {
+		c.Agent.ContextBudgetRatio = 0.6
+	}
+	if c.Agent.ContextBudgetRatio > 1 {
+		return fmt.Errorf("agent.context_budget_ratio 必须在 0 到 1 之间")
+	}
+	if c.ModelTiers.High.ContextWindow <= 0 {
+		return fmt.Errorf("model_tiers.high.context_window 必须大于 0；模型需要支持 OpenAI Responses 端点（/responses）")
+	}
 	if c.Chat.TalkFrequency < 0 || c.Chat.TalkFrequency > 1 {
 		return fmt.Errorf("chat.talk_frequency 必须在 0 到 1 之间")
 	}
@@ -297,9 +319,6 @@ func validate(c *Config) error {
 	}
 	if c.Embedding.Dimensions <= 0 {
 		return fmt.Errorf("embedding.dimensions 必须大于 0")
-	}
-	if strings.TrimSpace(c.VisionLLM.APIKey) == "" || strings.TrimSpace(c.VisionLLM.BaseURL) == "" || strings.TrimSpace(c.VisionLLM.Model) == "" {
-		return fmt.Errorf("vision_llm.api_key、vision_llm.base_url 和 vision_llm.model 不能为空")
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 必须在 1 到 65535 之间")

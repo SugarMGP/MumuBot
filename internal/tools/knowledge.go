@@ -128,7 +128,7 @@ func NewSearchMemoryTool() (tool.InvokableTool, error) {
 						valid = false
 						break
 					}
-					refs = append(refs, tc.RegisterMessage(msg.OneBotMessageID))
+					refs = append(refs, tc.Session.RegisterMessage(msg.OneBotMessageID))
 				}
 				if valid {
 					evidence[item.ID] = append(evidence[item.ID], refs)

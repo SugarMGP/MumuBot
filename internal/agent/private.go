@@ -6,31 +6,17 @@ import (
 	"time"
 
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
-func (a *Agent) onPrivateMessage(msg *onebot.ConversationMessage) {
-	a.privateCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg})
-}
-
-func (a *Agent) addPrivateBuffer(msg *onebot.ConversationMessage) {
-	a.privateMu.Lock()
-	defer a.privateMu.Unlock()
-	messages, trimmedSeq := appendMessageBuffer(a.privateBuffers[msg.TargetID], msg, messageBufferLimit())
-	a.privateBuffers[msg.TargetID] = messages
-	if trimmedSeq > 0 {
-		a.privateTrimmedSeq[msg.TargetID] = max(a.privateTrimmedSeq[msg.TargetID], trimmedSeq)
-	}
-	if msg.MessageID != 0 && msg.UserID == a.bot.GetSelfID() {
-		// 自身发言是会话边界：该序号及此前的消息不再留到下一轮
-		a.privateReadSeq[msg.TargetID] = max(a.privateReadSeq[msg.TargetID], msg.ArrivalSeq)
-	}
+func (a *Agent) onPrivateMessage(msg *onebot.ConversationMessage, mediaRefs []media.Ref) {
+	a.privateCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg, media: mediaRefs})
 }
 
 func (a *Agent) schedulePrivateThink(targetID int64, receivedAt time.Time) {
@@ -77,64 +63,54 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		return
 	}
 	cfg := config.Get()
-	selfID := a.bot.GetSelfID()
-	allMessages, readSeq, _ := a.getConversationSnapshot(memory.ConversationKindPrivate, targetID)
-	_, messages := splitMessageSnapshot(allMessages, readSeq, selfID)
-	if latestMessageWithID(messages) == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.ctx, time.Duration(cfg.Agent.ThinkTimeoutSeconds)*time.Second)
+	ctxWithTimeout, cancel := context.WithTimeout(a.ctx, time.Duration(cfg.Agent.ThinkTimeoutSeconds)*time.Second)
 	defer cancel()
-	mem := a.memory.WithContext(ctx)
-	snapshotMessageID := int64(0)
-	if latest := latestMessageWithID(allMessages); latest != nil {
-		snapshotMessageID = latest.MessageID
-	}
-	toolCtx := a.buildConversationToolContext(ctx, memory.ConversationKindPrivate, targetID, snapshotMessageID, allMessages)
-	tc := tools.GetToolContext(toolCtx)
-	chatContext := a.renderChatContext(allMessages, readSeq, tc)
-	if chatContext == "" || (collectTextContext(messages) == "" && !hasDisplayContext(messages)) {
-		// 本轮没有任何可读内容时不调用模型，只消费快照水位，避免后续调度反复空转
-		a.privateMu.Lock()
-		a.privateReadSeq[targetID] = max(a.privateReadSeq[targetID], tc.ThinkStartArrivalSeq)
-		a.privateMu.Unlock()
+
+	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
+	pending := session.PendingMessages()
+	if len(pending) == 0 {
 		return
 	}
-	var relatedMemories []memory.KnowledgeItem
-	var memoryRelations []memory.KnowledgeRelation
-	var snapshotUpper uint
-	if log, err := mem.GetMessageLogByScope(memory.ConversationKindPrivate, targetID, snapshotMessageID); err == nil {
-		snapshotUpper = log.ID
-		if query, err := a.memory.PrepareHybridQuery(toolCtx, collectTextFragments(messages)); err == nil {
-			relatedMemories, _, memoryRelations = a.buildConversationMemoryContext(toolCtx, memory.ConversationKindPrivate, targetID, allMessages, query, snapshotUpper)
+	ctx := a.buildConversationToolContext(ctxWithTimeout, memory.ConversationKindPrivate, targetID, session)
+	tc := tools.GetToolContext(ctx)
+	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
+
+	prefix := a.buildPrivateDynamicPrompt(ctx, targetID, session)
+	messages, err := session.Assemble(ctx, a.memory, sessionBudget(), prefix, pending)
+	if err != nil {
+		zap.L().Warn("装配私聊上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
+		return
+	}
+	produced, runErr := a.runAgent(ctx, a.privateAgent, messages)
+	if len(produced) > 0 {
+		session.AppendModel(time.Now(), produced...)
+	}
+	if runErr != nil {
+		// 发言成功但轮次失败时也要推进消费水位，避免同一批消息被重复回复
+		if seq := tc.ReadThroughSeq(false); seq > 0 {
+			session.MarkConsumed(seq)
+		}
+		zap.L().Warn("私聊思考失败", zap.Int64("target_id", targetID), zap.Error(runErr))
+		return
+	}
+	session.MarkConsumed(maxPendingSeq(pending))
+	session.MarkInjected(maxPendingSeq(pending))
+}
+
+// buildPrivateDynamicPrompt 生成本轮动态上下文，放在本轮消息前面
+func (a *Agent) buildPrivateDynamicPrompt(ctx context.Context, targetID int64, session *Session) string {
+	mem := a.memory.WithContext(ctx)
+	promptCtx := &persona.PrivatePromptContext{TargetID: targetID}
+	for _, user := range session.RecentUsers(1) {
+		if name := strings.TrimSpace(user.Nickname); name != "" {
+			promptCtx.FriendName = name
 		}
 	}
-	friendName := ""
-	for _, msg := range messages {
-		if nickname := strings.TrimSpace(msg.Nickname); nickname != "" {
-			friendName = nickname
-		}
-	}
-	privateCtx := &persona.PrivatePromptContext{
-		TargetID:           targetID,
-		FriendName:         friendName,
-		WorkingNote:        nil,
-		TopicSummary:       "",
-		RelatedMemories:    relatedMemories,
-		MemoryRelations:    memoryRelations,
-		SelfID:             selfID,
-		MemorySubjectNames: a.memorySubjectNames(ctx, relatedMemories),
-	}
-	if note, err := a.memory.GetWorkingNoteScope(ctx, memory.ConversationKindPrivate, targetID); err == nil {
-		privateCtx.WorkingNote = note
-	}
-	if snapshotUpper > 0 {
-		if topic, err := a.memory.GetPrivateTopicStateAt(toolCtx, targetID, snapshotUpper); err == nil && topic != nil && strings.TrimSpace(topic.SummaryJSON) != "" {
-			privateCtx.TopicSummary = topic.SummaryText()
-		}
+	if note, err := mem.GetWorkingNoteScope(ctx, memory.ConversationKindPrivate, targetID); err == nil {
+		promptCtx.WorkingNote = note
 	}
 	if mood, err := mem.GetMoodState(); err == nil {
-		privateCtx.MoodState = &persona.MoodInfo{Valence: mood.Valence, Energy: mood.Energy, Sociability: mood.Sociability}
+		promptCtx.MoodState = &persona.MoodInfo{Valence: mood.Valence, Energy: mood.Energy, Sociability: mood.Sociability}
 	}
 	if profile, err := mem.GetMemberProfile(targetID); err == nil && profile != nil {
 		info := &persona.FriendProfileInfo{
@@ -152,28 +128,9 @@ func (a *Agent) thinkPrivate(targetID int64) {
 				}
 			}
 		}
-		privateCtx.FriendProfile = info
+		promptCtx.FriendProfile = info
 	}
-	thinkPrompt := a.persona.GetPrivateThinkPrompt(privateCtx, chatContext)
-	systemPrompt := a.persona.GetPrivateSystemPrompt()
-	if cfg.Debug.ShowPrompt {
-		zap.L().Debug("私聊系统提示词", zap.String("prompt", systemPrompt))
-		zap.L().Debug("私聊思考提示词", zap.String("prompt", thinkPrompt))
-	}
-	result, err := a.privateReact.Generate(toolCtx, []*schema.Message{
-		schema.SystemMessage(systemPrompt),
-		schema.UserMessage(thinkPrompt),
-	}, chatOptions()...)
-	a.privateMu.Lock()
-	a.privateReadSeq[targetID] = max(a.privateReadSeq[targetID], tc.ReadThroughSeq(err == nil && result != nil))
-	a.privateMu.Unlock()
-	if err != nil || result == nil {
-		zap.L().Warn("私聊思考失败", zap.Int64("target_id", targetID), zap.Error(err), zap.Bool("empty_result", result == nil))
-		return
-	}
-	if cfg.Debug.ShowThinking && result.Content != "" {
-		zap.L().Debug("私聊 Agent 输出", zap.Int64("target_id", targetID), zap.String("content", result.Content))
-	}
+	return a.persona.GetPrivateDynamicBlock(promptCtx)
 }
 
 // stopPrivateTimers 停止私聊防抖定时器并禁止新的私聊思考，供停机排空使用

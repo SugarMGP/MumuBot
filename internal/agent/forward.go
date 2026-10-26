@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -51,33 +50,22 @@ func flattenForwardNodesAtDepth(nodes []message.ForwardNode, depth int) []messag
 	return flattened
 }
 
-func collectForwardMedia(nodes []message.ForwardNode, imageURLs, videoURLs *[]string) {
+// forwardMedia 收集转发节点里的图片，转发内容也要能查看
+func forwardMedia(nodes []message.ForwardNode) []pendingMedia {
+	var pending []pendingMedia
 	for _, node := range nodes {
 		for _, seg := range node.Message {
-			switch data := seg.Data.(type) {
-			case message.ImageData:
-				if strings.TrimSpace(data.URL) != "" {
-					*imageURLs = append(*imageURLs, data.URL)
-				}
-			case message.VideoData:
-				if strings.TrimSpace(data.URL) != "" {
-					*videoURLs = append(*videoURLs, data.URL)
-				}
+			data, ok := seg.Data.(message.ImageData)
+			if !ok {
+				continue
 			}
+			if strings.TrimSpace(data.URL) == "" {
+				continue
+			}
+			pending = append(pending, pendingMedia{URL: data.URL})
 		}
 	}
-}
-
-func (a *Agent) summarizeForwardMessages(ctx context.Context, content []message.ForwardNode) (string, error) {
-	if len(content) == 0 {
-		return "", nil
-	}
-	var imageURLs, videoURLs []string
-	flattened := flattenForwardNodes(content)
-	collectForwardMedia(flattened, &imageURLs, &videoURLs)
-	// 展平后的完整节点一次交给视觉模型，避免嵌套转发只按第一层理解
-	raw := formatForwardNodes(flattened)
-	return a.vision.SummarizeForward(ctx, raw, imageURLs, videoURLs)
+	return pending
 }
 
 func formatForwardNodes(nodes []message.ForwardNode) string {

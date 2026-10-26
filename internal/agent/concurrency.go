@@ -19,17 +19,16 @@ type GroupThinkConcurrency struct {
 	mu             sync.Mutex
 	wg             sync.WaitGroup
 
-	handler func(groupID int64, probabilityPassed bool) // 执行函数
+	handler func(groupID int64) // 执行函数
 }
 
 // GroupThinkTask 群聊思考任务
 type GroupThinkTask struct {
-	GroupID           int64
-	ProbabilityPassed bool
+	GroupID int64
 }
 
 // NewGroupThinkConcurrency 创建群聊思考并发管理器
-func NewGroupThinkConcurrency(parent context.Context, max int, h func(groupID int64, probabilityPassed bool)) *GroupThinkConcurrency {
+func NewGroupThinkConcurrency(parent context.Context, max int, h func(groupID int64)) *GroupThinkConcurrency {
 	ctx, cancel := context.WithCancel(parent)
 	return &GroupThinkConcurrency{
 		ctx:            ctx,
@@ -48,7 +47,7 @@ func (m *GroupThinkConcurrency) IsRunning(groupID int64) bool {
 }
 
 // Submit 提交任务
-func (m *GroupThinkConcurrency) Submit(groupID int64, probabilityPassed bool) {
+func (m *GroupThinkConcurrency) Submit(groupID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.ctx.Err(); err != nil {
@@ -60,14 +59,13 @@ func (m *GroupThinkConcurrency) Submit(groupID int64, probabilityPassed bool) {
 		return
 	}
 	if task := m.queued[groupID]; task != nil {
-		task.ProbabilityPassed = task.ProbabilityPassed || probabilityPassed
 		zap.L().Debug("任务已在队列中，跳过", zap.Int64("group_id", groupID))
 		return
 	}
 
 	// 如果设置了最大并发数，且当前运行数已满，则入队
 	if m.maxConcurrency > 0 && m.currentRunning >= m.maxConcurrency {
-		task := &GroupThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed}
+		task := &GroupThinkTask{GroupID: groupID}
 		m.queue = append(m.queue, task)
 		m.queued[groupID] = task
 		zap.L().Debug("并发已满，任务进入队列",
@@ -80,7 +78,7 @@ func (m *GroupThinkConcurrency) Submit(groupID int64, probabilityPassed bool) {
 	m.currentRunning++
 	m.running[groupID] = true
 	m.wg.Add(1)
-	go m.execute(&GroupThinkTask{GroupID: groupID, ProbabilityPassed: probabilityPassed})
+	go m.execute(&GroupThinkTask{GroupID: groupID})
 }
 
 // execute 执行任务
@@ -90,7 +88,7 @@ func (m *GroupThinkConcurrency) execute(task *GroupThinkTask) {
 	if err := m.ctx.Err(); err != nil {
 		return
 	}
-	m.handler(task.GroupID, task.ProbabilityPassed)
+	m.handler(task.GroupID)
 }
 
 func (m *GroupThinkConcurrency) finish(groupID int64) {

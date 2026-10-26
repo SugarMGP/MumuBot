@@ -15,7 +15,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -94,7 +93,7 @@ func (l *Learner) investigateGroup(groupID, selfID int64, after, upper uint, row
 		return err
 	}
 	initial += "\n仅供上下文，不重新分配：" + history
-	messages := []*schema.Message{schema.SystemMessage(groupMemoryPrompt), schema.UserMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s", groupID, selfID, after, upper, run.required, initial))}
+	messages := []*schema.AgenticMessage{schema.UserAgenticMessage(groupMemoryPrompt), schema.UserAgenticMessage(fmt.Sprintf("群 %d，机器人 %d，固定内部消息范围 (%d,%d]。本批需完整读取的原文 ID：%v\n原文：%s", groupID, selfID, after, upper, run.required, initial))}
 	// 话题上下文按优先级排序（本批归属 > 回复目标 > 近期活跃），超出预算时从末尾低优先级话题开始裁剪；
 	// 只裁剪提示词，run.topics 观察快照保持完整，CommitConversation 的校验不受影响
 	promptTopics := run.topics
@@ -113,7 +112,7 @@ func (l *Learner) investigateGroup(groupID, selfID int64, after, upper uint, row
 	if len(promptTopics.Topics) < len(run.topics.Topics) {
 		topicText += "（话题较多，仅展示与本批最相关的部分，其余可用 searchTopics 查询）"
 	}
-	messages = append(messages, schema.UserMessage("已有话题及原归属："+topicText))
+	messages = append(messages, schema.UserAgenticMessage("已有话题及原归属："+topicText))
 	agent, err := run.newAgent(ctx, l.model, cfg.Learning.MaxStep)
 	if err != nil {
 		return err
@@ -243,9 +242,6 @@ func (r *groupInvestigation) finishTool(ctx context.Context, input *groupFinishI
 	result, err := r.finish(ctx, input)
 	if err != nil {
 		return nil, err
-	}
-	if err := react.SetReturnDirectly(ctx); err != nil {
-		return nil, agenttools.NewTerminalToolError(err)
 	}
 	return result, nil
 }
