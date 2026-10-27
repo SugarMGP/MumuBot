@@ -50,7 +50,6 @@ type Agent struct {
 	groupCommits     *commitQueueSet[commitItem]
 	privateCommits   *commitQueueSet[commitItem]
 	sessions         *sessionStore
-	forwards         *forwardStore
 	media            *media.Manager
 	gates            *gateStore
 
@@ -111,7 +110,6 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		model:                chatModel,
 		bot:                  botClient,
 		sessions:             newSessionStore(),
-		forwards:             newForwardStore(),
 		gates:                newGateStore(),
 		pendingGroupThinks:   make(map[int64]*pendingThink),
 		pendingPrivateThinks: make(map[int64]*pendingThink),

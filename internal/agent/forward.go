@@ -4,16 +4,19 @@ import (
 	"fmt"
 	"strings"
 
+	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
 	"github.com/zjutjh/onebot-sdk/message"
 )
 
 // buildForwardNodes 把转发节点转成可翻阅的结构，嵌套转发单独存一份并给句柄
-func (a *Agent) buildForwardNodes(nodes []message.ForwardNode, depth int) []forwardNode {
-	result := make([]forwardNode, 0, len(nodes))
+func buildForwardNodes(nodes []message.ForwardNode, depth int, parent string) (string, int, []forwardDraft) {
+	handle := newForwardHandle()
+	draft := forwardDraft{Handle: handle, Parent: parent}
+	var drafts []forwardDraft
 	for _, node := range nodes {
-		item := forwardNode{Sender: node.Nickname}
+		item := memory.ForwardNode{Sender: node.Nickname}
 		var text strings.Builder
 		for _, seg := range node.Message {
 			data, ok := seg.Data.(message.ForwardData)
@@ -22,9 +25,13 @@ func (a *Agent) buildForwardNodes(nodes []message.ForwardNode, depth int) []forw
 				continue
 			}
 			if len(data.Content) > 0 && depth < onebot.MaxForwardDepth {
-				nested := a.buildForwardNodes(data.Content, depth+1)
-				item.Nested = a.forwards.add(nested)
-				text.WriteString(fmt.Sprintf("[合并转发 %s，共 %d 条]", item.Nested, len(nested)))
+				nestedHandle, nestedCount, nestedDrafts := buildForwardNodes(data.Content, depth+1, handle)
+				if nestedHandle == "" {
+					continue
+				}
+				drafts = append(drafts, nestedDrafts...)
+				item.Nested = append(item.Nested, nestedHandle)
+				text.WriteString(fmt.Sprintf("[合并转发 %s，共 %d 条]", nestedHandle, nestedCount))
 				continue
 			}
 			placeholder := "[嵌套合并转发未解析"
@@ -35,9 +42,9 @@ func (a *Agent) buildForwardNodes(nodes []message.ForwardNode, depth int) []forw
 			text.WriteString(placeholder)
 		}
 		item.Content = strings.TrimSpace(text.String())
-		result = append(result, item)
+		draft.Nodes = append(draft.Nodes, item)
 	}
-	return result
+	return handle, len(draft.Nodes), append([]forwardDraft{draft}, drafts...)
 }
 
 // renderForwardSegment 渲染转发里的单个消息段

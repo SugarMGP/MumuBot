@@ -25,6 +25,7 @@ func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 	ctx, cancel := a.persistenceContext()
 	defer cancel()
 	var mediaRefs []media.Ref
+	var forwards []forwardDraft
 	if msg.ParseFailed || msg.UserID <= 0 || !a.messageAllowed(ctx, msg) {
 		a.SkipConversationEvent(msg.ConversationKind, msg.TargetID, msg.ArrivalSeq)
 		return
@@ -38,19 +39,19 @@ func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 			return
 		}
 	} else {
-		mediaRefs = a.prepareMessageContent(ctx, msg)
+		mediaRefs, forwards = a.prepareMessageContent(ctx, msg)
 		selfID := a.bot.GetSelfID()
 		msg.IsMentioned = msg.IsMentioned || a.persona.IsMentioned(msg.Content) || (msg.Reply != nil && msg.Reply.SenderID == selfID)
 	}
 	if msg.ConversationKind == memory.ConversationKindPrivate {
-		a.onPrivateMessage(msg, mediaRefs)
+		a.onPrivateMessage(msg, mediaRefs, forwards)
 		return
 	}
-	a.onGroupMessage(msg, mediaRefs)
+	a.onGroupMessage(msg, mediaRefs, forwards)
 }
 
-func (a *Agent) onGroupMessage(msg *onebot.ConversationMessage, mediaRefs []media.Ref) {
-	a.groupCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg, media: mediaRefs})
+func (a *Agent) onGroupMessage(msg *onebot.ConversationMessage, mediaRefs []media.Ref, forwards []forwardDraft) {
+	a.groupCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg, media: mediaRefs, forwards: forwards})
 }
 
 // onRecall 撤回事件入口：带到达序号进入提交队列，与会话内消息保持顺序

@@ -13,8 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func (a *Agent) onPrivateMessage(msg *onebot.ConversationMessage, mediaRefs []media.Ref) {
-	a.privateCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg, media: mediaRefs})
+func (a *Agent) onPrivateMessage(msg *onebot.ConversationMessage, mediaRefs []media.Ref, forwards []forwardDraft) {
+	a.privateCommits.enqueue(msg.TargetID, msg.ArrivalSeq, commitItem{msg: msg, media: mediaRefs, forwards: forwards})
 }
 
 func (a *Agent) schedulePrivateThink(targetID int64, receivedAt time.Time) {

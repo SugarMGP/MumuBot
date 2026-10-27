@@ -56,7 +56,7 @@ func (a *Agent) messageAllowed(ctx context.Context, msg *onebot.ConversationMess
 }
 
 // persistConversationMessage 在队列消费时锁住会话许可，已成功发送的自身消息必须保留
-func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.ConversationMessage, mediaRefs []media.Ref) (*memory.MessageLog, bool, error) {
+func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.ConversationMessage, mediaRefs []media.Ref, forwards []forwardDraft) (*memory.MessageLog, bool, error) {
 	var log *memory.MessageLog
 	created := false
 	err := a.memory.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -72,7 +72,10 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 		if msg.ConversationKind == memory.ConversationKindGroup {
 			var err error
 			log, created, err = topic.NewManager(tx.Session(&gorm.Session{DisableNestedTransaction: true})).PersistMessage(ctx, msg, msg.IsMentioned, mediaRefs)
-			return err
+			if err != nil || !created {
+				return err
+			}
+			return saveMessageForwards(tx, log, forwards)
 		}
 		log = &memory.MessageLog{ConversationKind: memory.ConversationKindPrivate, OneBotMessageID: msg.MessageID, TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname, TextContent: msg.Content, DisplayContent: msg.FinalContent, IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs}
 		if msg.Reply != nil && msg.Reply.MessageID != 0 {
@@ -87,9 +90,26 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 		if !created {
 			return tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", msg.ConversationKind, msg.TargetID, msg.MessageID).First(log).Error
 		}
-		return nil
+		return saveMessageForwards(tx, log, forwards)
 	})
 	return log, created, err
+}
+
+// saveMessageForwards 把合并转发内容跟着消息一起落库，父级先于嵌套写入
+func saveMessageForwards(tx *gorm.DB, log *memory.MessageLog, drafts []forwardDraft) error {
+	if log == nil || len(drafts) == 0 {
+		return nil
+	}
+	rows := make([]memory.MessageForward, 0, len(drafts))
+	for _, draft := range drafts {
+		rows = append(rows, memory.MessageForward{
+			Handle:       draft.Handle,
+			MessageLogID: log.ID,
+			ParentHandle: draft.Parent,
+			Nodes:        draft.Nodes,
+		})
+	}
+	return memory.SaveMessageForwards(tx, rows)
 }
 
 // commitConversationMessage 群私消息、观察与重复事件共用持久化、撤回补偿及发布边界
@@ -104,7 +124,7 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	if replyErr != nil {
 		zap.L().Warn("核对引用撤回状态失败，省略引用原文", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(replyErr))
 	}
-	log, created, err := a.persistConversationMessage(ctx, msg, item.media)
+	log, created, err := a.persistConversationMessage(ctx, msg, item.media, item.forwards)
 	if errors.Is(err, memory.ErrConversationUnavailable) {
 		return
 	}
@@ -141,11 +161,12 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 // commitItem 提交队列项：消息、戳一戳、撤回统一按会话内到达序号重排提交；
 // skip 用于消费不会产生实际处理的序号（解析失败、无效事件、未启用会话），避免重排器死等
 type commitItem struct {
-	skip   bool
-	recall *recallCommit
-	retry  *recallCommit
-	msg    *onebot.ConversationMessage
-	media  []media.Ref
+	skip     bool
+	recall   *recallCommit
+	retry    *recallCommit
+	msg      *onebot.ConversationMessage
+	media    []media.Ref
+	forwards []forwardDraft
 }
 
 // commitOne 群聊与私聊提交队列共用的分发逻辑，会话隔离由各自队列实例保证

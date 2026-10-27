@@ -19,10 +19,10 @@ type ReadForwardInput struct {
 
 // ForwardMessageSummary 转发里一条消息的概览
 type ForwardMessageSummary struct {
-	Index   int    `json:"index"`
-	Sender  string `json:"sender,omitempty"`
-	Preview string `json:"preview"`
-	Nested  string `json:"nested_forward,omitempty"`
+	Index   int      `json:"index"`
+	Sender  string   `json:"sender,omitempty"`
+	Preview string   `json:"preview"`
+	Nested  []string `json:"nested_forward,omitempty"`
 }
 
 // ReadForwardOutput 读取结果
@@ -34,7 +34,7 @@ type ReadForwardOutput struct {
 	Index    int                     `json:"index,omitempty"`
 	Sender   string                  `json:"sender,omitempty"`
 	Content  string                  `json:"content,omitempty"`
-	Nested   string                  `json:"nested_forward,omitempty"`
+	Nested   []string                `json:"nested_forward,omitempty"`
 	Message  string                  `json:"message,omitempty"`
 }
 

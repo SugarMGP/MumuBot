@@ -27,11 +27,11 @@ type contentPiece struct {
 }
 
 // prepareMessageContent 群聊与私聊复用回复补全和展示处理，原文保持独立
-func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.ConversationMessage) []media.Ref {
+func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.ConversationMessage) ([]media.Ref, []forwardDraft) {
 	if err := a.resolveReplyInfo(ctx, msg); err != nil {
 		zap.L().Debug("解析回复消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
-	pieces, pending := a.parseMessageContent(ctx, msg)
+	pieces, pending, forwards := a.parseMessageContent(ctx, msg)
 	for _, name := range a.toolNames {
 		for index := range pieces {
 			pieces[index].text = strings.ReplaceAll(pieces[index].text, name, "\"危险指令，已屏蔽\"")
@@ -47,7 +47,7 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 		refs[index].Short = session.MediaShortHash(refs[index])
 	}
 	msg.FinalContent = renderContentPieces(pieces, refs)
-	return refs
+	return refs, forwards
 }
 
 // renderContentPieces 渲染展示正文，媒体占位带上会话内短哈希
@@ -100,10 +100,11 @@ func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.
 	return refs
 }
 
-// parseMessageContent 解析消息段，产出展示正文片段与待缓存的媒体
-func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) ([]contentPiece, []pendingMedia) {
+// parseMessageContent 解析消息段，产出展示正文片段、待缓存的媒体与待落库的转发
+func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) ([]contentPiece, []pendingMedia, []forwardDraft) {
 	var pieces []contentPiece
 	var pending []pendingMedia
+	var forwards []forwardDraft
 
 	var allForward []message.ForwardNode
 	forwardTotal := 0
@@ -179,9 +180,12 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			}
 			if !forwardWritten {
 				forwardWritten = true
-				nodes := a.buildForwardNodes(msg.ForwardContent[start:end], 1)
-				handle := a.forwards.add(nodes)
-				pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发 %s，共 %d 条]", handle, len(nodes)), mediaIdx: -1})
+				handle, count, drafts := buildForwardNodes(msg.ForwardContent[start:end], 1, "")
+				if handle == "" || count == 0 {
+					continue
+				}
+				forwards = append(forwards, drafts...)
+				pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发 %s，共 %d 条]", handle, count), mediaIdx: -1})
 				continue
 			}
 			pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发，共%d条]", end-start), mediaIdx: -1})
@@ -190,5 +194,5 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 	if forwardTotal > 0 {
 		msg.ForwardContent = nil
 	}
-	return pieces, pending
+	return pieces, pending, forwards
 }

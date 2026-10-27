@@ -64,6 +64,18 @@ type MessageLog struct {
 
 func (MessageLog) TableName() string { return "message_logs" }
 
+// MessageForward 一份合并转发的内容，句柄出现在消息正文里
+type MessageForward struct {
+	ID           uint         `gorm:"primaryKey" json:"id"`
+	Handle       string       `gorm:"column:handle;type:text;not null;uniqueIndex" json:"handle"`
+	MessageLogID uint         `gorm:"column:message_log_id;index;not null" json:"message_log_id"`
+	ParentHandle string       `gorm:"column:parent_handle;type:text;index" json:"parent_handle,omitempty"`
+	Nodes        ForwardNodes `gorm:"column:nodes;type:jsonb;not null" json:"nodes"`
+	CreatedAt    time.Time    `gorm:"column:created_at;not null" json:"created_at"`
+}
+
+func (MessageForward) TableName() string { return "message_forwards" }
+
 const RecalledMessageDisplayContent = "【消息已撤回】"
 
 type TopicThread struct {
