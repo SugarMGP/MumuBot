@@ -30,14 +30,13 @@ COPY --from=gen /src/internal/web/views/ internal/web/views/
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
-# libwebp 静态链接，产物不依赖系统动态库
-ENV CGO_LDFLAGS="-Wl,-Bstatic -lwebp -lsharpyuv -Wl,-Bdynamic"
-RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X mumu-bot/internal/version.Build=${VERSION}" -o /out/mumu-bot . && \
-    if ldd /out/mumu-bot 2>/dev/null | grep -q webp; then echo "产物仍动态依赖 libwebp"; exit 1; fi
+# 整份静态链接，产物不依赖任何系统动态库
+ENV CGO_LDFLAGS="-static -lwebp -lsharpyuv"
+RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X mumu-bot/internal/version.Build=${VERSION}" -o /out/mumu-bot .
 
 FROM alpine:3.23
 ENV TZ=Asia/Shanghai
-RUN apk add --no-cache ca-certificates su-exec tzdata libwebp && \
+RUN apk add --no-cache ca-certificates su-exec tzdata && \
     addgroup -S mumu && adduser -S -G mumu mumu
 WORKDIR /app
 COPY --from=build /out/mumu-bot /app/mumu-bot

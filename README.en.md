@@ -58,7 +58,7 @@ Core capabilities of this project:
 | PostgreSQL + pgvector | Store messages, memories, topics, group culture, and vectors |
 | SnowLuma | OneBot 11 protocol implementation |
 | LLM API | OpenAI Responses compatible (`/responses`), must support tool calling |
-| libwebp | Image transcoding dependency: `libwebp-dev` on Linux, `brew install webp` on macOS, mingw-w64 on Windows |
+| libwebp | Image transcoding dependency, needed to build and to run: `libwebp-dev` on Linux, `brew install webp` on macOS, mingw-w64 on Windows |
 
 ### Docker Compose
 

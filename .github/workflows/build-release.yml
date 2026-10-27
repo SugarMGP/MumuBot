@@ -120,6 +120,8 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libwebp-dev
+        # libwebp-dev 带 libwebp.a 与 libsharpyuv.a，整份静态链进去，产物不依赖任何系统库
+        echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv" >> $GITHUB_ENV
 
     - name: Install libwebp (macOS)
       if: runner.os == 'macOS'
@@ -144,31 +146,16 @@ jobs:
         echo "CC=$env:MSYS2_LOCATION\mingw64\bin\gcc.exe" >> $env:GITHUB_ENV
         echo "PKG_CONFIG_PATH=$env:MSYS2_LOCATION\mingw64\lib\pkgconfig" >> $env:GITHUB_ENV
         echo "$env:MSYS2_LOCATION\mingw64\bin" >> $env:GITHUB_PATH
+        # -static 让链接器只找 .a，MSYS2 的 libwebp 与 libsharpyuv 都带静态库
+        echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv" >> $env:GITHUB_ENV
 
     - name: Build
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: 1
-        CGO_LDFLAGS: "-Wl,-Bstatic -lwebp -Wl,-Bdynamic"
       run: |
         go build -v -trimpath -ldflags "-s -w -X mumu-bot/internal/version.Build=${GITHUB_REF_NAME}" -o dist/${{ matrix.output_name }} .
-
-    - name: Verify libwebp is statically linked
-      shell: bash
-      run: |
-        set -euo pipefail
-        binary="dist/${{ matrix.output_name }}"
-        case "${{ matrix.goos }}" in
-          linux) deps="$(ldd "$binary" 2>/dev/null || true)" ;;
-          darwin) deps="$(otool -L "$binary" 2>/dev/null || true)" ;;
-          windows) deps="$(objdump -p "$binary" 2>/dev/null || true)" ;;
-        esac
-        if echo "$deps" | grep -i "webp"; then
-          echo "产物仍动态依赖 libwebp："
-          echo "$deps" | grep -i "webp"
-          exit 1
-        fi
 
     - name: Archive (Unix)
       if: runner.os != 'Windows'

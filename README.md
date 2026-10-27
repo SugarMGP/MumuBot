@@ -58,7 +58,6 @@
 | PostgreSQL + pgvector | 存储消息、记忆、话题、群文化和向量 |
 | SnowLuma | OneBot 11 协议实现 |
 | 大语言模型 API | 兼容 OpenAI Responses 格式（`/responses`），需支持工具调用 |
-| libwebp | 图片转码依赖，Linux 装 `libwebp-dev`，macOS `brew install webp`，Windows 用 MSYS2 的 mingw-w64 |
 
 ### Docker Compose
 
@@ -109,6 +108,9 @@ go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate ./internal/web/views
 # 5. 编译
 go build -o mumu-bot .
 ```
+
+图片转码走 cgo 链接 libwebp。Linux 与 Windows 的发布包整份静态链接，下载后不需要再装任何运行库；
+macOS 的系统链接器不支持全静态，产物动态依赖 libwebp，运行前先 `brew install webp`。
 
 ### 配置与启动
 
