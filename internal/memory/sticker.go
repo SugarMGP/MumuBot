@@ -49,6 +49,22 @@ func (m *Manager) DeleteSticker(ctx context.Context, id uint) (*Sticker, error) 
 	return &sticker, nil
 }
 
+// CollectedStickerHashes 查询哪些表情哈希已经在收藏库
+func (m *Manager) CollectedStickerHashes(hashes []string) (map[string]bool, error) {
+	collected := map[string]bool{}
+	if len(hashes) == 0 {
+		return collected, nil
+	}
+	var rows []Sticker
+	if err := m.db.Model(&Sticker{}).Where("file_hash IN ?", hashes).Find(&rows).Error; err != nil {
+		return collected, err
+	}
+	for _, row := range rows {
+		collected[row.FileHash] = true
+	}
+	return collected, nil
+}
+
 // SearchStickers 搜索表情包
 func (m *Manager) SearchStickers(keyword string, limit int) ([]Sticker, error) {
 	var stickers []Sticker

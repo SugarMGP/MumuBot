@@ -2,14 +2,12 @@ package agent
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
-	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 
 	"go.uber.org/zap"
@@ -75,17 +73,12 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
-	prefix := a.buildPrivateDynamicPrompt(ctx, targetID, session)
-	messages, err := session.Assemble(ctx, a.memory, sessionBudget(), prefix, pending)
+	messages, err := session.Assemble(ctx, a.memory, sessionBudget())
 	if err != nil {
 		zap.L().Warn("装配私聊上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
 	}
-	produced, runErr := a.runAgent(ctx, a.privateAgent, messages)
-	if len(produced) > 0 {
-		session.AppendModel(time.Now(), produced...)
-	}
-	if runErr != nil {
+	if runErr := a.runAgent(ctx, a.privateAgent, messages); runErr != nil {
 		// 发言成功但轮次失败时也要推进消费水位，避免同一批消息被重复回复
 		if seq := tc.ReadThroughSeq(false); seq > 0 {
 			session.MarkConsumed(seq)
@@ -94,43 +87,6 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		return
 	}
 	session.MarkConsumed(maxPendingSeq(pending))
-	session.MarkInjected(maxPendingSeq(pending))
-}
-
-// buildPrivateDynamicPrompt 生成本轮动态上下文，放在本轮消息前面
-func (a *Agent) buildPrivateDynamicPrompt(ctx context.Context, targetID int64, session *Session) string {
-	mem := a.memory.WithContext(ctx)
-	promptCtx := &persona.PrivatePromptContext{TargetID: targetID}
-	for _, user := range session.RecentUsers(1) {
-		if name := strings.TrimSpace(user.Nickname); name != "" {
-			promptCtx.FriendName = name
-		}
-	}
-	if note, err := mem.GetWorkingNoteScope(ctx, memory.ConversationKindPrivate, targetID); err == nil {
-		promptCtx.WorkingNote = note
-	}
-	if mood, err := mem.GetMoodState(); err == nil {
-		promptCtx.MoodState = &persona.MoodInfo{Valence: mood.Valence, Energy: mood.Energy, Sociability: mood.Sociability}
-	}
-	if profile, err := mem.GetMemberProfile(targetID); err == nil && profile != nil {
-		info := &persona.FriendProfileInfo{
-			Nickname:      strings.TrimSpace(profile.Nickname),
-			Intimacy:      profile.Intimacy,
-			IntimacyLevel: memory.IntimacyLevel(profile.Intimacy),
-			IntimacyName:  memory.IntimacyLevelName(profile.Intimacy),
-			LastSeenAt:    profile.LastSeenAt,
-			MessageCount:  profile.MessageCount,
-		}
-		if names, err := mem.ListMemberNames(targetID); err == nil {
-			for _, name := range names {
-				if value := strings.TrimSpace(name.Value); value != "" {
-					info.Aliases = append(info.Aliases, persona.FriendAliasInfo{Value: value, GroupID: name.GroupID})
-				}
-			}
-		}
-		promptCtx.FriendProfile = info
-	}
-	return a.persona.GetPrivateDynamicBlock(promptCtx)
 }
 
 // stopPrivateTimers 停止私聊防抖定时器并禁止新的私聊思考，供停机排空使用

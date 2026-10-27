@@ -38,7 +38,7 @@ func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.
 		return nil
 	}
 	refs := make([]media.Ref, 0, len(pending))
-	for index, item := range pending {
+	for _, item := range pending {
 		if ctx.Err() != nil {
 			break
 		}
@@ -47,7 +47,6 @@ func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.
 			zap.L().Debug("缓存媒体失败", zap.String("url", item.URL), zap.Error(err))
 			continue
 		}
-		ref.Index = index
 		refs = append(refs, ref)
 	}
 	return refs

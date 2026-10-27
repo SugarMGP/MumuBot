@@ -45,48 +45,6 @@ func (a *Agent) buildGroupContext(groupID int64) string {
 	return strings.Join(parts, "\n")
 }
 
-// buildRecentPeopleContext 汇总最近在场的人与好感度
-func (a *Agent) buildRecentPeopleContext(ctx context.Context, session *Session, groupID int64) string {
-	users := session.RecentUsers(3)
-	if len(users) == 0 {
-		return ""
-	}
-	mem := a.memory.WithContext(ctx)
-	seenIDs := make(map[int64]struct{}, len(users))
-	lines := make([]string, 0, len(users))
-	for _, user := range users {
-		if user.SenderID == 0 || user.SenderID == a.bot.GetSelfID() {
-			continue
-		}
-		if _, exists := seenIDs[user.SenderID]; exists {
-			continue
-		}
-		seenIDs[user.SenderID] = struct{}{}
-		displayName := strings.TrimSpace(user.Nickname)
-		profile, err := mem.GetMemberProfile(user.SenderID)
-		if err != nil || profile == nil {
-			if displayName == "" {
-				displayName = fmt.Sprintf("%d", user.SenderID)
-			}
-			lines = append(lines, fmt.Sprintf("- %s：最近在场。", displayName))
-			continue
-		}
-		currentName := strings.TrimSpace(profile.Nickname)
-		if currentName == "" {
-			currentName = displayName
-		}
-		if currentName == "" {
-			currentName = fmt.Sprintf("%d", user.SenderID)
-		}
-		details := []string{fmt.Sprintf("好感度 %.2f（%d级·%s）", profile.Intimacy, memory.IntimacyLevel(profile.Intimacy), memory.IntimacyLevelName(profile.Intimacy))}
-		if profile.MessageCount > 0 {
-			details = append(details, fmt.Sprintf("历史发言 %d 次", profile.MessageCount))
-		}
-		lines = append(lines, fmt.Sprintf("- %s：%s。", currentName, strings.Join(details, "，")))
-	}
-	return strings.Join(lines, "\n")
-}
-
 func resolveMessageDisplayName(groupCard, nickname string) string {
 	if card := strings.TrimSpace(groupCard); card != "" {
 		return card
@@ -151,6 +109,12 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		GetNewMessagesCallback: func(callCtx context.Context) (any, error) {
 			return a.readNewMessages(callCtx, session)
 		},
+		GroupInfoCallback: func(callCtx context.Context) string {
+			if kind != memory.ConversationKindGroup {
+				return ""
+			}
+			return a.buildGroupContext(targetID)
+		},
 		RecallCallback: func(messageID int64, arrivalSeq uint64) {
 			a.onRecall(kind, targetID, messageID, arrivalSeq)
 		},
@@ -172,7 +136,7 @@ func (a *Agent) readNewMessages(ctx context.Context, session *Session) (any, err
 			"message_ref": user.Ref,
 			"sender_id":   user.SenderID,
 			"nickname":    user.Nickname,
-			"content":     user.Content,
+			"content":     user.Text,
 			"arrival_seq": user.ArrivalSeq,
 		})
 		observed = max(observed, user.ArrivalSeq)

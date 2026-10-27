@@ -4,7 +4,6 @@ package media
 import (
 	"context"
 	"database/sql/driver"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -24,12 +23,12 @@ import (
 
 // Ref 指向一份已缓存的媒体
 type Ref struct {
-	Hash    string `json:"hash"`
-	Path    string `json:"path"`
-	Mime    string `json:"mime"`
-	Bytes   int64  `json:"bytes"`
-	Sticker bool   `json:"sticker"`
-	Index   int    `json:"index"`
+	Hash      string `json:"hash"`
+	Path      string `json:"path"`
+	Mime      string `json:"mime"`
+	Bytes     int64  `json:"bytes"`
+	Sticker   bool   `json:"sticker"`
+	Collected bool   `json:"collected"` // 表情包是否已在收藏库
 }
 
 // Refs 有序媒体引用列表，落库为 jsonb
@@ -139,19 +138,6 @@ func (m *Manager) Ensure(ctx context.Context, src Source) (Ref, error) {
 	}
 	defer os.Remove(download.FilePath)
 	return m.storeImage(hash, download.FilePath)
-}
-
-// DataURI 把缓存文件读成 data URI，供模型直接读取
-func (m *Manager) DataURI(ref Ref) (string, error) {
-	data, err := os.ReadFile(ref.Path)
-	if err != nil {
-		return "", fmt.Errorf("读取媒体失败: %w", err)
-	}
-	mime := ref.Mime
-	if mime == "" {
-		mime = sniffMime(ref.Path)
-	}
-	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
 // cached 查缓存命中，普通图片落在 image 目录，表情包落在 sticker 目录

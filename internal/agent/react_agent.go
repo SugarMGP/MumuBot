@@ -211,6 +211,7 @@ func (a *Agent) initGroupTools() error {
 		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
 	})
 }
 
@@ -238,6 +239,7 @@ func (a *Agent) initPrivateTools() error {
 		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
 	})
 }
 
@@ -263,11 +265,11 @@ func (a *Agent) buildTools(dst *[]tool.BaseTool, builders []func() (tool.BaseToo
 
 // initAgents 构造群聊与私聊两个 Agent
 func (a *Agent) initAgents() error {
-	groupAgent, err := a.newChatAgent(a.groupTools)
+	groupAgent, err := a.newChatAgent(a.groupTools, a.groupGenModelInput)
 	if err != nil {
 		return err
 	}
-	privateAgent, err := a.newChatAgent(a.privateTools)
+	privateAgent, err := a.newChatAgent(a.privateTools, a.privateGenModelInput)
 	if err != nil {
 		return err
 	}
@@ -277,7 +279,7 @@ func (a *Agent) initAgents() error {
 }
 
 // newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立
-func (a *Agent) newChatAgent(chatTools []tool.BaseTool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
+func (a *Agent) newChatAgent(chatTools []tool.BaseTool, genModelInput adk.TypedGenModelInput[*schema.AgenticMessage]) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	cfg := config.Get()
 	maxStep := cfg.Agent.MaxStep
 	if maxStep <= 0 {
@@ -288,7 +290,8 @@ func (a *Agent) newChatAgent(chatTools []tool.BaseTool) (*adk.TypedChatModelAgen
 		return nil, err
 	}
 	return adk.NewTypedChatModelAgent[*schema.AgenticMessage](a.ctx, &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
-		Model: a.model,
+		Model:         a.model,
+		GenModelInput: genModelInput,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools:                chatTools,
@@ -306,6 +309,7 @@ func (a *Agent) newChatAgent(chatTools []tool.BaseTool) (*adk.TypedChatModelAgen
 		MaxIterations: maxStep,
 		Handlers: []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
 			&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
+			&sessionCollector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
 		},
 	})
 }
@@ -365,12 +369,10 @@ func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.Messag
 		if msg == nil {
 			continue
 		}
-		user := session.AppendUser(msg, log.ID, log.MediaRefs)
+		// 恢复的是已经进过上下文的历史，不算待处理消息
+		user := session.AppendHistory(msg, log.ID, log.MediaRefs)
 		user.ArrivalSeq = 0
 	}
-	// 重建的消息视为已消费，避免重启后重复触发
-	session.MarkConsumed(^uint64(0))
-	session.MarkInjected(^uint64(0))
 }
 
 // messageLogToSessionMessage 把消息库记录转成会话消息

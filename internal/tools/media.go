@@ -22,9 +22,10 @@ import (
 type SessionContext interface {
 	RegisterMessage(messageID int64) string
 	ResolveMessageRef(ref string) (int64, bool)
-	ResolveMedia(ref string, index int) (media.Ref, bool)
+	ResolveMediaByHash(hash string) (media.Ref, bool)
 	PendingAfter(seq uint64) []PendingMessage
 	MarkInjected(seq uint64)
+	CommitRound(messages []*schema.AgenticMessage)
 }
 
 // PendingMessage 待注入模型上下文的消息
@@ -34,6 +35,7 @@ type PendingMessage struct {
 	SenderID   int64
 	Nickname   string
 	ArrivalSeq uint64
+	Msg        *schema.AgenticMessage
 }
 
 // enhancedTool 返回多模态结果的工具
@@ -52,21 +54,18 @@ func (t *enhancedTool) InvokableRun(ctx context.Context, argument *schema.ToolAr
 
 // ViewImageInput 查看图片的参数
 type ViewImageInput struct {
-	MessageRef string `json:"message_ref" jsonschema:"description=消息编号，来自消息里的 [图片] 或 [表情] 提示"`
-	ImageIndex int    `json:"image_index,omitempty" jsonschema:"description=该消息里的第几张图片，从 1 开始；不填表示第一张"`
+	Hash string `json:"hash" jsonschema:"description=图片或表情的短哈希标识，取自消息里的方括号标记"`
 }
 
-// ViewImageOutput 查看图片的结果
+// ViewImageOutput 查看图片的结果，工具实际把图片本体交给模型
 type ViewImageOutput struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
-	Path    string `json:"path,omitempty"`
-	Mime    string `json:"mime,omitempty"`
 }
 
 // NewViewImageTool 返回可以查看会话内图片的工具
 func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
-	plain, err := utils.InferTool("viewImage", "查看本会话某条消息里的图片或表情内容。消息文本里出现 [图片] 或 [表情] 时调用，只在真的需要识别画面时调用。", viewImageFunc)
+	plain, err := utils.InferTool("viewImage", "查看一张图片或表情的内容。消息里的图片和表情都带短哈希标记，用那个标记调用，一次只看一张。", viewImageFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -79,11 +78,10 @@ func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
 
 // viewImageFunc 解析媒体引用
 func viewImageFunc(ctx context.Context, input *ViewImageInput) (*ViewImageOutput, error) {
-	item, err := resolveMedia(ctx, input)
-	if err != nil {
+	if _, err := resolveMedia(ctx, input); err != nil {
 		return nil, err
 	}
-	return &ViewImageOutput{Success: true, Message: "已取到图片内容", Path: item.Path, Mime: item.Mime}, nil
+	return &ViewImageOutput{Success: true, Message: "已取到图片内容"}, nil
 }
 
 // viewImageRun 读取媒体并作为图片返回给模型
@@ -108,7 +106,7 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 		mime = "image/jpeg"
 	}
 	parts := []schema.ToolOutputPart{
-		{Type: schema.ToolPartTypeText, Text: fmt.Sprintf("第 %d 张图片，%s，%d 字节", input.ImageIndex, mime, len(data))},
+		{Type: schema.ToolPartTypeText, Text: fmt.Sprintf("图片 %s，%d 字节", mime, len(data))},
 		{Type: schema.ToolPartTypeImage, Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{
 			Base64Data: &encoded,
 			MIMEType:   mime,
@@ -117,30 +115,25 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 	return &schema.ToolResult{Parts: parts}, nil
 }
 
-// resolveMedia 从会话里取出媒体
+// resolveMedia 从会话里按哈希取媒体
 func resolveMedia(ctx context.Context, input *ViewImageInput) (media.Ref, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil || tc.Session == nil {
 		return media.Ref{}, NewTerminalToolError(fmt.Errorf("媒体读取能力未初始化"))
 	}
-	if input == nil || strings.TrimSpace(input.MessageRef) == "" {
-		return media.Ref{}, fmt.Errorf("请提供 message_ref")
+	if input == nil || strings.TrimSpace(input.Hash) == "" {
+		return media.Ref{}, fmt.Errorf("请提供图片哈希标识")
 	}
-	index := input.ImageIndex - 1
-	if index < 0 {
-		index = 0
-	}
-	item, ok := tc.Session.ResolveMedia(input.MessageRef, index)
+	item, ok := tc.Session.ResolveMediaByHash(input.Hash)
 	if !ok {
-		return media.Ref{}, fmt.Errorf("消息 %s 里没有第 %d 张图片，可能已被清理", input.MessageRef, index+1)
+		return media.Ref{}, fmt.Errorf("没有找到标识为 %s 的图片，可能已被清理", input.Hash)
 	}
 	return item, nil
 }
 
 // SaveStickerInput 收藏表情包的参数
 type SaveStickerInput struct {
-	MessageRef  string `json:"message_ref" jsonschema:"description=消息编号，来自消息里的 [表情] 提示"`
-	ImageIndex  int    `json:"image_index,omitempty" jsonschema:"description=该消息里的第几张表情，从 1 开始；不填表示第一张"`
+	Hash        string `json:"hash" jsonschema:"description=表情的短哈希标识，取自消息里的方括号标记"`
 	Description string `json:"description" jsonschema:"description=表情含义的一句话备注"`
 }
 
@@ -152,28 +145,27 @@ type SaveStickerOutput struct {
 
 // NewSaveStickerTool 返回收藏表情包的工具，只接受消息里的表情
 func NewSaveStickerTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveSticker", "把本会话消息里的表情收藏进表情包库。只支持消息里标注为 [表情] 的图片，普通图片不能收藏。", saveStickerFunc)
+	return utils.InferTool("saveSticker", "把一条表情收藏进表情包库，只支持消息里标注为表情的条目，普通图片不能收藏。", saveStickerFunc)
 }
 
 // saveStickerFunc 收藏表情包
 func saveStickerFunc(ctx context.Context, input *SaveStickerInput) (*SaveStickerOutput, error) {
 	tc := GetToolContext(ctx)
-	if tc == nil || tc.Session == nil || tc.MemoryMgr == nil {
+	if tc == nil || tc.Session == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("表情包收藏能力未初始化"))
 	}
-	if input == nil || strings.TrimSpace(input.MessageRef) == "" {
-		return nil, fmt.Errorf("请提供 message_ref")
+	if input == nil || strings.TrimSpace(input.Hash) == "" {
+		return nil, fmt.Errorf("请提供表情哈希标识")
 	}
-	index := input.ImageIndex - 1
-	if index < 0 {
-		index = 0
-	}
-	item, ok := tc.Session.ResolveMedia(input.MessageRef, index)
+	item, ok := tc.Session.ResolveMediaByHash(input.Hash)
 	if !ok {
-		return nil, fmt.Errorf("消息 %s 里没有第 %d 个表情", input.MessageRef, index+1)
+		return nil, fmt.Errorf("没有找到标识为 %s 的表情", input.Hash)
 	}
 	if !item.Sticker {
-		return nil, fmt.Errorf("只能收藏表情，消息 %s 里第 %d 个是普通图片", input.MessageRef, index+1)
+		return nil, fmt.Errorf("只能收藏表情，标识 %s 是普通图片", input.Hash)
+	}
+	if tc.MemoryMgr == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("表情包收藏能力未初始化"))
 	}
 	cfg := config.Get()
 	stored, err := storeStickerFile(item, cfg.Sticker.StoragePath)

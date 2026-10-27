@@ -100,6 +100,7 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	}
 	ctx, cancel := a.persistenceContext()
 	defer cancel()
+	a.markCollectedStickers(ctx, item.media)
 	replyErr := a.refreshReplyRecall(ctx, msg)
 	if replyErr != nil {
 		zap.L().Warn("核对引用撤回状态失败，省略引用原文", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(replyErr))
@@ -126,7 +127,7 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	if replyErr == nil && msg.Reply != nil && msg.Reply.MessageID != 0 {
 		a.replyCache.Set(replyCacheKey(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID), *msg.Reply, ttlcache.DefaultTTL)
 	}
-	a.appendSessionMessage(msg, item.media, log)
+	a.appendSessionMessage(ctx, msg, item.media, log)
 	if msg.MessageID == 0 || msg.UserID == a.bot.GetSelfID() || a.stopping.Load() || a.ctx.Err() != nil {
 		return
 	}

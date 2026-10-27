@@ -8,7 +8,6 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
-	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 
 	"go.uber.org/zap"
@@ -150,17 +149,12 @@ func (a *Agent) thinkGroup(groupID int64) {
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
-	prefix := a.buildGroupDynamicPrompt(ctx, groupID, session)
-	messages, err := session.Assemble(ctx, a.memory, sessionBudget(), prefix, pending)
+	messages, err := session.Assemble(ctx, a.memory, sessionBudget())
 	if err != nil {
 		zap.L().Warn("装配群聊上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
-	produced, runErr := a.runAgent(ctx, a.groupAgent, messages)
-	if len(produced) > 0 {
-		session.AppendModel(time.Now(), produced...)
-	}
-	if runErr != nil {
+	if runErr := a.runAgent(ctx, a.groupAgent, messages); runErr != nil {
 		// 发言成功但轮次失败时也要推进消费水位，避免同一批消息被重复回复
 		if seq := tc.ReadThroughSeq(false); seq > 0 {
 			session.MarkConsumed(seq)
@@ -173,22 +167,6 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 	session.MarkConsumed(maxPendingSeq(pending))
-	session.MarkInjected(maxPendingSeq(pending))
-}
-
-// buildGroupDynamicPrompt 生成本轮动态上下文，放��本轮消息前面
-func (a *Agent) buildGroupDynamicPrompt(ctx context.Context, groupID int64, session *Session) string {
-	promptCtx := &persona.GroupPromptContext{GroupInfo: a.buildGroupContext(groupID)}
-	mem := a.memory.WithContext(ctx)
-	if note, err := mem.GetWorkingNote(ctx, groupID); err == nil {
-		promptCtx.WorkingNote = note
-	} else {
-		zap.L().Warn("读取工作便签失败", zap.Int64("group_id", groupID), zap.Error(err))
-	}
-	if mood, err := mem.GetMoodState(); err == nil {
-		promptCtx.MoodState = &persona.MoodInfo{Valence: mood.Valence, Energy: mood.Energy, Sociability: mood.Sociability}
-	}
-	return a.persona.GetGroupDynamicBlock(promptCtx, a.buildRecentPeopleContext(ctx, session, groupID))
 }
 
 func (a *Agent) conversationAllowed(kind string, targetID int64) bool {
