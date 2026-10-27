@@ -28,8 +28,8 @@ type Ref struct {
 	Mime      string `json:"mime"`
 	Bytes     int64  `json:"bytes"`
 	Sticker   bool   `json:"sticker"`
-	Collected bool   `json:"collected"` // 表情包是否已在收藏库
-	Index     int    `json:"index"`     // 在消息自身图片里的序号，合并转发里的图片为 -1
+	Collected bool   `json:"collected"`       // 表情包是否已在收藏库
+	Short     string `json:"short,omitempty"` // 会话内短哈希，落库后重启仍能对上
 }
 
 // Refs 有序媒体引用列表，落库为 jsonb

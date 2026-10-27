@@ -156,6 +156,9 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		s.users = map[*schema.AgenticMessage]*sessionUser{}
 	}
 	s.users[user.Msg] = user
+	for _, ref := range mediaRefs {
+		s.media.register(ref)
+	}
 	return user
 }
 
@@ -178,52 +181,20 @@ func (s *Session) renderUserText(msg *onebot.ConversationMessage, ref string, me
 			b.WriteString(fmt.Sprintf("[回复 %s(%d)] ", name, msg.Reply.SenderID))
 		}
 	}
-	// 展示正文带 @、QQ 表情、语音等非文本段，媒体占位再换成带短哈希的写法
+	// 展示正文带 @、QQ 表情、语音等非文本段，媒体占位在装配层就已经带上短哈希
 	body := strings.TrimSpace(msg.FinalContent)
 	if body == "" {
 		body = strings.TrimSpace(msg.Content)
 	}
-	b.WriteString(s.renderMediaPlaceholders(body, mediaRefs))
+	b.WriteString(body)
 	return strings.TrimSpace(b.String())
 }
 
-// renderMediaPlaceholders 把展示正文里的通用媒体占位换成带短哈希的占位
-func (s *Session) renderMediaPlaceholders(body string, mediaRefs []media.Ref) string {
-	own := make([]media.Ref, 0, len(mediaRefs))
-	for _, ref := range mediaRefs {
-		if ref.Index >= 0 {
-			own = append(own, ref)
-		}
-	}
-	sort.Slice(own, func(i, j int) bool { return own[i].Index < own[j].Index })
-	var b strings.Builder
-	rest := body
-	for _, ref := range own {
-		marker := " [图片]"
-		if ref.Sticker {
-			marker = " [表情包]"
-		}
-		index := strings.Index(rest, marker)
-		if index < 0 {
-			continue
-		}
-		b.WriteString(rest[:index])
-		short := s.media.shortHash(ref)
-		switch {
-		case short == "":
-			// 缓存失败时保留原文字占位，不伪造图片
-			b.WriteString(marker)
-		case ref.Sticker && ref.Collected:
-			b.WriteString(" [表情包:" + short + "(已收藏)]")
-		case ref.Sticker:
-			b.WriteString(" [表情包:" + short + "]")
-		default:
-			b.WriteString(" [图片:" + short + "]")
-		}
-		rest = rest[index+len(marker):]
-	}
-	b.WriteString(rest)
-	return b.String()
+// MediaShortHash 登记一份媒体并返回会话内短哈希，装配层用它渲染媒体占位
+func (s *Session) MediaShortHash(ref media.Ref) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.media.register(ref)
 }
 
 // takeNotesLocked 取出待附加的撤回说明，调用方需已持锁

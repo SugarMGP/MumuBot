@@ -50,6 +50,7 @@ type Agent struct {
 	groupCommits     *commitQueueSet[commitItem]
 	privateCommits   *commitQueueSet[commitItem]
 	sessions         *sessionStore
+	forwards         *forwardStore
 	media            *media.Manager
 	gates            *gateStore
 
@@ -110,6 +111,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		model:                chatModel,
 		bot:                  botClient,
 		sessions:             newSessionStore(),
+		forwards:             newForwardStore(),
 		gates:                newGateStore(),
 		pendingGroupThinks:   make(map[int64]*pendingThink),
 		pendingPrivateThinks: make(map[int64]*pendingThink),
@@ -213,6 +215,7 @@ func (a *Agent) initGroupTools() error {
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchFacesTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadForwardTool() },
 	})
 }
 
@@ -242,6 +245,7 @@ func (a *Agent) initPrivateTools() error {
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchFacesTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadForwardTool() },
 	})
 }
 

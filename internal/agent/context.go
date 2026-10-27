@@ -109,6 +109,9 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		GetNewMessagesCallback: func(callCtx context.Context) (any, error) {
 			return a.readNewMessages(callCtx, session)
 		},
+		ReadForwardCallback: func(callCtx context.Context, id string, index int) (any, error) {
+			return a.readForward(id, index)
+		},
 		GroupInfoCallback: func(callCtx context.Context) string {
 			if kind != memory.ConversationKindGroup {
 				return ""
@@ -120,6 +123,47 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		},
 	}
 	return tools.WithToolContext(ctx, tc)
+}
+
+// readForward 读取合并转发内容，index 为负表示先看这份转发的概览
+func (a *Agent) readForward(id string, index int) (any, error) {
+	entry, ok := a.forwards.get(id)
+	if !ok {
+		return nil, fmt.Errorf("合并转发 %s 不存在或已过期", id)
+	}
+	if index < 0 {
+		summaries := make([]tools.ForwardMessageSummary, 0, len(entry.Nodes))
+		for position, node := range entry.Nodes {
+			summaries = append(summaries, tools.ForwardMessageSummary{
+				Index:   position,
+				Sender:  node.Sender,
+				Preview: forwardPreview(node.Content),
+				Nested:  node.Nested,
+			})
+		}
+		return &tools.ReadForwardOutput{Success: true, ID: id, Count: len(entry.Nodes), Messages: summaries}, nil
+	}
+	if index >= len(entry.Nodes) {
+		return nil, fmt.Errorf("合并转发 %s 一共 %d 条消息", id, len(entry.Nodes))
+	}
+	node := entry.Nodes[index]
+	return &tools.ReadForwardOutput{
+		Success: true,
+		ID:      id,
+		Index:   index,
+		Sender:  node.Sender,
+		Content: node.Content,
+		Nested:  node.Nested,
+	}, nil
+}
+
+// forwardPreview 截取转发消息的预览
+func forwardPreview(content string) string {
+	runes := []rune(content)
+	if len(runes) > 40 {
+		return string(runes[:40]) + "…"
+	}
+	return content
 }
 
 // readNewMessages 读取本轮思考开始后到达的新消息

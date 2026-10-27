@@ -12,7 +12,7 @@ const mediaShortHashLen = 8
 // mediaIndex 会话内的媒体索引：同一内容复用同一个短哈希，不同内容撞前缀时逐位加长
 type mediaIndex struct {
 	byShort map[string]media.Ref
-	byFull  map[string]string
+	byFull  map[string]string // 内容 md5 → 短哈希
 }
 
 // newMediaIndex 创建空索引
@@ -20,8 +20,8 @@ func newMediaIndex() *mediaIndex {
 	return &mediaIndex{byShort: map[string]media.Ref{}, byFull: map[string]string{}}
 }
 
-// shortHash 登记一份媒体并返回会话内短哈希，调用方需已持会话锁
-func (idx *mediaIndex) shortHash(ref media.Ref) string {
+// register 登记一份媒体并返回它的短哈希，已经定好的短哈希优先沿用
+func (idx *mediaIndex) register(ref media.Ref) string {
 	if ref.Hash == "" {
 		return ""
 	}
@@ -30,16 +30,24 @@ func (idx *mediaIndex) shortHash(ref media.Ref) string {
 		idx.byShort[short] = ref
 		return short
 	}
-	for length := mediaShortHashLen; length <= len(ref.Hash); length++ {
-		candidate := ref.Hash[:length]
+	if ref.Short == "" {
+		ref.Short = idx.assign(ref.Hash)
+	}
+	idx.byShort[ref.Short] = ref
+	idx.byFull[ref.Hash] = ref.Short
+	return ref.Short
+}
+
+// assign 为内容分配短哈希，撞前缀时逐位加长
+func (idx *mediaIndex) assign(hash string) string {
+	for length := mediaShortHashLen; length <= len(hash); length++ {
+		candidate := hash[:length]
 		if _, taken := idx.byShort[candidate]; taken {
 			continue
 		}
-		idx.byShort[candidate] = ref
-		idx.byFull[ref.Hash] = candidate
 		return candidate
 	}
-	return ""
+	return hash
 }
 
 // resolve 按会话内短哈希取媒体

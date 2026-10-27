@@ -36,6 +36,7 @@ type ToolContext struct {
 	SendStickerCallback    SendStickerCallback // 发送表情包回调
 	SendImageURLCallback   SendImageURLCallback
 	GetNewMessagesCallback GetNewMessagesCallback
+	ReadForwardCallback    func(ctx context.Context, id string, index int) (any, error)
 	GroupInfoCallback      func(ctx context.Context) string
 	Session                SessionContext
 	ThinkStartArrivalSeq   uint64

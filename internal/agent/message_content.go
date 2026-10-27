@@ -17,7 +17,13 @@ type pendingMedia struct {
 	URL     string
 	File    string
 	Sticker bool
-	Index   int // 在消息自身图片里的序号，合并转发里的图片为 -1
+}
+
+// contentPiece 展示正文的一段：普通文本或媒体占位
+type contentPiece struct {
+	text     string
+	mediaIdx int    // >=0 表示这是待缓存媒体里的第几份，-1 表示纯文本
+	fallback string // 媒体缓存失败时保留的文字占位
 }
 
 // prepareMessageContent 群聊与私聊复用回复补全和展示处理，原文保持独立
@@ -25,12 +31,53 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 	if err := a.resolveReplyInfo(ctx, msg); err != nil {
 		zap.L().Debug("解析回复消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
-	content, pending := a.parseMessageContent(ctx, msg)
+	pieces, pending := a.parseMessageContent(ctx, msg)
 	for _, name := range a.toolNames {
-		content = strings.ReplaceAll(content, name, "\"危险指令，已屏蔽\"")
+		for index := range pieces {
+			pieces[index].text = strings.ReplaceAll(pieces[index].text, name, "\"危险指令，已屏蔽\"")
+		}
 	}
-	msg.FinalContent = content
-	return a.cacheMedia(ctx, pending)
+	refs := a.cacheMedia(ctx, pending)
+	a.markCollectedStickers(ctx, refs)
+	session := a.sessions.get(msg.ConversationKind, msg.TargetID)
+	for index := range refs {
+		if refs[index].Hash == "" {
+			continue
+		}
+		refs[index].Short = session.MediaShortHash(refs[index])
+	}
+	msg.FinalContent = renderContentPieces(pieces, refs)
+	return refs
+}
+
+// renderContentPieces 渲染展示正文，媒体占位带上会话内短哈希
+func renderContentPieces(pieces []contentPiece, refs []media.Ref) string {
+	var b strings.Builder
+	for _, piece := range pieces {
+		if piece.mediaIdx < 0 {
+			b.WriteString(piece.text)
+			continue
+		}
+		if piece.mediaIdx >= len(refs) {
+			continue
+		}
+		ref := refs[piece.mediaIdx]
+		if ref.Hash == "" || ref.Short == "" {
+			// 缓存失败时保留原文字占位，不伪造图片
+			b.WriteString(piece.fallback)
+			continue
+		}
+		if ref.Sticker {
+			if ref.Collected {
+				b.WriteString(" [表情包:" + ref.Short + "(已收藏)]")
+				continue
+			}
+			b.WriteString(" [表情包:" + ref.Short + "]")
+			continue
+		}
+		b.WriteString(" [图片:" + ref.Short + "]")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // cacheMedia 下载并缓存消息里的媒体，失败的位置留空以便和展示占位对齐
@@ -48,15 +95,14 @@ func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.
 			zap.L().Debug("缓存媒体失败", zap.String("url", item.URL), zap.Error(err))
 			continue
 		}
-		ref.Index = item.Index
 		refs[index] = ref
 	}
 	return refs
 }
 
-// parseMessageContent 解析消息段，产出展示文本与待缓存的媒体
-func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) (string, []pendingMedia) {
-	var content strings.Builder
+// parseMessageContent 解析消息段，产出展示正文片段与待缓存的媒体
+func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.ConversationMessage) ([]contentPiece, []pendingMedia) {
+	var pieces []contentPiece
 	var pending []pendingMedia
 
 	var allForward []message.ForwardNode
@@ -77,13 +123,14 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 	for _, part := range msg.MessageParts {
 		switch part.Kind {
 		case "text":
-			content.WriteString(part.Text)
+			pieces = append(pieces, contentPiece{text: part.Text, mediaIdx: -1})
 		case "at":
 			if part.AtUserID == onebot.AtAllUserID {
-				content.WriteString("@全体成员")
-			} else if part.AtUserID > 0 {
-				content.WriteByte('@')
-				content.WriteString(a.resolveMentionDisplayName(ctx, msg, part.AtUserID))
+				pieces = append(pieces, contentPiece{text: "@全体成员", mediaIdx: -1})
+				continue
+			}
+			if part.AtUserID > 0 {
+				pieces = append(pieces, contentPiece{text: "@" + a.resolveMentionDisplayName(ctx, msg, part.AtUserID), mediaIdx: -1})
 			}
 		case "face":
 			if part.Index < 0 || part.Index >= len(msg.Faces) {
@@ -92,11 +139,11 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			face := msg.Faces[part.Index]
 			switch {
 			case face.Name != "":
-				content.WriteString(fmt.Sprintf(" %s%s%s", onebot.QFaceMarker, face.Name, onebot.QFaceMarkerEnd))
+				pieces = append(pieces, contentPiece{text: fmt.Sprintf(" %s%s%s", onebot.QFaceMarker, face.Name, onebot.QFaceMarkerEnd), mediaIdx: -1})
 			case face.ID > 0:
-				content.WriteString(fmt.Sprintf(" %s%d%s", onebot.QFaceMarker, face.ID, onebot.QFaceMarkerEnd))
+				pieces = append(pieces, contentPiece{text: fmt.Sprintf(" %s%d%s", onebot.QFaceMarker, face.ID, onebot.QFaceMarkerEnd), mediaIdx: -1})
 			default:
-				content.WriteString(" [无法识别的表情]")
+				pieces = append(pieces, contentPiece{text: " [无法识别的表情]", mediaIdx: -1})
 			}
 		case "image":
 			if part.Index < 0 || part.Index >= len(msg.Images) {
@@ -104,32 +151,26 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			}
 			image := msg.Images[part.Index]
 			sticker := image.SubType == 1
+			fallback := " [图片]"
 			if sticker {
-				content.WriteString(" [表情包]")
-			} else {
-				content.WriteString(" [图片]")
+				fallback = " [表情包]"
 			}
-			pending = append(pending, pendingMedia{URL: image.URL, File: image.File, Sticker: sticker, Index: part.Index})
+			pending = append(pending, pendingMedia{URL: image.URL, File: image.File, Sticker: sticker})
+			pieces = append(pieces, contentPiece{mediaIdx: len(pending) - 1, fallback: fallback})
 		case "video":
-			content.WriteString(" [视频，无法查看]")
+			pieces = append(pieces, contentPiece{text: " [视频，无法查看]", mediaIdx: -1})
 		case "record":
-			content.WriteString(" [语音]")
+			pieces = append(pieces, contentPiece{text: " [语音]", mediaIdx: -1})
 		case "file":
 			if part.Index < 0 || part.Index >= len(msg.FileNames) {
 				continue
 			}
-			fileName := strings.TrimSpace(msg.FileNames[part.Index])
-			if fileName != "" {
-				content.WriteString(" [文件]")
-			} else {
-				content.WriteString(" [文件]")
-			}
+			pieces = append(pieces, contentPiece{text: " [文件]", mediaIdx: -1})
 		case "card":
 			if part.Index < 0 || part.Index >= len(msg.Cards) {
 				continue
 			}
-			content.WriteString(" ")
-			content.WriteString(msg.Cards[part.Index].Format())
+			pieces = append(pieces, contentPiece{text: " " + msg.Cards[part.Index].Format(), mediaIdx: -1})
 		case "forward":
 			start := max(part.Index, 0)
 			end := min(start+max(part.Count, 0), len(msg.ForwardContent))
@@ -138,16 +179,16 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			}
 			if !forwardWritten {
 				forwardWritten = true
-				nodes := flattenForwardNodes(msg.ForwardContent[start:end])
-				content.WriteString(formatForwardNodes(nodes))
-				pending = append(pending, forwardMedia(nodes)...)
-			} else {
-				content.WriteString(fmt.Sprintf(" [合并转发，共%d条]", end-start))
+				nodes := a.buildForwardNodes(msg.ForwardContent[start:end], 1)
+				handle := a.forwards.add(nodes)
+				pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发 %s，共 %d 条]", handle, len(nodes)), mediaIdx: -1})
+				continue
 			}
+			pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发，共%d条]", end-start), mediaIdx: -1})
 		}
 	}
 	if forwardTotal > 0 {
 		msg.ForwardContent = nil
 	}
-	return strings.TrimSpace(content.String()), pending
+	return pieces, pending
 }
