@@ -58,7 +58,7 @@ func (idx *mediaIndex) placeholders(refs []media.Ref) string {
 			parts = append(parts, "[表情包:"+short+"(已收藏)]")
 			continue
 		}
-		parts = append(parts, "[表情:"+short+"]")
+		parts = append(parts, "[表情包:"+short+"]")
 	}
 	return strings.Join(parts, " ")
 }

@@ -103,7 +103,7 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			image := msg.Images[part.Index]
 			sticker := image.SubType == 1
 			if sticker {
-				content.WriteString(" [表情]")
+				content.WriteString(" [表情包]")
 			} else {
 				content.WriteString(" [图片]")
 			}
