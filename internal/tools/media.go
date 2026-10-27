@@ -54,7 +54,7 @@ func (t *enhancedTool) InvokableRun(ctx context.Context, argument *schema.ToolAr
 
 // ViewImageInput 查看图片的参数
 type ViewImageInput struct {
-	Hash string `json:"hash" jsonschema:"description=图片或表情的短哈希标识，取自消息里的方括号标记"`
+	Hashes []string `json:"hashes" jsonschema:"description=图片或表情的短哈希标识列表，取自消息里的方括号标记，按顺序查看"`
 }
 
 // ViewImageOutput 查看图片的结果，工具实际把图片本体交给模型
@@ -63,9 +63,15 @@ type ViewImageOutput struct {
 	Message string `json:"message"`
 }
 
+// mediaHit 一次查图命中的结果，保留模型传入的短哈希以便回显
+type mediaHit struct {
+	hash string
+	ref  media.Ref
+}
+
 // NewViewImageTool 返回可以查看会话内图片的工具
 func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
-	plain, err := utils.InferTool("viewImage", "查看一张图片或表情的内容。消息里的图片和表情都带短哈希标记，用那个标记调用，一次只看一张。", viewImageFunc)
+	plain, err := utils.InferTool("viewImage", "查看图片或表情的内容。消息里的图片和表情都带短哈希标记，把要看的标记按顺序传进来，可以一次看多张。", viewImageFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -78,13 +84,13 @@ func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
 
 // viewImageFunc 解析媒体引用
 func viewImageFunc(ctx context.Context, input *ViewImageInput) (*ViewImageOutput, error) {
-	if _, err := resolveMedia(ctx, input); err != nil {
+	if _, err := resolveMediaList(ctx, input); err != nil {
 		return nil, err
 	}
 	return &ViewImageOutput{Success: true, Message: "已取到图片内容"}, nil
 }
 
-// viewImageRun 读取媒体并作为图片返回给模型
+// viewImageRun 按顺序读取媒体并作为图片返回给模型
 func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.ToolResult, error) {
 	input := &ViewImageInput{}
 	if argument != nil && strings.TrimSpace(argument.Text) != "" {
@@ -92,43 +98,58 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 			return nil, fmt.Errorf("参数解析失败: %w", err)
 		}
 	}
-	item, err := resolveMedia(ctx, input)
+	hits, err := resolveMediaList(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(item.Path)
-	if err != nil {
-		return nil, fmt.Errorf("读取图片失败: %w", err)
-	}
-	encoded := base64.StdEncoding.EncodeToString(data)
-	mime := item.Mime
-	if mime == "" {
-		mime = "image/jpeg"
-	}
-	parts := []schema.ToolOutputPart{
-		{Type: schema.ToolPartTypeText, Text: fmt.Sprintf("图片 %s，%d 字节", mime, len(data))},
-		{Type: schema.ToolPartTypeImage, Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{
-			Base64Data: &encoded,
-			MIMEType:   mime,
-		}}},
+	parts := make([]schema.ToolOutputPart, 0, len(hits)*2)
+	for index, hit := range hits {
+		data, err := os.ReadFile(hit.ref.Path)
+		if err != nil {
+			return nil, fmt.Errorf("读取图片失败: %w", err)
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		mime := hit.ref.Mime
+		if mime == "" {
+			mime = "image/jpeg"
+		}
+		parts = append(parts, schema.ToolOutputPart{
+			Type: schema.ToolPartTypeText,
+			Text: fmt.Sprintf("第%d张 %s：%s，%d 字节", index+1, hit.hash, mime, len(data)),
+		})
+		parts = append(parts, schema.ToolOutputPart{
+			Type: schema.ToolPartTypeImage,
+			Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{
+				Base64Data: &encoded,
+				MIMEType:   mime,
+			}},
+		})
 	}
 	return &schema.ToolResult{Parts: parts}, nil
 }
 
-// resolveMedia 从会话里按哈希取媒体
-func resolveMedia(ctx context.Context, input *ViewImageInput) (media.Ref, error) {
+// resolveMediaList 从会话里按哈希取出媒体，任一哈希缺失就整体失败
+func resolveMediaList(ctx context.Context, input *ViewImageInput) ([]mediaHit, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil || tc.Session == nil {
-		return media.Ref{}, NewTerminalToolError(fmt.Errorf("媒体读取能力未初始化"))
+		return nil, NewTerminalToolError(fmt.Errorf("媒体读取能力未初始化"))
 	}
-	if input == nil || strings.TrimSpace(input.Hash) == "" {
-		return media.Ref{}, fmt.Errorf("请提供图片哈希标识")
+	if input == nil || len(input.Hashes) == 0 {
+		return nil, fmt.Errorf("请提供至少一个图片哈希标识")
 	}
-	item, ok := tc.Session.ResolveMediaByHash(input.Hash)
-	if !ok {
-		return media.Ref{}, fmt.Errorf("没有找到标识为 %s 的图片，可能已被清理", input.Hash)
+	hits := make([]mediaHit, 0, len(input.Hashes))
+	for _, raw := range input.Hashes {
+		hash := strings.TrimSpace(raw)
+		if hash == "" {
+			return nil, fmt.Errorf("图片哈希标识不能为空")
+		}
+		item, ok := tc.Session.ResolveMediaByHash(hash)
+		if !ok {
+			return nil, fmt.Errorf("没有找到标识为 %s 的图片，可能已被清理", hash)
+		}
+		hits = append(hits, mediaHit{hash: hash, ref: item})
 	}
-	return item, nil
+	return hits, nil
 }
 
 // SaveStickerInput 收藏表情包的参数

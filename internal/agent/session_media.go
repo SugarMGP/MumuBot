@@ -55,7 +55,7 @@ func (idx *mediaIndex) placeholders(refs []media.Ref) string {
 			continue
 		}
 		if ref.Collected {
-			parts = append(parts, "[表情:"+short+"]（已收藏）")
+			parts = append(parts, "[表情包:"+short+"(已收藏)]")
 			continue
 		}
 		parts = append(parts, "[表情:"+short+"]")
