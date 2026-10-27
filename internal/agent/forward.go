@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 
 	"mumu-bot/internal/onebot"
@@ -87,7 +86,7 @@ func formatForwardNodes(nodes []message.ForwardNode) string {
 					b.WriteString("[@]")
 				}
 			case message.FaceData:
-				b.WriteString(fmt.Sprintf("[QQ表情:%s]", data.ID))
+				b.WriteString(onebot.QFaceText(string(data.ID)))
 			case message.ReplyData:
 				b.WriteString("[回复]")
 			case message.ImageData:
@@ -108,12 +107,13 @@ func formatForwardNodes(nodes []message.ForwardNode) string {
 			case message.JSONData:
 				b.WriteString("[JSON卡片]")
 			case message.MFaceData:
+				// 转发里的表情包用独立标记，避免和消息自身表情包的占位混淆
 				if data.Summary != "" {
-					b.WriteString("[QQ表情:")
+					b.WriteString("[转发表情包:")
 					b.WriteString(data.Summary)
 					b.WriteByte(']')
 				} else {
-					b.WriteString("[QQ表情]")
+					b.WriteString("[转发表情包]")
 				}
 			case message.CardData:
 				b.WriteString("[卡片]")

@@ -107,7 +107,8 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 - “一条消息”按意思划分，不按句号数量判断；即使语法上是一句话，只要包含多个判断、原因、转折或建议，也要拆开
 - 不要用逗号、空格、分号、句号或换行符串联多个本可独立发送的意思
 - 要回复某条消息时填写reply_to参数，只有当发言内容与该消息强相关时才用；不要回复自己的消息
-- 要at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号`,
+- 要at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号
+- 想发表情时在content里写%qface:名称%或%qface:编号%（例如%qface:微笑%），可以夹在文字中间任意位置；名称和编号先用searchFaces查。图片表情包用sendSticker单独发，不要写进文字里`,
 		speakFunc,
 	)
 }
@@ -116,7 +117,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		`在私聊里说话。每次只能发送一条消息；需要回复某条消息时填写 reply_to，不需要填写 mentions。`,
+		`在私聊里说话。每次只能发送一条消息；需要回复某条消息时填写 reply_to，不需要填写 mentions。想发表情时在 content 里写 %qface:名称% 或 %qface:编号%，名称和编号先用 searchFaces 查；图片表情包用 sendSticker 单独发。`,
 		privateSpeakFunc,
 	)
 }

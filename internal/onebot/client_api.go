@@ -90,9 +90,7 @@ func (c *Client) SendGroupMessage(ctx context.Context, groupID int64, content st
 		}
 		chain = append(chain, message.At(uid), message.Text(" "))
 	}
-	if content != "" {
-		chain = append(chain, message.Text(content))
-	}
+	chain = append(chain, SplitQFace(content)...)
 	return c.sendChain(ctx, "group", groupID, chain)
 }
 
@@ -105,7 +103,7 @@ func (c *Client) SendPrivateMessage(ctx context.Context, userID int64, content s
 	if replyTo != 0 {
 		chain = append(chain, message.Reply(replyTo))
 	}
-	chain = append(chain, message.Text(content))
+	chain = append(chain, SplitQFace(content)...)
 	return c.sendChain(ctx, "private", userID, chain)
 }
 

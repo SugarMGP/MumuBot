@@ -1,5 +1,11 @@
 package onebot
 
+import (
+	"sort"
+	"strconv"
+	"strings"
+)
+
 // qqFaceNames QQ 系统表情的编号与名称。
 // 数据来自 QQ 表情目录（OIDB 0x9154 的 sysface 列表）：koishijs/QFace 的 lib/data.json
 // 与 NapCat 的 packages/napcat-core/external/face_config.json，两者互补，重名以较新的 NapCat 目录为准。
@@ -397,7 +403,64 @@ var qqFaceNames = map[int]string{
 	484: "比爱心",
 }
 
+// qqFaceIDs 名称到编号的索引，同名表情取较新的编号
+var qqFaceIDs = buildQQFaceIDs(qqFaceNames)
+
+// buildQQFaceIDs 从编号表生成名称索引，同名时保留较大的编号
+func buildQQFaceIDs(names map[int]string) map[string]int {
+	ids := make(map[string]int, len(names))
+	for id, name := range names {
+		if current, exists := ids[name]; !exists || id > current {
+			ids[name] = id
+		}
+	}
+	return ids
+}
+
 // QQFaceName 返回 QQ 表情的名称，编号不在目录内时返回空串
 func QQFaceName(id int) string {
 	return qqFaceNames[id]
+}
+
+// QQFaceIDByName 按名称查表情编号，同名表情返回较新的编号
+func QQFaceIDByName(name string) (int, bool) {
+	id, ok := qqFaceIDs[strings.TrimSpace(name)]
+	return id, ok
+}
+
+// QQFaceResolve 把名称或编号解析成表情编号；纯数字先按编号查，查不到再按名称查
+func QQFaceResolve(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if id, err := strconv.Atoi(value); err == nil {
+		if _, ok := qqFaceNames[id]; ok {
+			return id, true
+		}
+	}
+	return QQFaceIDByName(value)
+}
+
+// QQFaceEntry 一条可发送的 QQ 表情
+type QQFaceEntry struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// SearchQQFaces 按名称片段查 QQ 表情，关键词为空时按编号返回一批常用表情
+func SearchQQFaces(keyword string, limit int) []QQFaceEntry {
+	keyword = strings.TrimSpace(keyword)
+	entries := make([]QQFaceEntry, 0, len(qqFaceIDs))
+	for name, id := range qqFaceIDs {
+		if keyword != "" && !strings.Contains(name, keyword) {
+			continue
+		}
+		entries = append(entries, QQFaceEntry{ID: id, Name: name})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries
 }

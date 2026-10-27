@@ -212,6 +212,7 @@ func (a *Agent) initGroupTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchFacesTool() },
 	})
 }
 
@@ -240,6 +241,7 @@ func (a *Agent) initPrivateTools() error {
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchFacesTool() },
 	})
 }
 

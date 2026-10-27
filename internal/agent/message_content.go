@@ -92,11 +92,11 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			face := msg.Faces[part.Index]
 			switch {
 			case face.Name != "":
-				content.WriteString(fmt.Sprintf(" [QQ表情:%s]", face.Name))
+				content.WriteString(fmt.Sprintf(" %s%s%s", onebot.QFaceMarker, face.Name, onebot.QFaceMarkerEnd))
 			case face.ID > 0:
-				content.WriteString(fmt.Sprintf(" [QQ表情:%d]", face.ID))
+				content.WriteString(fmt.Sprintf(" %s%d%s", onebot.QFaceMarker, face.ID, onebot.QFaceMarkerEnd))
 			default:
-				content.WriteString(" [QQ表情]")
+				content.WriteString(" [无法识别的表情]")
 			}
 		case "image":
 			if part.Index < 0 || part.Index >= len(msg.Images) {
