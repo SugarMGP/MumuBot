@@ -58,7 +58,6 @@ Core capabilities of this project:
 | PostgreSQL + pgvector | Store messages, memories, topics, group culture, and vectors |
 | SnowLuma | OneBot 11 protocol implementation |
 | LLM API | OpenAI Responses compatible (`/responses`), must support tool calling |
-| libwebp | Image transcoding dependency, needed to build and to run: `libwebp-dev` on Linux, `brew install webp` on macOS, mingw-w64 on Windows |
 
 ### Docker Compose
 
@@ -105,6 +104,8 @@ go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate ./internal/web/views
 # 4. Build
 go build -o mumu-bot .
 ```
+
+Image transcoding uses cgo to link against libwebp. The Linux and Windows release packages are fully statically linked, so no runtime libraries need to be installed after downloading. macOS's system linker does not support fully static linking, so the artifacts dynamically depend on libwebp; run `brew install webp` before running them.
 
 ### Configuration and Launch
 
