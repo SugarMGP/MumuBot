@@ -29,6 +29,7 @@ type Ref struct {
 	Bytes     int64  `json:"bytes"`
 	Sticker   bool   `json:"sticker"`
 	Collected bool   `json:"collected"` // 表情包是否已在收藏库
+	Index     int    `json:"index"`     // 在消息自身图片里的序号，合并转发里的图片为 -1
 }
 
 // Refs 有序媒体引用列表，落库为 jsonb

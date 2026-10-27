@@ -27,7 +27,6 @@ type sessionUser struct {
 	Text       string
 	Content    string
 	At         time.Time
-	Media      []media.Ref
 	Recalled   bool
 	Mentioned  bool
 	SenderID   int64
@@ -141,7 +140,6 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		Ref:        ref,
 		Content:    strings.TrimSpace(msg.Content),
 		At:         msg.Time,
-		Media:      mediaRefs,
 		Mentioned:  msg.IsMentioned,
 		SenderID:   msg.UserID,
 		Nickname:   msg.Nickname,
@@ -180,17 +178,52 @@ func (s *Session) renderUserText(msg *onebot.ConversationMessage, ref string, me
 			b.WriteString(fmt.Sprintf("[回复 %s(%d)] ", name, msg.Reply.SenderID))
 		}
 	}
-	content := strings.TrimSpace(msg.Content)
-	if content != "" {
-		b.WriteString(content)
+	// 展示正文带 @、QQ 表情、语音等非文本段，媒体占位再换成带短哈希的写法
+	body := strings.TrimSpace(msg.FinalContent)
+	if body == "" {
+		body = strings.TrimSpace(msg.Content)
 	}
-	if len(msg.Videos) > 0 {
-		b.WriteString(" [视频，无法查看]")
-	}
-	if placeholders := s.media.placeholders(mediaRefs); placeholders != "" {
-		b.WriteString(" " + placeholders)
-	}
+	b.WriteString(s.renderMediaPlaceholders(body, mediaRefs))
 	return strings.TrimSpace(b.String())
+}
+
+// renderMediaPlaceholders 把展示正文里的通用媒体占位换成带短哈希的占位
+func (s *Session) renderMediaPlaceholders(body string, mediaRefs []media.Ref) string {
+	own := make([]media.Ref, 0, len(mediaRefs))
+	for _, ref := range mediaRefs {
+		if ref.Index >= 0 {
+			own = append(own, ref)
+		}
+	}
+	sort.Slice(own, func(i, j int) bool { return own[i].Index < own[j].Index })
+	var b strings.Builder
+	rest := body
+	for _, ref := range own {
+		marker := " [图片]"
+		if ref.Sticker {
+			marker = " [表情包]"
+		}
+		index := strings.Index(rest, marker)
+		if index < 0 {
+			continue
+		}
+		b.WriteString(rest[:index])
+		short := s.media.shortHash(ref)
+		switch {
+		case short == "":
+			// 缓存失败时保留原文字占位，不伪造图片
+			b.WriteString(marker)
+		case ref.Sticker && ref.Collected:
+			b.WriteString(" [表情包:" + short + "(已收藏)]")
+		case ref.Sticker:
+			b.WriteString(" [表情包:" + short + "]")
+		default:
+			b.WriteString(" [图片:" + short + "]")
+		}
+		rest = rest[index+len(marker):]
+	}
+	b.WriteString(rest)
+	return b.String()
 }
 
 // takeNotesLocked 取出待附加的撤回说明，调用方需已持锁
@@ -328,10 +361,6 @@ func (s *Session) MessagesAfter(seq uint64) []*sessionUser {
 // pendingMessageLocked 把真人消息转成工具可读的结构，调用方需已持锁
 func (s *Session) pendingMessageLocked(user *sessionUser) tools.PendingMessage {
 	return tools.PendingMessage{
-		Ref:        user.Ref,
-		Content:    user.Text,
-		SenderID:   user.SenderID,
-		Nickname:   user.Nickname,
 		ArrivalSeq: user.ArrivalSeq,
 		Msg:        user.Msg,
 	}

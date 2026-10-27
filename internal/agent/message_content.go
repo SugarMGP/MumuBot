@@ -17,6 +17,7 @@ type pendingMedia struct {
 	URL     string
 	File    string
 	Sticker bool
+	Index   int // 在消息自身图片里的序号，合并转发里的图片为 -1
 }
 
 // prepareMessageContent 群聊与私聊复用回复补全和展示处理，原文保持独立
@@ -32,13 +33,13 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 	return a.cacheMedia(ctx, pending)
 }
 
-// cacheMedia 下载并缓存消息里的媒体，失败时只保留文字占位
+// cacheMedia 下载并缓存消息里的媒体，失败的位置留空以便和展示占位对齐
 func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.Ref {
 	if len(pending) == 0 {
 		return nil
 	}
-	refs := make([]media.Ref, 0, len(pending))
-	for _, item := range pending {
+	refs := make([]media.Ref, len(pending))
+	for index, item := range pending {
 		if ctx.Err() != nil {
 			break
 		}
@@ -47,7 +48,8 @@ func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.
 			zap.L().Debug("缓存媒体失败", zap.String("url", item.URL), zap.Error(err))
 			continue
 		}
-		refs = append(refs, ref)
+		ref.Index = item.Index
+		refs[index] = ref
 	}
 	return refs
 }
@@ -90,11 +92,11 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			face := msg.Faces[part.Index]
 			switch {
 			case face.Name != "":
-				content.WriteString(fmt.Sprintf(" [表情:%s]", face.Name))
+				content.WriteString(fmt.Sprintf(" [QQ表情:%s]", face.Name))
 			case face.ID > 0:
-				content.WriteString(fmt.Sprintf(" [表情:%d]", face.ID))
+				content.WriteString(fmt.Sprintf(" [QQ表情:%d]", face.ID))
 			default:
-				content.WriteString(" [表情]")
+				content.WriteString(" [QQ表情]")
 			}
 		case "image":
 			if part.Index < 0 || part.Index >= len(msg.Images) {
@@ -107,7 +109,7 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			} else {
 				content.WriteString(" [图片]")
 			}
-			pending = append(pending, pendingMedia{URL: image.URL, File: image.File, Sticker: sticker})
+			pending = append(pending, pendingMedia{URL: image.URL, File: image.File, Sticker: sticker, Index: part.Index})
 		case "video":
 			content.WriteString(" [视频，无法查看]")
 		case "record":

@@ -30,10 +30,6 @@ type SessionContext interface {
 
 // PendingMessage 待注入模型上下文的消息
 type PendingMessage struct {
-	Ref        string
-	Content    string
-	SenderID   int64
-	Nickname   string
 	ArrivalSeq uint64
 	Msg        *schema.AgenticMessage
 }

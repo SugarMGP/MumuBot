@@ -149,9 +149,10 @@ func parseMessageSegments(chain message.Chain, msg *ConversationMessage) {
 
 		case message.FaceData:
 			face := FaceInfo{}
-			// 表情名称不在强类型字段内，展示层回退为 [表情:ID]
+			// 强类型段只有编号，名称从经典 QQ 表情表里补
 			if id, ok := parseStrNum(data.ID); ok {
 				face.ID = int(id)
+				face.Name = QQFaceName(face.ID)
 			}
 			msg.Faces = append(msg.Faces, face)
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "face", Index: len(msg.Faces) - 1})
@@ -291,7 +292,7 @@ func extractTextFromSegments(segments []interface{}) string {
 		case "image":
 			parts = append(parts, "[图片]")
 		case "face":
-			parts = append(parts, "[表情]")
+			parts = append(parts, "[QQ表情]")
 		case "record":
 			parts = append(parts, "[语音]")
 		case "video":

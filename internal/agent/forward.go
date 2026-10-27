@@ -62,7 +62,7 @@ func forwardMedia(nodes []message.ForwardNode) []pendingMedia {
 			if strings.TrimSpace(data.URL) == "" {
 				continue
 			}
-			pending = append(pending, pendingMedia{URL: data.URL})
+			pending = append(pending, pendingMedia{URL: data.URL, Index: -1})
 		}
 	}
 	return pending
@@ -87,16 +87,17 @@ func formatForwardNodes(nodes []message.ForwardNode) string {
 					b.WriteString("[@]")
 				}
 			case message.FaceData:
-				b.WriteString(fmt.Sprintf("[表情:%s]", data.ID))
+				b.WriteString(fmt.Sprintf("[QQ表情:%s]", data.ID))
 			case message.ReplyData:
 				b.WriteString("[回复]")
 			case message.ImageData:
+				// 转发里的图片用独立标记，避免和消息自身图片的占位混淆
 				if data.Summary != "" {
-					b.WriteString("[图片:")
+					b.WriteString("[转发图片:")
 					b.WriteString(data.Summary)
 					b.WriteByte(']')
 				} else {
-					b.WriteString("[图片]")
+					b.WriteString("[转发图片]")
 				}
 			case message.RecordData:
 				b.WriteString("[语音]")
@@ -108,11 +109,11 @@ func formatForwardNodes(nodes []message.ForwardNode) string {
 				b.WriteString("[JSON卡片]")
 			case message.MFaceData:
 				if data.Summary != "" {
-					b.WriteString("[表情:")
+					b.WriteString("[QQ表情:")
 					b.WriteString(data.Summary)
 					b.WriteByte(']')
 				} else {
-					b.WriteString("[表情]")
+					b.WriteString("[QQ表情]")
 				}
 			case message.CardData:
 				b.WriteString("[卡片]")

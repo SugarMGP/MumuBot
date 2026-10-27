@@ -42,27 +42,6 @@ func (idx *mediaIndex) shortHash(ref media.Ref) string {
 	return ""
 }
 
-// placeholders 渲染媒体占位，图片与表情分开，已收藏的表情带标记
-func (idx *mediaIndex) placeholders(refs []media.Ref) string {
-	parts := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		short := idx.shortHash(ref)
-		if short == "" {
-			continue
-		}
-		if !ref.Sticker {
-			parts = append(parts, "[图片:"+short+"]")
-			continue
-		}
-		if ref.Collected {
-			parts = append(parts, "[表情包:"+short+"(已收藏)]")
-			continue
-		}
-		parts = append(parts, "[表情包:"+short+"]")
-	}
-	return strings.Join(parts, " ")
-}
-
 // resolve 按会话内短哈希取媒体
 func (idx *mediaIndex) resolve(hash string) (media.Ref, bool) {
 	ref, ok := idx.byShort[strings.TrimSpace(hash)]
