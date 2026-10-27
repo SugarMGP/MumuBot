@@ -120,7 +120,6 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 		allForward = append(allForward, msg.ForwardContent[start:end]...)
 		forwardTotal += end - start
 	}
-	forwardWritten := false
 	for _, part := range msg.MessageParts {
 		switch part.Kind {
 		case "text":
@@ -178,17 +177,12 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			if start >= end {
 				continue
 			}
-			if !forwardWritten {
-				forwardWritten = true
-				handle, count, drafts := buildForwardNodes(msg.ForwardContent[start:end], 1, "")
-				if handle == "" || count == 0 {
-					continue
-				}
-				forwards = append(forwards, drafts...)
-				pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发 %s，共 %d 条]", handle, count), mediaIdx: -1})
+			handle, count, drafts := buildForwardNodes(msg.ForwardContent[start:end], 1, "")
+			if handle == "" || count == 0 {
 				continue
 			}
-			pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发，共%d条]", end-start), mediaIdx: -1})
+			forwards = append(forwards, drafts...)
+			pieces = append(pieces, contentPiece{text: fmt.Sprintf(" [合并转发 %s，共 %d 条]", handle, count), mediaIdx: -1})
 		}
 	}
 	if forwardTotal > 0 {

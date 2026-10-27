@@ -130,10 +130,14 @@ func (m *Manager) cleanupMediaFiles() {
 	if strings.TrimSpace(dir) == "" {
 		return
 	}
-	used := map[string]bool{}
-	if err := m.db.Raw(`SELECT DISTINCT elem->>'hash' FROM message_logs ml, jsonb_array_elements(ml.media_refs) elem WHERE ml.media_refs IS NOT NULL`).Scan(&used).Error; err != nil {
+	var hashes []string
+	if err := m.db.Raw(`SELECT DISTINCT elem->>'hash' FROM message_logs ml, jsonb_array_elements(ml.media_refs) elem WHERE ml.media_refs IS NOT NULL`).Scan(&hashes).Error; err != nil {
 		zap.L().Warn("读取媒体引用失败，跳过媒体清理", zap.Error(err))
 		return
+	}
+	used := make(map[string]bool, len(hashes))
+	for _, hash := range hashes {
+		used[hash] = true
 	}
 	for _, sub := range []string{"image", "sticker"} {
 		root := filepath.Join(dir, sub)

@@ -163,7 +163,6 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 type commitItem struct {
 	skip     bool
 	recall   *recallCommit
-	retry    *recallCommit
 	msg      *onebot.ConversationMessage
 	media    []media.Ref
 	forwards []forwardDraft
@@ -175,16 +174,6 @@ func (a *Agent) commitOne(item commitItem) {
 	case item.skip:
 	case item.recall != nil:
 		a.commitRecall(item.recall)
-	case item.retry != nil:
-		ctx, cancel := a.persistenceContext()
-		defer cancel()
-		a.applyPendingRecall(ctx, &onebot.ConversationMessage{ConversationKind: item.retry.kind, TargetID: item.retry.targetID, MessageID: item.retry.messageID})
-		a.recallMu.Lock()
-		if pending, ok := a.pendingRecalls[*item.retry]; ok {
-			pending.queued = false
-			a.pendingRecalls[*item.retry] = pending
-		}
-		a.recallMu.Unlock()
 	default:
 		a.commitConversationMessage(item)
 	}

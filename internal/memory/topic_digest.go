@@ -38,10 +38,11 @@ func (m *Manager) TopicCoverage(ctx context.Context, kind string, targetID int64
 		if state == nil {
 			return coverage, nil
 		}
-		for _, id := range logIDs {
-			coverage.Covered[id] = id <= state.ThroughMessageLogID
-		}
+		// 摘要来源失效时不能标记覆盖，否则原文被丢弃又没有摘要顶上
 		if state.ThroughMessageLogID > 0 && state.SourcesValid {
+			for _, id := range logIDs {
+				coverage.Covered[id] = id <= state.ThroughMessageLogID
+			}
 			var summary TopicSummary
 			if err := sonic.UnmarshalString(state.SummaryJSON, &summary); err != nil {
 				return coverage, err
@@ -79,13 +80,6 @@ func (m *Manager) TopicCoverage(ctx context.Context, kind string, targetID int64
 	if err := rows.Err(); err != nil {
 		return coverage, err
 	}
-	if len(topicIDs) == 0 {
-		for _, id := range logIDs {
-			coverage.Covered[id] = true
-		}
-		return coverage, nil
-	}
-
 	summaries, err := m.topicSummaries(ctx, topicIDs)
 	if err != nil {
 		return coverage, err

@@ -17,8 +17,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// sessionTokenReserve 工具声明与模型响应预留的 token
-const sessionTokenReserve = 8000
+// sessionReserveRatio 给系统提示、工具声明与模型输出预留的上下文比例
+const sessionReserveRatio = 0.15
 
 // sessionUser 一条真人消息在会话里的形态
 type sessionUser struct {
@@ -27,6 +27,7 @@ type sessionUser struct {
 	Text       string
 	Content    string
 	At         time.Time
+	ReceivedAt time.Time
 	Recalled   bool
 	Mentioned  bool
 	SenderID   int64
@@ -60,8 +61,6 @@ type Session struct {
 	media     *mediaIndex      // 会话内的媒体索引
 	refs      map[string]int64 // 会话编号 → 原始消息 id
 	nextRef   int
-	readSeq   uint64                 // 已消费水位
-	observed  uint64                 // getNewMessages 已读水位
 	injected  uint64                 // 已注入模型上下文的到达序号
 	selfAt    []time.Time            // 机器人自己发言的时间
 	notes     []string               // 待附加到下一条消息的撤回说明
@@ -140,6 +139,7 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		Ref:        ref,
 		Content:    strings.TrimSpace(msg.Content),
 		At:         msg.Time,
+		ReceivedAt: msg.ReceivedAt,
 		Mentioned:  msg.IsMentioned,
 		SenderID:   msg.UserID,
 		Nickname:   msg.Nickname,
@@ -253,36 +253,22 @@ func (s *Session) PendingMessages() []*sessionUser {
 	return append([]*sessionUser(nil), s.pending...)
 }
 
-// MarkConsumed 推进已消费水位
+// MarkConsumed 把已处理的待处理消息并入会话记录：它们不再作为新消息重复投喂，但仍留在上下文里
 func (s *Session) MarkConsumed(seq uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if seq > s.readSeq {
-		s.readSeq = seq
+	if seq == 0 {
+		return
 	}
-}
-
-// ReadSeq 返回已消费水位
-func (s *Session) ReadSeq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.readSeq
-}
-
-// MarkObserved 推进 getNewMessages 的观察水位
-func (s *Session) MarkObserved(seq uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if seq > s.observed {
-		s.observed = seq
+	kept := s.pending[:0]
+	for _, user := range s.pending {
+		if user.ArrivalSeq <= seq {
+			s.seen = append(s.seen, sessionEntry{user: user, msg: user.Msg})
+			continue
+		}
+		kept = append(kept, user)
 	}
-}
-
-// ObservedSeq 返回观察水位
-func (s *Session) ObservedSeq() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.observed
+	s.pending = kept
 }
 
 // MarkInjected 记录已进入模型上下文的到达序号
@@ -489,7 +475,8 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, budgetToken
 	for _, user := range pending {
 		pendingCost += estimateTokens(user.Text)
 	}
-	remaining := budgetTokens - sessionTokenReserve - estimateTokens(digestText) - pendingCost
+	reserve := int(float64(budgetTokens) * sessionReserveRatio)
+	remaining := budgetTokens - reserve - estimateTokens(digestText) - pendingCost
 	selected := make([]*sessionSegment, 0, len(kept))
 	for index := len(kept) - 1; index >= 0; index-- {
 		cost := segmentTokens(kept[index])

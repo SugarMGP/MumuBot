@@ -61,7 +61,6 @@ type Agent struct {
 
 	recallMu       sync.Mutex
 	pendingRecalls map[recallCommit]pendingRecall
-	recallWG       sync.WaitGroup
 
 	pendingGroupThinks map[int64]*pendingThink
 	pendingGroupMu     sync.Mutex
@@ -77,9 +76,8 @@ type Agent struct {
 }
 
 type pendingThink struct {
-	timer             *time.Timer
-	probabilityPassed bool
-	generation        uint64
+	timer      *time.Timer
+	generation uint64
 }
 
 func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
@@ -114,6 +112,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		pendingGroupThinks:   make(map[int64]*pendingThink),
 		pendingPrivateThinks: make(map[int64]*pendingThink),
 		privateRunning:       make(map[int64]bool),
+		pendingRecalls:       make(map[recallCommit]pendingRecall),
 		replyCache:           newAgentTTLCache[string, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
 		media: media.New(media.Options{
 			Dir:        cfg.Media.StoragePath,
@@ -415,7 +414,6 @@ func (a *Agent) shutdown() {
 		a.groupConcurrency.Close()
 	}
 	a.thinkWG.Wait()
-	a.recallWG.Wait()
 	// 3. 关闭提交队列并排空：此时没有生产者，队列消息以排空上下文完成落库
 	a.groupCommits.close()
 	a.privateCommits.close()

@@ -173,7 +173,8 @@ func (a *Agent) readNewMessages(ctx context.Context, session *Session) (any, err
 	if tc == nil {
 		return nil, tools.NewTerminalToolError(fmt.Errorf("消息读取能力未初始化"))
 	}
-	floor := tc.ThinkStartArrivalSeq
+	// 只返回上次读取之后的新消息，重复读取不会把同一批消息再喂一遍
+	floor := max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
 	messages := make([]map[string]any, 0, 4)
 	observed := floor
 	for _, user := range session.MessagesAfter(floor) {

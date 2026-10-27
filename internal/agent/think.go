@@ -39,7 +39,7 @@ func (a *Agent) thinkCycle() {
 		if len(pending) == 0 {
 			continue
 		}
-		a.scheduleGroupThink(groupID, a.hasStrongInteraction(pending), time.Now())
+		a.scheduleGroupThink(groupID, a.hasStrongInteraction(pending), latestReceivedAt(pending))
 	}
 	targets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true)
 	if err != nil {
@@ -51,11 +51,23 @@ func (a *Agent) thinkCycle() {
 			continue
 		}
 		session := a.sessions.get(memory.ConversationKindPrivate, target.TargetID)
-		if len(session.PendingMessages()) == 0 {
+		pending := session.PendingMessages()
+		if len(pending) == 0 {
 			continue
 		}
-		a.schedulePrivateThink(target.TargetID, time.Now())
+		a.schedulePrivateThink(target.TargetID, latestReceivedAt(pending))
 	}
+}
+
+// latestReceivedAt 取待处理消息里最新的一条进入时间，防抖从消息进来到达开始算
+func latestReceivedAt(pending []*sessionUser) time.Time {
+	var latest time.Time
+	for _, user := range pending {
+		if user.ReceivedAt.After(latest) {
+			latest = user.ReceivedAt
+		}
+	}
+	return latest
 }
 
 func (a *Agent) scheduleGroupThink(groupID int64, isMention bool, receivedAt time.Time) {
@@ -195,16 +207,6 @@ func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 		}
 	}
 	return false
-}
-
-// latestMessageWithID 按缓冲顺序反向查找，不比较 OneBot message_id
-func latestMessageWithID(messages []*onebot.ConversationMessage) *onebot.ConversationMessage {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i] != nil && messages[i].MessageID != 0 {
-			return messages[i]
-		}
-	}
-	return nil
 }
 
 func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) error {

@@ -249,7 +249,3 @@ func NewSearchWebTool() (tool.InvokableTool, error) {
 func NewFetchWebTool() (tool.InvokableTool, error) {
 	return utils.InferTool("fetchWeb", "抓取网页完整正文、链接、图片 URL 和 og:image。", fetchWeb)
 }
-
-type InspectImageInput struct {
-	URL string `json:"url" jsonschema:"description=普通网页图片的 HTTP/HTTPS 地址"`
-}

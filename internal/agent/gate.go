@@ -194,7 +194,8 @@ func (a *Agent) gateAllow(groupID int64, session *Session, pending []*sessionUse
 	threshold := window.threshold(now, a.gateFrequency(groupID))
 	probability *= a.gateDecay(groupID)
 	window.record(now, probability, false)
-	return probability >= threshold
+	// 限流生效时意愿分被压到 0，这时任何阈值都不该放行
+	return probability > 0 && probability >= threshold
 }
 
 // gateFrequency 取本群的目标发言频率，时段规则优先

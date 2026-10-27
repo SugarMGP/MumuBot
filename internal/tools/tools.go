@@ -21,7 +21,6 @@ type SpeakCallback func(ctx context.Context, targetID int64, content string, rep
 
 // SendStickerCallback 发送表情包回调函数类型
 type SendStickerCallback func(ctx context.Context, targetID int64, fileName string, description string) error
-type InspectImageCallback func(ctx context.Context, imageURL string) (string, error)
 type SendImageURLCallback func(ctx context.Context, imageURL string) error
 type GetNewMessagesCallback func(ctx context.Context) (any, error)
 
@@ -41,7 +40,6 @@ type ToolContext struct {
 	Session                SessionContext
 	ThinkStartArrivalSeq   uint64
 	ObservedThroughSeq     uint64
-	ObservationIncomplete  bool
 	RecallCallback         func(messageID int64, arrivalSeq uint64)
 	actionSucceeded        bool
 
@@ -56,16 +54,12 @@ func (tc *ToolContext) MarkActionSucceeded() {
 	}
 }
 
-// ReadThroughSeq 失败轮次仅在已执行行动时消费快照，观察缺口不能推进观察水位
+// ReadThroughSeq 失败轮次仅在已执行行动时消费快照
 func (tc *ToolContext) ReadThroughSeq(thinkSucceeded bool) uint64 {
 	if tc == nil || (!thinkSucceeded && !tc.actionSucceeded) {
 		return 0
 	}
-	seq := tc.ThinkStartArrivalSeq
-	if !tc.ObservationIncomplete {
-		seq = max(seq, tc.ObservedThroughSeq)
-	}
-	return seq
+	return max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
 }
 
 // ctxKey 上下文键类型
@@ -212,7 +206,7 @@ func NewGetGroupMemberDetailTool() (tool.InvokableTool, error) {
 // ==================== 获取短期记忆工具 ====================
 
 func NewGetNewMessagesTool() (tool.InvokableTool, error) {
-	return utils.InferTool("getNewMessages", "读取本轮思考开始后已经收到的新消息；不会等待。", func(ctx context.Context, _ *struct{}) (any, error) {
+	return utils.InferTool("getNewMessages", "读取上次读取之后新到的消息；不会等待。", func(ctx context.Context, _ *struct{}) (any, error) {
 		tc := GetToolContext(ctx)
 		if tc == nil || tc.GetNewMessagesCallback == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("新消息读取能力未初始化"))
