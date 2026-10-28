@@ -99,6 +99,19 @@ func memoryKindText(kind string) string {
 	}
 }
 
+func memoryRelationKindText(kind string) string {
+	switch kind {
+	case "variant_of":
+		return "同义变体"
+	case "supersedes":
+		return "替代"
+	case "contradicts":
+		return "冲突"
+	default:
+		return "关联关系"
+	}
+}
+
 func memoryStatusText(status string) string {
 	switch status {
 	case "archived":

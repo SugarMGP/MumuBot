@@ -22,12 +22,9 @@ type Config struct {
 	Persona    PersonaConfig    `mapstructure:"persona"`
 	OneBot     OneBotConfig     `mapstructure:"onebot"`
 	Agent      AgentConfig      `mapstructure:"agent"`
-	Chat       ChatConfig       `mapstructure:"chat"`     // 聊天行为配置
-	Learning   LearningConfig   `mapstructure:"learning"` // 学习系统配置
+	Chat       ChatConfig       `mapstructure:"chat"` // 聊天行为配置
 	ModelTiers ModelTiersConfig `mapstructure:"model_tiers"`
-	Embedding  EmbeddingConfig  `mapstructure:"embedding"`
 	Database   DatabaseConfig   `mapstructure:"database"`
-	Memory     MemoryConfig     `mapstructure:"memory"`
 	Sticker    StickerConfig    `mapstructure:"sticker"` // 表情包配置
 	Media      MediaConfig      `mapstructure:"media"`   // 聊天媒体缓存配置
 	Server     ServerConfig     `mapstructure:"server"`
@@ -59,12 +56,21 @@ type OneBotConfig struct {
 
 // AgentConfig Agent决策配置
 type AgentConfig struct {
-	ThinkTimeoutSeconds int     `mapstructure:"think_timeout_seconds"` // 主 Agent 单轮超时（秒）
-	ThinkInterval       int     `mapstructure:"think_interval"`        // 决策间隔（秒）
-	ThinkDebounceMS     int     `mapstructure:"think_debounce_ms"`     // 思考聚合窗口（毫秒）
-	ContextBudgetRatio  float64 `mapstructure:"context_budget_ratio"`  // 模型输入预算占上下文窗口的比例
-	MaxStep             int     `mapstructure:"max_step"`              // ReAct 最大步数
-	MaxCoroutine        int     `mapstructure:"max_coroutine"`         // 最大并发思考进程数（0表示不限制）
+	ThinkTimeoutSeconds int              `mapstructure:"think_timeout_seconds"` // 主 Agent 单轮超时（秒）
+	ThinkInterval       int              `mapstructure:"think_interval"`        // 决策间隔（秒）
+	ThinkDebounceMS     int              `mapstructure:"think_debounce_ms"`     // 思考聚合窗口（毫秒）
+	MaxStep             int              `mapstructure:"max_step"`              // ReAct 最大步数
+	MaxCoroutine        int              `mapstructure:"max_coroutine"`         // 最大并发思考进程数（0表示不限制）
+	Compaction          CompactionConfig `mapstructure:"compaction"`
+}
+
+// CompactionConfig 控制主模型同步话题压缩
+type CompactionConfig struct {
+	TriggerRatio    float64 `mapstructure:"trigger_ratio"`
+	TargetRatio     float64 `mapstructure:"target_ratio"`
+	RecentTailRatio float64 `mapstructure:"recent_tail_ratio"`
+	MaxStep         int     `mapstructure:"max_step"`
+	TimeoutSeconds  int     `mapstructure:"timeout_seconds"`
 }
 
 // ChatConfig 聊天行为配置
@@ -92,16 +98,6 @@ type TimeRuleConfig struct {
 	TalkValue float64 `mapstructure:"talk_value"` // 该时段的发言频率
 }
 
-// LearningConfig 学习系统配置
-type LearningConfig struct {
-	MaxStep          int `mapstructure:"max_step"`          // Memory Agent 最大步数
-	TimeoutSeconds   int `mapstructure:"timeout_seconds"`   // Memory Agent 单轮超时（秒）
-	IntervalMinutes  int `mapstructure:"interval_minutes"`  // 学习任务间隔（分钟）
-	RecoveryInterval int `mapstructure:"recovery_interval"` // 后台恢复扫描间隔（秒）
-	BatchSize        int `mapstructure:"batch_size"`        // 每次学习的消息数量限制
-	MaxWaitMinutes   int `mapstructure:"max_wait_minutes"`
-}
-
 // MediaConfig 聊天媒体缓存配置，普通图片转 webp、表情包保留原件
 type MediaConfig struct {
 	StoragePath  string `mapstructure:"storage_path"`  // 媒体缓存目录
@@ -119,34 +115,13 @@ type ModelConfig struct {
 	ExtraFields   map[string]interface{} `mapstructure:"extra_fields"`   // 额外参数
 }
 
-// ModelTiersConfig 高 / 低两档模型配置
+// ModelTiersConfig 只保留一个主模型，沿用 high 配置名以兼容现有部署
 type ModelTiersConfig struct {
 	High ModelConfig `mapstructure:"high"`
-	Low  ModelConfig `mapstructure:"low"`
-}
-
-// EmbeddingConfig Embedding 模型配置
-type EmbeddingConfig struct {
-	APIKey     string `mapstructure:"api_key"`
-	BaseURL    string `mapstructure:"base_url"`
-	Model      string `mapstructure:"model"`
-	Dimensions int    `mapstructure:"dimensions"`
-}
-
-// MemoryConfig 记忆系统配置
-type MemoryConfig struct {
-	MessageLogCleanup MessageLogCleanupConfig `mapstructure:"message_log_cleanup"`
 }
 
 type DatabaseConfig struct {
 	DSN string `mapstructure:"dsn"`
-}
-
-// MessageLogCleanupConfig 消息日志清理配置
-type MessageLogCleanupConfig struct {
-	Enabled       *bool `mapstructure:"enabled"`        // 是否启用，默认 true
-	IntervalHours int   `mapstructure:"interval_hours"` // 清理间隔（小时），默认 6
-	KeepLatest    int   `mapstructure:"keep_latest"`    // 每个会话保留最新消息数
 }
 
 // StickerConfig 表情包配置
@@ -166,8 +141,6 @@ type WebConfig struct {
 
 // DebugConfig 调试配置
 type DebugConfig struct {
-	ShowPrompt    bool `mapstructure:"show_prompt"`     // 显示系统提示词
-	ShowThinking  bool `mapstructure:"show_thinking"`   // 显示思考过程
 	ShowToolCalls bool `mapstructure:"show_tool_calls"` // 显示工具调用
 }
 
@@ -200,8 +173,6 @@ func Load(path string) (*Config, error) {
 		loaded.Persona.PrivatePromptTemplate = privatePrompt
 		// 从环境变量覆盖模型端点和敏感配置
 		overrideModelEndpoint("MUMU_MODEL_HIGH", &loaded.ModelTiers.High.APIKey, &loaded.ModelTiers.High.BaseURL, &loaded.ModelTiers.High.Model)
-		overrideModelEndpoint("MUMU_MODEL_LOW", &loaded.ModelTiers.Low.APIKey, &loaded.ModelTiers.Low.BaseURL, &loaded.ModelTiers.Low.Model)
-		overrideModelEndpoint("MUMU_EMBEDDING", &loaded.Embedding.APIKey, &loaded.Embedding.BaseURL, &loaded.Embedding.Model)
 		if token := os.Getenv("MUMU_ONEBOT_TOKEN"); token != "" {
 			loaded.OneBot.AccessToken = token
 		}
@@ -237,18 +208,6 @@ func overrideModelEndpoint(prefix string, apiKey, baseURL, modelName *string) {
 }
 
 func validate(c *Config) error {
-	if c.Learning.MaxStep == 0 {
-		c.Learning.MaxStep = 25
-	}
-	if c.Learning.TimeoutSeconds == 0 {
-		c.Learning.TimeoutSeconds = 300
-	}
-	if c.Learning.TimeoutSeconds < 1 {
-		return fmt.Errorf("learning.timeout_seconds 必须大于 0")
-	}
-	if c.Learning.MaxStep < 1 {
-		return fmt.Errorf("learning.max_step 必须大于 0")
-	}
 	if strings.TrimSpace(c.Media.StoragePath) == "" {
 		c.Media.StoragePath = "./media"
 	}
@@ -267,41 +226,38 @@ func validate(c *Config) error {
 	if strings.TrimSpace(c.Sticker.StoragePath) == "" {
 		c.Sticker.StoragePath = "./stickers"
 	}
-	if c.Learning.BatchSize == 0 {
-		c.Learning.BatchSize = 50
-	}
-	if c.Learning.IntervalMinutes == 0 {
-		c.Learning.IntervalMinutes = 5
-	}
-	if c.Learning.MaxWaitMinutes == 0 {
-		c.Learning.MaxWaitMinutes = 15
-	}
-	if c.Learning.IntervalMinutes < 1 || c.Learning.MaxWaitMinutes < c.Learning.IntervalMinutes {
-		return fmt.Errorf("整理间隔必须为正，最大等待时间不能短于整理间隔")
-	}
-	if c.Learning.BatchSize < 1 || c.Learning.BatchSize > 100 {
-		return fmt.Errorf("learning.batch_size 必须在1到100之间")
-	}
 	if c.OneBot.ReconnectInterval <= 0 {
 		return fmt.Errorf("onebot.reconnect_interval 必须大于 0")
+	}
+	if c.Agent.ThinkTimeoutSeconds <= 0 {
+		c.Agent.ThinkTimeoutSeconds = 60
 	}
 	if c.Agent.ThinkInterval <= 0 {
 		return fmt.Errorf("agent.think_interval 必须大于 0")
 	}
-	if c.Learning.RecoveryInterval == 0 {
-		c.Learning.RecoveryInterval = 180
-	}
-	if c.Learning.RecoveryInterval < 0 {
-		return fmt.Errorf("learning.recovery_interval 不能小于 0")
+	if c.Agent.MaxStep <= 0 {
+		c.Agent.MaxStep = 13
 	}
 	if c.Agent.MaxCoroutine < 0 {
 		return fmt.Errorf("agent.max_coroutine 不能小于 0")
 	}
-	if c.Agent.ContextBudgetRatio <= 0 {
-		c.Agent.ContextBudgetRatio = 0.6
+	if c.Agent.Compaction.TriggerRatio <= 0 {
+		c.Agent.Compaction.TriggerRatio = 0.90
 	}
-	if c.Agent.ContextBudgetRatio > 1 {
-		return fmt.Errorf("agent.context_budget_ratio 必须在 0 到 1 之间")
+	if c.Agent.Compaction.TargetRatio <= 0 {
+		c.Agent.Compaction.TargetRatio = 0.40
+	}
+	if c.Agent.Compaction.RecentTailRatio <= 0 {
+		c.Agent.Compaction.RecentTailRatio = 0.10
+	}
+	if c.Agent.Compaction.MaxStep <= 0 {
+		c.Agent.Compaction.MaxStep = 12
+	}
+	if c.Agent.Compaction.TimeoutSeconds <= 0 {
+		c.Agent.Compaction.TimeoutSeconds = 300
+	}
+	if c.Agent.Compaction.TargetRatio > 0.55 || c.Agent.Compaction.TargetRatio >= c.Agent.Compaction.TriggerRatio || c.Agent.Compaction.TriggerRatio >= 1 || c.Agent.Compaction.RecentTailRatio >= c.Agent.Compaction.TargetRatio {
+		return fmt.Errorf("agent.compaction 比例无效：target 不超过 0.55、target < trigger < 1 且 recent_tail < target")
 	}
 	if c.ModelTiers.High.ContextWindow <= 0 {
 		return fmt.Errorf("model_tiers.high.context_window 必须大于 0；模型需要支持 OpenAI Responses 端点（/responses）")
@@ -316,9 +272,6 @@ func validate(c *Config) error {
 	}
 	if strings.TrimSpace(c.Database.DSN) == "" {
 		return fmt.Errorf("database.dsn 不能为空")
-	}
-	if c.Embedding.Dimensions <= 0 {
-		return fmt.Errorf("embedding.dimensions 必须大于 0")
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 必须在 1 到 65535 之间")

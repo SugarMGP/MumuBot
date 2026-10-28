@@ -26,40 +26,32 @@ type GetNewMessagesCallback func(ctx context.Context) (any, error)
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	ConversationKind       string
-	TargetID               int64
-	MemoryMgr              *memory.Manager
-	Bot                    *onebot.Client
-	SnapshotMessageID      int64
-	SpeakCallback          SpeakCallback       // 发言回调
-	SendStickerCallback    SendStickerCallback // 发送表情包回调
-	SendImageURLCallback   SendImageURLCallback
-	GetNewMessagesCallback GetNewMessagesCallback
-	ReadForwardCallback    func(ctx context.Context, id string, index int) (any, error)
-	GroupInfoCallback      func(ctx context.Context) string
-	Session                SessionContext
-	ThinkStartArrivalSeq   uint64
-	ObservedThroughSeq     uint64
-	RecallCallback         func(messageID int64, arrivalSeq uint64)
-	actionSucceeded        bool
+	ConversationKind        string
+	TargetID                int64
+	MemoryMgr               *memory.Manager
+	Bot                     *onebot.Client
+	SnapshotLogID           uint
+	RunID                   string
+	VisibleTranscriptIDs    []uint
+	InjectedArrivalSeq      uint64
+	CompactionAttempts      int
+	CurrentConversationOnly bool
+	RequestTokenEstimate    int
+	MemoryReadVersions      map[uint]uint64
+	SpeakCallback           SpeakCallback       // 发言回调
+	SendStickerCallback     SendStickerCallback // 发送表情包回调
+	SendImageURLCallback    SendImageURLCallback
+	GetNewMessagesCallback  GetNewMessagesCallback
+	ReadForwardCallback     func(ctx context.Context, id string, index int) (any, error)
+	GroupInfoCallback       func(ctx context.Context) string
+	Session                 SessionContext
+	ThinkStartArrivalSeq    uint64
+	ObservedThroughSeq      uint64
+	RecallCallback          func(messageID int64, arrivalSeq uint64)
 
 	seenMu        sync.Mutex
 	seenToolCalls map[string]struct{}
-}
-
-// MarkActionSucceeded 只在已确认远程操作或本地状态变更成功后记录会话行动
-func (tc *ToolContext) MarkActionSucceeded() {
-	if tc != nil {
-		tc.actionSucceeded = true
-	}
-}
-
-// ReadThroughSeq 失败轮次仅在已执行行动时消费快照
-func (tc *ToolContext) ReadThroughSeq(thinkSucceeded bool) uint64 {
-	if tc == nil || (!thinkSucceeded && !tc.actionSucceeded) {
-		return 0
-	}
-	return max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
+	memoryMu      sync.Mutex
 }
 
 // ctxKey 上下文键类型
@@ -118,6 +110,30 @@ func truncateToolLogString(raw string, max int) string {
 		return trimmed
 	}
 	return string(runes[:max]) + "...(truncated)"
+}
+
+// MarkMemoryRead 记录本轮实际读取过的记忆版本，供维护工具做并发校验
+func (tc *ToolContext) MarkMemoryRead(id uint, version uint64) {
+	if tc == nil || id == 0 || version == 0 {
+		return
+	}
+	tc.memoryMu.Lock()
+	defer tc.memoryMu.Unlock()
+	if tc.MemoryReadVersions == nil {
+		tc.MemoryReadVersions = map[uint]uint64{}
+	}
+	tc.MemoryReadVersions[id] = version
+}
+
+// MemoryVersion 读取本轮已经读取过的记忆版本
+func (tc *ToolContext) MemoryVersion(id uint) (uint64, bool) {
+	if tc == nil || id == 0 {
+		return 0, false
+	}
+	tc.memoryMu.Lock()
+	defer tc.memoryMu.Unlock()
+	version, ok := tc.MemoryReadVersions[id]
+	return version, ok
 }
 
 // LogToolCall 记录工具调用

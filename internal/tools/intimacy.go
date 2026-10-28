@@ -62,10 +62,9 @@ func updateMemberIntimacy(ctx context.Context, userID int64, change, reason stri
 
 	profile, err := tc.MemoryMgr.UpdateMemberIntimacy(userID, delta, reason)
 	if err != nil {
-		return nil, NewTerminalToolError(fmt.Errorf("更新好感度失败: %w", err))
+		return nil, fmt.Errorf("更新好感度失败: %w", err)
 	}
 	tc.MarkToolCallSucceeded("updateMemberIntimacy:user", dedupKey)
-	tc.MarkActionSucceeded()
 	return &UpdateMemberIntimacyOutput{Success: true, Message: "好感度已更新", Intimacy: profile.Intimacy, Level: memory.IntimacyLevel(profile.Intimacy), LevelName: memory.IntimacyLevelName(profile.Intimacy)}, nil
 }
 

@@ -4,75 +4,79 @@ import (
 	"context"
 	"fmt"
 
+	"mumu-bot/internal/memory"
+
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 )
 
-// ==================== 情绪更新工具 ====================
+type EmotionChangeInput struct {
+	EmotionID   uint   `json:"emotion_id,omitempty"`
+	Kind        string `json:"kind" jsonschema:"description=喜悦/好奇/亲近/感动/思念/吃醋/担忧/安心/委屈/失落/不满/愧疚"`
+	AboutUserID int64  `json:"about_user_id,omitempty" jsonschema:"description=0 表示无特定对象，正数表示人物 QQ"`
+	Intensity   string `json:"intensity" jsonschema:"description=轻微/明显/强烈/已平复"`
+	DecayClass  string `json:"decay_class,omitempty" jsonschema:"description=brief 或 lingering"`
+	Reason      string `json:"reason,omitempty"`
+}
 
-// UpdateMoodInput 更新情绪的输入参数
 type UpdateMoodInput struct {
-	// ValenceDelta 心情变化量，正数变好，负数变差
-	ValenceDelta float64 `json:"valence_delta" jsonschema:"description=心情变化量：正数心情变好，负数心情变差。范围-0.5~0.5"`
-	// EnergyDelta 精力变化量，正数更活跃，负数更疲惫
-	EnergyDelta float64 `json:"energy_delta" jsonschema:"description=精力变化量：正数更有活力，负数更疲惫。范围-0.3~0.3"`
-	// SociabilityDelta 社交意愿变化量，正数更想聊，负数更想安静
-	SociabilityDelta float64 `json:"sociability_delta" jsonschema:"description=社交意愿变化量：正数更想聊天，负数更想安静。范围-0.3~0.3"`
-	// Reason 情绪变化的原因（可选）
-	Reason string `json:"reason,omitempty" jsonschema:"description=情绪变化的原因（给自己看的笔记，可选）"`
+	Changes     []EmotionChangeInput `json:"changes,omitempty"`
+	Energy      *string              `json:"energy,omitempty" jsonschema:"description=low/normal/high"`
+	Sociability *string              `json:"sociability,omitempty" jsonschema:"description=low/normal/high"`
+	Reason      string               `json:"reason,omitempty"`
 }
 
-// UpdateMoodOutput 更新情绪的输出
-type UpdateMoodOutput struct {
-	Success     bool    `json:"success"`
-	Message     string  `json:"message,omitempty"`
-	Valence     float64 `json:"valence"`     // 更新后的心情值
-	Energy      float64 `json:"energy"`      // 更新后的精力值
-	Sociability float64 `json:"sociability"` // 更新后的社交意愿值
-}
-
-// updateMoodFunc 更新情绪的实际实现
-func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (*UpdateMoodOutput, error) {
+func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (any, error) {
 	tc := GetToolContext(ctx)
-	if tc == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
-	}
-	if tc.MemoryMgr == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("记忆管理器未初始化"))
+	if tc == nil || tc.MemoryMgr == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("情绪能力未初始化"))
 	}
 	if input == nil {
-		return nil, fmt.Errorf("情绪参数不能为空")
+		input = &UpdateMoodInput{}
 	}
-
-	// 限制单次变化量，防止极端变化
-	valenceDelta := min(max(input.ValenceDelta, -0.5), 0.5)
-	energyDelta := min(max(input.EnergyDelta, -0.3), 0.3)
-	sociabilityDelta := min(max(input.SociabilityDelta, -0.3), 0.3)
-
-	mood, err := tc.MemoryMgr.UpdateMoodState(valenceDelta, energyDelta, sociabilityDelta, input.Reason)
-	if err != nil {
-		return nil, NewTerminalToolError(fmt.Errorf("更新情绪失败: %w", err))
+	changes := make([]memory.EmotionChange, 0, len(input.Changes))
+	for _, raw := range input.Changes {
+		about := raw.AboutUserID
+		if about == 0 && tc.ConversationKind == memory.ConversationKindPrivate {
+			about = tc.TargetID
+		}
+		source, err := sourceMetaJSON(tc, nil)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, memory.EmotionChange{
+			EmotionID: raw.EmotionID, Kind: raw.Kind, AboutUserID: about,
+			Intensity: raw.Intensity, DecayClass: raw.DecayClass, Reason: raw.Reason, SourceMeta: source,
+		})
 	}
-
-	return &UpdateMoodOutput{
-		Success:     true,
-		Message:     "情绪已更新",
-		Valence:     mood.Valence,
-		Energy:      mood.Energy,
-		Sociability: mood.Sociability,
-	}, nil
+	var emotions []memory.CurrentEmotion
+	var err error
+	if len(changes) > 0 {
+		emotions, err = tc.MemoryMgr.UpdateEmotions(ctx, changes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if input.Energy != nil || input.Sociability != nil {
+		current, getErr := tc.MemoryMgr.GetMoodState()
+		if getErr != nil {
+			return nil, getErr
+		}
+		energy, sociability := current.Energy, current.Sociability
+		if input.Energy != nil {
+			energy = memory.AffectLevel(*input.Energy, energy)
+		}
+		if input.Sociability != nil {
+			sociability = memory.AffectLevel(*input.Sociability, sociability)
+		}
+		if _, err := tc.MemoryMgr.UpdateAffectState(ctx, energy, sociability, input.Reason); err != nil {
+			return nil, err
+		}
+	}
+	all, _ := tc.MemoryMgr.CurrentEmotions(ctx, -1, 3)
+	return map[string]any{"success": true, "emotions": emotions, "current": all}, nil
 }
 
-// NewUpdateMoodTool 创建更新情绪工具
 func NewUpdateMoodTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
-		"updateMood",
-		`调整你的情绪状态。情绪会自然衰减回归平静，但你可以根据对话内容主动调整。
-
-【使用建议】
-- 不需要每次都调整，只有明确感受到情绪变化时才调用
-- 变化量建议小幅度（±0.1~0.2），除非发生重大事件
-- 例如：被夸了: valence +0.2；聊太久了: energy -0.1；话题无聊: sociability -0.15`,
-		updateMoodFunc,
-	)
+	return utils.InferTool("updateMood", "更新具体情感、精力和社交意愿。情感必须说明对象、原因和强度；不确定时不要更新。", updateMoodFunc)
 }

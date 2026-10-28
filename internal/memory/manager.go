@@ -2,40 +2,22 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
 	"slices"
-	"sync"
 	"time"
 
 	"mumu-bot/internal/config"
 
-	pgvector "github.com/pgvector/pgvector-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	gormlogger "gorm.io/gorm/logger"
 )
 
-type EmbeddingProvider interface {
-	Embed(ctx context.Context, text string) ([]float64, error)
-}
-
-type StoreClaimsContext struct {
-	ConversationKind        string
-	TargetID                int64
-	SelfID                  int64
-	SnapshotOneBotMessageID int64
-}
-
 type Manager struct {
-	db          *gorm.DB
-	embedding   EmbeddingProvider
-	cleanupStop chan struct{}
-	stopOnce    sync.Once
-	background  sync.WaitGroup
+	db *gorm.DB
 }
 
 func OpenDB() (*gorm.DB, error) {
@@ -53,42 +35,19 @@ func OpenDB() (*gorm.DB, error) {
 	return db, nil
 }
 
-func NewManager(db *gorm.DB, embedding EmbeddingProvider) (*Manager, error) {
+func NewManager(db *gorm.DB) (*Manager, error) {
 	if db == nil {
 		return nil, fmt.Errorf("PostgreSQL 未初始化")
 	}
-	if embedding == nil {
-		return nil, fmt.Errorf("embedding 未初始化")
-	}
-	m := &Manager{db: db, embedding: embedding, cleanupStop: make(chan struct{})}
-	m.startMessageLogCleanup()
-	m.startMoodDecay()
-	return m, nil
-}
-
-func EmbeddingVector(values []float64) (pgvector.Vector, error) {
-	expected := config.Get().Embedding.Dimensions
-	if len(values) != expected {
-		return pgvector.Vector{}, fmt.Errorf("embedding 维度不匹配: got %d, want %d", len(values), expected)
-	}
-	result := make([]float32, len(values))
-	for i, value := range values {
-		result[i] = float32(value)
-	}
-	return pgvector.NewVector(result), nil
-}
-
-func (m *Manager) GetRecentMessages(ctx context.Context, groupID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {
-	return m.GetRecentMessagesScope(ctx, ConversationKindGroup, groupID, throughOneBotMessageID, limit, offset)
+	return &Manager{db: db}, nil
 }
 
 func (m *Manager) GetRecentMessagesScope(ctx context.Context, kind string, targetID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {
 	var items []MessageLog
-	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id = ?", kind, targetID).Order("message_time DESC, id DESC").Limit(limit)
+	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID).Order("id DESC").Limit(limit)
 	if throughOneBotMessageID != 0 {
-		upperBound := m.db.Model(&MessageLog{}).Select("id").
-			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ?", kind, targetID, throughOneBotMessageID)
-		q = q.Where("message_logs.id <= (?)", upperBound)
+		upperBound := m.db.Model(&MessageLog{}).Select("id").Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", kind, targetID, throughOneBotMessageID)
+		q = q.Where("message_logs.id<=(?)", upperBound)
 	}
 	if offset > 0 {
 		q = q.Offset(offset)
@@ -102,18 +61,8 @@ func (m *Manager) GetRecentMessagesScope(ctx context.Context, kind string, targe
 
 func (m *Manager) GetMessageCountByTime(groupID, userID int64, start time.Time) (int64, error) {
 	var count int64
-	err := m.db.Model(&MessageLog{}).Where("conversation_kind=? AND target_id = ? AND user_id = ? AND message_time >= ?", ConversationKindGroup, groupID, userID, start).Count(&count).Error
+	err := m.db.Model(&MessageLog{}).Where("conversation_kind=? AND target_id=? AND user_id=? AND message_time>=?", ConversationKindGroup, groupID, userID, start).Count(&count).Error
 	return count, err
-}
-
-type rankedIDRow struct{ ID uint }
-
-func rankRows(rows []rankedIDRow) []uint {
-	result := make([]uint, len(rows))
-	for i, row := range rows {
-		result[i] = row.ID
-	}
-	return result
 }
 
 func requireAffected(result *gorm.DB) error {
@@ -128,21 +77,20 @@ func requireAffected(result *gorm.DB) error {
 
 func (m *Manager) GetMemberProfile(userID int64) (*MemberProfile, error) {
 	var profile MemberProfile
-	if err := m.db.First(&profile, "user_id = ?", userID).Error; err != nil {
+	if err := m.db.First(&profile, "user_id=?", userID).Error; err != nil {
 		return nil, err
 	}
 	return &profile, nil
 }
 
 func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt time.Time) (*MemberProfile, error) {
-	// 用 RETURNING 直接取回写入后的行，省去 upsert 后再查一次
 	profile := MemberProfile{UserID: userID, Nickname: nickname, LastSeenAt: seenAt, MessageCount: 1}
 	err := m.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"nickname":      gorm.Expr("CASE WHEN EXCLUDED.last_seen_at >= member_profiles.last_seen_at THEN EXCLUDED.nickname ELSE member_profiles.nickname END"),
-			"last_seen_at":  gorm.Expr("GREATEST(member_profiles.last_seen_at, EXCLUDED.last_seen_at)"),
-			"message_count": gorm.Expr("member_profiles.message_count + 1"),
+			"nickname":      gorm.Expr("CASE WHEN EXCLUDED.last_seen_at>=member_profiles.last_seen_at THEN EXCLUDED.nickname ELSE member_profiles.nickname END"),
+			"last_seen_at":  gorm.Expr("GREATEST(member_profiles.last_seen_at,EXCLUDED.last_seen_at)"),
+			"message_count": gorm.Expr("member_profiles.message_count+1"),
 		}),
 	}, clause.Returning{}).Create(&profile).Error
 	if err != nil {
@@ -151,16 +99,12 @@ func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt
 	return &profile, nil
 }
 
-func (m *Manager) GetMessageLogByID(groupID, messageID int64) (*MessageLog, error) {
-	return m.GetMessageLogByScope(ConversationKindGroup, groupID, messageID)
-}
-
 func (m *Manager) GetMessageLogByScope(kind string, targetID, messageID int64) (*MessageLog, error) {
 	var item MessageLog
 	if kind == "" {
 		kind = ConversationKindGroup
 	}
-	if err := m.db.Where("conversation_kind=? AND target_id=? AND one_bot_message_id = ?", kind, targetID, messageID).First(&item).Error; err != nil {
+	if err := m.db.Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", kind, targetID, messageID).First(&item).Error; err != nil {
 		return nil, err
 	}
 	return &item, nil
@@ -172,7 +116,7 @@ func (m *Manager) SchemaVersion(ctx context.Context) (int, error) {
 	return version, err
 }
 
-// MarkMessageRecalledScope 按会话作用域标记消息撤回并使相关证据失效
+// MarkMessageRecalledScope 只标记撤回，不改写已经进入上下文的历史原文
 func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int64) (*MessageLog, bool, error) {
 	if kind == "" {
 		kind = ConversationKindGroup
@@ -183,13 +127,9 @@ func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int6
 	var item MessageLog
 	changed := false
 	err := m.db.Transaction(func(tx *gorm.DB) error {
-		if err := LockKnowledgeScope(tx, kind, targetID); err != nil {
-			return err
-		}
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("conversation_kind=? AND target_id = ? AND one_bot_message_id = ?", kind, targetID, messageID).
-			First(&item)
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", kind, targetID, messageID).Take(&item)
+		if result.Error == gorm.ErrRecordNotFound {
 			return nil
 		}
 		if result.Error != nil {
@@ -198,29 +138,11 @@ func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int6
 		if item.RecalledAt != nil {
 			return nil
 		}
-
-		recalledAt := time.Now()
-		displayContent := RecalledMessageDisplayContent
-		if err := tx.Model(&item).Updates(map[string]any{
-			"recalled_at":         recalledAt,
-			"text_content":        "",
-			"display_content":     displayContent,
-			"reply_to_message_id": nil,
-			"is_mentioned":        false,
-		}).Error; err != nil {
+		now := time.Now()
+		if err := tx.Model(&item).Update("recalled_at", now).Error; err != nil {
 			return err
 		}
-		item.RecalledAt = &recalledAt
-		item.TextContent = ""
-		item.DisplayContent = displayContent
-		item.ReplyToMessageID = nil
-		item.IsMentioned = false
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&TopicAssignment{MessageLogID: item.ID}).Error; err != nil {
-			return err
-		}
-		if err := InvalidateKnowledgeEvidenceScope(tx, kind, targetID); err != nil {
-			return err
-		}
+		item.RecalledAt = &now
 		changed = true
 		return nil
 	})
@@ -234,8 +156,6 @@ func (m *Manager) MarkMessageRecalledScope(kind string, targetID, messageID int6
 }
 
 func (m *Manager) Close() error {
-	m.stopOnce.Do(func() { close(m.cleanupStop) })
-	m.background.Wait()
 	sqlDB, err := m.db.DB()
 	if err != nil {
 		return err
@@ -244,3 +164,16 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) GetDB() *gorm.DB { return m.db }
+
+func (m *Manager) GetMessageLogByInternalID(id uint) (*MessageLog, error) {
+	var item MessageLog
+	if err := m.db.Where("id=?", id).First(&item).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+// WithContext 返回绑定请求上下文的轻量管理器
+func (m *Manager) WithContext(ctx context.Context) *Manager {
+	return &Manager{db: m.db.WithContext(ctx)}
+}

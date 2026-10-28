@@ -3,12 +3,12 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
-	"mumu-bot/internal/topic"
 
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
@@ -69,15 +69,12 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 			created = true
 			return nil
 		}
-		if msg.ConversationKind == memory.ConversationKindGroup {
-			var err error
-			log, created, err = topic.NewManager(tx.Session(&gorm.Session{DisableNestedTransaction: true})).PersistMessage(ctx, msg, msg.IsMentioned, mediaRefs)
-			if err != nil || !created {
-				return err
-			}
-			return saveMessageForwards(tx, log, forwards)
+		log = &memory.MessageLog{
+			ConversationKind: msg.ConversationKind, OneBotMessageID: msg.MessageID,
+			TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname,
+			TextContent: msg.Content, DisplayContent: msg.FinalContent,
+			IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs,
 		}
-		log = &memory.MessageLog{ConversationKind: memory.ConversationKindPrivate, OneBotMessageID: msg.MessageID, TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname, TextContent: msg.Content, DisplayContent: msg.FinalContent, IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs}
 		if msg.Reply != nil && msg.Reply.MessageID != 0 {
 			replyTo := msg.Reply.MessageID
 			log.ReplyToMessageID = &replyTo
@@ -89,6 +86,16 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 		created = result.RowsAffected > 0
 		if !created {
 			return tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", msg.ConversationKind, msg.TargetID, msg.MessageID).First(log).Error
+		}
+		if log != nil && strings.TrimSpace(log.MessageRef) == "" {
+			ref, err := a.memory.AllocateMessageRef(tx, msg.ConversationKind, msg.TargetID)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&memory.MessageLog{}).Where("id=?", log.ID).Update("message_ref", ref).Error; err != nil {
+				return err
+			}
+			log.MessageRef = ref
 		}
 		return saveMessageForwards(tx, log, forwards)
 	})

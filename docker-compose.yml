@@ -1,6 +1,6 @@
 services:
   database:
-    image: pgvector/pgvector:0.8.2-pg18-trixie
+    image: postgres:18-trixie
     restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
@@ -64,12 +64,6 @@ services:
       MUMU_MODEL_HIGH_BASE_URL: ${MUMU_MODEL_HIGH_BASE_URL:?set MUMU_MODEL_HIGH_BASE_URL in .env}
       MUMU_MODEL_HIGH_API_KEY: ${MUMU_MODEL_HIGH_API_KEY:?set MUMU_MODEL_HIGH_API_KEY in .env}
       MUMU_MODEL_HIGH_MODEL: ${MUMU_MODEL_HIGH_MODEL:?set MUMU_MODEL_HIGH_MODEL in .env}
-      MUMU_MODEL_LOW_BASE_URL: ${MUMU_MODEL_LOW_BASE_URL:?set MUMU_MODEL_LOW_BASE_URL in .env}
-      MUMU_MODEL_LOW_API_KEY: ${MUMU_MODEL_LOW_API_KEY:?set MUMU_MODEL_LOW_API_KEY in .env}
-      MUMU_MODEL_LOW_MODEL: ${MUMU_MODEL_LOW_MODEL:?set MUMU_MODEL_LOW_MODEL in .env}
-      MUMU_EMBEDDING_BASE_URL: ${MUMU_EMBEDDING_BASE_URL:?set MUMU_EMBEDDING_BASE_URL in .env}
-      MUMU_EMBEDDING_API_KEY: ${MUMU_EMBEDDING_API_KEY:?set MUMU_EMBEDDING_API_KEY in .env}
-      MUMU_EMBEDDING_MODEL: ${MUMU_EMBEDDING_MODEL:?set MUMU_EMBEDDING_MODEL in .env}
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:

@@ -34,12 +34,13 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		MemoryCount:       stats.MemoryCount,
 		MemberCount:       stats.MemberCount,
 		ActiveCount:       stats.ActiveCount,
-		RelationCount:     stats.RelationCount,
+		TopicCount:        stats.TopicCount,
 		StickerCount:      stats.StickerCount,
 		OneBotConnected:   snapshot.Connected,
 		SelfID:            snapshot.SelfID,
 		MCPToolCount:      snapshot.MCPToolCount,
 		CurrentMood:       snapshot.CurrentMood,
+		CurrentEmotions:   snapshot.CurrentEmotions,
 		Flash:             flash,
 	}, r.URL.Path))
 }
@@ -258,11 +259,18 @@ func (a *App) stickerPageData(current *neturl.URL, flash *views.FlashMessage) (v
 func (a *App) topicPageData(current *neturl.URL, flash *views.FlashMessage) (views.TopicListPageData, error) {
 	page := parsePositiveInt(current.Query().Get("page"), 1)
 	pageSize := listPageSizeWithDefault(current.Query().Get("page_size"), compactListPageSize)
+	conversationKind, targetID := parseConversationParam(current.Query().Get("conversation"))
+	status := strings.TrimSpace(current.Query().Get("status"))
+	if status == "all" {
+		status = ""
+	}
 	filter := services.ListFilter{
-		GroupID:  parseInt64Query(current.Query().Get("group_id")),
-		Keyword:  strings.TrimSpace(current.Query().Get("keyword")),
-		Page:     page,
-		PageSize: pageSize,
+		ConversationKind: conversationKind,
+		TargetID:         targetID,
+		Status:           status,
+		Keyword:          strings.TrimSpace(current.Query().Get("keyword")),
+		Page:             page,
+		PageSize:         pageSize,
 	}
 
 	result, err := a.admin.ListTopicThreads(filter)
@@ -270,13 +278,13 @@ func (a *App) topicPageData(current *neturl.URL, flash *views.FlashMessage) (vie
 		return views.TopicListPageData{}, err
 	}
 
-	groups, err := a.admin.KnowledgeGroups(context.Background())
+	conversations, err := a.admin.KnowledgeConversations(context.Background())
 	if err != nil {
 		return views.TopicListPageData{}, err
 	}
 	return views.TopicListPageData{
-		Groups: groups, CurrentURL: views.WithQuery(current.RequestURI(), "sort", "", "order", ""),
-		GroupID: current.Query().Get("group_id"),
+		Conversations: conversations, CurrentURL: views.WithQuery(current.RequestURI(), "sort", "", "order", ""),
+		Conversation: current.Query().Get("conversation"), Status: status,
 		Keyword: filter.Keyword,
 		Items:   result.Items,
 		Meta:    a.listMeta(current, result.Page, result.PageSize, result.Total),
@@ -295,9 +303,7 @@ func (a *App) topicDetailPageData(id uint, flash *views.FlashMessage) (views.Top
 	}
 
 	return views.TopicDetailPageData{
-		Thread:         thread,
-		SummaryChanges: views.TopicSummaryChanges(thread),
-		Messages:       messages,
-		Flash:          flash,
+		Thread: thread, SummaryChanges: views.TopicSummaryChanges(thread),
+		Messages: messages, Flash: flash,
 	}, nil
 }

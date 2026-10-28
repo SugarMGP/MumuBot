@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"mumu-bot/internal/llm"
 	"mumu-bot/internal/migration"
 	"mumu-bot/internal/utils"
 	"mumu-bot/internal/web/views"
@@ -52,14 +51,15 @@ func (a *App) systemSections() []views.SystemSection {
 		groupFields = append(groupFields, views.SystemField{Label: "聚合窗口", Value: fmt.Sprintf("%d 毫秒", cfg.Agent.ThinkDebounceMS)})
 	}
 	groupFields = append(groupFields,
-		views.SystemField{Label: "记忆整理", Value: fmt.Sprintf("满 %d 条或等待 %d 分钟后排队", cfg.Learning.BatchSize, cfg.Learning.MaxWaitMinutes)},
-		views.SystemField{Label: "整理间隔", Value: fmt.Sprintf("同一会话至少 %d 分钟，单轮最多 %d 秒", cfg.Learning.IntervalMinutes, cfg.Learning.TimeoutSeconds)},
+		views.SystemField{Label: "上下文压缩", Value: fmt.Sprintf("达到 %d%% 后一次性整理", int(cfg.Agent.Compaction.TriggerRatio*100))},
+		views.SystemField{Label: "压缩目标", Value: fmt.Sprintf("目标 %d%%，最多接受 %d%%", int(cfg.Agent.Compaction.TargetRatio*100), 55)},
+		views.SystemField{Label: "最近原文", Value: fmt.Sprintf("保留约 %d%%", int(cfg.Agent.Compaction.RecentTailRatio*100))},
+		views.SystemField{Label: "单次上限", Value: fmt.Sprintf("%d 步、%d 秒", cfg.Agent.Compaction.MaxStep, cfg.Agent.Compaction.TimeoutSeconds)},
 	)
 
 	modelFields := make([]views.SystemField, 0, 8)
-	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierHigh), cfg.ModelTiers.High.Model)
-	modelFields = appendField(modelFields, llm.TierDisplayName(llm.TierLow), cfg.ModelTiers.Low.Model)
-	modelFields = appendField(modelFields, "记忆检索", cfg.Embedding.Model)
+	modelFields = appendField(modelFields, "主模型", cfg.ModelTiers.High.Model)
+	modelFields = appendField(modelFields, "记忆与话题检索", "关键词与模糊匹配")
 	if snapshot.MCPToolCount > 0 {
 		modelFields = append(modelFields, views.SystemField{Label: "扩展工具", Value: fmt.Sprintf("%d 个", snapshot.MCPToolCount)})
 	}
@@ -86,7 +86,7 @@ func (a *App) systemSections() []views.SystemSection {
 		sections = append(sections, views.SystemSection{Title: "人格设定", Fields: personaFields})
 	}
 	if len(groupFields) > 0 {
-		sections = append(sections, views.SystemSection{Title: "群聊与学习", Fields: groupFields})
+		sections = append(sections, views.SystemSection{Title: "群聊与上下文", Fields: groupFields})
 	}
 	if len(modelFields) > 0 {
 		sections = append(sections, views.SystemSection{Title: "模型能力", Fields: modelFields})

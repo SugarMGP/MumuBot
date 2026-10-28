@@ -15,7 +15,7 @@ type KnowledgeDetailPageData struct {
 }
 
 func knowledgeHref(id uint) string { return fmt.Sprintf("/admin/knowledge/%d", id) }
-func knowledgeTitle(item memory.KnowledgeItem) string {
+func knowledgeTitle(item memory.KnowledgeRecord) string {
 	if item.Label != "" {
 		return item.Label
 	}

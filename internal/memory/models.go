@@ -1,50 +1,16 @@
 package memory
 
 import (
-	"mumu-bot/internal/media"
-
 	"strings"
 	"time"
 
-	pgvector "github.com/pgvector/pgvector-go"
+	"mumu-bot/internal/media"
 )
 
-type MemoryKind string
-
-const (
-	MemoryKindFact       MemoryKind = "fact"
-	MemoryKindPreference MemoryKind = "preference"
-	MemoryKindConstraint MemoryKind = "constraint"
-	MemoryKindGoal       MemoryKind = "goal"
-)
-
-const SubjectSelfInputID int64 = -1
-
-type RawMemoryClaim struct {
-	SubjectUserID      *int64  `json:"subject_user_id" jsonschema:"description=记忆主体；-1 表示机器人自身，0 表示群组，正数表示成员 QQ"`
-	Kind               string  `json:"kind" jsonschema:"enum=fact,enum=preference,enum=constraint,enum=goal"`
-	Content            string  `json:"content" jsonschema:"description=包含当前昵称且脱离原句仍可理解的完整自然语言命题"`
-	EvidenceMessageIDs []int64 `json:"evidence_message_ids" jsonschema:"description=1 到 8 条原始证据消息 ID"`
-}
-
-type MemoryClaim struct {
-	SubjectUserID      int64      `json:"subject_user_id"`
-	Kind               MemoryKind `json:"kind"`
-	Content            string     `json:"content"`
-	EvidenceMessageIDs []int64    `json:"evidence_message_ids"`
-}
-
+// NormalizeContent 统一记忆去重时的空白和大小写
 func NormalizeContent(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
-
-// messageWhitespaceSQL 与 Go strings.TrimSpace 的 Unicode 空白集合一致
-const messageWhitespaceSQL = `U&'\0009\000a\000b\000c\000d\0020\0085\00a0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200a\2028\2029\202f\205f\3000'`
-
-// OriginalMessageTextSQL 统一判定已使用 ml 别名的原文是否非空
-const OriginalMessageTextSQL = "btrim(ml.text_content," + messageWhitespaceSQL + ")"
-
-const originalMessageTextSQL = "btrim(text_content," + messageWhitespaceSQL + ")"
 
 type MessageLog struct {
 	ID               uint       `gorm:"primaryKey" json:"id"`
@@ -58,6 +24,7 @@ type MessageLog struct {
 	ReplyToMessageID *int64     `json:"reply_to_message_id,omitempty"`
 	IsMentioned      bool       `gorm:"not null" json:"is_mentioned"`
 	MessageTime      time.Time  `gorm:"index;not null" json:"message_time"`
+	MessageRef       string     `gorm:"type:text;not null" json:"message_ref"`
 	RecalledAt       *time.Time `json:"recalled_at,omitempty"`
 	MediaRefs        media.Refs `gorm:"column:media_refs;type:jsonb" json:"media_refs,omitempty"`
 }
@@ -77,14 +44,6 @@ type MessageForward struct {
 func (MessageForward) TableName() string { return "message_forwards" }
 
 const RecalledMessageDisplayContent = "【消息已撤回】"
-
-type TopicThread struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	GroupID   int64     `gorm:"index;not null" json:"group_id"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (TopicThread) TableName() string { return "topic_threads" }
 
 type TopicAssignment struct {
 	ID           uint  `gorm:"primaryKey" json:"id"`
@@ -109,24 +68,6 @@ type TopicSummary struct {
 	RecentTurns  []string           `json:"recent_turns"`
 	Keywords     []string           `json:"keywords"`
 }
-
-type TopicSummarySource struct {
-	SummaryID    uint `gorm:"primaryKey"`
-	MessageLogID uint `gorm:"primaryKey"`
-}
-
-func (TopicSummarySource) TableName() string { return "topic_summary_sources" }
-
-type TopicSummaryRecord struct {
-	ID                       uint             `gorm:"primaryKey" json:"id"`
-	ThroughTopicAssignmentID uint             `gorm:"index;not null" json:"through_topic_assignment_id"`
-	SummaryJSON              string           `gorm:"type:jsonb;not null" json:"summary_json"`
-	Embedding                *pgvector.Vector `gorm:"type:vector" json:"-"`
-	CreatedAt                time.Time        `json:"created_at"`
-	SourcesValid             bool             `gorm:"column:sources_valid;->;-:migration" json:"sources_valid"`
-}
-
-func (TopicSummaryRecord) TableName() string { return "topic_summaries" }
 
 type MemberProfile struct {
 	UserID       int64     `gorm:"primaryKey" json:"user_id"`
@@ -159,14 +100,14 @@ type MemberName struct {
 
 func (MemberName) TableName() string { return "member_names" }
 
-type LearningState struct {
-	ConversationKind string     `gorm:"primaryKey;type:text" json:"conversation_kind"`
-	TargetID         int64      `gorm:"column:target_id;primaryKey" json:"target_id"`
-	LastMessageLogID uint       `gorm:"not null" json:"last_message_log_id"`
-	NextAttemptAt    *time.Time `json:"next_attempt_at,omitempty"`
+type ConversationAgentState struct {
+	ConversationKind string    `gorm:"primaryKey;type:text" json:"conversation_kind"`
+	TargetID         int64     `gorm:"column:target_id;primaryKey" json:"target_id"`
+	Note             string    `json:"note"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-func (LearningState) TableName() string { return "learning_states" }
+func (ConversationAgentState) TableName() string { return "group_agent_states" }
 
 type Sticker struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
@@ -183,7 +124,6 @@ func (Sticker) TableName() string { return "stickers" }
 type MoodState struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	Valence     float64   `gorm:"not null;default:0" json:"valence"`
 	Energy      float64   `gorm:"not null;default:0.5" json:"energy"`
 	Sociability float64   `gorm:"not null;default:0.5" json:"sociability"`
 	LastReason  string    `gorm:"type:text" json:"last_reason,omitempty"`

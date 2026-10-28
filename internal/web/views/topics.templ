@@ -25,9 +25,9 @@ templ TopicListBody(data TopicListPageData) {
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
 									<h2 class="line-clamp-2 text-lg font-semibold leading-6 text-base-content">{ topicTitle(item) }</h2>
-									<p class="admin-number mt-1 text-xs text-base-content/60">群 { fmt.Sprintf("%d", item.GroupID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p>
+									<p class="admin-number mt-1 text-xs text-base-content/60">{ conversationText(item.ConversationKind, item.TargetID) } · 话题 #{ fmt.Sprintf("%d", item.ID) }</p>
 								</div>
-								<span class={ joinClasses("shrink-0", topicSummaryProgressClass(item)) }>{ topicSummaryProgressText(item) }</span>
+								<span class={ joinClasses("shrink-0", topicStateClass(item)) }>{ topicStateText(item) }</span>
 							</div>
 							<p class="line-clamp-3 text-sm leading-7 text-base-content/75" title={ topicGist(item) }>{ topicGist(item) }</p>
 							<div class="flex flex-wrap gap-2">
@@ -36,7 +36,7 @@ templ TopicListBody(data TopicListPageData) {
 								}
 							</div>
 							<div class="flex items-center justify-between border-t border-base-300 pt-3 text-xs text-base-content/60">
-								<span>{ topicUpdatedTime(item) } · 待续 { fmt.Sprint(len(topicSummary(item).OpenLoops)) } 项</span>
+								<span>{ topicUpdatedTime(item) } · { fmt.Sprint(item.MessageCount) } 条消息 · 关键 { fmt.Sprint(len(item.AnchorMessageIDs)) } 条 · 待续 { fmt.Sprint(len(topicSummary(item).OpenLoops)) } 项</span>
 								<span class="flex items-center gap-1 font-medium text-primary">
 									<span>查看详情</span>@AdminIcon("arrow-right", "size-3.5", "topic-detail-arrow")
 								</span>
@@ -51,12 +51,17 @@ templ TopicListBody(data TopicListPageData) {
 }
 
 templ TopicFilterForm(data TopicListPageData) {
-	<form id="topic-filter-form" class="grid grid-cols-[clamp(150px,24vw,200px)_minmax(0,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
-		<select class="select w-full" name="group_id" aria-label="群聊">
-			<option value="">全部群聊</option>
-			for _,id:=range data.Groups {
-				<option value={ fmt.Sprint(id) } selected?={ fmt.Sprint(id)==data.GroupID }>群 { fmt.Sprint(id) }</option>
+	<form id="topic-filter-form" class="grid grid-cols-[clamp(170px,24vw,240px)_clamp(120px,14vw,160px)_minmax(0,1fr)_auto] items-center gap-3" method="get" action="/admin/topics" hx-get="/admin/topics" hx-trigger="submit" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+		<select class="select w-full" name="conversation" aria-label="会话">
+			<option value="">全部会话</option>
+			for _,item:=range data.Conversations {
+				<option value={ item.Kind+":"+fmt.Sprint(item.TargetID) } selected?={ item.Kind+":"+fmt.Sprint(item.TargetID)==data.Conversation }>{ conversationLabel(item) }</option>
 			}
+		</select>
+		<select class="select w-full" name="status" aria-label="状态">
+			<option value="">全部状态</option>
+			<option value="active" selected?={ data.Status=="active" }>当前话题</option>
+			<option value="dormant" selected?={ data.Status=="dormant" }>可检索话题</option>
 		</select>
 		<input class="input w-full border-base-300 focus:border-primary" type="search" name="keyword" value={ data.Keyword } placeholder="输入话题关键词…" aria-label="话题关键词"/>
 		<button class="btn btn-primary min-w-24" type="submit" data-loading-label="筛选中">
@@ -80,8 +85,10 @@ templ TopicDetailBody(data TopicDetailPageData) {
 				<h1 class="admin-page-title min-w-0 truncate font-semibold">{ topicTitle(data.Thread) }</h1>
 			</div>
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-xs text-base-content/60">
-				<span class="badge badge-ghost badge-sm">群 { fmt.Sprintf("%d", data.Thread.GroupID) }</span>
-				<span class={ topicSummaryProgressClass(data.Thread) }>{ topicSummaryProgressText(data.Thread) }</span>
+				<span class="badge badge-ghost badge-sm">{ conversationText(data.Thread.ConversationKind, data.Thread.TargetID) }</span>
+				<span class={ topicStateClass(data.Thread) }>{ topicStateText(data.Thread) }</span>
+				<span class="badge badge-ghost badge-sm">关键消息 { fmt.Sprint(len(data.Thread.AnchorMessageIDs)) } 条</span>
+				<span class="badge badge-ghost badge-sm">原文 { fmt.Sprint(len(data.Thread.SourceMessageIDs)) } 条</span>
 				<span>更新于 { topicUpdatedTime(data.Thread) }</span>
 			</div>
 		</header>
@@ -107,6 +114,12 @@ templ TopicDetailBody(data TopicDetailPageData) {
 										<div class="flex items-center justify-between gap-3">
 											<div class="flex min-w-0 items-center gap-2">
 												<span class="min-w-0 truncate text-xs font-medium text-base-content/75">{ topicMessageSender(item) }</span>
+												if topicMessageAnchor(data.Thread, item.ID) {
+													<span class="badge badge-warning badge-soft badge-xs shrink-0">关键消息</span>
+												}
+												if topicMessageSource(data.Thread, item.ID) {
+													<span class="badge badge-primary badge-soft badge-xs shrink-0">摘要来源</span>
+												}
 												if item.RecalledAt != nil {
 													<span class="badge badge-error badge-soft badge-xs shrink-0">已撤回</span>
 												}
@@ -139,14 +152,14 @@ templ TopicDetailBody(data TopicDetailPageData) {
 }
 
 templ TopicCurrentSummary(topic services.TopicThreadView) {
-	if latest:=topic.LatestSummary();latest!=nil && !latest.SourcesValid {
-		<div class="alert alert-warning">摘要依据已失效，等待后续讨论重新整理。历史版本保留供核对。</div>
-	}
 	<section class="card">
 		<div class="card-body gap-4 p-5">
 			<div class="flex items-center gap-2 text-primary">
 				@AdminIcon("memories", "size-5", "topic-summary")
 				<h2 class="text-lg font-semibold text-base-content">当前摘要</h2>
+				if latest := topic.LatestSummary(); latest != nil {
+					<span class="badge badge-ghost badge-sm">v{ fmt.Sprint(latest.Version) }</span>
+				}
 			</div>
 			<p class="text-sm leading-7 text-base-content/75">{ topicGist(topic) }</p>
 			<div class="divider my-0"></div>
@@ -159,6 +172,21 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 					}
 				</div>
 			</div>
+			if len(topicSummary(topic).Participants) > 0 {
+				<div>
+					<h3 class="text-xs font-semibold text-base-content/60">参与人</h3>
+					<div class="mt-2 flex flex-wrap gap-2">
+						for _, participant := range topicSummary(topic).Participants {
+							<div class="flex items-center gap-2 rounded-lg border border-base-300 px-2.5 py-1.5 text-xs">
+								<span class="font-medium text-base-content/75">{ displayText(participant.Nickname, fmt.Sprintf("%d", participant.UserID)) }</span>
+								if participant.Position != "" {
+									<span class="text-base-content/45">{ participant.Position }</span>
+								}
+							</div>
+						}
+					</div>
+				</div>
+			}
 			if len(topicSummary(topic).OpenLoops) > 0 {
 				<div>
 					<h3 class="text-xs font-semibold text-base-content/60">未完事项</h3>

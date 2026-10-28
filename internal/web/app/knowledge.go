@@ -84,12 +84,7 @@ func (a *App) handleKnowledgeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	target := a.actionTargetURL(r, "/admin/knowledge")
 	if err != nil {
-		message := "记录可能已变化，或缺少完整有效证据。请刷新后核对。"
-		var validation *memory.ValidationError
-		if errors.As(err, &validation) {
-			message = validation.Message
-		}
-		http.Redirect(w, r, withFlash(target.String(), "error", "操作未完成", message), http.StatusSeeOther)
+		http.Redirect(w, r, withFlash(target.String(), "error", "操作未完成", err.Error()), http.StatusSeeOther)
 		return
 	}
 	title := "记忆状态已更新"

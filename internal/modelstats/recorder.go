@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/callbacks"
-	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/model"
 	callbacktpl "github.com/cloudwego/eino/utils/callbacks"
 	"go.uber.org/zap"
@@ -165,23 +164,6 @@ func Handler(task, modelName string) callbacks.Handler {
 				recorder.Record(task, modelName, elapsed(ctx), true, 0, false)
 				return ctx
 			},
-		}).
-		Embedding(&callbacktpl.EmbeddingCallbackHandler{
-			OnStart: func(ctx context.Context, _ *callbacks.RunInfo, _ *embedding.CallbackInput) context.Context {
-				return context.WithValue(ctx, startedAtKey{}, time.Now())
-			},
-			OnEnd: func(ctx context.Context, _ *callbacks.RunInfo, output *embedding.CallbackOutput) context.Context {
-				total, reported := 0, false
-				if output != nil && output.TokenUsage != nil {
-					total, reported = output.TokenUsage.TotalTokens, true
-				}
-				recorder.Record(task, modelName, elapsed(ctx), false, total, reported)
-				return ctx
-			},
-			OnError: func(ctx context.Context, _ *callbacks.RunInfo, _ error) context.Context {
-				recorder.Record(task, modelName, elapsed(ctx), true, 0, false)
-				return ctx
-			},
 		}).Handler()
 }
 
@@ -265,24 +247,8 @@ func taskLabel(task string) string {
 	switch task {
 	case "react":
 		return "主对话"
-	case "topic_assignment":
-		return "话题归属"
-	case "memory_agent":
-		return "记忆整理"
-	case "topic_summary":
-		return "话题摘要"
-	case "memory_merge":
-		return "记忆合并"
-	case "learning_culture":
-		return "群文化学习"
-	case "learning_profile":
-		return "成员画像学习"
-	case "learning_review":
-		return "学习审核"
-	case "vision":
-		return "图片与视频理解"
-	case "embedding":
-		return "向量检索"
+	case "compaction":
+		return "上下文压缩"
 	default:
 		return task
 	}

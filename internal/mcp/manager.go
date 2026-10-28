@@ -37,15 +37,14 @@ type Config struct {
 
 // Manager MCP 客户端管理器
 type Manager struct {
-	clients  []*client.Client
-	tools    []tool.BaseTool
-	readOnly map[string]bool
-	mu       sync.RWMutex
+	clients []*client.Client
+	tools   []tool.BaseTool
+	mu      sync.RWMutex
 }
 
 // NewMCPManager 创建 MCP 管理器
 func NewMCPManager() *Manager {
-	return &Manager{readOnly: make(map[string]bool)}
+	return &Manager{}
 }
 
 // LoadFromConfig 从配置文件加载 MCP 服务器
@@ -148,42 +147,14 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 		_ = cli.Close()
 		return err
 	}
-	readOnly := listReadOnlyTools(ctx, cli, cfg)
 	m.clients = append(m.clients, cli)
 	m.tools = append(m.tools, renamed...)
-	for name, ro := range readOnly {
-		m.readOnly[name] = ro
-	}
 
 	zap.L().Info("已加载 MCP 工具",
 		zap.String("server", cfg.Name),
 		zap.Int("tool_count", len(baseTools)))
 
 	return nil
-}
-
-// listReadOnlyTools 读取 MCP 自带的只读标注；未标注或读取失败按可能有副作用处理
-func listReadOnlyTools(ctx context.Context, cli *client.Client, cfg *ServerConfig) map[string]bool {
-	result := make(map[string]bool)
-	list, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
-	if err != nil {
-		zap.L().Warn("读取 MCP 工具只读标注失败，按可能有副作用处理", zap.String("server", cfg.Name), zap.Error(err))
-		return result
-	}
-	allowed := make(map[string]struct{}, len(cfg.ToolNameList))
-	for _, name := range cfg.ToolNameList {
-		allowed[name] = struct{}{}
-	}
-	for _, item := range list.Tools {
-		if len(allowed) > 0 {
-			if _, ok := allowed[item.Name]; !ok {
-				continue
-			}
-		}
-		hint := item.Annotations.ReadOnlyHint
-		result[mcpToolName(cfg.Name, item.Name)] = hint != nil && *hint
-	}
-	return result
 }
 
 // renamedTool 把 MCP 工具改名成 mcp-服务名-工具名，调用能力原样透传
@@ -272,17 +243,6 @@ func (m *Manager) GetTools() []tool.BaseTool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.tools
-}
-
-// ReadOnlyTools 返回带只读标注的 MCP 工具名；其余工具在失败轮次按可能有副作用处理
-func (m *Manager) ReadOnlyTools() map[string]bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make(map[string]bool, len(m.readOnly))
-	for name, ro := range m.readOnly {
-		result[name] = ro
-	}
-	return result
 }
 
 // Close 关闭所有MCP连接

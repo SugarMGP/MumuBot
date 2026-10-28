@@ -89,14 +89,13 @@ func (m *Manager) RecentIntimacyLogs(userIDs []int64, perUser int) (map[int64][]
 		perUser = 8
 	}
 	var rows []MemberIntimacyLog
-	if err := m.db.Raw(`SELECT id,user_id,delta,before_value,after_value,reason,created_at FROM (
-		SELECT *,row_number() OVER (PARTITION BY user_id ORDER BY created_at DESC,id DESC) AS position
-		FROM member_intimacy_logs WHERE user_id=ANY(?::bigint[])
-	) recent WHERE position<=? ORDER BY user_id,created_at DESC,id DESC`, int64Array(userIDs), perUser).Scan(&rows).Error; err != nil {
+	if err := m.db.Where("user_id IN ?", userIDs).Order("user_id,created_at DESC,id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
-		result[row.UserID] = append(result[row.UserID], row)
+		if len(result[row.UserID]) < perUser {
+			result[row.UserID] = append(result[row.UserID], row)
+		}
 	}
 	return result, nil
 }

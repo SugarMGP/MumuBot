@@ -6,17 +6,15 @@
 
 - MumuBot 是运行在 QQ 群和好友私聊里的智能体：通过 OneBot 11 接收群消息与好友私聊消息，使用 ReAct（观察、思考、行动循环）决定是否回复、调用工具或保持沉默。
 - 主链路由 `main.go` 启动：配置加载、模型客户端、记忆系统、聊天 agent、管理后台和退出清理都在这里串起来。
-- 语义能力分成几条边界清楚的链路：话题工作记忆保存对话脉络，统一 Memory Agent 负责话题归属、摘要和长期知识维护，后台负责查看、审核和管理。
+- 语义能力分成几条边界清楚的链路：主 Agent 直接维护长期记忆和具体情感，同步话题压缩保存对话脉络与检查点，后台负责浏览与管理。
 
 ## 目录地图
 
-- `internal/agent/`：运行编排层，连接 OneBot、话题、学习、工具、模型和思考循环。
+- `internal/agent/`：运行编排层，连接 OneBot、transcript、同步压缩、工具、模型和思考循环。
 - `internal/onebot/`：onebot-sdk 接入、OneBot 11 Adapter、消息事件解析和发送 API。
-- `internal/topic/`：话题工作记忆读取、消息持久化、归档检索和提示词上下文；没有独立模型任务。
-- `internal/memory/`：PostgreSQL 数据模型、pgvector/pg_trgm 检索、长期记忆、消息日志、成员画像。
+- `internal/memory/`：PostgreSQL 数据模型、pg_trgm 检索、transcript、checkpoint、长期记忆、情感、消息日志和成员画像。
 - `internal/migration/`：数据库 schema 版本与一次性数据迁移，只依赖 GORM 和 memory 的模型。
-- `internal/learning/`：统一 Memory Agent、群聊与私聊轮转、批处理与冷却。
-- `internal/tools/`：暴露给 ReAct agent 和学习审核流程使用的工具。
+- `internal/tools/`：暴露给主 Agent 和压缩 Agent 的受限工具集。
 - `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务（含会话管理）。
 - `config/`：运行配置、群聊人格提示词、私聊提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
 
@@ -27,11 +25,11 @@
 | 看启动顺序 | `main.go` |
 | 看消息如何进入 bot | `internal/onebot/client.go`、`internal/agent/message.go` |
 | 看回复决策 | `internal/agent/think.go` |
-| 看话题分配和摘要 | `internal/learning/investigate.go`、`internal/memory/conversation.go` |
-| 看长期记忆入库 | `internal/memory/knowledge_commit.go`、`internal/memory/conversation.go` |
+| 看 transcript 与同步压缩 | `internal/agent/session.go`、`internal/agent/compaction.go` |
+| 看话题提交与分层检索 | `internal/memory/topic_compaction.go`、`internal/memory/topics_v2.go` |
+| 看长期记忆与情感 | `internal/memory/memory_v2.go`、`internal/memory/emotion_v2.go` |
 | 看数据库启动迁移 | `internal/migration/`、`main.go` |
-| 看群文化学习 | `internal/learning/learner.go` |
-| 看私聊收发与整理 | `internal/agent/private.go`、`internal/learning/private_learner.go` |
+| 看私聊收发 | `internal/agent/private.go` |
 | 看会话与黑名单 | `internal/memory/conversation_targets.go`、`internal/agent/commit.go` |
 | 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
 
@@ -163,73 +161,67 @@ go vet ./...
 
 ## 核心架构约束
 
-- 话题工作记忆是主路径能力，不按“可关闭功能”设计，也不要为核心链路补可选回退开关。
-- 机器人 QQ 只以 OneBot Adapter 在连接时取得的登录账号为运行时事实来源；配置和静态人格提示词不保存 QQ，也不保留旧 `persona.qq` 兼容字段；learner、消息渲染、话题下沉和工具统一读取 Adapter 的 `self_id`，账号未就绪时相关后台任务保持待处理。
-- 对话模型只保留 high 和 low 两档：high 用于主 ReAct，话题、学习和记忆等非实时任务统一使用 low；不要恢复 mid 配置或兼容别名。
-- 两档模型都只走 OpenAI Responses 端点（`/responses`），不保留 Chat Completions 兼容路径；高档必须配置 `context_window`，用于计算上下文预算。
-- 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，也不在主 ReAct 前增加模型分类调用；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
-- 发言门控分两层：v1 按消息内容算意愿分（被提及、是否问句、是否纯媒体、自己近期发言占比、距上次发言时长、待处理条数，权重取自离线拟合并写死为常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；被直接提及强制放行，私聊不设门控。门控只做前置过滤，最终是否发言仍由模型决定。
-- 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct。每群保持单任务串行，think 运行期间的新触发由并发锁直接忽略，不创建 rerun；消息本身仍保留，等待后续正常调度重新纳入会话。
-- 戳一戳只作为普通观察事件，不能成为回应理由；现有动态 prompt 的行动指引必须说明该事件没有消息 ID、禁止借用其他消息 ID 回应。同批普通消息仍按自身内容正常处理，不为此增加独立状态或条件提示词段落。
-- 每条消息进入会话后即成为上下文的一部分，不重建快照、不主动追加本轮或触发 rerun；机器人成功发言后取得同一会话的 `ArrivalSeq` 并进入提交队列，自身消息提交时把该序号及此前会话事件推进为已读，之后到达的消息留给后续正常调度；`speak` 每次只发送一条消息，多条内容通过多次调用表达。
-- 运行期间到达的新消息由 ADK 的 `BeforeModelRewriteState` 在模型调用边界注入，保证补充、纠正和新图片在下一次判断前出现；同一批新消息各自成为独立的 user 消息，不合并内容。
-- 每个会话维护一条持续 transcript：人消息各占一条独立 user 消息并带稳定的会话内编号（`m1`、`m2`…，跨轮不变），机器人回复与工具轨迹作为 assistant/tool 轮次接在后面；不再使用 `(OLD)` 前缀，也不再每轮重建上下文。
-- 上下文按预算装配：`[系统指令]`（人格 + 对话守则 + 行动指引 + 群特殊说明，逐字稳定以保证前缀缓存）+ `[话题摘要块]`（水位之前的话题摘要）+ `[水位之后的原文]`（未被摘要覆盖的近期对话）+ `[新消息]`。
-- 消息正文进入上下文后不再变化：时间、群信息、情绪、工作便签这些会变的状态一律不做每轮注入，改由模型调用 `getCurrentStatus` 实时读取；不再提供"最近在场的人"。
-- 模型看到的正文就是展示正文：`@` 提及、QQ 表情、语音、文件、卡片等非文本段都要保留，QQ 自带的表情符号统一写成 `[QQ表情:名称]`（编号不在经典表情集内时退回编号），不能退回成只显示纯文本。
-- 每轮必须原样回传上一轮的 reasoning、工具调用与全部工具结果（包括 `viewImage` 取回的图片），这些内容由 ADK 的 `state.Messages` 直接写回会话 transcript，不重新渲染成文字；任何重新拼装都会打断前缀缓存。
-- 压缩只允许整段丢弃最早的交互段（真人消息加随后的模型与工具消息），不拆散工具调用与工具结果；被话题摘要覆盖的整段用摘要块替代，其余从最老开始丢。
-- 话题水位由数据决定：群聊按话题归属与有效摘要算出最后一个未覆盖的消息 id，私聊用 `private_topic_states.through_message_log_id`；水位之前的内容用摘要代替，水位之后的保留原文；超出预算先丢最老摘要，再丢最老原文。只有被 Memory Agent 明确判定过的消息才算已覆盖：整理判定“无话题价值”的原文按已覆盖丢弃，还没整理过的新消息一律保留原文；摘要来源失效时也不得标记覆盖，否则原文被丢弃又没有摘要顶上。
-- 撤回不改写上下文原文：会话条目只打撤回标记，后续消息里附一句撤回说明，避免改动前缀导致缓存失效。
-- 会话是否可用以 `conversation_targets` 的 `active/blocked` 为准：启动、重连和每 5 分钟兜底同步刷新列表，机器人退群/被踢/群解散用 `group_decrease` 即时标记为已离开，好友关系建立用 `friend_add` 即时放行；好友删除没有 OneBot 事件，只能靠兜底同步纠正。同步以 API 是否报错为准，允许空列表（真的删光群和好友时会话状态要跟着清空）。MCP 工具统一命名为 `mcp-服务名-工具名`；服务器声明只读的工具不算副作用，未声明或声明失败的按可能有副作用处理，成功调用在失败轮次同样推进已读水位。
-- 事件处理直接并发分发：每条群聊/私聊消息、撤回和戳一戳事件独立处理，不按会话串行、不设并发上限；消息解析（含媒体下载）并行完成，事件入口按到达顺序为每个会话（群聊/私聊）分配单调递增的 `ArrivalSeq`，成功的机器人主动发言也从同一序列取得边界序号，统一投入对应会话的提交队列，由提交协程按序号重排后顺序落库、入缓冲并调度思考；解析失败、无效事件和未启用群/已拉黑会话通过跳过项消费序号，保证重排器不会死等。事件排序、固定快照和已读水位只能使用 `ArrivalSeq`，不能使用 OneBot `message_id`。
-- 序号消费只在业务层完成：Adapter 一旦分发事件就必须进入业务回调，不再在分发路径提前返回；事件入口按事件类型确认对应回调就绪后才分配序号，未就绪时事件丢弃且不产生缺口。提交重排等待队列有上限，超限时丢弃最旧等待项并把水位推进越过它，被越过的序号到达时自然跳过，不记录、不留下永久缺口、内存有界。
-- 消息处理为纯同步链路：回复信息补全、合并转发内容解析（含落库持久化）、媒体下载与归一化、工具名屏蔽与展示内容生成都在消息回调内完成；标已读、成员画像更新只在消息确实落库且非机器人自身消息时执行。
-- 群聊展示中的机器人提及必须直接用 Adapter 的运行时 `self_id` 识别并渲染为“@{persona.name}(你)”；普通成员优先使用 OneBot 事件自带称呼，缺失时只能在消息解析路径或主动发言路径查询群名片/昵称，禁止在思考快照构建中调用成员信息接口。
-- 业务上将 OneBot `message_id` 视为不重复的不透明外部定位符，用于消息去重、回复、撤回和缓存；消息落库以 `(conversation_kind, target_id, one_bot_message_id)` 唯一约束实现同一会话重复事件幂等。每段合并转发各放一个带句柄的占位（`[合并转发 f1ab2cd34ef56，共 12 条]`），内容写进 `message_forwards` 表：每份转发（含嵌套）各占一行，嵌套行用 `parent_handle` 指向父级，句柄全局唯一并随消息正文落库，重启后照样能翻；用 `readForward` 先看概览再按 index 翻具体某一条；转发内容不调用模型总结，消息被清理时随外键级联删除；撤回与同会话消息共享序号流，按到达顺序在消息之后执行；原消息尚未落库时（重连窗口、上游丢失或事件乱序）登记有限 TTL 的待补偿记录，消息落库后补记撤回并同步缓冲展示。
-- 停机时 Adapter 关闭不清零机器人账号，Agent 排空提交队列期间仍按真实账号识别机器人自身消息；账号仅在首次连接成功前处于未就绪状态，断线重连期间保留账号供后台任务继续按真实身份工作。
-- 消息触发的思考防抖从当前进程收到 OneBot 事件的时间开始计算；消息解析完成后按剩余窗口调度思考，解析耗时超过窗口时立即调度。思考从会话快照起步，运行期间到达的新消息由 ADK 在模型调用边界注入；模型可通过 `getNewMessages` 读取上次读取之后新到的消息，重复调用不会重复返回同一批。
-- 群聊与私聊后台整理共用 `learning` 的步数、超时、冷却、批量及最长等待，不添加重复的 `private_*` 设置；两类会话在一个调度器中轮转。
-- 通用消息事件与工具上下文使用 `ConversationMessage`、`TargetID`，专属流程明确使用 Group/Private 名称；数据库已发布的表名由 TableName 显式保留。
-- 网页、梗查询和表情包下载统一使用 utils 的 HTTP 入口，TLS 与 HTTP/2 指纹交给 tls-client，只校验 URL 合法性和响应大小限制，不做内网地址拦截；模型要求发送的网络图片由 NapCat 直接抓取，模型、MCP 和 OneBot 的 SDK 专属连接保持其协议与可信配置边界。
-- 人格提示词只做增量调整：群聊与私聊各自维护 `config/persona_group.prompt` 和 `config/persona_private.prompt`，不复用同一份模板，也不恢复已删除的成组矫正案例。
-- 后台 Memory Agent 在同一上下文中完成话题归属、摘要、稳定知识与群文化维护；不再启动独立话题模型或重复提取任务。
-- 自动知识由统一整理提交；显式 saveMemory 仍独立提交知识，两者共用知识存储及证据校验。
-- learning_states 每个会话（群聊/私聊）仅保存一个统一整理水位。按数据库连续原文批次整理；默认同一会话至少5分钟，满50条或等待15分钟后可调度。启动和恢复扫描也遵守冷却，不强制连续排空。
-- 长期记忆主体只保存 `subject_user_id`：`0` 为群组、运行时 `self_id` 为自身、其他正数为成员；数据库不保存 `scope`。模型和工具输入用 `-1` 表示自身，必须在写库前解析，任何负数主体都不能进入持久化模型。
-- saveMemory 提交带主体、类型、完整正文和1-8条原文证据的 claim；统一 Agent 直接提交 knowledge items 及1-16条消息的证据组，不在摘要重复保存 claims。不拼昵称、不二次分类、不猜测目标。知识类型不含经历（事件交给话题），证据组只要还有未被撤回的原文就算有效，整组原文全部撤回才失效；后台按原文条数展示。
-- 知识关系只有 variant_of、supersedes、contradicts 三种，必须各自带独立证据；关系会在一跳邻域内参与 agent 记忆召回，不为展示维护关系，也不再保存话题摘要的 related_topics。
-- 所有知识共用 memory 包的提交校验；只能用自己的证据验证主体，禁止借用其他条目的证据。
-- 知识统一保存为 `knowledge_items`，状态为 `active/archived`；正文语义变化新增条目，明确关联存为双端点 `knowledge_relations`。新知识通过完整证据校验后默认启用；证据或语义不确定时不提交。已有知识省略状态时保留原状态，重复保存不得复活人工归档结果；归档后重新启用须明确维护决定。
-- `reviewed_through_id` 保留作知识维护的快照可见上界，不再用于候选调度；关系维护同步更新端点，普通召回要求有效证据，后台维护可核对缺证据的归档记录。
-- 知识及关系证据通过 `knowledge_evidence_sets/knowledge_evidence_messages` 关联原始消息；每组是完整独立证明，整组消息全部撤回才失效，没有其他完整证明时归档并退出正常召回。不以摘要或模型推理作证据。
-- 不再学习成员常用词、泛化说话风格；成员页聚合知识主体及原文参与情况，禁止恢复 `speaking/phrase/interest` 双写。
-- 统一 Agent 直接消费原文，不以前置 assignment 为门槛；一次 finish 原子保存所有归属、摘要、知识、证据与水位。
-- 成员画像保持全局 `user_id` 维度，不引入 `group_id` 维度，除非用户明确提出新的画像隔离需求。
-- 表达方式以包含语境与用法的统一知识正文保存，通过 `searchMemory` 与其他知识一起查询，不设专用表达或黑话存储。
-- Memory Agent 在群聊与私聊间轮转、单轮统一使用 Eino MaxStep，默认25，纠错重试同样消耗总步数；异常不推进水位，历史读取限于当前会话固定消息上界。
-- `group_agent_states` 按会话只保存 note 与更新时间，`saveWorkingNote` 空值清除；便签不算会话行动，不独立推进失败轮次的已读水位。
+- 主聊天和同步话题压缩共用唯一 high 模型；不再保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索，也不为它们补兼容路径。
+- 对话模型只走 OpenAI Responses 端点（`/responses`）；`model_tiers.high.context_window` 用于输入预算和压缩触发，设置 `max_output_tokens` 或固定输出预留不是本项目行为。
+- 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
+- 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
+- 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
+- 戳一戳只作为普通观察事件，不能成为回应理由；它没有稳定消息 ID，正文以 `[观察]` 渲染，不能借用其他消息 ID 回应。
+- 每个会话维护 `conversation_sessions` + `conversation_transcript` 持续工作集；真人消息各自是 user 行，助手与工具轨迹原样保存，压缩成功后只删除被 checkpoint 覆盖的 transcript 行。
+- `m1`、`m2` 是 `message_logs.message_ref` 上的稳定会话编号，压缩删除 transcript 后仍然存在；`h12345` 是全局内部消息 ID，只用于历史读取，不能当作当前会话可回复编号。
+- `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚、不自动重试，下一次由新消息触发。
+- `visible_seq` 必须按模型请求中的真实消息顺序分配：摘要/内部参考在前、待处理输入在后；不要按数据库主键重新排序。
+- 上下文顺序固定为：稳定系统指令和工具 → checkpoint 概览 → active 话题摘要 → `reference_baseline` → checkpoint 后 transcript → 新内部参考 → 新真人消息 → assistant/tool。
+- 消息正文进入上下文后不再变化：首次渲染写入 transcript，时间固定为 `YYYY-MM-DD HH:MM:SS`；当前时间、群信息、情感、便签只由 `getCurrentStatus` 查询。
+- 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
+- 每轮原样回传 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 保存同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。
+- 主上下文装配不静默截断 transcript；预算达到窗口 90% 时触发一次完整同步压缩，目标 40%，55% 为可接受上限，超过 55% 不提交。
+- 压缩最多两次模型尝试，共享 12 步和 300 秒；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readHistory`、`readToolResult` 和一次 `finishCompaction`。
+- 压缩只整理冻结的完整旧交互段，保护当前触发批次、活动工具链、未闭合 CallID 和近期尾部；提交事务原子写入话题、归属、来源、概览、检查点并删除覆盖 transcript。
+- 压缩失败、参数遗漏、预算超限、数据库失败或提交结果不明时保留旧 transcript；失败后至少退避 60 秒，不能让模型带着超限上下文继续请求。
+- `conversation_tool_calls` 不存在；工具调用和结果直接是 `entry_kind=tool` 的 transcript 行。`run_id + call_id` 幂等，同 CallID 复用已有回执，不同 CallID 的重复搜索或多次发言不拦截。
+- 大工具结果超过约 4000 token 时，完整文本保存为内容寻址文件，模型只看到约 1000 token 预览和 `result_ref`；孤立文件至少保留 24 小时后再清理。
+- 工具中间件只保留协议层：`ToolErrorMiddleware`、`UnknownToolsHandler`、参数规范化、顺序执行、`ReturnDirectly` 和终端错误；不要恢复全局 ToolAction/ToolDedup 或消费水位。
+- `conversation_targets.active/blocked` 是会话可用性事实源；启动、重连和每 5 分钟兜底同步，允许真实空列表。机器人退群/被踢和好友建立分别由事件即时纠正，好友删除靠兜底同步。
+- 事件直接并发分发；每个会话按到达顺序分配单调 `ArrivalSeq`，主动发言也进入同一序列。提交重排只使用 `ArrivalSeq`，OneBot `message_id` 只做不透明等值键，不能排序或当水位。
+- 解析失败、无效事件、未启用或拉黑会话通过跳过项消费序号，保证重排器不死等；提交等待队列必须有界，越过的序号不留下永久缺口。
+- 媒体在事件回调内同步下载、转码与落库；普通图片摆正并转 webp，表情包保留原件；重复内容按 md5 复用，失败保留文字占位，不伪造识别结果。
+- 机器人 QQ 只以 OneBot Adapter 运行时 `self_id` 为准；配置和静态人格提示词不保存 QQ。自身消息写入 `message_logs`，但不额外生成 transcript user 行。
+- 一条真人消息经 `message_logs` 永久保存原文与展示正文；`message_forwards` 按句柄保存每一份转发，嵌套转发独立成行，重启后仍可逐层读取。
+- 撤回只写 `recalled_at` 并同步会话标记；不得清空原文、摘要来源、情感或长期记忆，后续用户消息可附撤回说明，不改写已进入上下文的前缀。
+- 停机时不清零运行时账号；提交队列排空期间仍按真实账号识别自身消息。
+- 思考从会话起始到达序号开始；运行期间新消息由 `BeforeModelRewriteState` 注入，`getNewMessages` 重复调用不重复返回同一批。
+- 消息时间固定、不注入“最近在场的人”；群聊自动参考最多选当前批次发送者、提及和回复目标 3 人。
+- 长期记忆由主 Agent 通过 `searchMemory`、`readMemory`、`manageMemory` 维护；类型只允许 fact/preference/constraint/goal/term/expression/alias，更新和归档必须基于已读取版本。
+- `knowledge_items` 用 `subject_user_id` 表示主体（0 群组、运行时 self 自身、正数人物），模型输入 `-1` 必须在工具边界解析；`conversation_kind + target_id` 只是来源，不是检索隔离。
+- 知识正文语义变化新增条目；同主体、同类型、同内容哈希精确去重，重复创建不复活归档条目。
+- `manageMemory` 一批 1–8 项全成功或全回滚；主 Agent 不物理删除，后台只提供启用、归档和查看修订。
+- 具体情感固定 12 类；同一对象同一情感只保留一份当前状态，变化写入 `emotion_revisions`。强度只接收轻微/明显/强烈/已平复，按真实时间惰性衰减，不做定时写库或独立情感判断模型。
+- 精力与交流意愿保留辅助状态；好感度继续保持全局 `user_id` 维度，不按群隔离，也不由情感状态替代。
+- 自动内部参考预算固定约 1200 token：核心记忆 800、便签与明确约定 200、情感与总体状态 200；完整条目原子选取，无内容不凑满。
+- 内部参考是独立 user 类型 `internal_context`，不计真人消息、不触发门控；只在版本、语义或强度档位变化时追加，压缩写入新的 `reference_baseline`，不回头修改旧 transcript。
+- 话题系统承担三项职责：压缩后的会话表示、后台浏览管理单位、关键词 → 话题概览 → 关键消息 → 原文前后文的分层查询。
+- 话题只有 active/dormant，统一群聊和私聊作用域；摘要不可变且按版本保存，来源分 source/anchor，撤回不改写、不使话题失效。
+- `context_compaction_checkpoints.active_topic_versions` 保持稳定顺序；dormant 话题不进入当前摘要块但始终可搜索。退出 active 仍有 open loop 时，程序必须把未完成事项补进 overview。
+- `overview` 是会话级滚动概览，不是新 Agent；压缩器必须写结论、不确定性、纠正、边界、动作结果和未完成事项，程序不静默截断摘要。
+- 首次 v15 升级接续旧摘要与预算内近期原文，不回填伪造的旧 assistant/tool 轨迹；旧证据、关系、学习水位、私聊摘要和旧心情原表保留为 `legacy_*`。
+- 跨会话检索允许用于记忆、话题和历史，结果必须带群聊/好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
+- 系统提示只做增量调整：群聊与私聊分别维护 `config/persona_group.prompt` 和 `config/persona_private.prompt`，不复用同一模板，也不恢复已删除的成组矫正案例。
 
 ## 数据与检索边界
 
-- `ConversationMessage.Content`、`MessageLog.TextContent` 保存原始文本；`ConversationMessage.FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文。
-- 话题归属、话题摘要、话题与主动长期记忆检索、黑话匹配、表达方式查询、成员画像学习、长期记忆提取等语义链路默认只使用原始文本；如果原始文本为空，就直接跳过，不要回退到渲染后的展示文本。
-- 摘要与记忆正文涉及机器人自己时用第一人称写，涉及他人时用第三人称；人称只影响叙述方式，不改变证据要求与主体校验。
-- 当主动检索或混合查询构建失败时，优先跳过该步骤，不要回退到聊天展示文本、关键词提取或其他启发式拼接结果。
-- 话题与主动长期记忆检索共用固定消息快照生成的一份混合查询：拼接原文只用于单次向量查询，逐条原文用于 pg_trgm 文本召回，再由 RRF 融合；不要增加关键词提取模型、手写中文分词或第二份检索上下文。
-- 持久化使用 PostgreSQL。OneBot 首次连接并取得 `self_id` 后才允许打开数据库；连接已建立但业务事件必须由闸门阻塞，直到 schema 迁移、Agent 恢复和后台初始化全部完成。
-- schema 版本由 `schema_migrations` 记录并在后端启动时顺序执行。完全空库只走 `initializeV1Schema`；无版本表但全部已知旧业务表存在时只走 `migrateV1`；部分表、未知结构、版本断档或数据库版本高于程序时拒绝启动。迁移使用事务级 advisory lock 和显式 SQL，不使用 `AutoMigrate`。
-- 项目同时兼容 NapCat 与 SnowLuma 后端，方言由 onebot-sdk 在连接时通过 `get_version_info` 自动检测；SnowLuma 的 forward 段只带转发 ID，由 SDK 归一化管线回源拉取完整节点，消息解析路径只消费补拉结果，不重复兜底。当前 NapCat 将原始 `msgId`、会话类型和对端标识拼接后做 MD5，并截取为 31 位正整数 OneBot `message_id`；SnowLuma 则使用带符号 int32 `message_id`。没有同时覆盖消息、回复和撤回链路的更稳定上报字段，项目按碰撞概率可忽略的前提将 `message_id` 视为不重复，但绝不假设递增，也不假设正负号以外的取值规律。`one_bot_message_id` 只能做等值匹配，禁止用于排序、范围比较或水位；数据库中的消息范围使用内部自增 `message_logs.id`，进程内到达顺序使用 `ArrivalSeq`。`0` 表示缺失，接入层仍接受其他 OneBot 实现可能返回的负数 ID。
-- 长期记忆与历史原文不再每轮自动注入上下文，改由模型主动检索：`searchMemory` 查长期知识，`searchHistory` 跨群跨私聊检索原文与约定；检索工具内部仍用 pgvector + pg_trgm + RRF。记忆相关条目不再自动出现在提示词里，模型不查就不知道，这是有意取舍。
-- 管理后台日志每秒刷新内存中完整 300 条 buffer，搜索、最低级别和下载必须共用同一过滤逻辑；日志滚动以是否接近列表底部决定自动跟随，用户向上回看时自动暂停，回到底部自动恢复。用户选中日志文本时暂停轮询交换以保留选区，清除选区后自动恢复。日志高亮直接使用服务端已解析的时间、级别、消息与字段，格式化视图展开字段并保留真实换行，不引入第二套文本解析器。模型观测只保存按小时的任务/模型请求数、失败、耗时和 provider Token 聚合，不保存 prompt/response，不估算 Token 或成本。
-- 聊天媒体统一本地缓存：普通图片按 EXIF 方向摆正后缩到窄边上限再转 webp，表情包保留原件；图片不默认进入上下文，消息里只留占位，模型需要时调用 `viewImage` 取图。媒体下载或转码失败必须记录错误并在消息里保留文字占位，禁止伪造识别结果。
-- 同一张图重复出现时按内容 md5 去重，只下载、转码和存储一次；QQ 图床链接带签名且会过期，不能直接交给模型端点抓取。
-- 媒体在会话内用短哈希寻址：短哈希由会话媒体索引分配，内容相同复用同一短哈希，不同内容撞前缀时逐位加长；媒体占位在装配层就渲染成 `[图片:哈希]`、`[表情包:哈希]` 并随展示正文落库，重启后短哈希仍能对上，会话侧不做字符串替换；已收藏的表情包渲染成 `[表情包:哈希(已收藏)]`，缓存失败保留原文字占位不伪造图片；`viewImage` 一次只看一张，工具结果直接返回图片本体；只能收表情包不能收普通图片。
-- QQ 自带表情用 `%qface:名称%` 标记，收发同型：收到 QQ 表情一律渲染成 `%qface:名称%`（名称不在目录里才退回编号），发言内容里的同一个标记会被解析成 QQ 表情消息段，可以和文字任意穿插。标记里写名称或编号都行，名称取较新的编号，编号按精确值发；无法识别的标记按普通文字原样发出，不报错也不替换成别的表情。图片表情包不走这个标记，仍由 `sendSticker` 单独发送。
-- QQ 系统表情的名称与编号对照表放在 `internal/onebot/face.go`。数据来自两处公开目录：koishijs/QFace 的 `lib/data.json`（275 条，另有拼音缩写）和 NapCat 的 `packages/napcat-core/external/face_config.json`（329 条，含 2026 年新增表情）；两者同源于 QQ 表情目录协议 OIDB `0x9154` 的 `sysface` 列表，编号集合互补（NapCat 缺 61 个老表情，QFace 缺 349–484 的新表情），同编号只有 181、200、317 三处名称不同，取较新的 NapCat 为准，合并后 390 条覆盖 0–484。 名称索引取同名表情里较大的编号，所以「微笑」指向新款的 452 而不是经典的 14。
-- 这张表是静态快照，QQ 偶尔会改表情名（如 181 从"骚扰"改成"戳一戳"），落后时按编号退回显示数字，不要凭记忆猜名字。OneBot 的 `face` 段 `id` 就是表里的编号（SnowLuma 的 `face.toSegment` 直接写 `String(element.faceId)`），商城表情走 `mface` 的 `emoji_id`、不在这张表内；`face` 段编号解析失败时按未知处理，不能落到编号 0。
-- 第一版检索固定为 pgvector 精确向量、pg_trgm 文本召回和 RRF 融合；没有明确需求和测量依据时，不引入 BM25 扩展、HNSW、Milvus、Elasticsearch、MMR、reranker、聚类或额外分类器。
-- PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符，避免 ORM 将元素展开成错误的函数参数或数组字面量。
+- `ConversationMessage.Content`、`MessageLog.TextContent` 保存原始文本；`FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文，历史工具可同时返回两者以保留媒体占位。
+- 禁止用展示文本替代原始文本做知识主体判断；原始文本为空时，语义记忆提取跳过，但话题压缩仍可整理当时可见的展示动作与工具结果。
+- 摘要和记忆涉及机器人自己时用第一人称，涉及他人时用第三人称；人称不改变主体与来源校验。
+- 话题检索先做标题、概况、关键词的精确子串和 `pg_trgm` 近似候选，再按关键词命中数、标题命中、相似度、更新时间和内部 ID 排序；不做中文分词或向量检索。
+- 长期记忆检索使用 `content/label` 的 ILIKE + `pg_trgm` 候选；历史原文使用 `text_content` 的 ILIKE + `pg_trgm`。空关键词可浏览，失败不伪造结果。
+- 跨会话历史倒序分页使用内部 ID 的 `before_id`（`id < before_id`）；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。
+- 持久化使用 PostgreSQL 18；OneBot 首次取得 `self_id` 后才打开数据库，连接建立后业务事件仍等待 schema 迁移、Agent 恢复和后台初始化完成。
+- schema 由 `schema_migrations` 记录并顺序执行；完全空库直接初始化 v15，v14 原地升级 v15，更旧、断档、部分结构或高版本数据库拒绝启动。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
+- 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
+- 管理后台日志与模型统计口径保持现有约束；媒体和原文永久保留，只有 transcript、摘要版本和未被引用的工具结果文件会按各自规则变化。
+- 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。
+- PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符。
 
 ## 质量取向
 
@@ -239,5 +231,5 @@ go vet ./...
 
 ## 消息保留规则
 
-- 消息清理不能删除已分配话题的消息。
-- 消息清理不能删除 learner 尚未处理的消息。
+- `message_logs`、媒体原文和机器人已发送消息永久保留，不恢复按条数或时间清理。
+- 被压缩删除的只有 `conversation_transcript`；话题摘要、anchor/source、长期记忆和情感修订不能因清理工作集而丢失。

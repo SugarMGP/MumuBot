@@ -12,64 +12,29 @@ import (
 	"github.com/cloudwego/eino/components/model"
 )
 
-var (
-	highTierClientSlot = &tierClientSlot{}
-	lowTierClientSlot  = &tierClientSlot{}
-)
+var clientSlot = &clientHolder{}
 
-type Tier string
-
-const (
-	TierHigh Tier = "high"
-	TierLow  Tier = "low"
-)
-
-type tierClientSlot struct {
+type clientHolder struct {
 	client model.AgenticModel
 	err    error
 	once   sync.Once
 }
 
-func TierDisplayName(tier Tier) string {
-	switch tier {
-	case TierHigh:
-		return "高档模型"
-	case TierLow:
-		return "轻量模型"
-	default:
-		return "模型"
-	}
-}
-
-// NewClientForTier 创建 Responses 端点模型客户端，只支持支持 /responses 的服务商
-func NewClientForTier(tier Tier) (model.AgenticModel, error) {
+// NewClient 创建唯一的主模型客户端
+func NewClient() (model.AgenticModel, error) {
 	cfg := config.Get()
 	if cfg == nil {
 		return nil, fmt.Errorf("配置未加载")
 	}
-
-	var modelCfg config.ModelConfig
-	var slot *tierClientSlot
-	switch tier {
-	case TierHigh:
-		modelCfg = cfg.ModelTiers.High
-		slot = highTierClientSlot
-	case TierLow:
-		modelCfg = cfg.ModelTiers.Low
-		slot = lowTierClientSlot
-	default:
-		return nil, fmt.Errorf("未知模型档位: %s", tier)
-	}
-
-	slot.once.Do(func() {
+	clientSlot.once.Do(func() {
+		modelCfg := cfg.ModelTiers.High
 		apiKey := strings.TrimSpace(modelCfg.APIKey)
 		baseURL := strings.TrimSpace(modelCfg.BaseURL)
 		modelName := strings.TrimSpace(modelCfg.Model)
 		if apiKey == "" || baseURL == "" || modelName == "" {
-			slot.err = fmt.Errorf("%s配置不完整", TierDisplayName(tier))
+			clientSlot.err = fmt.Errorf("主模型配置不完整")
 			return
 		}
-
 		client, err := agenticopenai.NewResponsesModel(context.Background(), &agenticopenai.ResponsesConfig{
 			BaseURL:     baseURL,
 			APIKey:      apiKey,
@@ -77,11 +42,10 @@ func NewClientForTier(tier Tier) (model.AgenticModel, error) {
 			ExtraFields: modelCfg.ExtraFields,
 		})
 		if err != nil {
-			slot.err = fmt.Errorf("创建%s失败: %w", TierDisplayName(tier), err)
+			clientSlot.err = fmt.Errorf("创建主模型失败: %w", err)
 			return
 		}
-		slot.client = client
+		clientSlot.client = client
 	})
-
-	return slot.client, slot.err
+	return clientSlot.client, clientSlot.err
 }

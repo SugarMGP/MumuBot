@@ -21,15 +21,3 @@ type ConversationTarget struct {
 }
 
 func (ConversationTarget) TableName() string { return "conversation_targets" }
-
-// PrivateTopicState 保存每个好友唯一的线性私聊话题摘要
-type PrivateTopicState struct {
-	TargetID            int64     `gorm:"primaryKey;column:target_id" json:"target_id"`
-	SummaryJSON         string    `gorm:"type:jsonb;not null" json:"summary_json"`
-	ThroughMessageLogID uint      `gorm:"not null;default:0" json:"through_message_log_id"`
-	UpdatedAt           time.Time `json:"updated_at"`
-	SourceMessageIDs    []uint    `gorm:"-" json:"-"`
-	SourcesValid        bool      `gorm:"-" json:"-"`
-}
-
-func (PrivateTopicState) TableName() string { return "private_topic_states" }

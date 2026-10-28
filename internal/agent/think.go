@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"mumu-bot/internal/config"
@@ -143,13 +142,9 @@ func (a *Agent) thinkGroup(groupID int64) {
 	if a.bot.IsSelfMuted(groupID) {
 		return
 	}
-	cfg := config.Get()
-	ctxWithTimeout, cancel := context.WithTimeout(a.ctx, time.Duration(cfg.Agent.ThinkTimeoutSeconds)*time.Second)
-	defer cancel()
-
 	session := a.sessions.get(memory.ConversationKindGroup, groupID)
 	pending := session.PendingMessages()
-	if len(pending) == 0 {
+	if len(pending) == 0 || !hasActionableMessage(pending) {
 		return
 	}
 	forced := a.hasStrongInteraction(pending)
@@ -157,28 +152,24 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 
-	ctx := a.buildConversationToolContext(ctxWithTimeout, memory.ConversationKindGroup, groupID, session)
+	ctx := a.buildConversationToolContext(a.ctx, memory.ConversationKindGroup, groupID, session)
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
-	messages, err := session.Assemble(ctx, a.memory, sessionBudget())
+	messages, err := session.Assemble(ctx, a.memory)
 	if err != nil {
 		zap.L().Warn("装配群聊上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
 	if runErr := a.runAgent(ctx, a.groupAgent, messages); runErr != nil {
-		// 发言成功但轮次失败时也要推进消费水位，避免同一批消息被重复回复
-		if seq := tc.ReadThroughSeq(false); seq > 0 {
-			session.MarkConsumed(seq)
+		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, a.groupTools, a.groupGenModelInput, session) {
+			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, a.groupAgent, session); retryErr == nil {
+				return
+			}
 		}
-		if errors.Is(ctxWithTimeout.Err(), context.DeadlineExceeded) {
-			zap.L().Warn("群聊思考超时", zap.Int64("group_id", groupID), zap.Int("timeout_seconds", cfg.Agent.ThinkTimeoutSeconds))
-		} else {
-			zap.L().Error("群聊思考失败", zap.Int64("group_id", groupID), zap.Error(runErr))
-		}
+		zap.L().Error("群聊思考失败", zap.Int64("group_id", groupID), zap.Error(runErr))
 		return
 	}
-	session.MarkConsumed(maxPendingSeq(pending))
 }
 
 func (a *Agent) conversationAllowed(kind string, targetID int64) bool {
@@ -192,6 +183,16 @@ func (a *Agent) conversationAllowed(kind string, targetID int64) bool {
 		zap.L().Warn("思考启动许可检查失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
 	}
 	return err == nil && allowed
+}
+
+// hasActionableMessage 观察事件只能进入后续上下文，不能单独触发回应
+func hasActionableMessage(pending []*sessionUser) bool {
+	for _, user := range pending {
+		if user != nil && user.MessageID != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
@@ -239,7 +240,6 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		zap.L().Error("发言失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return err
 	}
-	tools.GetToolContext(ctx).MarkActionSucceeded()
 
 	parts := make([]onebot.MessagePart, 0, len(mentions)+1)
 	for _, userID := range mentions {
@@ -277,6 +277,8 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	}
 
 	a.onMessage(msg)
+	a.sessions.get(memory.ConversationKindGroup, groupID).NoteSelfSpoke(msg.Time)
+	a.gates.markReply(groupID)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
 	return nil
 }
@@ -287,7 +289,6 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, fileName strin
 		zap.L().Error("发送表情包失败", zap.Int64("group_id", groupID), zap.String("file_name", fileName), zap.Error(err))
 		return err
 	}
-	tools.GetToolContext(ctx).MarkActionSucceeded()
 
 	msg := &onebot.ConversationMessage{
 		ConversationKind: memory.ConversationKindGroup,
@@ -316,7 +317,6 @@ func (a *Agent) doSendImageURL(ctx context.Context, groupID int64, imageURL stri
 	if err != nil {
 		return err
 	}
-	tools.GetToolContext(ctx).MarkActionSucceeded()
 	a.onMessage(&onebot.ConversationMessage{
 		ConversationKind: memory.ConversationKindGroup,
 		MessageID:        msgID,

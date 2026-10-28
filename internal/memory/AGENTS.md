@@ -1,19 +1,19 @@
 # AGENTS
 
-本目录负责 PostgreSQL 持久化、统一整理事务、知识证据和混合检索。
+本目录负责 PostgreSQL 持久化、transcript/checkpoint、话题分层检索、长期记忆与具体情感。
 
-- conversation.go 是群聊后台写入入口；在同一会话 advisory lock 下原子保存归属、摘要、知识和统一进度，私聊线性整理在 private_topic.go 提交。
-- knowledge_commit.go 是共同知识提交器，供统一整理和显式 saveMemory 使用；会话作用域（`conversation_kind` + `target_id`）、主体、完整证据、固定上界与乐观并发校验不可绕过。
-- saveMemory 的外部消息编号在 knowledge_claims.go 解析；后台直接使用已读取的内部消息 ID，不保存负数主体。
-- knowledge_scan.go 从 learning_states 单一水位读取连续原文；旧 assignment 不再作为前置消费门槛。
-- knowledge_history.go 只读取当前会话、固定上界、未撤回的原文；展示文本不能反向作为语义输入。
-- knowledge_items 只保存启用和归档知识，新知识默认启用，旧知识省略状态保留原状态；知识语义改变必须新建，关系为双端点，不另建通用实体仓库。
-- 每组1-16条消息是一份完整证据，整组消息全部撤回才失效；无其他完整组时归档，不自动恢复旧解释。
-- 普通关系要求两端启用及独立有效依据；supersedes 允许旧端归档。端点归档或证据失效时同事务归档不合法关系，不因重复保存恢复归档状态。
-- reviewed_through_id 仅作维护后的快照可见上界；维护查询允许核对缺证据的归档知识，正常召回不放行。
-- topic_summaries 的 embedding 可以为空，知识和摘要向量共用有预算的后台补全；不在保存事务调用模型。
-- 成员基础资料仍是全局 user_id，不恢复 speaking/phrase 特征学习。
-- 迁移定义在 `internal/migration/`；已发布迁移不能修改，新增迁移顺序执行，用事务和显式 SQL，不使用 AutoMigrate。
-- v4 将旧学习水位改为统一整理水位，v10 起 learning_states/group_agent_states/knowledge_items/message_logs 按会话作用域保存；必要时回退以接续未完成任务，保留原话题身份。
-- 消息清理不得删除已有话题或未完成统一整理的消息。
-- 检索使用现有 pgvector、pg_trgm 和 RRF；无测量依据不增加图数据库、近似索引或重排模型。
+- `runtime_store.go` 只通过 `conversation_sessions` 分配 input/visible/message 序号；`visible_seq` 在模型请求成功后写入，待处理输入保持 NULL。
+- `conversation_transcript` 是工作集，不是永久记录；只允许压缩事务删除 checkpoint 覆盖的可见行，原文在 `message_logs` 永久保留。
+- `topic_compaction.go` 必须在一个事务内校验覆盖完整性、写入话题摘要/归属/source/anchor/概览/检查点并删除覆盖行；任一步失败全部回滚。
+- `topic_digest.go` 的概览、active topic 和 reference baseline 顺序必须稳定；dormant 话题可搜索但不进入当前摘要块。
+- active topic 退出时若仍有 open loop，程序必须把未完成事项补进 overview，不能只依赖模型自觉。
+- 话题摘要不可变，按 topic/version 保存；anchor/source 是消息内部 ID，撤回不清空、不失效。
+- `topics_v2.go` 的关键词检索只做精确子串和 pg_trgm，不做中文分词、向量或重排模型；跨会话结果必须保留来源。
+- `memory_v2.go` 的知识类型只允许 fact/preference/constraint/goal/term/expression/alias；`subject_user_id` 是主体，`conversation_kind + target_id` 只是来源。
+- 同一主体、同类型、同内容哈希精确去重；归档条目重复创建不得复活；更新、归档、恢复必须基于读取过的当前版本。
+- `manageMemory` 的 1–8 项变更必须在一个事务内全成功或全回滚；主 Agent 不物理删除，后台只启用或归档。
+- 普通正文最多 8000 字。
+- `emotion_v2.go` 固定 12 类情感，同一对象同一情感仅一份当前状态；变化写 revisions，读取时惰性衰减，不跑定时衰减写库。
+- `reference.go` 的自动参考固定约 1200 token：核心 800、便签与约定 200、情感与状态 200；完整条目原子选取。
+- 原文、媒体和已发送消息永久保留；不再恢复消息日志清理、Embedding 补全、后台学习水位、知识证据强制或向量检索。
+- 迁移定义在 `internal/migration/`；v15 保留旧证据/关系/学习/私聊摘要/心情为 `legacy_*` 历史资料，不使用 AutoMigrate 或 DROP CASCADE。

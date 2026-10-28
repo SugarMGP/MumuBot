@@ -17,36 +17,49 @@ templ DashboardMetric(icon string, label string, value string, tone string) {
 	</div>
 }
 
-templ MoodProgressRow(label string, kind string, raw float64, barClass string) {
+templ MoodProgressRow(label string, raw float64, barClass string) {
 	<div class="flex items-center gap-3">
-		<span class="w-11 shrink-0 text-sm text-base-content/60">{ label }</span>
-		<progress class={ joinClasses("progress h-2 flex-1", barClass) } value={ fmt.Sprintf("%d", moodPercent(kind, raw)) } max="100" title={ fmt.Sprintf("%s %d%%", label, moodPercent(kind, raw)) } aria-label={ fmt.Sprintf("%s %d%%", label, moodPercent(kind, raw)) }></progress>
+		<span class="w-16 shrink-0 text-sm text-base-content/60">{ label }</span>
+		<progress class={ joinClasses("progress h-2 flex-1", barClass) } value={ fmt.Sprintf("%d", moodPercent(raw)) } max="100" title={ fmt.Sprintf("%s %d%%", label, moodPercent(raw)) } aria-label={ fmt.Sprintf("%s %d%%", label, moodPercent(raw)) }></progress>
 	</div>
 }
 
 templ DashboardBody(data DashboardPageData) {
 	<div class="space-y-6">
-		@PageHeader("首页", "查看机器人运行状态与学习概况。", "")
+		@PageHeader("首页", "查看机器人运行状态与记忆概况。", "")
 		<section class="grid grid-cols-3 gap-3 min-[1360px]:grid-cols-6">
 			@DashboardMetric("groups", "启用群聊", fmt.Sprintf("%d", data.EnabledGroupCount), "bg-[#eef5ff]")
-			@DashboardMetric("memories", "统一记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
+			@DashboardMetric("memories", "长期记忆", fmt.Sprintf("%d", data.MemoryCount), "bg-[#fff1f3]")
 			@DashboardMetric("members", "成员管理", fmt.Sprintf("%d", data.MemberCount), "bg-[#fff5ee]")
 			@DashboardMetric("jargons", "启用记忆", fmt.Sprintf("%d", data.ActiveCount), "bg-[#eff9f4]")
-			@DashboardMetric("style-cards", "知识关联", fmt.Sprintf("%d", data.RelationCount), "bg-[#f5f0ff]")
+			@DashboardMetric("style-cards", "话题", fmt.Sprintf("%d", data.TopicCount), "bg-[#f5f0ff]")
 			@DashboardMetric("stickers", "表情包", fmt.Sprintf("%d", data.StickerCount), "bg-[#fff8e8]")
 		</section>
 		<div class="grid grid-cols-[minmax(0,1fr)_minmax(240px,clamp(240px,22vw,320px))] gap-4 min-[1360px]:grid-cols-[minmax(0,2fr)_minmax(280px,0.8fr)]">
 			<section class="card">
 				<div class="card-body p-5">
-					<div class="flex items-center justify-between"><div><h2 class="text-lg font-semibold text-base-content">当前心情</h2><p class="mt-1 text-xs text-base-content/60">机器人此刻的情绪与交流意愿</p></div><span class="badge badge-primary badge-soft badge-sm">实时</span></div>
+					<div class="flex items-center justify-between"><div><h2 class="text-lg font-semibold text-base-content">当前情感</h2><p class="mt-1 text-xs text-base-content/60">机器人此刻的情感、精力与交流意愿</p></div><span class="badge badge-primary badge-soft badge-sm">实时</span></div>
 					if data.CurrentMood != nil {
 						<div class="mt-4 space-y-4">
-							@MoodProgressRow("心情", "valence", data.CurrentMood.Valence, "progress-primary")
-							@MoodProgressRow("精力", "energy", data.CurrentMood.Energy, "progress-success")
-							@MoodProgressRow("社交欲", "sociability", data.CurrentMood.Sociability, "progress-warning")
+							@MoodProgressRow("精力", data.CurrentMood.Energy, "progress-success")
+							@MoodProgressRow("交流意愿", data.CurrentMood.Sociability, "progress-warning")
+							<div class="space-y-2 pt-1">
+								for _,emotion:=range data.CurrentEmotions {
+									<div class="flex items-start justify-between gap-3">
+										<div class="min-w-0">
+											<span class="badge badge-primary badge-soft badge-sm">{ emotion.Kind } · { fmt.Sprintf("%d%%", int(emotion.Strength*100)) }</span>
+											<p class="mt-1 line-clamp-2 text-xs text-base-content/60">{ emotion.Reason }</p>
+										</div>
+										<time class="shrink-0 text-xs text-base-content/45">{ formatTime(emotion.OccurredAt) }</time>
+									</div>
+								}
+								if len(data.CurrentEmotions)==0 {
+									<p class="text-xs text-base-content/45">当前没有明显的具体情感</p>
+								}
+							</div>
 						</div>
 					} else {
-						<div class="flex h-[220px] items-center justify-center text-sm text-base-content/45">暂无心情数据</div>
+						<div class="flex h-[220px] items-center justify-center text-sm text-base-content/45">暂无情感数据</div>
 					}
 				</div>
 			</section>

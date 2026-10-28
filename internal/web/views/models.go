@@ -79,12 +79,13 @@ type DashboardPageData struct {
 	MemoryCount       int64
 	MemberCount       int64
 	ActiveCount       int64
-	RelationCount     int64
+	TopicCount        int64
 	StickerCount      int64
 	OneBotConnected   bool
 	SelfID            int64
 	MCPToolCount      int
 	CurrentMood       *memory.MoodState
+	CurrentEmotions   []memory.CurrentEmotion
 	Flash             *FlashMessage
 }
 
@@ -108,20 +109,21 @@ type KnowledgeListPageData struct {
 	Workspace KnowledgeWorkspaceData
 	Metadata  map[uint]services.KnowledgeMetadata
 	Sort      SortToolbarData
-	Items     []memory.KnowledgeItem
+	Items     []memory.KnowledgeRecord
 	SelfID    int64
 	Meta      ListMeta
 	Flash     *FlashMessage
 }
 
 type TopicListPageData struct {
-	Groups     []int64
-	CurrentURL string
-	GroupID    string
-	Keyword    string
-	Items      []services.TopicThreadView
-	Meta       ListMeta
-	Flash      *FlashMessage
+	Conversations []services.KnowledgeConversation
+	CurrentURL    string
+	Conversation  string
+	Status        string
+	Keyword       string
+	Items         []services.TopicThreadView
+	Meta          ListMeta
+	Flash         *FlashMessage
 }
 
 type TopicDetailPageData struct {

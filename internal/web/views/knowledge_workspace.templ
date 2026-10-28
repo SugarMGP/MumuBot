@@ -4,7 +4,7 @@ import "fmt"
 
 templ KnowledgeWorkspace(data KnowledgeWorkspaceData) {
 	<header class="flex items-start justify-between gap-4">
-		@PageHeader("统一记忆", "查看已记住的内容，核对原文依据。", "")
+		@PageHeader("长期记忆", "查看已记住的内容，核对原文依据。", "")
 	</header>
 	<form class="admin-memory-filters card" method="get" action="/admin/knowledge" hx-get="/admin/knowledge" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
 		<input type="hidden" name="sort" value={ data.Filter.Sort }/>

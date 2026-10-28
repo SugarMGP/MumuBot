@@ -29,7 +29,7 @@
 
 ## 修改注意
 
-- 修改消息类型或解析结果字段时，检查 `internal/topic`、`internal/agent`、`internal/learning` 是否把该字段当语义输入；群聊与私聊共用 `ConversationMessage`，用 `ConversationKind` 区分作用域。
+- 修改消息类型或解析结果字段时，检查 `internal/agent`、`internal/memory` 是否把该字段当语义输入；群聊与私聊共用 `ConversationMessage`，用 `ConversationKind` 区分作用域。
 - SDK event loop 只做一次事件信封解析和分流：`meta_event`、无顺序要求的 `notice`、`request` 在 Adapter 入口同步处理，群聊/私聊消息、撤回和戳一戳每条事件直接并发分发，不做按会话串行或并发上限。
 - 事件入口按到达顺序为每条并发分发的事件按会话分配递增序号（`ArrivalSeq`），主动发送成功的消息也在返回前取得同一序列的边界序号，供上层统一重排提交；事件分配前按类型确认对应业务回调已就绪，未就绪则丢弃且不分配序号，不产生缺口。消息段解析失败时构造占位消息并记录日志，由业务层消费序号。
 - 事件回调内完成消息结构解析、去重、原文入库和缓冲更新；消息内容相关的解析全部在回调内同步完成，Adapter 不拆分异步阶段。事件的字段有效性判断一律下沉到业务层，Adapter 分发路径不提前返回。

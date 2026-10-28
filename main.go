@@ -11,7 +11,6 @@ import (
 
 	"mumu-bot/internal/agent"
 	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
 	"mumu-bot/internal/logger"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/migration"
@@ -71,7 +70,7 @@ func main() {
 		_ = botClient.Close()
 		zap.L().Fatal("打开 PostgreSQL 失败", zap.Error(err))
 	}
-	if err := migration.RunMigrations(db, selfID, cfg.Embedding.Dimensions); err != nil {
+	if err := migration.RunMigrations(db, selfID); err != nil {
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
@@ -82,19 +81,18 @@ func main() {
 	modelstats.SetDefault(statsRecorder)
 	statsRecorder.Start(db)
 
-	embeddingClient, err := llm.NewEmbeddingClient()
-	if err != nil {
-		_ = botClient.Close()
-		zap.L().Fatal("Embedding 客户端创建失败", zap.Error(err))
-	}
-
-	memoryMgr, err := memory.NewManager(db, embeddingClient)
+	memoryMgr, err := memory.NewManager(db)
 	if err != nil {
 		_ = botClient.Close()
 		zap.L().Fatal("记忆管理器创建失败", zap.Error(err))
 	}
 	defer memoryMgr.Close()
 	defer statsRecorder.Close()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := memoryMgr.CleanupToolResults(cleanupCtx, 24*time.Hour); err != nil {
+		zap.L().Warn("清理无引用工具结果失败", zap.Error(err))
+	}
+	cleanupCancel()
 	zap.L().Info("记忆系统已初始化")
 	if err := syncConversationContacts(botClient, memoryMgr); err != nil {
 		_ = botClient.Close()

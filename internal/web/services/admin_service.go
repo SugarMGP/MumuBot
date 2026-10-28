@@ -17,7 +17,9 @@ type Page[T any] struct {
 }
 
 type ListFilter struct {
-	GroupID              int64
+	ConversationKind     string
+	TargetID             int64
+	Status               string
 	Keyword, Sort, Order string
 	Page, PageSize       int
 }
@@ -27,15 +29,26 @@ type MemoryFilter struct {
 	Page, PageSize                     int
 }
 
-type TopicThreadView struct {
-	ID                   uint
-	GroupID              int64
-	CreatedAt, UpdatedAt time.Time
-	LastAssignmentID     uint
-	Summaries            []memory.TopicSummaryRecord
+type TopicSummaryView struct {
+	ID          uint
+	Version     uint64
+	SummaryJSON string
+	CreatedAt   time.Time
 }
 
-func (t TopicThreadView) LatestSummary() *memory.TopicSummaryRecord {
+type TopicThreadView struct {
+	ID               uint
+	ConversationKind string
+	TargetID         int64
+	Status           string
+	UpdatedAt        time.Time
+	MessageCount     int64
+	Summaries        []TopicSummaryView
+	AnchorMessageIDs []uint
+	SourceMessageIDs []uint
+}
+
+func (t TopicThreadView) LatestSummary() *TopicSummaryView {
 	if len(t.Summaries) == 0 {
 		return nil
 	}
@@ -56,7 +69,7 @@ type AdminService struct {
 	stickerDir string
 }
 
-type OverviewStats struct{ MemoryCount, MemberCount, ActiveCount, RelationCount, StickerCount int64 }
+type OverviewStats struct{ MemoryCount, MemberCount, ActiveCount, TopicCount, StickerCount int64 }
 
 func NewAdminService(memoryManager *memory.Manager, stickerDir string) *AdminService {
 	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir}
@@ -122,16 +135,15 @@ func (s *AdminService) OverviewStats() (OverviewStats, error) {
 		model any
 		count *int64
 	}{
-		{&memory.KnowledgeItem{}, &out.MemoryCount}, {&memory.MemberProfile{}, &out.MemberCount},
-		{&memory.KnowledgeRelation{}, &out.RelationCount},
-		{&memory.Sticker{}, &out.StickerCount},
+		{&memory.KnowledgeRecord{}, &out.MemoryCount}, {&memory.MemberProfile{}, &out.MemberCount},
+		{&memory.TopicThreadRow{}, &out.TopicCount}, {&memory.Sticker{}, &out.StickerCount},
 	}
 	for _, item := range items {
 		if err := s.db.Model(item.model).Count(item.count).Error; err != nil {
 			return out, err
 		}
 	}
-	if err := s.db.Model(&memory.KnowledgeItem{}).Where("status = ?", "active").Count(&out.ActiveCount).Error; err != nil {
+	if err := s.db.Model(&memory.KnowledgeRecord{}).Where("status = ?", "active").Count(&out.ActiveCount).Error; err != nil {
 		return out, err
 	}
 	return out, nil
@@ -152,22 +164,27 @@ func paginate[T any](q *gorm.DB, page, size int, items *[]T) (Page[T], error) {
 
 func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], error) {
 	page, size := normalizePage(f.Page, f.PageSize)
-	base := s.db.Model(&memory.TopicThread{})
-	if f.GroupID > 0 {
-		base = base.Where("group_id = ?", f.GroupID)
+	base := s.db.Model(&memory.TopicThreadRow{})
+	if f.ConversationKind != "" {
+		base = base.Where("conversation_kind=?", f.ConversationKind)
+	}
+	targetID := f.TargetID
+	if targetID > 0 {
+		base = base.Where("target_id=?", targetID)
+	}
+	if f.Status != "" && f.Status != "all" {
+		base = base.Where("status=?", f.Status)
 	}
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		base = base.Where("EXISTS (SELECT 1 FROM topic_assignments ta JOIN topic_summaries ts ON ts.through_topic_assignment_id = ta.id WHERE ta.topic_id = topic_threads.id AND ts.summary_json::text ILIKE ?)", "%"+k+"%")
+		p := "%" + k + "%"
+		base = base.Where("EXISTS (SELECT 1 FROM topic_summaries ts WHERE ts.topic_id=topic_threads.id AND (COALESCE(ts.summary_json->>'title','') ILIKE ? OR COALESCE(ts.summary_json->>'gist','') ILIKE ? OR ts.summary_json::text ILIKE ?))", p, p, p)
 	}
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		return Page[TopicThreadView]{}, err
 	}
-	base = base.Order("(SELECT MAX(ml.message_time) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) DESC NULLS LAST").
-		Order("(SELECT MAX(ml.id) FROM topic_assignments ta JOIN message_logs ml ON ml.id = ta.message_log_id WHERE ta.topic_id = topic_threads.id) DESC NULLS LAST").
-		Order("id DESC")
-	var threads []memory.TopicThread
-	if err := base.Offset((page - 1) * size).Limit(size).Find(&threads).Error; err != nil {
+	var threads []memory.TopicThreadRow
+	if err := base.Order("updated_at DESC,id DESC").Offset((page - 1) * size).Limit(size).Find(&threads).Error; err != nil {
 		return Page[TopicThreadView]{}, err
 	}
 	items, err := s.loadTopicThreads(threads)
@@ -178,18 +195,18 @@ func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], er
 }
 
 func (s *AdminService) GetTopicThread(id uint) (TopicThreadView, error) {
-	var t memory.TopicThread
-	if err := s.db.First(&t, id).Error; err != nil {
+	var thread memory.TopicThreadRow
+	if err := s.db.First(&thread, id).Error; err != nil {
 		return TopicThreadView{}, err
 	}
-	items, err := s.loadTopicThreads([]memory.TopicThread{t})
+	items, err := s.loadTopicThreads([]memory.TopicThreadRow{thread})
 	if err != nil {
 		return TopicThreadView{}, err
 	}
 	return items[0], nil
 }
 
-func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicThreadView, error) {
+func (s *AdminService) loadTopicThreads(threads []memory.TopicThreadRow) ([]TopicThreadView, error) {
 	if len(threads) == 0 {
 		return []TopicThreadView{}, nil
 	}
@@ -197,38 +214,80 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicTh
 	for i, thread := range threads {
 		ids[i] = thread.ID
 	}
-	type activityRow struct {
-		TopicID          uint
-		LastAssignmentID uint
-		UpdatedAt        *time.Time
-	}
-	var assignments []activityRow
-	if err := s.db.Table("topic_assignments ta").Select("ta.topic_id, COALESCE(MAX(ta.id), 0) AS last_assignment_id, MAX(ml.message_time) AS updated_at").Joins("JOIN message_logs ml ON ml.id=ta.message_log_id").Where("ta.topic_id IN ?", ids).Group("ta.topic_id").Scan(&assignments).Error; err != nil {
+	var summaries []memory.TopicSummaryRow
+	if err := s.db.Raw(`SELECT id,topic_id,version,summary_json,created_at FROM (
+		SELECT ts.*,row_number() OVER(PARTITION BY topic_id ORDER BY version DESC,id DESC) rn
+		FROM topic_summaries ts WHERE topic_id IN ?
+	) ranked WHERE rn<=10 ORDER BY topic_id,version ASC,id ASC`, ids).Scan(&summaries).Error; err != nil {
 		return nil, err
 	}
-	activityByTopic := make(map[uint]activityRow, len(assignments))
-	for _, row := range assignments {
-		activityByTopic[row.TopicID] = row
+	summariesByTopic := make(map[uint][]TopicSummaryView, len(ids))
+	latestByTopic := make(map[uint]uint, len(ids))
+	for _, row := range summaries {
+		view := TopicSummaryView{ID: row.ID, Version: row.Version, SummaryJSON: row.SummaryJSON, CreatedAt: row.CreatedAt}
+		items := summariesByTopic[row.TopicID]
+		items = append(items, view)
+		summariesByTopic[row.TopicID] = items
+		latestByTopic[row.TopicID] = row.ID
 	}
-	var summaries []struct {
-		memory.TopicSummaryRecord
-		TopicID uint
-	}
-	if err := s.db.Table("topic_summaries ts").Select("ts.*, ta.topic_id, ("+memory.TopicSummaryValiditySQL+") AS sources_valid").Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").Where("ta.topic_id IN ?", ids).Order("ts.id ASC").Scan(&summaries).Error; err != nil {
-		return nil, err
-	}
-	summariesByTopic := make(map[uint][]memory.TopicSummaryRecord, len(ids))
-	for _, summary := range summaries {
-		if summary.TopicID != 0 {
-			summariesByTopic[summary.TopicID] = append(summariesByTopic[summary.TopicID], summary.TopicSummaryRecord)
+	latestSummaryIDs := make([]uint, 0, len(latestByTopic))
+	for _, id := range ids {
+		if summaryID, ok := latestByTopic[id]; ok {
+			latestSummaryIDs = append(latestSummaryIDs, summaryID)
 		}
+	}
+	anchors := map[uint][]uint{}
+	sources := map[uint][]uint{}
+	var sourceRows []memory.TopicSourceRow
+	if len(latestSummaryIDs) > 0 {
+		if err := s.db.Where("summary_id IN ?", latestSummaryIDs).Order("message_log_id").Find(&sourceRows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range sourceRows {
+			if row.Role == "anchor" {
+				anchors[row.SummaryID] = append(anchors[row.SummaryID], row.MessageLogID)
+			} else {
+				sources[row.SummaryID] = append(sources[row.SummaryID], row.MessageLogID)
+			}
+		}
+	}
+	var assignmentRows []struct {
+		TopicID      uint
+		MessageLogID uint
+	}
+	if err := s.db.Table("topic_assignments").Select("topic_id,message_log_id").Where("topic_id IN ?", ids).Scan(&assignmentRows).Error; err != nil {
+		return nil, err
+	}
+	messagesByTopic := make(map[uint]map[uint]bool, len(ids))
+	addMessage := func(topicID, messageID uint) {
+		if topicID == 0 || messageID == 0 {
+			return
+		}
+		if messagesByTopic[topicID] == nil {
+			messagesByTopic[topicID] = map[uint]bool{}
+		}
+		messagesByTopic[topicID][messageID] = true
+	}
+	for _, row := range assignmentRows {
+		addMessage(row.TopicID, row.MessageLogID)
+	}
+	latestTopicBySummary := make(map[uint]uint, len(latestByTopic))
+	for topicID, summaryID := range latestByTopic {
+		latestTopicBySummary[summaryID] = topicID
+	}
+	for _, row := range sourceRows {
+		addMessage(latestTopicBySummary[row.SummaryID], row.MessageLogID)
+	}
+	countByTopic := make(map[uint]int64, len(messagesByTopic))
+	for topicID, messages := range messagesByTopic {
+		countByTopic[topicID] = int64(len(messages))
 	}
 	items := make([]TopicThreadView, 0, len(threads))
 	for _, thread := range threads {
-		activity := activityByTopic[thread.ID]
-		view := TopicThreadView{ID: thread.ID, GroupID: thread.GroupID, CreatedAt: thread.CreatedAt, UpdatedAt: thread.CreatedAt, LastAssignmentID: activity.LastAssignmentID, Summaries: summariesByTopic[thread.ID]}
-		if activity.UpdatedAt != nil {
-			view.UpdatedAt = *activity.UpdatedAt
+		view := TopicThreadView{ID: thread.ID, ConversationKind: thread.ConversationKind, TargetID: thread.TargetID, Status: thread.Status, UpdatedAt: thread.UpdatedAt, MessageCount: countByTopic[thread.ID], Summaries: summariesByTopic[thread.ID]}
+		if latest := view.LatestSummary(); latest != nil {
+			view.AnchorMessageIDs = anchors[latest.ID]
+			view.SourceMessageIDs = sources[latest.ID]
 		}
 		items = append(items, view)
 	}
@@ -237,7 +296,10 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThread) ([]TopicTh
 
 func (s *AdminService) ListTopicMessages(topicID uint, limit int) ([]memory.MessageLog, error) {
 	var out []memory.MessageLog
-	q := s.db.Table("message_logs ml").Select("ml.*").Joins("JOIN topic_assignments ta ON ta.message_log_id = ml.id").Where("ta.topic_id = ?", topicID).Order("ml.id DESC")
+	q := s.db.Table("message_logs ml").Select("DISTINCT ml.*").
+		Joins("LEFT JOIN topic_assignments ta ON ta.message_log_id=ml.id").
+		Where("ta.topic_id=? OR ml.id IN (SELECT src.message_log_id FROM topic_summary_sources src JOIN topic_summaries ts ON ts.id=src.summary_id WHERE ts.topic_id=? AND ts.version=(SELECT MAX(version) FROM topic_summaries WHERE topic_id=?))", topicID, topicID, topicID).
+		Order("ml.id DESC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}

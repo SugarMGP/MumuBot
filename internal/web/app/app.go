@@ -20,10 +20,11 @@ import (
 )
 
 type RuntimeSnapshot struct {
-	Connected    bool
-	SelfID       int64
-	MCPToolCount int
-	CurrentMood  *memory.MoodState
+	Connected       bool
+	SelfID          int64
+	MCPToolCount    int
+	CurrentMood     *memory.MoodState
+	CurrentEmotions []memory.CurrentEmotion
 }
 
 type App struct {

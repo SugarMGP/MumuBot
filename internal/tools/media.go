@@ -22,16 +22,20 @@ import (
 type SessionContext interface {
 	RegisterMessage(messageID int64) string
 	ResolveMessageRef(ref string) (int64, bool)
+	ResolveMessageLogRef(ref string) (uint, bool)
+	BeginToolTranscript(ctx context.Context, runID, toolName, callID, arguments string) (id uint, existingResult string, resumed bool, err error)
+	FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, resultRef string) (string, *schema.ToolResult, error)
+	RegisterMediaRefs(refs []media.Ref)
 	ResolveMediaByHash(hash string) (media.Ref, bool)
 	PendingAfter(seq uint64) []PendingMessage
 	MarkInjected(seq uint64)
-	CommitRound(messages []*schema.AgenticMessage)
 }
 
 // PendingMessage 待注入模型上下文的消息
 type PendingMessage struct {
-	ArrivalSeq uint64
-	Msg        *schema.AgenticMessage
+	ArrivalSeq   uint64
+	Msg          *schema.AgenticMessage
+	TranscriptID uint
 }
 
 // enhancedTool 返回多模态结果的工具
@@ -113,7 +117,7 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 func resolveMedia(ctx context.Context, input *ViewImageInput) (media.Ref, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil || tc.Session == nil {
-		return media.Ref{}, NewTerminalToolError(fmt.Errorf("媒体读取能力未初始化"))
+		return media.Ref{}, fmt.Errorf("媒体读取能力未初始化")
 	}
 	if input == nil || strings.TrimSpace(input.Hash) == "" {
 		return media.Ref{}, fmt.Errorf("请提供图片哈希标识")

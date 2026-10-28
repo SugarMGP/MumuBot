@@ -60,33 +60,29 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	if !a.conversationAllowed(memory.ConversationKindPrivate, targetID) {
 		return
 	}
-	cfg := config.Get()
-	ctxWithTimeout, cancel := context.WithTimeout(a.ctx, time.Duration(cfg.Agent.ThinkTimeoutSeconds)*time.Second)
-	defer cancel()
-
 	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
 	pending := session.PendingMessages()
-	if len(pending) == 0 {
+	if len(pending) == 0 || !hasActionableMessage(pending) {
 		return
 	}
-	ctx := a.buildConversationToolContext(ctxWithTimeout, memory.ConversationKindPrivate, targetID, session)
+	ctx := a.buildConversationToolContext(a.ctx, memory.ConversationKindPrivate, targetID, session)
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
-	messages, err := session.Assemble(ctx, a.memory, sessionBudget())
+	messages, err := session.Assemble(ctx, a.memory)
 	if err != nil {
 		zap.L().Warn("装配私聊上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
 	}
 	if runErr := a.runAgent(ctx, a.privateAgent, messages); runErr != nil {
-		// 发言成功但轮次失败时也要推进消费水位，避免同一批消息被重复回复
-		if seq := tc.ReadThroughSeq(false); seq > 0 {
-			session.MarkConsumed(seq)
+		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, a.privateTools, a.privateGenModelInput, session) {
+			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, a.privateAgent, session); retryErr == nil {
+				return
+			}
 		}
 		zap.L().Warn("私聊思考失败", zap.Int64("target_id", targetID), zap.Error(runErr))
 		return
 	}
-	session.MarkConsumed(maxPendingSeq(pending))
 }
 
 // stopPrivateTimers 停止私聊防抖定时器并禁止新的私聊思考，供停机排空使用
@@ -107,7 +103,6 @@ func (a *Agent) doPrivateSpeak(ctx context.Context, targetID int64, content stri
 	if err != nil {
 		return err
 	}
-	tools.GetToolContext(ctx).MarkActionSucceeded()
 	msg := &onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.persona.GetName(), Content: content, MessageParts: []onebot.MessagePart{{Kind: "text", Text: content}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq}
 	if replyTo != 0 {
 		msg.Reply = &onebot.ReplyInfo{MessageID: replyTo}
@@ -122,7 +117,6 @@ func (a *Agent) doPrivateSticker(ctx context.Context, targetID int64, fileName s
 		zap.L().Error("发送私聊表情包失败", zap.Int64("target_id", targetID), zap.String("file_name", fileName), zap.Error(err))
 		return err
 	}
-	tools.GetToolContext(ctx).MarkActionSucceeded()
 	a.onMessage(&onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.persona.GetName(), Images: []onebot.ImageInfo{{SubType: 1, Desc: description}}, MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq})
 	return nil
 }
@@ -132,7 +126,6 @@ func (a *Agent) doPrivateImage(ctx context.Context, targetID int64, imageURL str
 	if err != nil {
 		return err
 	}
-	tools.GetToolContext(ctx).MarkActionSucceeded()
 	a.onMessage(&onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.persona.GetName(), Images: []onebot.ImageInfo{{URL: imageURL}}, MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq})
 	return nil
 }

@@ -3,159 +3,182 @@ package memory
 import (
 	"context"
 	"fmt"
-	"sort"
+	"strings"
 
 	"github.com/bytedance/sonic"
 )
 
-// TopicDigestSummary 一条话题摘要的展示内容
-type TopicDigestSummary struct {
-	TopicID      uint     `json:"topic_id"`
-	Title        string   `json:"title"`
-	Gist         string   `json:"gist"`
-	Participants []string `json:"participants,omitempty"`
-	OpenLoops    []string `json:"open_loops,omitempty"`
-	Keywords     []string `json:"keywords,omitempty"`
-}
-
-// TopicCoverage 指定消息的话题覆盖情况与对应摘要
-type TopicCoverage struct {
-	Covered   map[uint]bool
-	Summaries []TopicDigestSummary
-}
-
-// TopicCoverage 计算一批消息是否已被有效话题摘要覆盖，并返回对应摘要
-func (m *Manager) TopicCoverage(ctx context.Context, kind string, targetID int64, logIDs []uint) (TopicCoverage, error) {
-	coverage := TopicCoverage{Covered: map[uint]bool{}}
-	if len(logIDs) == 0 {
-		return coverage, nil
-	}
-	if kind == ConversationKindPrivate {
-		state, err := m.GetPrivateTopicStateAt(ctx, targetID, 0)
-		if err != nil {
-			return coverage, err
-		}
-		if state == nil {
-			return coverage, nil
-		}
-		// 摘要来源失效时不能标记覆盖，否则原文被丢弃又没有摘要顶上
-		if state.ThroughMessageLogID > 0 && state.SourcesValid {
-			for _, id := range logIDs {
-				coverage.Covered[id] = id <= state.ThroughMessageLogID
-			}
-			var summary TopicSummary
-			if err := sonic.UnmarshalString(state.SummaryJSON, &summary); err != nil {
-				return coverage, err
-			}
-			coverage.Summaries = append(coverage.Summaries, topicDigestSummary(0, summary))
-		}
-		return coverage, nil
-	}
-
-	topicOf := make(map[uint]uint, len(logIDs))
-	rows, err := m.db.WithContext(ctx).Table("topic_assignments ta").
-		Select("ta.message_log_id, ta.topic_id").
-		Joins("JOIN message_logs ml ON ml.id = ta.message_log_id").
-		Where("ml.conversation_kind=? AND ml.target_id=? AND ml.id IN ?", kind, targetID, logIDs).
-		Rows()
+// RenderCheckpointDigest 按固定顺序渲染检查点中的概览、活跃话题和内部参考基线
+func (m *Manager) RenderCheckpointDigest(ctx context.Context, kind string, targetID int64) (string, error) {
+	checkpoint, err := m.GetCheckpoint(ctx, kind, targetID)
 	if err != nil {
-		return coverage, err
+		return "", err
 	}
-	defer rows.Close()
-	topicIDs := make([]uint, 0, len(logIDs))
-	for rows.Next() {
-		var messageID uint
-		var topicID *uint
-		if err := rows.Scan(&messageID, &topicID); err != nil {
-			return coverage, err
-		}
-		if topicID == nil {
-			// 无话题价值的原文视为已覆盖，压缩时直接丢弃
-			coverage.Covered[messageID] = true
-			continue
-		}
-		topicOf[messageID] = *topicID
-		topicIDs = append(topicIDs, *topicID)
+	if checkpoint == nil {
+		return m.renderLegacyTopicDigest(ctx, kind, targetID)
 	}
-	if err := rows.Err(); err != nil {
-		return coverage, err
+	var snapshots []TopicSnapshot
+	if err := sonic.Unmarshal(checkpoint.ActiveTopicVersions, &snapshots); err != nil {
+		return "", err
 	}
-	summaries, err := m.topicSummaries(ctx, topicIDs)
-	if err != nil {
-		return coverage, err
-	}
-	validTopics := make(map[uint]bool, len(summaries))
-	for _, item := range summaries {
-		validTopics[item.TopicID] = true
-	}
-	for messageID, topicID := range topicOf {
-		coverage.Covered[messageID] = validTopics[topicID]
-	}
-	return coverage, nil
-}
-
-// topicSummaries 读取指定话题的最新有效摘要
-func (m *Manager) topicSummaries(ctx context.Context, topicIDs []uint) ([]TopicDigestSummary, error) {
-	if len(topicIDs) == 0 {
-		return nil, nil
-	}
-	unique := make([]uint, 0, len(topicIDs))
-	seen := map[uint]bool{}
-	for _, id := range topicIDs {
-		if id == 0 || seen[id] {
-			continue
-		}
-		seen[id] = true
-		unique = append(unique, id)
-	}
-	sort.Slice(unique, func(i, j int) bool { return unique[i] < unique[j] })
-	rows, err := m.db.WithContext(ctx).Table("topic_summaries ts").
-		Select("DISTINCT ON (ta.topic_id) ts.*, ta.topic_id, ("+TopicSummaryValiditySQL+") AS sources_valid").
-		Joins("JOIN topic_assignments ta ON ta.id = ts.through_topic_assignment_id").
-		Where("ta.topic_id IN ?", unique).
-		Order("ta.topic_id, ts.id DESC").Rows()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]TopicDigestSummary, 0, len(unique))
-	for rows.Next() {
-		var record TopicSummaryRecord
-		var topicID uint
-		var sourcesValid bool
-		if err := rows.Scan(&record.ID, &record.ThroughTopicAssignmentID, &record.SummaryJSON, &record.Embedding, &record.CreatedAt, &topicID, &sourcesValid); err != nil {
-			return nil, err
-		}
-		if !sourcesValid {
-			continue
+	summaries := make([]TopicSummary, 0, len(snapshots))
+	topicIDs := make([]uint, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		var row TopicSummaryRow
+		if err := m.db.WithContext(ctx).Where("id=? AND topic_id=?", snapshot.SummaryID, snapshot.TopicID).Take(&row).Error; err != nil {
+			return "", fmt.Errorf("读取活跃话题摘要有误: %w", err)
 		}
 		var summary TopicSummary
-		if err := sonic.UnmarshalString(record.SummaryJSON, &summary); err != nil {
-			return nil, err
+		if err := sonic.UnmarshalString(row.SummaryJSON, &summary); err != nil {
+			return "", fmt.Errorf("解析活跃话题摘要有误: %w", err)
 		}
-		items = append(items, topicDigestSummary(topicID, summary))
+		summaries = append(summaries, summary)
+		topicIDs = append(topicIDs, snapshot.TopicID)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return renderContextDigest(checkpoint.Overview, summaries, topicIDs, checkpoint.ReferenceBaseline), nil
 }
 
-// topicDigestSummary 把话题摘要转成展示结构
-func topicDigestSummary(topicID uint, summary TopicSummary) TopicDigestSummary {
-	item := TopicDigestSummary{
-		TopicID:   topicID,
-		Title:     summary.Title,
-		Gist:      summary.Gist,
-		OpenLoops: summary.OpenLoops,
-		Keywords:  summary.Keywords,
+func (m *Manager) renderLegacyTopicDigest(ctx context.Context, kind string, targetID int64) (string, error) {
+	var topics []TopicThreadRow
+	if err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID).Order("updated_at DESC,id DESC").Limit(8).Find(&topics).Error; err != nil {
+		return "", err
 	}
-	for _, participant := range summary.Participants {
-		name := participant.Nickname
-		if name == "" {
-			name = fmt.Sprintf("%d", participant.UserID)
+	var summaries []TopicSummary
+	var topicIDs []uint
+	for _, topic := range topics {
+		var row TopicSummaryRow
+		if err := m.db.WithContext(ctx).Where("topic_id=?", topic.ID).Order("version DESC,id DESC").Take(&row).Error; err != nil {
+			return "", fmt.Errorf("读取历史话题摘要有误: %w", err)
 		}
-		item.Participants = append(item.Participants, name)
+		var summary TopicSummary
+		if err := sonic.UnmarshalString(row.SummaryJSON, &summary); err != nil {
+			return "", fmt.Errorf("解析历史话题摘要有误: %w", err)
+		}
+		summaries = append(summaries, summary)
+		topicIDs = append(topicIDs, topic.ID)
 	}
-	return item
+	if len(summaries) == 0 {
+		return "", nil
+	}
+	return renderContextDigest("以下是升级前保留的历史摘要，仅作旧事参考。", summaries, topicIDs, ""), nil
+}
+
+// RenderCompactionPreview 渲染尚未提交的压缩摘要视图，用于提交前预算校验
+func (m *Manager) RenderCompactionPreview(ctx context.Context, input *CompactionCommit) (string, error) {
+	if input == nil {
+		return "", fmt.Errorf("压缩预览参数为空")
+	}
+	topicSummaries := make(map[string]TopicSummary, len(input.Topics))
+	for _, topic := range input.Topics {
+		topicSummaries[strings.TrimSpace(topic.Ref)] = topic.Summary
+		if topic.TopicID > 0 {
+			topicSummaries[fmt.Sprintf("t%d", topic.TopicID)] = topic.Summary
+		}
+	}
+	summaries := make([]TopicSummary, 0, len(input.ActiveTopicRefs))
+	topicIDs := make([]uint, 0, len(input.ActiveTopicRefs))
+	for _, rawRef := range input.ActiveTopicRefs {
+		ref := strings.TrimSpace(rawRef)
+		if summary, ok := topicSummaries[ref]; ok {
+			summaries = append(summaries, summary)
+			topicIDs = append(topicIDs, parseTopicIDRef(ref))
+			continue
+		}
+		topicID := parseTopicIDRef(ref)
+		if topicID == 0 {
+			continue
+		}
+		detail, err := m.ReadTopic(ctx, topicID)
+		if err != nil || detail == nil {
+			return "", fmt.Errorf("读取待激活话题失败: %w", err)
+		}
+		summaries = append(summaries, detail.Summary)
+		topicIDs = append(topicIDs, topicID)
+	}
+	overview := strings.TrimSpace(input.Overview)
+	active := map[uint]bool{}
+	for _, id := range topicIDs {
+		active[id] = true
+	}
+	var existing []TopicThreadRow
+	qExisting := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID)
+	if input.ExpectedVersion > 0 {
+		qExisting = qExisting.Where("status='active'")
+	}
+	if err := qExisting.Find(&existing).Error; err != nil {
+		return "", err
+	}
+	for _, topic := range existing {
+		if active[topic.ID] {
+			continue
+		}
+		var latest TopicSummaryRow
+		if err := m.db.WithContext(ctx).Where("topic_id=?", topic.ID).Order("version DESC,id DESC").Take(&latest).Error; err != nil {
+			return "", fmt.Errorf("读取待降级话题失败: %w", err)
+		}
+		var summary TopicSummary
+		if err := sonic.UnmarshalString(latest.SummaryJSON, &summary); err != nil {
+			return "", fmt.Errorf("解析待降级话题失败: %w", err)
+		}
+		for _, loop := range summary.OpenLoops {
+			loop = strings.TrimSpace(loop)
+			if loop != "" && !strings.Contains(overview, loop) {
+				if overview != "" {
+					overview += "\n"
+				}
+				overview += "未完成事项延续：" + loop
+			}
+		}
+	}
+	return renderContextDigest(overview, summaries, topicIDs, input.ReferenceBaseline), nil
+}
+
+func renderContextDigest(overview string, summaries []TopicSummary, topicIDs []uint, baseline string) string {
+	var sections []string
+	if overview = strings.TrimSpace(overview); overview != "" {
+		sections = append(sections, "【会话概览】\n"+overview)
+	}
+	if len(summaries) > 0 {
+		sections = append(sections, "【活跃话题】")
+		for i, summary := range summaries {
+			id := uint(0)
+			if i < len(topicIDs) {
+				id = topicIDs[i]
+			}
+			title := strings.TrimSpace(summary.Title)
+			block := "### " + summaryTitle(summary, id)
+			if id > 0 {
+				if title == "" {
+					block = fmt.Sprintf("### 话题 t%d", id)
+				} else {
+					block = fmt.Sprintf("### 话题 t%d · %s", id, title)
+				}
+			}
+			if gist := strings.TrimSpace(summary.Gist); gist != "" {
+				block += "\n概况：" + gist
+			}
+			if len(summary.RecentTurns) > 0 {
+				block += "\n近期脉络：" + strings.Join(summary.RecentTurns, "；")
+			}
+			if len(summary.OpenLoops) > 0 {
+				block += "\n未完事项：" + strings.Join(summary.OpenLoops, "；")
+			}
+			if len(summary.Participants) > 0 {
+				names := make([]string, 0, len(summary.Participants))
+				for _, participant := range summary.Participants {
+					if participant.Nickname != "" {
+						names = append(names, participant.Nickname)
+					}
+				}
+				if len(names) > 0 {
+					block += "\n在场：" + strings.Join(names, "、")
+				}
+			}
+			sections = append(sections, block)
+		}
+	}
+	if baseline = strings.TrimSpace(baseline); baseline != "" {
+		sections = append(sections, "【内部参考基线】\n"+baseline)
+	}
+	return strings.Join(sections, "\n\n")
 }

@@ -25,7 +25,6 @@ const mapping = [
   [["sort-desc"], "arrow-down-wide-narrow"],
   [["sort-asc"], "arrow-up-narrow-wide"],
   [["connection"], "plug-zap"],
-  [["learning", "style-metric"], "sparkles"],
   [["tools"], "wrench"],
   [["runtime-summary"], "chart-column"],
   [["mood"], "heart"],

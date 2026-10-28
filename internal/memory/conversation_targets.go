@@ -147,3 +147,19 @@ func (m *Manager) SetConversationExtraPrompt(ctx context.Context, targetID int64
 		Updates(map[string]any{"extra_prompt": prompt, "updated_at": time.Now()}).Error
 	return result
 }
+
+// LockConversationAllowed 在提交事务内锁定会话许可
+func LockConversationAllowed(tx *gorm.DB, kind string, targetID int64) error {
+	var row ConversationTarget
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&row).Error
+	if err == gorm.ErrRecordNotFound {
+		return ErrConversationUnavailable
+	}
+	if err != nil {
+		return err
+	}
+	if !row.Active || row.Blocked {
+		return ErrConversationUnavailable
+	}
+	return nil
+}

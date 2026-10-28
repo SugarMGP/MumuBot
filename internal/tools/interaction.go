@@ -74,7 +74,7 @@ func speakContent(ctx context.Context, content, replyRef string, inputMentions [
 	}
 
 	if err := tc.SpeakCallback(ctx, tc.TargetID, content, replyTo, mentions); err != nil {
-		return nil, NewTerminalToolError(err)
+		return nil, err
 	}
 
 	return &SpeakOutput{
@@ -183,9 +183,8 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 		return nil, fmt.Errorf("用户 ID 不能为空")
 	}
 	if err := tc.Bot.GroupPoke(ctx, tc.TargetID, input.UserID); err != nil {
-		return nil, NewTerminalToolError(err)
+		return nil, err
 	}
-	tc.MarkActionSucceeded()
 
 	return &PokeOutput{Success: true, Message: "已戳一戳"}, nil
 }
@@ -202,9 +201,8 @@ func privatePokeFunc(ctx context.Context, _ *PrivatePokeInput) (*PokeOutput, err
 		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
 	}
 	if err := tc.Bot.FriendPoke(ctx, tc.TargetID); err != nil {
-		return nil, NewTerminalToolError(err)
+		return nil, err
 	}
-	tc.MarkActionSucceeded()
 	return &PokeOutput{Success: true, Message: "已戳一戳"}, nil
 }
 
@@ -281,9 +279,8 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	}
 
 	if err := tc.Bot.SetMsgEmojiLike(ctx, messageID, emojiID); err != nil {
-		return nil, NewTerminalToolError(err)
+		return nil, err
 	}
-	tc.MarkActionSucceeded()
 
 	return &ReactToMessageOutput{Success: true, Message: "已回应表情"}, nil
 }
@@ -356,9 +353,8 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 
 	arrivalSeq, err := tc.Bot.DeleteMsg(ctx, tc.ConversationKind, tc.TargetID, messageID)
 	if err != nil {
-		return nil, NewTerminalToolError(err)
+		return nil, err
 	}
-	tc.MarkActionSucceeded()
 	tc.RecallCallback(messageID, arrivalSeq)
 
 	return &RecallMessageOutput{Success: true, Message: "已撤回消息"}, nil

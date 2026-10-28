@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"mumu-bot/internal/config"
-	"mumu-bot/internal/learning"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/media"
@@ -53,8 +52,6 @@ type Agent struct {
 	media            *media.Manager
 	gates            *gateStore
 
-	learner *learning.Learner
-
 	toolNames []string
 
 	replyCache *ttlcache.Cache[string, onebot.ReplyInfo]
@@ -94,10 +91,11 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		return nil, fmt.Errorf("加载人格失败: %w", err)
 	}
 
-	chatModel, err := llm.NewClientForTier(llm.TierHigh)
+	chatModel, err := llm.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("创建 LLM 客户端失败: %w", err)
 	}
+	chatModel = newTimedAgenticModel(chatModel, time.Duration(cfg.Agent.ThinkTimeoutSeconds)*time.Second)
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
@@ -107,7 +105,7 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 		memory:               mem,
 		model:                chatModel,
 		bot:                  botClient,
-		sessions:             newSessionStore(),
+		sessions:             newSessionStore(mem),
 		gates:                newGateStore(),
 		pendingGroupThinks:   make(map[int64]*pendingThink),
 		pendingPrivateThinks: make(map[int64]*pendingThink),
@@ -135,10 +133,6 @@ func New(mem *memory.Manager, botClient *onebot.Client) (*Agent, error) {
 
 	a.groupConcurrency = NewGroupThinkConcurrency(a.ctx, cfg.Agent.MaxCoroutine, a.thinkGroup)
 
-	a.learner, err = learning.New(mem, botClient.GetSelfID)
-	if err != nil {
-		return nil, fmt.Errorf("初始化记忆整理失败: %w", err)
-	}
 	a.mcpMgr = mcp.NewMCPManager()
 	if err := a.mcpMgr.LoadFromConfig(a.ctx, "config/mcp.json"); err != nil {
 		zap.L().Error("加载 MCP 配置失败", zap.Error(err))
@@ -184,12 +178,15 @@ func (a *Agent) initTools() error {
 // initGroupTools 显式声明群聊工具，不从私聊工具二次过滤
 func (a *Agent) initGroupTools() error {
 	return a.buildTools(&a.groupTools, []func() (tool.BaseTool, error){
-		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewUpdateMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewDeleteMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSaveWorkingNoteTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchHistoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchTopicsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadTopicTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchHistoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadHistoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -219,12 +216,15 @@ func (a *Agent) initGroupTools() error {
 // initPrivateTools 显式声明私聊工具，不暴露群成员和群操作能力
 func (a *Agent) initPrivateTools() error {
 	return a.buildTools(&a.privateTools, []func() (tool.BaseTool, error){
-		func() (tool.BaseTool, error) { return tools.NewSaveMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewUpdateMemoryTool() },
-		func() (tool.BaseTool, error) { return tools.NewDeleteMemoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSaveWorkingNoteTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchHistoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchTopicsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadTopicTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchHistoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadHistoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewPrivateSpeakTool() },
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -303,16 +303,15 @@ func (a *Agent) newChatAgent(chatTools []tool.BaseTool, genModelInput adk.TypedG
 				ToolArgumentsHandler: argumentsHandler,
 				ToolCallMiddlewares: []compose.ToolMiddleware{
 					{Invokable: tools.ToolErrorMiddleware()},
-					{Invokable: tools.ToolActionMiddleware(a.mcpMgr.ReadOnlyTools())},
-					{Invokable: tools.ToolDedupMiddleware()},
+					tools.ToolTranscriptMiddleware(),
 				},
 			},
 			ReturnDirectly: map[string]bool{"stayQuiet": true},
 		},
 		MaxIterations: maxStep,
 		Handlers: []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
-			&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
-			&sessionCollector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
+			&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
+			&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
 		},
 	})
 }
@@ -323,74 +322,11 @@ func (a *Agent) Start() error {
 	}
 	a.bot.OnMessage(a.onMessage)
 	a.bot.OnRecall(a.onRecall)
-	if a.learner != nil {
-		a.learner.Start(a.ctx)
-	}
 
 	a.wg.Add(1)
 	go a.conversationThinkLoop()
 	zap.L().Info("Agent 已启动")
 	return nil
-}
-
-// restoreSessions 从消息库重建会话最近消息，重启后仍能接上话
-func (a *Agent) restoreSessions() error {
-	bufSize := restoreMessageLimit
-	groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx)
-	if err != nil {
-		return fmt.Errorf("读取可恢复群聊失败: %w", err)
-	}
-	for _, groupID := range groupIDs {
-		logs, err := a.memory.GetRecentMessages(a.ctx, groupID, 0, bufSize, 0)
-		if err != nil {
-			return fmt.Errorf("恢复群 %d 消息失败: %w", groupID, err)
-		}
-		a.restoreSession(memory.ConversationKindGroup, groupID, logs)
-	}
-	privateTargets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true)
-	if err != nil {
-		return fmt.Errorf("读取可恢复私聊失败: %w", err)
-	}
-	for _, target := range privateTargets {
-		logs, err := a.memory.GetRecentMessagesScope(a.ctx, memory.ConversationKindPrivate, target.TargetID, 0, bufSize, 0)
-		if err != nil {
-			return fmt.Errorf("恢复好友 %d 消息失败: %w", target.TargetID, err)
-		}
-		a.restoreSession(memory.ConversationKindPrivate, target.TargetID, logs)
-	}
-	return nil
-}
-
-// restoreSession 重建单个会话的最近消息
-func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.MessageLog) {
-	if len(logs) == 0 {
-		return
-	}
-	session := a.sessions.get(kind, targetID)
-	for _, log := range logs {
-		msg := messageLogToSessionMessage(log)
-		if msg == nil {
-			continue
-		}
-		// 恢复的是已经进过上下文的历史，不算待处理消息
-		user := session.AppendHistory(msg, log.ID, log.MediaRefs)
-		user.ArrivalSeq = 0
-	}
-}
-
-// messageLogToSessionMessage 把消息库记录转成会话消息
-func messageLogToSessionMessage(log memory.MessageLog) *onebot.ConversationMessage {
-	return &onebot.ConversationMessage{
-		MessageID:        log.OneBotMessageID,
-		ConversationKind: log.ConversationKind,
-		TargetID:         log.TargetID,
-		UserID:           log.UserID,
-		Nickname:         log.Nickname,
-		Content:          log.TextContent,
-		FinalContent:     log.DisplayContent,
-		IsMentioned:      log.IsMentioned,
-		Time:             log.MessageTime,
-	}
 }
 
 func (a *Agent) Stop() {
@@ -420,9 +356,6 @@ func (a *Agent) shutdown() {
 
 	a.wg.Wait()
 	a.stopCaches()
-	if a.learner != nil {
-		a.learner.Stop()
-	}
 	if a.mcpMgr != nil {
 		a.mcpMgr.Close()
 	}

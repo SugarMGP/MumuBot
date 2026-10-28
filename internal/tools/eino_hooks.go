@@ -13,9 +13,9 @@ import (
 	cb "github.com/cloudwego/eino/callbacks"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 	callbacktpl "github.com/cloudwego/eino/utils/callbacks"
 	"github.com/eino-contrib/jsonschema"
-	"go.uber.org/zap"
 )
 
 type toolLogStateKey struct{}
@@ -146,50 +146,120 @@ func coerceToolArgument(value any, parameterSchema *jsonschema.Schema) any {
 	return value
 }
 
-// ToolDedupMiddleware 拦截同一轮 think 中完全相同的工具调用
-func ToolDedupMiddleware() compose.InvokableToolMiddleware {
-	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
-		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-			tc := GetToolContext(ctx)
-			if tc == nil || input.Name == "getNewMessages" {
-				return next(ctx, input)
-			}
-
-			if tc.IsToolCallSeen(input.Name, input.Arguments) {
-				zap.L().Debug("工具调用被中间件去重",
-					zap.String("tool", input.Name),
-					zap.String("arguments", input.Arguments))
-				output, err := sonic.MarshalString(&duplicateToolOutput{
-					Success: true,
-					Message: fmt.Sprintf("检测到与本轮完全相同的 %s 调用，已忽略", input.Name),
-				})
-				if err != nil {
-					return nil, err
+// ToolTranscriptMiddleware 把每次工具执行作为 tool 工作集条目保存，大结果只保留预览和 result_ref
+func ToolTranscriptMiddleware() compose.ToolMiddleware {
+	return compose.ToolMiddleware{
+		Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
+			return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+				tc := GetToolContext(ctx)
+				if tc == nil || tc.Session == nil {
+					return next(ctx, input)
 				}
-				return &compose.ToolOutput{Result: output}, nil
+				id, existing, resumed, beginErr := tc.Session.BeginToolTranscript(ctx, tc.RunID, input.Name, input.CallID, input.Arguments)
+				if beginErr != nil {
+					return nil, beginErr
+				}
+				if resumed {
+					if id != 0 {
+						tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
+					}
+					return &compose.ToolOutput{Result: existing}, nil
+				}
+				output, err := next(ctx, input)
+				status := "succeeded"
+				result := ""
+				if output != nil {
+					result = output.Result
+				}
+				if err != nil {
+					status = "failed"
+					result = err.Error()
+				} else if output != nil && !toolOutputSucceeded(output) {
+					status = "failed"
+				}
+				display, _, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, nil, "")
+				if finishErr != nil {
+					return nil, finishErr
+				}
+				if id != 0 {
+					tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
+				}
+				if output != nil {
+					output.Result = display
+				}
+				return output, err
 			}
-
-			output, err := next(ctx, input)
-			if err == nil && toolOutputSucceeded(output) {
-				tc.MarkToolCallSucceeded(input.Name, input.Arguments)
+		},
+		EnhancedInvokable: func(next compose.EnhancedInvokableToolEndpoint) compose.EnhancedInvokableToolEndpoint {
+			return func(ctx context.Context, input *compose.ToolInput) (*compose.EnhancedInvokableToolOutput, error) {
+				tc := GetToolContext(ctx)
+				if tc == nil || tc.Session == nil {
+					return next(ctx, input)
+				}
+				id, existing, resumed, beginErr := tc.Session.BeginToolTranscript(ctx, tc.RunID, input.Name, input.CallID, input.Arguments)
+				if beginErr != nil {
+					return nil, beginErr
+				}
+				if resumed {
+					if id != 0 {
+						tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
+					}
+					return &compose.EnhancedInvokableToolOutput{Result: &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: existing}}}}, nil
+				}
+				output, err := next(ctx, input)
+				status := "succeeded"
+				result := ""
+				if output != nil {
+					result = toolResultText(output.Result)
+				}
+				if err != nil {
+					status = "failed"
+					result = err.Error()
+				}
+				var enhanced *schema.ToolResult
+				if output != nil {
+					enhanced = output.Result
+				}
+				displayText, displayEnhanced, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, enhanced, "")
+				if finishErr != nil {
+					return nil, finishErr
+				}
+				if id != 0 {
+					tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
+				}
+				if output != nil {
+					if displayEnhanced != nil {
+						output.Result = displayEnhanced
+					} else {
+						output.Result = &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: displayText}}}
+					}
+				}
+				return output, err
 			}
-			return output, err
-		}
+		},
 	}
 }
 
-// ToolActionMiddleware 在工具成功后记录已发生的会话行动；MCP 工具按只读标注区分是否为副作用
-func ToolActionMiddleware(mcpReadOnly map[string]bool) compose.InvokableToolMiddleware {
-	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
-		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-			output, err := next(ctx, input)
-			mcpWrites := strings.HasPrefix(input.Name, "mcp-") && !mcpReadOnly[input.Name]
-			if err == nil && toolOutputSucceeded(output) && (input.Name == "updateMood" || input.Name == "saveMemory" || mcpWrites) {
-				GetToolContext(ctx).MarkActionSucceeded()
-			}
-			return output, err
+func toolResultText(result *schema.ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	var parts []string
+	for _, part := range result.Parts {
+		switch part.Type {
+		case schema.ToolPartTypeText:
+			parts = append(parts, part.Text)
+		case schema.ToolPartTypeImage:
+			parts = append(parts, "[图片工具结果]")
+		case schema.ToolPartTypeAudio:
+			parts = append(parts, "[音频工具结果]")
+		case schema.ToolPartTypeVideo:
+			parts = append(parts, "[视频工具结果]")
+		case schema.ToolPartTypeFile:
+			parts = append(parts, "[文件工具结果]")
 		}
 	}
+	return strings.Join(parts, "\n")
 }
 
 // ToolErrorMiddleware 将可恢复工具错误转成 JSON 结果，让 Eino 继续循环

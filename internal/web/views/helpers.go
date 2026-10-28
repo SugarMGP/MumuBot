@@ -14,7 +14,7 @@ import (
 func NavItems() []NavItem {
 	return []NavItem{
 		{Label: "首页", Href: "/admin"},
-		{Label: "统一记忆", Href: "/admin/knowledge"},
+		{Label: "长期记忆", Href: "/admin/knowledge"},
 		{Label: "话题管理", Href: "/admin/topics"},
 		{Label: "成员管理", Href: "/admin/members"},
 		{Label: "会话管理", Href: "/admin/contacts"},
@@ -49,10 +49,7 @@ func navClass(currentPath string, href string) string {
 	return joinClasses(base, "text-base-content/60 hover:bg-primary/10 hover:text-primary")
 }
 
-func moodPercent(kind string, raw float64) int {
-	if kind == "valence" {
-		raw = (raw + 1) / 2
-	}
+func moodPercent(raw float64) int {
 	clamped := math.Min(1, math.Max(0, raw))
 	return int(math.Round(clamped * 100))
 }

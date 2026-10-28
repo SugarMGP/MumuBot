@@ -59,7 +59,7 @@ func knowledgeDetailURL(id uint, returnTo string) string {
 	return WithQuery(knowledgeHref(id), "return_to", returnTo)
 }
 
-func knowledgeSubject(item memory.KnowledgeItem, selfID int64, meta services.KnowledgeMetadata) string {
+func knowledgeSubject(item memory.KnowledgeRecord, selfID int64, meta services.KnowledgeMetadata) string {
 	if item.SubjectUserID == 0 || item.SubjectUserID == selfID {
 		return memorySubjectText(item.SubjectUserID, selfID)
 	}
@@ -70,21 +70,8 @@ func knowledgeSubject(item memory.KnowledgeItem, selfID int64, meta services.Kno
 }
 
 func evidenceSummary(meta services.KnowledgeMetadata) string {
-	switch valid := meta.ValidMessages(); {
-	case meta.Messages == 0:
-		return "暂无原文"
-	case valid <= 0:
-		return "原文依据已失效"
-	default:
-		return fmt.Sprintf("原文 %d 条", valid)
+	if meta.Messages == 0 {
+		return "暂无来源消息"
 	}
-}
-
-func firstEvidenceOpen(sets []memory.KnowledgeEvidence, index int) bool {
-	for i, set := range sets {
-		if set.Valid {
-			return index == i
-		}
-	}
-	return index == 0
+	return fmt.Sprintf("来源 %d 条", meta.ValidMessages())
 }

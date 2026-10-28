@@ -6,8 +6,9 @@ import (
 	"time"
 
 	"mumu-bot/internal/memory"
-	topicpkg "mumu-bot/internal/topic"
 	"mumu-bot/internal/web/services"
+
+	"github.com/bytedance/sonic"
 )
 
 func topicSummary(topic services.TopicThreadView) memory.TopicSummary {
@@ -15,10 +16,11 @@ func topicSummary(topic services.TopicThreadView) memory.TopicSummary {
 	if latest == nil {
 		return memory.TopicSummary{}
 	}
-	if !latest.SourcesValid {
+	var summary memory.TopicSummary
+	if sonic.UnmarshalString(latest.SummaryJSON, &summary) != nil {
 		return memory.TopicSummary{}
 	}
-	return topicpkg.ParseSummary(latest.SummaryJSON)
+	return summary
 }
 
 type topicSummarySnapshot struct {
@@ -29,7 +31,11 @@ type topicSummarySnapshot struct {
 func topicSummaryHistory(topic services.TopicThreadView) []topicSummarySnapshot {
 	out := make([]topicSummarySnapshot, 0, len(topic.Summaries))
 	for _, record := range topic.Summaries {
-		out = append(out, topicSummarySnapshot{CapturedAt: record.CreatedAt.Format(time.RFC3339), Summary: topicpkg.ParseSummary(record.SummaryJSON)})
+		var summary memory.TopicSummary
+		if sonic.UnmarshalString(record.SummaryJSON, &summary) != nil {
+			continue
+		}
+		out = append(out, topicSummarySnapshot{CapturedAt: record.CreatedAt.Format(time.RFC3339), Summary: summary})
 	}
 	return out
 }
@@ -305,7 +311,7 @@ func normalizedTopicSummaryItems(items []string) []string {
 func topicTitle(topic services.TopicThreadView) string {
 	var title string
 	if latest := topic.LatestSummary(); latest != nil {
-		title = strings.TrimSpace(topicpkg.ParseSummary(latest.SummaryJSON).Title)
+		title = strings.TrimSpace(topicSummary(topic).Title)
 	}
 	if title != "" {
 		return title
@@ -314,9 +320,6 @@ func topicTitle(topic services.TopicThreadView) string {
 }
 
 func topicGist(topic services.TopicThreadView) string {
-	if latest := topic.LatestSummary(); latest != nil && !latest.SourcesValid {
-		return "摘要依据已失效，等待后续讨论重新整理。"
-	}
 	gist := strings.TrimSpace(topicSummary(topic).Gist)
 	if gist != "" {
 		return gist
@@ -328,31 +331,8 @@ func topicKeywords(topic services.TopicThreadView) []string {
 	return topicSummary(topic).Keywords
 }
 
-func topicSummaryProgressText(topic services.TopicThreadView) string {
-	latest := topic.LatestSummary()
-	if latest == nil {
-		return "尚无摘要"
-	}
-	if !latest.SourcesValid {
-		return "摘要依据已失效"
-	}
-	if latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
-		return "已覆盖已归属消息"
-	}
-	return "还有新消息待补进摘要"
-}
-
-func topicSummaryProgressClass(topic services.TopicThreadView) string {
-	latest := topic.LatestSummary()
-	if latest != nil && latest.SourcesValid && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
-		return "badge badge-success badge-soft badge-sm"
-	}
-	return "badge badge-warning badge-soft badge-sm"
-}
-
 func topicTone(topic services.TopicThreadView) string {
-	latest := topic.LatestSummary()
-	if latest != nil && latest.SourcesValid && latest.ThroughTopicAssignmentID >= topic.LastAssignmentID {
+	if topic.Status == "active" {
 		return "success"
 	}
 	return "primary"
@@ -363,9 +343,6 @@ func topicUpdatedTime(topic services.TopicThreadView) string {
 }
 
 func topicMessageText(log memory.MessageLog) string {
-	if log.RecalledAt != nil {
-		return "原消息内容已隐藏"
-	}
 	text := strings.TrimSpace(log.TextContent)
 	if text != "" {
 		return text
@@ -408,4 +385,36 @@ func displayText(value string, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+func topicStateText(topic services.TopicThreadView) string {
+	if topic.Status == "active" {
+		return "当前上下文"
+	}
+	return "可检索"
+}
+
+func topicStateClass(topic services.TopicThreadView) string {
+	if topic.Status == "active" {
+		return "badge badge-success badge-soft badge-sm"
+	}
+	return "badge badge-ghost badge-sm"
+}
+
+func topicMessageAnchor(topic services.TopicThreadView, messageID uint) bool {
+	for _, id := range topic.AnchorMessageIDs {
+		if id == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+func topicMessageSource(topic services.TopicThreadView, messageID uint) bool {
+	for _, id := range topic.SourceMessageIDs {
+		if id == messageID {
+			return true
+		}
+	}
+	return false
 }

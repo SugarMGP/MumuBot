@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -82,12 +84,14 @@ func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.Conve
 // buildConversationToolContext 构造工具执行上下文，会话内的消息编号与媒体都由会话维护
 func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, targetID int64, session *Session) context.Context {
 	tc := &tools.ToolContext{
-		ConversationKind:  kind,
-		TargetID:          targetID,
-		MemoryMgr:         a.memory.WithContext(ctx),
-		Bot:               a.bot,
-		Session:           session,
-		SnapshotMessageID: session.LatestMessageID(),
+		ConversationKind:   kind,
+		TargetID:           targetID,
+		MemoryMgr:          a.memory.WithContext(ctx),
+		Bot:                a.bot,
+		Session:            session,
+		SnapshotLogID:      session.LatestLogID(),
+		RunID:              newRunID(),
+		MemoryReadVersions: map[uint]uint64{},
 		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) error {
 			if kind == memory.ConversationKindPrivate {
 				return a.doPrivateSpeak(callCtx, gid, content, replyTo)
@@ -123,6 +127,15 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		},
 	}
 	return tools.WithToolContext(ctx, tc)
+}
+
+// newRunID 生成当前 ReAct 的幂等分组标识
+func newRunID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("run-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 // readForward 读取合并转发内容，index 为负表示先看这份转发的概览
@@ -178,6 +191,9 @@ func (a *Agent) readNewMessages(ctx context.Context, session *Session) (any, err
 	messages := make([]map[string]any, 0, 4)
 	observed := floor
 	for _, user := range session.MessagesAfter(floor) {
+		if user.TranscriptID != 0 {
+			tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, user.TranscriptID)
+		}
 		messages = append(messages, map[string]any{
 			"message_ref": user.Ref,
 			"sender_id":   user.SenderID,

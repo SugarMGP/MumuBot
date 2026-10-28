@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">MumuBot</h1>
-  <p align="center">A cyber QQ group friend that chats, remembers, and blends into your group's culture</p>
+  <p align="center">A cyber QQ group friend that chats, remembers, and recalls conversations by topic</p>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 ## 🤔 What is MumuBot
 
-MumuBot is an AI companion that lives in your QQ group chats and friend DMs. Unlike typical Q&A bots, MumuBot decides on its own when to speak up and when to stay quiet. It remembers what's been discussed, picks up on group slang and inside jokes, and gradually builds an understanding of each member through everyday conversations.
+MumuBot is an AI companion that lives in your QQ group chats and friend DMs. Unlike typical Q&A bots, MumuBot decides on its own when to speak up and when to stay quiet. It remembers what has been discussed, compresses long conversations into searchable topics, and gradually builds an understanding of each member through everyday conversations.
 
 In short: it tries to behave like an actual person in the group, not an on-demand tool.
 
@@ -34,17 +34,17 @@ Core capabilities of this project:
 
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
 - 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
-- 🧵 **Topic Working Memory** — Continuously tracks current topics, summaries, participants, and open threads; can recall archived topics
+- 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
 - 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers, with more available through MCP
-- 📝 **Long-term Memory** — Unifies facts, preferences, constraints, goals, group terms, and expressions with pgvector and pg_trgm
-- 👤 **Member Profiles** — Shows evidence-backed member knowledge and participation; a background memory agent investigates historical context
-- 🎭 **Emotion System** — Three-dimensional mood (valence, energy, sociability) shifts naturally during conversation, affecting tone and activity
+- 📝 **Long-term Memory** — The main agent maintains facts, preferences, constraints, goals, terms, expressions, and aliases with revisions, core-memory selection, and keyword/fuzzy search
+- 👤 **Member Profiles** — Aggregates member knowledge and participation; intimacy remains a separate global signal
+- 🎭 **Specific Emotions** — Twelve emotion kinds plus energy and sociability, with lazy time-based decay
 - 🖼️ **Sticker System** — The agent inspects and collects stickers on demand; originals are kept
-- 🔎 **Active Retrieval** — The agent searches long-term memory and chat history itself instead of having them injected every turn
+- 🔎 **Active Retrieval** — The agent searches long-term memory, topics, and raw history itself; cross-conversation results keep source labels and are not injected every turn
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
-- 💬 **Friend DMs** — One-on-one friend chats with a dedicated prompt, conversation queue, and a single linear topic summary per friend
+- 💬 **Friend DMs** — One-on-one chats with a dedicated prompt, conversation queue, and the same topic compaction model used for groups
 - 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 
 ## 🚀 Quick Start
@@ -55,13 +55,13 @@ Core capabilities of this project:
 |------|------|
 | Go 1.26.5+ | Build and run |
 | Bun 1.3.14+ | Build frontend assets (only needed for source builds) |
-| PostgreSQL + pgvector | Store messages, memories, topics, group culture, and vectors |
+| PostgreSQL 18 | Stores messages, memory, topics, checkpoints, and emotions using `pg_trgm` |
 | SnowLuma | OneBot 11 protocol implementation |
 | LLM API | OpenAI Responses compatible (`/responses`), must support tool calling |
 
 ### Docker Compose
 
-Compose starts MumuBot, PostgreSQL/pgvector, and SnowLuma together:
+Compose starts MumuBot, standard PostgreSQL 18, and SnowLuma together:
 
 ```bash
 cp .env.example .env
@@ -118,9 +118,7 @@ cp config/mcp.example.json config/mcp.json
 
 # 2. Edit config (fill in model, database, OneBot details, etc.)
 # Sensitive values can also be set via environment variables:
-#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - Complete high-tier model endpoint
-#   MUMU_MODEL_LOW_BASE_URL / API_KEY / MODEL  - Complete low-tier model endpoint
-#   MUMU_EMBEDDING_BASE_URL / API_KEY / MODEL  - Complete embedding model endpoint
+#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - The single main model endpoint
 #   MUMU_ONEBOT_TOKEN                   - OneBot access token
 #   MUMU_DATABASE_DSN                   - PostgreSQL connection string
 
@@ -132,18 +130,23 @@ cp config/mcp.example.json config/mcp.json
 ./mumu-bot
 ```
 
-Storage uses PostgreSQL and requires [pgvector](https://github.com/pgvector/pgvector).
-
-At startup, MumuBot attempts to enable the extensions with the statements below before creating and verifying its schema. If the runtime account lacks permission, an administrator can run these statements in advance.
+Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required.
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
+
+To upgrade from an older release, first use the old program to bring the database to v14, then start this version to run the v15 migration. The v15 migration preserves old evidence, relations, learning watermarks, and private summaries as `legacy_*` history tables. Back up the database and media directory before upgrading.
 
 The service listens on port `7468` by default (configurable).
 
 Visit `/admin` to access the admin dashboard. The dashboard stays disabled until a secret key is configured.
+
+## 🧠 Context and Topics
+
+The main chat and synchronous topic compaction share one model. At 90% of the context window, the current turn may wait up to 300 seconds for a complete compaction. The target is 40%; results above 55% are rejected. Only transcript working-set rows covered by the new summaries are deleted. Original messages, media, and sent messages are retained permanently.
+
+Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around an `h` message ID.
 
 ## 🧠 Persona Template
 

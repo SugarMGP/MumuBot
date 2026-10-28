@@ -178,6 +178,9 @@ func (a *App) runtimeSnapshot() RuntimeSnapshot {
 		if mood, err := a.memMgr.GetMoodState(); err == nil {
 			snapshot.CurrentMood = mood
 		}
+		if emotions, err := a.memMgr.CurrentEmotions(context.Background(), -1, 3); err == nil {
+			snapshot.CurrentEmotions = emotions
+		}
 	}
 	return snapshot
 }

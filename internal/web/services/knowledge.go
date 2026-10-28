@@ -2,10 +2,13 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"mumu-bot/internal/memory"
 
+	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
 )
 
@@ -16,54 +19,52 @@ type KnowledgeFilter struct {
 	UserID, AuthorID int64
 }
 
-// knowledgeParticipationSQL 返回知识条目与原文参与关联的 EXISTS 条件
-// authorExpr 在子查询内以 message_logs 的 user_id 匹配作者：列表筛选传 "?"（参数绑定），
-// 成员页统计传相关外层列（如 "mp.user_id"），不能引用子查询作用域之外的其他别名
 func knowledgeParticipationSQL(authorExpr string) string {
 	return `EXISTS (
- SELECT 1 FROM knowledge_evidence_sets es
- JOIN knowledge_evidence_messages em ON em.evidence_set_id=es.id
- JOIN message_logs ml ON ml.id=em.message_log_id
- LEFT JOIN knowledge_relations kr ON kr.id=es.relation_id
- WHERE (es.item_id=ki.id OR kr.source_item_id=ki.id OR kr.target_item_id=ki.id)
- AND ml.user_id=` + authorExpr + ` AND ` + memory.KnowledgeEvidenceSetValiditySQL + `
-)`
+	 SELECT 1 FROM jsonb_array_elements_text(COALESCE(ki.source_meta->'message_log_ids','[]'::jsonb)) src
+	 JOIN message_logs ml ON ml.id=src.value::bigint
+	 WHERE ml.user_id=` + authorExpr + `
+	)`
+}
+
+type LegacyRelation struct {
+	ID         uint
+	Kind       string
+	Status     string
+	OtherID    uint
+	OtherLabel string
 }
 
 type KnowledgeDetail struct {
-	Page     int
-	HasMore  bool
-	Item     memory.KnowledgeItem
-	Evidence []memory.KnowledgeEvidence
-	Topics   map[uint]uint
+	Page            int
+	HasMore         bool
+	Item            memory.KnowledgeRecord
+	Revisions       []memory.KnowledgeRevision
+	Sources         []memory.MessageLog
+	LegacySources   []memory.MessageLog
+	LegacyRelations []LegacyRelation
+	Topics          map[uint]uint
 }
 
-// KnowledgeGroups 列出有记忆或话题的群号，供话题筛选使用
-func (s *AdminService) KnowledgeGroups(ctx context.Context) ([]int64, error) {
-	var ids []int64
-	err := s.db.WithContext(ctx).Raw("SELECT target_id FROM knowledge_items WHERE conversation_kind='group' UNION SELECT group_id AS target_id FROM topic_threads ORDER BY target_id").Scan(&ids).Error
-	return ids, err
-}
-
-// KnowledgeConversation 是后台知识筛选用的会话项
 type KnowledgeConversation struct {
 	Kind     string
 	TargetID int64
 	Name     string
 }
 
-// KnowledgeConversations 列出有知识或话题的会话，供知识筛选使用
+// KnowledgeConversations 列出有知识或话题的会话
 func (s *AdminService) KnowledgeConversations(ctx context.Context) ([]KnowledgeConversation, error) {
 	var rows []KnowledgeConversation
-	err := s.db.WithContext(ctx).Raw(`SELECT c.conversation_kind AS kind, c.target_id AS target_id, COALESCE(ct.name,'') AS name
-	 FROM (SELECT conversation_kind,target_id FROM knowledge_items UNION SELECT 'group',group_id FROM topic_threads) c
-	 LEFT JOIN conversation_targets ct ON ct.conversation_kind=c.conversation_kind AND ct.target_id=c.target_id
-	 ORDER BY c.conversation_kind, c.target_id`).Scan(&rows).Error
+	err := s.db.WithContext(ctx).Raw(`SELECT c.conversation_kind AS kind,c.target_id AS target_id,COALESCE(ct.name,'') AS name
+		FROM (SELECT conversation_kind,target_id FROM knowledge_items
+		      UNION SELECT conversation_kind,target_id FROM topic_threads) c
+		LEFT JOIN conversation_targets ct ON ct.conversation_kind=c.conversation_kind AND ct.target_id=c.target_id
+		ORDER BY c.conversation_kind,c.target_id`).Scan(&rows).Error
 	return rows, err
 }
 
-func (s *AdminService) ListKnowledge(f KnowledgeFilter) (Page[memory.KnowledgeItem], error) {
-	var items []memory.KnowledgeItem
+func (s *AdminService) ListKnowledge(f KnowledgeFilter) (Page[memory.KnowledgeRecord], error) {
+	var items []memory.KnowledgeRecord
 	q := s.filterKnowledge(s.db.Table("knowledge_items ki"), f)
 	q = order(q, f.Sort, f.Order, map[string]string{"updated": "ki.updated_at", "created": "ki.created_at", "default": "ki.updated_at"})
 	return paginate(q, f.Page, f.PageSize, &items)
@@ -86,84 +87,173 @@ func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
 		q = q.Where("ki.status=?", f.Status)
 	}
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		q = q.Where("ki.label ILIKE ? OR ki.content ILIKE ?", "%"+k+"%", "%"+k+"%")
+		p := "%" + k + "%"
+		q = q.Where("ki.label ILIKE ? OR ki.content ILIKE ?", p, p)
 	}
 	return q
 }
 
 type KnowledgeMetadata struct {
-	ID       uint
 	Name     string
-	Messages int64 // 全部原文条数
-	Recalled int64 // 其中已撤回的条数
+	Messages int64
+	Recalled int64
 }
 
-// ValidMessages 返回仍可用的原文条数
 func (m KnowledgeMetadata) ValidMessages() int64 {
 	return max(0, m.Messages-m.Recalled)
 }
 
-func (s *AdminService) KnowledgeMetadata(ctx context.Context, items []memory.KnowledgeItem) (map[uint]KnowledgeMetadata, error) {
+func (s *AdminService) KnowledgeMetadata(ctx context.Context, items []memory.KnowledgeRecord) (map[uint]KnowledgeMetadata, error) {
 	out := map[uint]KnowledgeMetadata{}
 	if len(items) == 0 {
 		return out, nil
 	}
-	ids := make([]uint, len(items))
-	for i, item := range items {
-		ids[i] = item.ID
+	ids := make([]uint, 0, len(items))
+	messageIDs := make([]uint, 0, len(items)*2)
+	byItem := make(map[uint][]uint, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+		for _, id := range sourceMessageIDs(item.SourceMeta) {
+			byItem[item.ID] = append(byItem[item.ID], id)
+			messageIDs = append(messageIDs, id)
+		}
 	}
-	var rows []KnowledgeMetadata
-	err := s.db.WithContext(ctx).Table("knowledge_items ki").Select("ki.id,\n\t COALESCE(NULLIF(btrim(mp.nickname),''),(SELECT mn.value FROM member_names mn WHERE mn.user_id=ki.subject_user_id AND btrim(mn.value)<>'' ORDER BY (ki.conversation_kind='group' AND mn.group_id=ki.target_id) DESC,mn.updated_at DESC LIMIT 1),'') name,\n\t (SELECT count(*) FROM knowledge_evidence_messages em JOIN knowledge_evidence_sets es ON es.id=em.evidence_set_id WHERE es.item_id=ki.id) messages,\n\t (SELECT count(*) FROM knowledge_evidence_messages em JOIN knowledge_evidence_sets es ON es.id=em.evidence_set_id JOIN message_logs ml ON ml.id=em.message_log_id WHERE es.item_id=ki.id AND (ml.recalled_at IS NOT NULL OR "+memory.OriginalMessageTextSQL+"='')) recalled").
-		Joins("LEFT JOIN member_profiles mp ON mp.user_id=ki.subject_user_id").Where("ki.id IN ?", ids).Scan(&rows).Error
-	for _, row := range rows {
-		out[row.ID] = row
+	var names []struct {
+		ID   uint
+		Name string
 	}
-	return out, err
+	if err := s.db.WithContext(ctx).Raw(`SELECT ki.id,
+		COALESCE(NULLIF(btrim(mp.nickname),''),(
+		 SELECT mn.value FROM member_names mn WHERE mn.user_id=ki.subject_user_id AND btrim(mn.value)<>''
+		 ORDER BY mn.updated_at DESC LIMIT 1),'') AS name
+		FROM knowledge_items ki LEFT JOIN member_profiles mp ON mp.user_id=ki.subject_user_id
+		WHERE ki.id IN ?`, ids).Scan(&names).Error; err != nil {
+		return nil, err
+	}
+	recalledByID := map[uint]int64{}
+	if len(messageIDs) > 0 {
+		var rows []struct {
+			ID         uint
+			RecalledAt *time.Time
+		}
+		if err := s.db.WithContext(ctx).Model(&memory.MessageLog{}).Select("id,recalled_at").Where("id IN ?", messageIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		recalled := map[uint]bool{}
+		for _, row := range rows {
+			recalled[row.ID] = row.RecalledAt != nil
+		}
+		for itemID, ids := range byItem {
+			for _, id := range ids {
+				if recalled[id] {
+					recalledByID[itemID]++
+				}
+			}
+		}
+	}
+	for _, row := range names {
+		out[row.ID] = KnowledgeMetadata{Name: row.Name, Messages: int64(len(byItem[row.ID])), Recalled: recalledByID[row.ID]}
+	}
+	return out, nil
 }
 
-func (s *AdminService) GetKnowledge(id uint) (memory.KnowledgeItem, error) {
-	var item memory.KnowledgeItem
+func (s *AdminService) GetKnowledge(id uint) (memory.KnowledgeRecord, error) {
+	var item memory.KnowledgeRecord
 	err := s.db.First(&item, id).Error
 	return item, err
 }
 
 func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint, page int) (KnowledgeDetail, error) {
-	d := KnowledgeDetail{Page: max(1, page)}
-	offset := (d.Page - 1) * 5
+	d := KnowledgeDetail{Page: max(1, page), Topics: map[uint]uint{}}
 	item, err := s.GetKnowledge(id)
 	if err != nil {
 		return d, err
 	}
 	d.Item = item
-	d.Evidence, d.HasMore, err = s.memory.ListKnowledgeEvidencePageScope(ctx, item.ConversationKind, item.TargetID, id, 0, offset, 5)
-	if err != nil {
+	if err := s.db.WithContext(ctx).Where("item_id=?", id).Order("version DESC,id DESC").
+		Offset((d.Page - 1) * 5).Limit(6).Find(&d.Revisions).Error; err != nil {
 		return d, err
 	}
-	ids := []uint{}
-	for _, set := range d.Evidence {
-		for _, msg := range set.Messages {
-			ids = append(ids, msg.ID)
-		}
+	if len(d.Revisions) > 5 {
+		d.HasMore = true
+		d.Revisions = d.Revisions[:5]
 	}
-	d.Topics = map[uint]uint{}
+	ids := sourceMessageIDs(item.SourceMeta)
+	if len(ids) > 50 {
+		ids = ids[:50]
+	}
 	if len(ids) > 0 {
-		var rows []memory.TopicAssignment
-		if err = s.db.Where("message_log_id IN ?", ids).Find(&rows).Error; err != nil {
+		if err := s.db.WithContext(ctx).Where("id IN ?", ids).Order("id").Find(&d.Sources).Error; err != nil {
 			return d, err
 		}
-		for _, row := range rows {
+		var assignments []memory.TopicAssignment
+		if err := s.db.WithContext(ctx).Where("message_log_id IN ?", ids).Find(&assignments).Error; err != nil {
+			return d, err
+		}
+		for _, row := range assignments {
 			if row.TopicID != nil {
 				d.Topics[row.MessageLogID] = *row.TopicID
 			}
+		}
+	}
+	if s.db.Migrator().HasTable("legacy_knowledge_evidence_messages") && s.db.Migrator().HasTable("legacy_knowledge_evidence_sets") {
+		if err := s.db.WithContext(ctx).Table("message_logs ml").Select("DISTINCT ml.*").
+			Joins("JOIN legacy_knowledge_evidence_messages lem ON lem.message_log_id=ml.id").
+			Joins("JOIN legacy_knowledge_evidence_sets les ON les.id=lem.evidence_set_id").
+			Where("les.item_id=?", id).Order("ml.id").Limit(50).Scan(&d.LegacySources).Error; err != nil {
+			return d, err
+		}
+	}
+	if s.db.Migrator().HasTable("legacy_knowledge_relations") {
+		if err := s.db.WithContext(ctx).Raw(`SELECT kr.id,kr.kind,kr.status,
+			CASE WHEN kr.source_item_id=? THEN kr.target_item_id ELSE kr.source_item_id END AS other_id,
+			COALESCE(ki.label,left(ki.content,40),'') AS other_label
+			FROM legacy_knowledge_relations kr LEFT JOIN knowledge_items ki
+			ON ki.id=CASE WHEN kr.source_item_id=? THEN kr.target_item_id ELSE kr.source_item_id END
+			WHERE kr.source_item_id=? OR kr.target_item_id=? ORDER BY kr.id`, id, id, id, id).Scan(&d.LegacyRelations).Error; err != nil {
+			return d, err
 		}
 	}
 	return d, nil
 }
 
 func (s *AdminService) UpdateKnowledgeStatus(ctx context.Context, id uint, status string) error {
+	status = strings.TrimSpace(status)
+	if status != "active" && status != "archived" {
+		return fmt.Errorf("记忆状态无效")
+	}
 	item, err := s.GetKnowledge(id)
 	if err != nil {
 		return err
 	}
-	return s.memory.SetKnowledgeStatusScope(ctx, item.ConversationKind, item.TargetID, id, strings.TrimSpace(status))
+	if item.Status == status {
+		return nil
+	}
+	action := "archive"
+	if status == "active" {
+		action = "restore"
+		var duplicate int64
+		if err := s.db.WithContext(ctx).Model(&memory.KnowledgeRecord{}).
+			Where("subject_user_id=? AND kind=? AND content_hash=? AND status='active' AND id<>?", item.SubjectUserID, item.Kind, item.ContentHash, item.ID).
+			Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return fmt.Errorf("已有一条相同内容处于启用状态")
+		}
+	}
+	_, err = s.memory.ManageMemories(ctx, []memory.MemoryChange{{
+		Action: action, ItemID: item.ID, ExpectedVersion: item.Version, Reason: "后台维护",
+	}})
+	return err
+}
+
+func sourceMessageIDs(raw string) []uint {
+	var meta struct {
+		MessageLogIDs []uint `json:"message_log_ids"`
+	}
+	if sonic.UnmarshalString(raw, &meta) != nil {
+		return nil
+	}
+	return meta.MessageLogIDs
 }

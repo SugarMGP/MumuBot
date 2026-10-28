@@ -208,29 +208,6 @@ func (a *Agent) updateMember(ctx context.Context, msg *onebot.ConversationMessag
 	}
 }
 
-func findReplyInfoInMessages(msgs []*onebot.ConversationMessage, messageID int64) *onebot.ReplyInfo {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		msg := msgs[i]
-		if msg == nil || msg.MessageID != messageID {
-			continue
-		}
-
-		content := strings.TrimSpace(msg.FinalContent)
-		if content == "" {
-			content = strings.TrimSpace(msg.Content)
-		}
-
-		return &onebot.ReplyInfo{
-			MessageID: messageID,
-			Content:   content,
-			SenderID:  msg.UserID,
-			Nickname:  msg.Nickname,
-			GroupCard: msg.GroupCard,
-		}
-	}
-	return nil
-}
-
 func replyInfoFromMessageLog(log *memory.MessageLog) *onebot.ReplyInfo {
 	if log == nil {
 		return nil
