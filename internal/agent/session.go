@@ -449,7 +449,7 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager) ([]*schema.
 	}
 	var referenceID uint
 	if mem != nil {
-		refText, versions, refErr := mem.BuildAutoReference(ctx, s.kind, s.targetID, s.autoReferenceUserIDs())
+		refText, versions, refErr := mem.BuildAutoReference(ctx, s.kind, s.autoReferenceUserIDs())
 		if refErr != nil {
 			return nil, refErr
 		}

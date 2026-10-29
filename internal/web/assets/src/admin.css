@@ -129,7 +129,6 @@
 
 .admin-page h2 { letter-spacing: 0; }
 
-  .admin-memory-note { padding: var(--admin-card-pad-compact); border-radius: var(--admin-inner-radius); background: #fff7f9; }
   .admin-memory-table { background: #fff; }
   .admin-memory-table td { overflow-wrap: anywhere; }
   .admin-member-row { display:grid; grid-template-columns:minmax(200px,1fr) minmax(260px,1.25fr) clamp(170px,16vw,220px); gap:clamp(14px,1.2vw,20px); align-items:center; padding:clamp(12px,1vw,16px) clamp(14px,1.4vw,20px); min-height:104px; }

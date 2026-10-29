@@ -21,11 +21,10 @@ type GetCurrentStatusOutput struct {
 	Emotions     []memory.CurrentEmotion `json:"emotions,omitempty"`
 	Intimacy     float64                 `json:"intimacy,omitempty"`
 	IntimacyName string                  `json:"intimacy_name,omitempty"`
-	Note         string                  `json:"note,omitempty"`
 }
 
 func NewGetCurrentStatusTool() (tool.InvokableTool, error) {
-	return utils.InferTool("getCurrentStatus", "读取当前时间、会话对象、具体情感、精力、社交意愿、好感和工作便签。", getCurrentStatusFunc)
+	return utils.InferTool("getCurrentStatus", "读取当前时间、会话对象、具体情感、精力、社交意愿和好感。", getCurrentStatusFunc)
 }
 
 func getCurrentStatusFunc(ctx context.Context, _ *struct{}) (*GetCurrentStatusOutput, error) {
@@ -51,9 +50,6 @@ func getCurrentStatusFunc(ctx context.Context, _ *struct{}) (*GetCurrentStatusOu
 		output.Mood = fmt.Sprintf("精力：%s；交流意愿：%s", affectText(mood.Energy), affectText(mood.Sociability))
 	}
 	output.Emotions, _ = tc.MemoryMgr.CurrentEmotions(ctx, -1, 3)
-	if note, err := tc.MemoryMgr.GetWorkingNoteScope(ctx, tc.ConversationKind, tc.TargetID); err == nil && note != nil {
-		output.Note = strings.TrimSpace(note.Note)
-	}
 	return output, nil
 }
 

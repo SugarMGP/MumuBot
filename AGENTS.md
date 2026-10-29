@@ -172,7 +172,8 @@ go vet ./...
 - `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚、不自动重试，下一次由新消息触发。
 - `visible_seq` 必须按模型请求中的真实消息顺序分配：摘要/内部参考在前、待处理输入在后；不要按数据库主键重新排序。
 - 上下文顺序固定为：稳定系统指令和工具 → checkpoint 概览 → active 话题摘要 → `reference_baseline` → checkpoint 后 transcript → 新内部参考 → 新真人消息 → assistant/tool。
-- 消息正文进入上下文后不再变化：首次渲染写入 transcript，时间固定为 `YYYY-MM-DD HH:MM:SS`；当前时间、群信息、情感、便签只由 `getCurrentStatus` 查询。
+- 消息正文进入上下文后不再变化：首次渲染写入 transcript，时间固定为 `YYYY-MM-DD HH:MM:SS`；当前时间、群信息和情感只由 `getCurrentStatus` 查询。
+- 工作便签已移除；跨轮临时状态由连续 transcript、checkpoint overview 和话题 open_loops 承担，不保留 `saveWorkingNote`、状态查询字段或后台入口。
 - 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
 - 每轮原样回传 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 保存同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。
 - 主上下文装配不静默截断 transcript；预算达到窗口 90% 时触发一次完整同步压缩，目标 40%，55% 为可接受上限，超过 55% 不提交。
@@ -198,13 +199,13 @@ go vet ./...
 - `manageMemory` 一批 1–8 项全成功或全回滚；主 Agent 不物理删除，后台只提供启用、归档和查看修订。
 - 具体情感固定 12 类；同一对象同一情感只保留一份当前状态，变化写入 `emotion_revisions`。强度只接收轻微/明显/强烈/已平复，按真实时间惰性衰减，不做定时写库或独立情感判断模型。
 - 精力与交流意愿保留辅助状态；好感度继续保持全局 `user_id` 维度，不按群隔离，也不由情感状态替代。
-- 自动内部参考预算固定约 1200 token：核心记忆 800、便签与明确约定 200、情感与总体状态 200；完整条目原子选取，无内容不凑满。
+- 自动内部参考预算固定约 1200 token：核心记忆 800、明确约定 200、情感与总体状态 200；完整条目原子选取，无内容不凑满。
 - 内部参考是独立 user 类型 `internal_context`，不计真人消息、不触发门控；只在版本、语义或强度档位变化时追加，压缩写入新的 `reference_baseline`，不回头修改旧 transcript。
 - 话题系统承担三项职责：压缩后的会话表示、后台浏览管理单位、关键词 → 话题概览 → 关键消息 → 原文前后文的分层查询。
 - 话题只有 active/dormant，统一群聊和私聊作用域；摘要不可变且按版本保存，来源分 source/anchor，撤回不改写、不使话题失效。
 - `context_compaction_checkpoints.active_topic_versions` 保持稳定顺序；dormant 话题不进入当前摘要块但始终可搜索。退出 active 仍有 open loop 时，程序必须把未完成事项补进 overview。
 - `overview` 是会话级滚动概览，不是新 Agent；压缩器必须写结论、不确定性、纠正、边界、动作结果和未完成事项，程序不静默截断摘要。
-- 首次 v15 升级接续旧摘要与预算内近期原文，不回填伪造的旧 assistant/tool 轨迹；旧证据、关系、学习水位、私聊摘要和旧心情原表保留为 `legacy_*`。
+- 首次从旧版升级接续旧摘要与预算内近期原文，不回填伪造的旧 assistant/tool 轨迹；旧证据、关系、学习水位、私聊摘要和旧心情原表保留为 `legacy_*`。
 - 跨会话检索允许用于记忆、话题和历史，结果必须带群聊/好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
 - 系统提示只做增量调整：群聊与私聊分别维护 `config/persona_group.prompt` 和 `config/persona_private.prompt`，不复用同一模板，也不恢复已删除的成组矫正案例。
 
@@ -217,7 +218,7 @@ go vet ./...
 - 长期记忆检索使用 `content/label` 的 ILIKE + `pg_trgm` 候选；历史原文使用 `text_content` 的 ILIKE + `pg_trgm`。空关键词可浏览，失败不伪造结果。
 - 跨会话历史倒序分页使用内部 ID 的 `before_id`（`id < before_id`）；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。
 - 持久化使用 PostgreSQL 18；OneBot 首次取得 `self_id` 后才打开数据库，连接建立后业务事件仍等待 schema 迁移、Agent 恢复和后台初始化完成。
-- schema 由 `schema_migrations` 记录并顺序执行；完全空库直接初始化 v15，v14 原地升级 v15，更旧、断档、部分结构或高版本数据库拒绝启动。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
+- schema 由 `schema_migrations` 记录并顺序执行；完全空库直接初始化 v15 后执行 v16 清理，v14 原地升级到 v15 再执行 v16；更旧、断档、部分结构或高版本数据库拒绝启动。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
 - 管理后台日志与模型统计口径保持现有约束；媒体和原文永久保留，只有 transcript、摘要版本和未被引用的工具结果文件会按各自规则变化。
 - 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。

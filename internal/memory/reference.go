@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	coreReferenceBudget    = 800
-	workingReferenceBudget = 200
-	emotionReferenceBudget = 200
+	coreReferenceBudget       = 800
+	constraintReferenceBudget = 200
+	emotionReferenceBudget    = 200
 )
 
 func referenceTokens(text string) int {
@@ -43,8 +43,8 @@ func subjectScope(kind string, userIDs []int64) []int64 {
 	return ids
 }
 
-// BuildAutoReference 生成少量核心记忆、明确约定、工作便签和当前情感
-func (m *Manager) BuildAutoReference(ctx context.Context, kind string, targetID int64, userIDs []int64) (string, []string, error) {
+// BuildAutoReference 生成少量核心记忆、明确约定和当前情感
+func (m *Manager) BuildAutoReference(ctx context.Context, kind string, userIDs []int64) (string, []string, error) {
 	var blocks []string
 	var versions []string
 	subjects := subjectScope(kind, userIDs)
@@ -69,14 +69,7 @@ func (m *Manager) BuildAutoReference(ctx context.Context, kind string, targetID 
 		}
 	}
 
-	var working strings.Builder
-	if note, err := m.GetWorkingNoteScope(ctx, kind, targetID); err == nil && note != nil && strings.TrimSpace(note.Note) != "" {
-		line := "工作便签：" + strings.TrimSpace(note.Note)
-		if referenceTokens(line) <= workingReferenceBudget {
-			working.WriteString(line)
-			versions = append(versions, "note:"+note.UpdatedAt.UTC().Format("20060102150405"))
-		}
-	}
+	var constraintsBlock strings.Builder
 	if len(subjects) > 0 {
 		var constraints []KnowledgeRecord
 		if err := m.db.WithContext(ctx).Where("status='active' AND kind='constraint' AND is_core=false AND subject_user_id IN ?", subjects).Order("updated_at DESC,id DESC").Find(&constraints).Error; err != nil {
@@ -84,17 +77,17 @@ func (m *Manager) BuildAutoReference(ctx context.Context, kind string, targetID 
 		}
 		for _, item := range constraints {
 			line := "明确约定：" + strings.TrimSpace(item.Content)
-			if referenceTokens(working.String())+referenceTokens(line) > workingReferenceBudget {
+			if referenceTokens(constraintsBlock.String())+referenceTokens(line) > constraintReferenceBudget {
 				continue
 			}
-			if working.Len() > 0 {
-				working.WriteByte('\n')
+			if constraintsBlock.Len() > 0 {
+				constraintsBlock.WriteByte('\n')
 			}
-			working.WriteString(line)
+			constraintsBlock.WriteString(line)
 			versions = append(versions, fmt.Sprintf("k%d:v%d", item.ID, item.Version))
 		}
 	}
-	if text := strings.TrimSpace(working.String()); text != "" {
+	if text := strings.TrimSpace(constraintsBlock.String()); text != "" {
 		blocks = append(blocks, text)
 	}
 

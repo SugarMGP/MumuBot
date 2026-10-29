@@ -100,15 +100,6 @@ type MemberName struct {
 
 func (MemberName) TableName() string { return "member_names" }
 
-type ConversationAgentState struct {
-	ConversationKind string    `gorm:"primaryKey;type:text" json:"conversation_kind"`
-	TargetID         int64     `gorm:"column:target_id;primaryKey" json:"target_id"`
-	Note             string    `json:"note"`
-	UpdatedAt        time.Time `json:"updated_at"`
-}
-
-func (ConversationAgentState) TableName() string { return "group_agent_states" }
-
 type Sticker struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	CreatedAt   time.Time `json:"created_at"`

@@ -136,7 +136,7 @@ Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-To upgrade from an older release, first use the old program to bring the database to v14, then start this version to run the v15 migration. The v15 migration preserves old evidence, relations, learning watermarks, and private summaries as `legacy_*` history tables. Back up the database and media directory before upgrading.
+To upgrade from an older release, first use the old program to bring the database to v14, then start this version to run the v15 and v16 migrations. The v15 migration preserves old evidence, relations, learning watermarks, and private summaries as `legacy_*` history tables; v16 removes the obsolete working-note table. Back up the database and media directory before upgrading.
 
 The service listens on port `7468` by default (configurable).
 

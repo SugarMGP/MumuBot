@@ -317,7 +317,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	} else if checkpoint != nil {
 		expectedVersion = checkpoint.Version
 	}
-	referenceBaseline, referenceVersions, err := a.memory.BuildAutoReference(ctx, session.kind, session.targetID, session.autoReferenceUserIDs())
+	referenceBaseline, referenceVersions, err := a.memory.BuildAutoReference(ctx, session.kind, session.autoReferenceUserIDs())
 	if err != nil {
 		return err
 	}

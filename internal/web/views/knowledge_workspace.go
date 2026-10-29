@@ -13,7 +13,6 @@ import (
 type KnowledgeWorkspaceData struct {
 	Filter        services.KnowledgeFilter
 	Conversations []services.KnowledgeConversation
-	Note          *memory.ConversationAgentState
 	CurrentURL    string
 }
 

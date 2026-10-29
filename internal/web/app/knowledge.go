@@ -61,37 +61,24 @@ func (a *App) handleKnowledgeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	kind := r.FormValue("action_kind")
-	if kind == "note-clear" {
-		groupID := parseInt64Query(r.FormValue("group_id"))
-		if groupID <= 0 {
-			http.Error(w, "群号无效。", 400)
-			return
-		}
-		err = a.memMgr.SaveWorkingNote(r.Context(), groupID, "")
-	} else {
-		id, e := parseUintParam(r.FormValue("action_id"))
-		if e != nil {
-			http.Error(w, "记录编号无效。", 400)
-			return
-		}
-		switch kind {
-		case "knowledge-status":
-			err = a.admin.UpdateKnowledgeStatus(r.Context(), id, r.FormValue("status"))
-		default:
-			http.Error(w, "未识别这次操作。", 400)
-			return
-		}
+	id, e := parseUintParam(r.FormValue("action_id"))
+	if e != nil {
+		http.Error(w, "记录编号无效。", 400)
+		return
+	}
+	switch kind {
+	case "knowledge-status":
+		err = a.admin.UpdateKnowledgeStatus(r.Context(), id, r.FormValue("status"))
+	default:
+		http.Error(w, "未识别这次操作。", 400)
+		return
 	}
 	target := a.actionTargetURL(r, "/admin/knowledge")
 	if err != nil {
 		http.Redirect(w, r, withFlash(target.String(), "error", "操作未完成", err.Error()), http.StatusSeeOther)
 		return
 	}
-	title := "记忆状态已更新"
-	if kind == "note-clear" {
-		title = "群便签已清除"
-	}
-	http.Redirect(w, r, withFlash(target.String(), "success", title, ""), http.StatusSeeOther)
+	http.Redirect(w, r, withFlash(target.String(), "success", "记忆状态已更新", ""), http.StatusSeeOther)
 }
 func (a *App) knowledgeWorkspace(r *http.Request) (views.KnowledgeWorkspaceData, error) {
 	q := r.URL.Query()
@@ -109,9 +96,6 @@ func (a *App) knowledgeWorkspace(r *http.Request) (views.KnowledgeWorkspaceData,
 	f := services.KnowledgeFilter{MemoryFilter: services.MemoryFilter{Kind: kind, Status: status, Keyword: strings.TrimSpace(q.Get("keyword")), Sort: sortKey, Order: order, Page: parsePositiveInt(q.Get("page"), 1), PageSize: listPageSize(q.Get("page_size"))}, ConversationKind: conversationKind, TargetID: targetID, UserID: parseInt64Query(q.Get("user_id")), AuthorID: parseInt64Query(q.Get("author_id"))}
 	conversations, err := a.admin.KnowledgeConversations(r.Context())
 	data := views.KnowledgeWorkspaceData{Filter: f, Conversations: conversations, CurrentURL: views.WithQuery(r.URL.RequestURI(), "conversation", conversation, "status", status, "kind", kind, "focus_kind", "", "focus_id", "", "selected_kind", "", "selected_id", "", "selected_related", "", "return_to", "", "flash_kind", "", "flash_title", "", "flash_body", "")}
-	if err == nil && conversationKind == memory.ConversationKindGroup && targetID > 0 {
-		data.Note, err = a.memMgr.GetWorkingNote(r.Context(), targetID)
-	}
 	return data, err
 }
 

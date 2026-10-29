@@ -53,11 +53,4 @@ templ KnowledgeWorkspace(data KnowledgeWorkspaceData) {
 			}
 		</div>
 	</form>
-	if data.Note!=nil && data.Note.Note!="" {
-		<details class="admin-memory-note">
-			<summary class="text-sm">当前群便签 <time class="ml-2 text-xs text-base-content/60">{ formatTime(data.Note.UpdatedAt) }</time></summary>
-			<p class="my-3 whitespace-pre-wrap text-sm leading-6">{ data.Note.Note }</p>
-			<form method="post" action="/admin/knowledge/actions"><input type="hidden" name="action_kind" value="note-clear"/><input type="hidden" name="group_id" value={ fmt.Sprint(data.Filter.TargetID) }/><input type="hidden" name="return_to" value={ data.CurrentURL }/><button class="btn btn-ghost btn-xs" type="submit">清除便签</button></form>
-		</details>
-	}
 }
