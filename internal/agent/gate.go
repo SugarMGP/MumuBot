@@ -200,7 +200,7 @@ func (a *Agent) gateAllow(groupID int64, session *Session, pending []*sessionUse
 
 // gateFrequency 取本群的目标发言频率，时段规则优先
 func (a *Agent) gateFrequency(groupID int64) float64 {
-	cfg := config.Get()
+	cfg := config.Snapshot()
 	base := cfg.Chat.TalkFrequency
 	if cfg.Chat.EnableTimeRules {
 		for _, rule := range cfg.Chat.TimeRules {
@@ -226,7 +226,7 @@ func (a *Agent) gateFrequency(groupID int64) float64 {
 
 // gateDecay 防话痨衰减，发言过多时压低意愿分
 func (a *Agent) gateDecay(groupID int64) float64 {
-	cfg := config.Get()
+	cfg := config.Snapshot()
 	limitCfg := cfg.Chat.RateLimit
 	if !limitCfg.Enabled || limitCfg.PeriodSec <= 0 || limitCfg.MaxMessages <= 0 {
 		return 1
@@ -264,7 +264,9 @@ func (a *Agent) gateProbability(session *Session, pending []*sessionUser) float6
 		if strings.ContainsAny(content, "?？") {
 			question = true
 		}
-		if user.Mentioned || (a.persona != nil && a.persona.IsMentioned(content)) {
+		if user.Mentioned {
+			mention = true
+		} else if p := a.currentPersona(); p != nil && p.IsMentioned(content) {
 			mention = true
 		}
 	}

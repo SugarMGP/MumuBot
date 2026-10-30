@@ -61,23 +61,24 @@ services:
       MUMU_ONEBOT_WS_URL: ${MUMU_ONEBOT_WS_URL:-ws://snowluma:3001}
       MUMU_ONEBOT_TOKEN: ${MUMU_ONEBOT_TOKEN:-}
       MUMU_WEB_ADMIN_KEY: ${MUMU_WEB_ADMIN_KEY:?set MUMU_WEB_ADMIN_KEY in .env}
-      MUMU_MODEL_HIGH_BASE_URL: ${MUMU_MODEL_HIGH_BASE_URL:?set MUMU_MODEL_HIGH_BASE_URL in .env}
-      MUMU_MODEL_HIGH_API_KEY: ${MUMU_MODEL_HIGH_API_KEY:?set MUMU_MODEL_HIGH_API_KEY in .env}
-      MUMU_MODEL_HIGH_MODEL: ${MUMU_MODEL_HIGH_MODEL:?set MUMU_MODEL_HIGH_MODEL in .env}
+      MUMU_SECRET_KEY: ${MUMU_SECRET_KEY:?set MUMU_SECRET_KEY in .env}
+      MUMU_SERVER_PORT: ${MUMU_SERVER_PORT:-7468}
+      MUMU_ONEBOT_RECONNECT_SECONDS: ${MUMU_ONEBOT_RECONNECT_SECONDS:-5}
+      MUMU_MEDIA_DIR: /app/media
+      MUMU_STICKER_DIR: /app/stickers
+      MUMU_LOG_LEVEL: ${MUMU_LOG_LEVEL:-info}
+      MUMU_DEBUG: ${MUMU_DEBUG:-false}
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
-      - ${MUMU_WEB_PORT:-7468}:7468
+      - ${MUMU_WEB_PORT:-7468}:${MUMU_SERVER_PORT:-7468}
     volumes:
-      - type: bind
-        source: ${MUMU_CONFIG_DIR:-./config}
-        target: /app/config
       - stickers:/app/stickers
       - media:/app/media
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7468/health >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${MUMU_SERVER_PORT:-7468}/health >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 5

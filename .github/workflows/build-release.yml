@@ -48,11 +48,7 @@ jobs:
 
     - name: Prepare build directory
       run: |
-        mkdir -p dist/config
-        cp config/config.example.yaml dist/config/config.yaml
-        cp config/persona_group.prompt dist/config/persona_group.prompt
-        cp config/persona_private.prompt dist/config/persona_private.prompt
-        cp config/mcp.example.json dist/config/mcp.json
+        mkdir -p dist
         cp README.md dist/
         cp LICENSE dist/
 

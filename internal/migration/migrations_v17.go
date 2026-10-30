@@ -239,6 +239,46 @@ func initializeV17Schema(db *gorm.DB) error {
 			text TEXT NOT NULL CHECK(btrim(text)<>''),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`CREATE TABLE app_config (
+			config_key TEXT PRIMARY KEY CHECK(btrim(config_key)<>''),
+			config_value JSONB NOT NULL,
+			version BIGINT NOT NULL DEFAULT 1 CHECK(version>0),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE TABLE model_profiles (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			provider TEXT NOT NULL DEFAULT 'openai_responses',
+			base_url TEXT NOT NULL,
+			model_name TEXT NOT NULL,
+			context_window INT NOT NULL CHECK(context_window>0),
+			thinking_type TEXT NOT NULL DEFAULT '',
+			reasoning_effort TEXT NOT NULL DEFAULT '',
+			api_key_ciphertext BYTEA NOT NULL,
+			api_key_nonce BYTEA NOT NULL,
+			api_key_key_version INT NOT NULL DEFAULT 1,
+			api_key_hint TEXT NOT NULL DEFAULT '',
+			active BOOLEAN NOT NULL DEFAULT false,
+			version BIGINT NOT NULL DEFAULT 1,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			CHECK(thinking_type IN ('','enabled','disabled')),
+			CHECK(reasoning_effort IN ('','low','medium','high','xhigh','max'))
+		)`,
+		`CREATE UNIQUE INDEX uq_model_profiles_active ON model_profiles(active) WHERE active`,
+		`CREATE TABLE mcp_servers (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			transport TEXT NOT NULL,
+			config_ciphertext BYTEA NOT NULL,
+			config_nonce BYTEA NOT NULL,
+			key_version INT NOT NULL DEFAULT 1,
+			version BIGINT NOT NULL DEFAULT 1,
+			position INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

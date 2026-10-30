@@ -34,10 +34,6 @@ vendor/
 .DS_Store
 Thumbs.db
 
-# 配置（敏感信息）
-config/config.local.yaml
-config/*.local.yaml
-
 # 数据目录
 data/
 stickers/
@@ -52,11 +48,9 @@ logs/
 .env
 .env.local
 
-config.yaml
 napcat_onebot_11_http_api.json
 onebot-11-master/
 
-mcp.json
 /.codex-temp
 /node_modules
 /internal/web/assets/dist/

@@ -14,14 +14,23 @@ import (
 
 func (a *Agent) conversationThinkLoop() {
 	defer a.wg.Done()
-	ticker := time.NewTicker(time.Duration(config.Get().Agent.ThinkInterval) * time.Second)
-	defer ticker.Stop()
+	interval := time.Duration(config.Snapshot().Agent.ThinkInterval) * time.Second
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			a.thinkCycle()
+			next := time.Duration(config.Snapshot().Agent.ThinkInterval) * time.Second
+			if next <= 0 {
+				next = 15 * time.Second
+			}
+			timer.Reset(next)
 		}
 	}
 }
@@ -70,7 +79,7 @@ func latestReceivedAt(pending []*sessionUser) time.Time {
 }
 
 func (a *Agent) scheduleGroupThink(groupID int64, receivedAt time.Time) {
-	debounce := time.Duration(config.Get().Agent.ThinkDebounceMS) * time.Millisecond
+	debounce := time.Duration(config.Snapshot().Agent.ThinkDebounceMS) * time.Millisecond
 	delay := remainingDebounce(receivedAt, time.Now(), debounce)
 
 	a.pendingGroupMu.Lock()
@@ -136,6 +145,16 @@ func (a *Agent) clearPendingThinks() {
 }
 
 func (a *Agent) thinkGroup(groupID int64) {
+	generation := a.acquireGeneration()
+	if generation == nil {
+		return
+	}
+	defer generation.wg.Done()
+	state, err := newRunState()
+	if err != nil {
+		zap.L().Warn("加载本轮配置失败", zap.Int64("group_id", groupID), zap.Error(err))
+		return
+	}
 	if !a.conversationAllowed(memory.ConversationKindGroup, groupID) {
 		return
 	}
@@ -152,7 +171,9 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 
-	ctx := a.buildConversationToolContext(a.ctx, memory.ConversationKindGroup, groupID, session)
+	ctx := withRunState(a.ctx, state)
+	ctx = withGeneration(ctx, generation)
+	ctx = a.buildConversationToolContext(ctx, memory.ConversationKindGroup, groupID, session)
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
@@ -161,9 +182,9 @@ func (a *Agent) thinkGroup(groupID int64) {
 		zap.L().Warn("装配群聊上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
-	if runErr := a.runAgent(ctx, a.groupAgent, messages); runErr != nil {
-		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, a.groupTools, a.groupGenModelInput, session) {
-			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, a.groupAgent, session); retryErr == nil {
+	if runErr := a.runAgent(ctx, generation.groupAgent, messages); runErr != nil {
+		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.groupGenModelInput, session) {
+			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupAgent, session); retryErr == nil {
 				return
 			}
 		}
@@ -203,7 +224,7 @@ func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 		if user.Mentioned {
 			return true
 		}
-		if a.persona.IsMentioned(user.Content) {
+		if p := a.currentPersona(); p != nil && p.IsMentioned(user.Content) {
 			return true
 		}
 	}
@@ -211,7 +232,7 @@ func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 }
 
 func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) error {
-	cfg := config.Get()
+	cfg := configFor(ctx)
 	if cfg.Chat.TypingSimulation {
 		typingSpeed := cfg.Chat.TypingSpeed
 		if typingSpeed <= 0 {
@@ -255,7 +276,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		MessageID:        msgID,
 		TargetID:         groupID,
 		UserID:           a.bot.GetSelfID(),
-		Nickname:         a.persona.GetName(),
+		Nickname:         a.currentPersona().GetName(),
 		Content:          content,
 		MessageParts:     parts,
 		Time:             time.Now(),
@@ -295,7 +316,7 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, fileName strin
 		MessageID:        msgID,
 		TargetID:         groupID,
 		UserID:           a.bot.GetSelfID(),
-		Nickname:         a.persona.GetName(),
+		Nickname:         a.currentPersona().GetName(),
 		Content:          "",
 		MessageParts:     []onebot.MessagePart{{Kind: "image", Index: 0}},
 		Time:             time.Now(),
@@ -322,7 +343,7 @@ func (a *Agent) doSendImageURL(ctx context.Context, groupID int64, imageURL stri
 		MessageID:        msgID,
 		TargetID:         groupID,
 		UserID:           a.bot.GetSelfID(),
-		Nickname:         a.persona.GetName(),
+		Nickname:         a.currentPersona().GetName(),
 		MessageParts:     []onebot.MessagePart{{Kind: "image", Index: 0}},
 		Images:           []onebot.ImageInfo{{URL: imageURL}},
 		Time:             time.Now(),

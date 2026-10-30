@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 
-	"github.com/bytedance/sonic"
 	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -30,11 +28,6 @@ type ServerConfig struct {
 	CustomHeaders map[string]string `json:"custom_headers"` // 可选，自定义 HTTP 头
 }
 
-// Config MCP 配置文件结构
-type Config struct {
-	Servers []ServerConfig `json:"servers"`
-}
-
 // Manager MCP 客户端管理器
 type Manager struct {
 	clients []*client.Client
@@ -47,31 +40,17 @@ func NewMCPManager() *Manager {
 	return &Manager{}
 }
 
-// LoadFromConfig 从配置文件加载 MCP 服务器
-func (m *Manager) LoadFromConfig(ctx context.Context, configPath string) error {
+// Load 连接指定的 MCP 服务器；单个失败会返回汇总错误
+func (m *Manager) Load(ctx context.Context, servers []ServerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			zap.L().Debug("MCP 配置文件不存在，跳过加载", zap.String("path", configPath))
-			return nil
-		}
-		return fmt.Errorf("读取 MCP 配置文件失败: %w", err)
-	}
-
-	var cfg Config
-	if err := sonic.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("解析 MCP 配置文件失败: %w", err)
-	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	var loadErrors []error
-	for _, serverCfg := range cfg.Servers {
+	for _, serverCfg := range servers {
 		if !serverCfg.Enabled {
 			zap.L().Debug("MCP 服务器已禁用，跳过", zap.String("name", serverCfg.Name))
 			continue

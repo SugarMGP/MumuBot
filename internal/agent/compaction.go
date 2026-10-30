@@ -153,11 +153,12 @@ func coverageNeedsRepair(total, unassigned int) bool {
 }
 
 func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *compactionCandidate, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], attempt int, remainingSteps *int, feedback string) error {
-	cfg := config.Get()
-	if cfg == nil || candidate == nil || len(candidate.Messages) == 0 || state == nil {
+	cfg := configFor(ctx)
+	generation := generationFrom(ctx)
+	if cfg == nil || generation == nil || candidate == nil || len(candidate.Messages) == 0 || state == nil {
 		return fmt.Errorf("缺少压缩候选")
 	}
-	maxStep := cfg.Agent.Compaction.MaxStep
+	maxStep := cfg.Compactor.MaxSteps
 	if maxStep <= 0 {
 		maxStep = 12
 	}
@@ -167,8 +168,8 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	if maxStep <= 0 {
 		return fmt.Errorf("压缩步数预算已用尽")
 	}
-	window := cfg.ModelTiers.High.ContextWindow
-	target := int(float64(window) * cfg.Agent.Compaction.TargetRatio)
+	window := generation.contextWindow
+	target := int(float64(window) * cfg.Compactor.TargetRatio)
 	maximum := int(float64(window) * 0.55)
 	checkpointDigest, err := a.memory.RenderCheckpointDigest(ctx, session.kind, session.targetID)
 	if err != nil {
@@ -177,11 +178,12 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	tc := &tools.ToolContext{
 		ConversationKind: session.kind, TargetID: session.targetID,
 		MemoryMgr: a.memory.WithContext(ctx), Bot: a.bot, Session: session,
+		StickerDir:    config.Boot().StickerDir,
 		SnapshotLogID: candidate.ThroughMessageLogID, RunID: newBatchID(),
 		CurrentConversationOnly: true,
 	}
 	compactionCtx := tools.WithToolContext(ctx, tc)
-	compactionCtx = llm.WithTask(compactionCtx, "compaction", cfg.ModelTiers.High.Model)
+	compactionCtx = llm.WithTask(compactionCtx, "compaction", generation.modelName)
 
 	var finish *FinishCompactionInput
 	finishTool, err := utils.InferTool("finishCompaction", "提交会话概览和话题更新；尽量覆盖候选消息，覆盖率过低时系统会要求一次修正。", func(_ context.Context, input *FinishCompactionInput) (any, error) {
@@ -212,7 +214,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	}
 	available := []tool.BaseTool{searchTopics, readTopic, searchHistory, readToolResult, finishTool}
 	compactor, err := adk.NewTypedChatModelAgent[*schema.AgenticMessage](compactionCtx, &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
-		Model: a.model,
+		Model: generation.model,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: available, ExecuteSequentially: true,

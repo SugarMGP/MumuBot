@@ -7,11 +7,6 @@
 !main.go
 !package.json
 !bun.lock
-!config/
-!config/config.example.yaml
-!config/mcp.example.json
-!config/persona_group.prompt
-!config/persona_private.prompt
 !scripts/
 !internal/
 !internal/**

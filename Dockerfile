@@ -40,12 +40,8 @@ RUN apk add --no-cache ca-certificates su-exec tzdata && \
     addgroup -S mumu && adduser -S -G mumu mumu
 WORKDIR /app
 COPY --from=build /out/mumu-bot /app/mumu-bot
-COPY config/config.example.yaml /app/config-defaults/config.yaml
-COPY config/persona_group.prompt /app/config-defaults/persona_group.prompt
-COPY config/persona_private.prompt /app/config-defaults/persona_private.prompt
-COPY config/mcp.example.json /app/config-defaults/mcp.json
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN mkdir -p /app/config /app/stickers /app/media && chown -R mumu:mumu /app
+RUN mkdir -p /app/stickers /app/media && chown -R mumu:mumu /app
 EXPOSE 7468
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/app/mumu-bot"]

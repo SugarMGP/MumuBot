@@ -17,6 +17,7 @@ import (
 )
 
 type Client struct {
+	boot          config.Bootstrap
 	transportCtx  context.Context
 	stopTransport context.CancelFunc
 	closeOnce     sync.Once
@@ -46,10 +47,11 @@ type Client struct {
 	scopeSeq        map[string]uint64
 }
 
-func NewClient() *Client {
+func NewClient(boot config.Bootstrap) *Client {
 	transportCtx, stopTransport := context.WithCancel(context.Background())
 	cache := newGroupMemberInfoCache()
 	c := &Client{
+		boot:            boot,
 		transportCtx:    transportCtx,
 		stopTransport:   stopTransport,
 		mutedUntil:      make(map[int64]time.Time),
@@ -70,9 +72,8 @@ func (c *Client) connect() error {
 	if c.transportCtx.Err() != nil {
 		return context.Canceled
 	}
-	cfg := config.Get()
 	// 由 SDK 通过 get_version_info 自动检测后端方言，兼容 NapCat 与 SnowLuma
-	sdk, err := ob.DialWebSocket(c.transportCtx, cfg.OneBot.WsURL, ob.WithToken(cfg.OneBot.AccessToken), ob.WithRequestTimeout(30*time.Second), ob.WithEventBuffer(1024), ob.WithEventDeliveryTimeout(time.Second))
+	sdk, err := ob.DialWebSocket(c.transportCtx, c.boot.OneBotWSURL, ob.WithToken(c.boot.OneBotToken), ob.WithRequestTimeout(30*time.Second), ob.WithEventBuffer(1024), ob.WithEventDeliveryTimeout(time.Second))
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
@@ -160,8 +161,7 @@ func (c *Client) startConnectLoop(generation uint64) {
 }
 
 func (c *Client) connectLoop(generation uint64) {
-	cfg := config.Get()
-	interval := time.Duration(cfg.OneBot.ReconnectInterval) * time.Second
+	interval := time.Duration(c.boot.OneBotReconnect) * time.Second
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -175,7 +175,7 @@ func (c *Client) connectLoop(generation uint64) {
 		}
 		err := c.connect()
 		if err == nil {
-			zap.L().Info("已连接到 OneBot", zap.String("url", cfg.OneBot.WsURL), zap.Int64("self_id", c.GetSelfID()))
+			zap.L().Info("已连接到 OneBot", zap.String("url", c.boot.OneBotWSURL), zap.Int64("self_id", c.GetSelfID()))
 			return
 		}
 		if c.transportCtx.Err() != nil {

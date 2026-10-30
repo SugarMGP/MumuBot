@@ -97,11 +97,11 @@ func NewPersona(cfg *config.PersonaConfig) (*Persona, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("人格配置为空")
 	}
-	group, err := renderSystemPrompt("persona_group.prompt", cfg.GroupPromptTemplate, cfg)
+	group, err := renderSystemPrompt("群聊人格模板", cfg.GroupPromptTemplate, cfg)
 	if err != nil {
 		return nil, err
 	}
-	private, err := renderSystemPrompt("persona_private.prompt", cfg.PrivatePromptTemplate, cfg)
+	private, err := renderSystemPrompt("私聊人格模板", cfg.PrivatePromptTemplate, cfg)
 	if err != nil {
 		return nil, err
 	}

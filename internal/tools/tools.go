@@ -47,6 +47,7 @@ type ToolContext struct {
 	SessionMessageCallback  SessionMessageCallback
 	ReadForwardCallback     func(ctx context.Context, id string, index int) (any, error)
 	GroupInfoCallback       func(ctx context.Context) string
+	StickerDir              string
 	Session                 SessionContext
 	ThinkStartArrivalSeq    uint64
 	ObservedThroughSeq      uint64
@@ -151,7 +152,7 @@ func (tc *ToolContext) MemoryVersion(id uint) (uint64, bool) {
 
 // LogToolCall 记录工具调用
 func LogToolCall(toolName string, inputJSON string, outputJSON string, err error) {
-	cfg := config.Get()
+	cfg := config.Snapshot()
 	if cfg != nil && cfg.Debug.ShowToolCalls {
 		inputJSON = truncateToolLogString(inputJSON, toolLogMaxLen)
 		outputJSON = truncateToolLogString(outputJSON, toolLogMaxLen)

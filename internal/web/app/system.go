@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"mumu-bot/internal/config"
 	"mumu-bot/internal/migration"
 	"mumu-bot/internal/utils"
 	"mumu-bot/internal/web/views"
@@ -16,7 +17,7 @@ import (
 )
 
 func (a *App) systemSections() []views.SystemSection {
-	cfg := a.cfg
+	cfg := config.Snapshot()
 	snapshot := a.runtimeSnapshot()
 
 	groupIDs := a.enabledGroups()
@@ -46,19 +47,33 @@ func (a *App) systemSections() []views.SystemSection {
 		{Label: "启用群数", Value: fmt.Sprintf("%d", groupCount)},
 		{Label: "已启用群聊", Value: groupSummary},
 		{Label: "思考间隔", Value: fmt.Sprintf("%d 秒", cfg.Agent.ThinkInterval)},
+		{Label: "单轮最大步数", Value: fmt.Sprintf("%d 步", cfg.Agent.MaxStep)},
 	}
 	if cfg.Agent.ThinkDebounceMS > 0 {
 		groupFields = append(groupFields, views.SystemField{Label: "聚合窗口", Value: fmt.Sprintf("%d 毫秒", cfg.Agent.ThinkDebounceMS)})
 	}
 	groupFields = append(groupFields,
-		views.SystemField{Label: "上下文压缩", Value: fmt.Sprintf("达到 %d%% 后一次性整理", int(cfg.Agent.Compaction.TriggerRatio*100))},
-		views.SystemField{Label: "压缩目标", Value: fmt.Sprintf("目标 %d%%，最多接受 %d%%", int(cfg.Agent.Compaction.TargetRatio*100), 55)},
-		views.SystemField{Label: "最近原文", Value: fmt.Sprintf("保留约 %d%%", int(cfg.Agent.Compaction.RecentTailRatio*100))},
-		views.SystemField{Label: "单次上限", Value: fmt.Sprintf("%d 步、%d 秒", cfg.Agent.Compaction.MaxStep, cfg.Agent.Compaction.TimeoutSeconds)},
+		views.SystemField{Label: "上下文压缩", Value: fmt.Sprintf("达到 %d%% 后一次性整理", int(cfg.Compactor.TriggerRatio*100))},
+		views.SystemField{Label: "压缩目标", Value: fmt.Sprintf("目标 %d%%，最多接受 %d%%", int(cfg.Compactor.TargetRatio*100), 55)},
+		views.SystemField{Label: "最近原文", Value: fmt.Sprintf("保留约 %d%%", int(cfg.Compactor.RecentTailRatio*100))},
+		views.SystemField{Label: "压缩器步数", Value: fmt.Sprintf("%d 步", cfg.Compactor.MaxSteps)},
 	)
 
 	modelFields := make([]views.SystemField, 0, 8)
-	modelFields = appendField(modelFields, "主模型", cfg.ModelTiers.High.Model)
+	contextWindow := 0
+	if profile, err := a.modelStore.Active(context.Background()); err == nil {
+		modelFields = appendField(modelFields, "主模型", profile.ModelName)
+		modelFields = appendField(modelFields, "接口地址", profile.BaseURL)
+		contextWindow = profile.ContextWindow
+		if profile.ThinkingType != "" {
+			modelFields = appendField(modelFields, "思考模式", profile.ThinkingType)
+		}
+		if profile.ReasoningEffort != "" {
+			modelFields = appendField(modelFields, "推理强度", profile.ReasoningEffort)
+		}
+	} else {
+		modelFields = append(modelFields, views.SystemField{Label: "主模型", Value: "尚未配置"})
+	}
 	modelFields = appendField(modelFields, "记忆与话题检索", "关键词与模糊匹配")
 	if snapshot.MCPToolCount > 0 {
 		modelFields = append(modelFields, views.SystemField{Label: "扩展工具", Value: fmt.Sprintf("%d 个", snapshot.MCPToolCount)})
@@ -66,7 +81,7 @@ func (a *App) systemSections() []views.SystemSection {
 
 	runtimeFields := []views.SystemField{
 		{Label: "当前连接", Value: views.ConnectionText(snapshot.Connected)},
-		{Label: "重连间隔", Value: fmt.Sprintf("%d 秒", cfg.OneBot.ReconnectInterval)},
+		{Label: "重连间隔", Value: fmt.Sprintf("%d 秒", a.boot.OneBotReconnect)},
 	}
 	if currentVersion, err := a.memMgr.SchemaVersion(context.Background()); err == nil {
 		runtimeFields = append(runtimeFields, views.SystemField{Label: "数据结构版本", Value: fmt.Sprintf("v%d / v%d", currentVersion, migration.LatestSchemaVersion())})
@@ -77,8 +92,8 @@ func (a *App) systemSections() []views.SystemSection {
 	if cfg.Media.MaxBytesMB > 0 {
 		runtimeFields = append(runtimeFields, views.SystemField{Label: "媒体大小上限", Value: fmt.Sprintf("%d MB", cfg.Media.MaxBytesMB)})
 	}
-	if cfg.ModelTiers.High.ContextWindow > 0 {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "上下文窗口", Value: fmt.Sprintf("%d token", cfg.ModelTiers.High.ContextWindow)})
+	if contextWindow > 0 {
+		runtimeFields = append(runtimeFields, views.SystemField{Label: "上下文窗口", Value: fmt.Sprintf("%d token", contextWindow)})
 	}
 
 	sections := make([]views.SystemSection, 0, 4)

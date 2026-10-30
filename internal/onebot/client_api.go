@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"mumu-bot/internal/config"
-
 	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	ob "github.com/zjutjh/onebot-sdk"
@@ -108,14 +106,14 @@ func (c *Client) SendPrivateMessage(ctx context.Context, userID int64, content s
 }
 
 // buildImageSegment 构造图片/表情包消息段；表情包相对文件名只在保存目录内读取，本地内容统一转 base64
-func buildImageSegment(filePath string, isSticker bool) (message.Segment, error) {
+func (c *Client) buildImageSegment(filePath string, isSticker bool) (message.Segment, error) {
 	file := filePath
 	trimmed := strings.ToLower(strings.TrimSpace(filePath))
 	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
 		var data []byte
 		var err error
 		if isSticker {
-			root, openErr := os.OpenRoot(config.Get().Sticker.StoragePath)
+			root, openErr := os.OpenRoot(c.boot.StickerDir)
 			if openErr != nil {
 				return message.Segment{}, fmt.Errorf("打开表情包目录失败: %w", openErr)
 			}
@@ -143,7 +141,7 @@ func buildImageSegment(filePath string, isSticker bool) (message.Segment, error)
 // filePath: 图片 URL；本地表情包使用保存目录中的相对文件名，普通图片使用本地路径
 // isSticker: true 时作为表情包发送 (sub_type=1)
 func (c *Client) SendImageMessage(ctx context.Context, groupID int64, filePath string, isSticker bool) (int64, uint64, error) {
-	segment, err := buildImageSegment(filePath, isSticker)
+	segment, err := c.buildImageSegment(filePath, isSticker)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -155,7 +153,7 @@ func (c *Client) SendPrivateImageMessage(ctx context.Context, userID int64, file
 	if userID <= 0 {
 		return 0, 0, fmt.Errorf("私聊图片目标无效")
 	}
-	segment, err := buildImageSegment(filePath, isSticker)
+	segment, err := c.buildImageSegment(filePath, isSticker)
 	if err != nil {
 		return 0, 0, err
 	}

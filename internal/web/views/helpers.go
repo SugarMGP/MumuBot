@@ -18,6 +18,7 @@ func NavItems() []NavItem {
 		{Label: "成员管理", Href: "/admin/members"},
 		{Label: "会话管理", Href: "/admin/contacts"},
 		{Label: "表情包", Href: "/admin/stickers"},
+		{Label: "设置", Href: "/admin/settings"},
 		{Label: "系统状态", Href: "/admin/system"},
 	}
 }
@@ -86,6 +87,8 @@ func navIconName(href string) string {
 		return "members"
 	case "/admin/contacts":
 		return "sessions"
+	case "/admin/settings":
+		return "settings"
 	case "/admin/system":
 		return "system"
 	default:

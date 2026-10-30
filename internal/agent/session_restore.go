@@ -65,7 +65,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 			if getErr != nil {
 				return getErr
 			}
-			a.restoreSession(kind, targetID, trimRestoreMessages(logs, a.bot.GetSelfID()))
+			a.restoreSession(kind, targetID, trimRestoreMessages(logs, a.bot.GetSelfID(), a.contextWindow()))
 		}
 		return nil
 	}
@@ -308,15 +308,15 @@ func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.Messag
 }
 
 // trimRestoreMessages 首次升级时只接续预算内的近期原文，优先保留最新消息
-func trimRestoreMessages(logs []memory.MessageLog, selfID int64) []memory.MessageLog {
+func trimRestoreMessages(logs []memory.MessageLog, selfID int64, window int) []memory.MessageLog {
 	if len(logs) == 0 {
 		return logs
 	}
-	cfg := config.Get()
-	if cfg == nil || cfg.ModelTiers.High.ContextWindow <= 0 || cfg.Agent.Compaction.RecentTailRatio <= 0 {
+	cfg := config.Snapshot()
+	if window <= 0 || cfg.Compactor.RecentTailRatio <= 0 {
 		return logs
 	}
-	budget := int(float64(cfg.ModelTiers.High.ContextWindow) * cfg.Agent.Compaction.RecentTailRatio)
+	budget := int(float64(window) * cfg.Compactor.RecentTailRatio)
 	if budget <= 0 {
 		return logs
 	}

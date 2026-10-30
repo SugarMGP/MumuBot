@@ -17,7 +17,7 @@
 
 ## 编排边界
 
-- 主聊天和压缩共用同一个 high 模型；不要恢复 low、后台 Learner、Embedding 或独立压缩模型。
+- 主聊天和压缩共用当前模型；不要恢复 low、后台 Learner、Embedding 或独立压缩模型。
 - 主聊天是单次 ReAct，不拆 Planner/Replyer；是否发言最终由模型和工具决定，门控只做前置过滤。
 - 每群/每好友只允许一个 think 运行；运行期间新消息进入会话，不创建 rerun，后续正常调度继续消费。
 - 思考从会话起始到达序号开始；`BeforeModelRewriteState` 在新消息到达时注入，同一批消息不合并。
@@ -33,11 +33,13 @@
 - 大文本工具结果超过约 4000 token 时只把预览交给模型，完整内容写内容寻址文件；`viewImage` 图片本体保留。
 - 工具中间件只保留 `ToolTranscriptMiddleware`、`ToolErrorMiddleware`、Unknown handler、参数规范和顺序执行；不要恢复全局 ToolAction/ToolDedup 或消费水位。
 - 压缩只在估算输入达到窗口 90% 时触发，目标 40%，55% 为可接受上限；超过上限不得提交。
+- 模型、人格、MCP 和运行态使用 generation 快照；配置切换只替换 generation，不重启进程。
 - 压缩候选只包含完整、已可见、协议闭合的旧交互段，保护当前批次、活动工具链、未闭合 CallID 和最近尾部。
 - 压缩器只能读当前会话并使用 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和 `finishCompaction`；不提供 `readHistory`，不能写记忆、情感、便签或外部系统。
 - 压缩失败、覆盖遗漏、预算超限、数据库失败和结果不明都不能删除 transcript；失败后退避 60 秒。
 - provider 返回上下文溢出时允许一次强制压缩后重试主请求；仍失败则保留状态结束本轮。
-- `main` 的单次模型请求超时和压缩 300 秒超时分开；压缩等待不能让主请求的超时上下文提前失效。
+- 模型请求不设置整体超时，只限制连接和 TLS 握手 10 秒；Agent 关闭时的上下文取消仍然生效。
+- 主 Agent 每轮默认最多 50 步；压缩器步数独立配置。
 - 发言、戳一戳、贴表情、撤回等外部侧效应仍由工具自身和 OneBot API 保证真实成功，不伪造完成状态。
 - 撤回只打标记，不改写 transcript 前缀；后续消息附撤回说明。
 - 自己发送的消息写入 `message_logs` 但不额外生成 transcript user 行，因为动作已由 assistant/tool 轨迹表达。

@@ -32,9 +32,11 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 		zap.L().Debug("解析回复消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
 	pieces, pending, forwards := a.parseMessageContent(ctx, msg)
-	for _, name := range a.toolNames {
-		for index := range pieces {
-			pieces[index].text = strings.ReplaceAll(pieces[index].text, name, "\"危险指令，已屏蔽\"")
+	if generation := a.currentGeneration(); generation != nil {
+		for _, name := range generation.toolNames {
+			for index := range pieces {
+				pieces[index].text = strings.ReplaceAll(pieces[index].text, name, "\"危险指令，已屏蔽\"")
+			}
 		}
 	}
 	refs := a.cacheMedia(ctx, pending)
@@ -90,7 +92,11 @@ func (a *Agent) cacheMedia(ctx context.Context, pending []pendingMedia) []media.
 		if ctx.Err() != nil {
 			break
 		}
-		ref, err := a.media.Ensure(ctx, media.Source{URL: item.URL, File: item.File, Sticker: item.Sticker})
+		mediaMgr := a.currentMedia()
+		if mediaMgr == nil {
+			continue
+		}
+		ref, err := mediaMgr.Ensure(ctx, media.Source{URL: item.URL, File: item.File, Sticker: item.Sticker})
 		if err != nil {
 			zap.L().Debug("缓存媒体失败", zap.String("url", item.URL), zap.Error(err))
 			continue

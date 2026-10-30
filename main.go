@@ -12,10 +12,13 @@ import (
 	"mumu-bot/internal/agent"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/logger"
+	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/migration"
+	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/secrets"
 	webapp "mumu-bot/internal/web/app"
 	"mumu-bot/internal/web/services"
 
@@ -46,17 +49,31 @@ func syncConversationContacts(botClient *onebot.Client, memoryMgr *memory.Manage
 }
 
 func main() {
-	configPath := "config/config.yaml"
-	cfg, err := config.Load(configPath)
+	boot, err := config.LoadBootstrap()
 	if err != nil {
-		fmt.Printf("加载配置失败: %v\n", err)
+		fmt.Printf("加载启动配置失败: %v\n", err)
 		os.Exit(1)
 	}
+	logger.Init(boot.LogLevel, boot.Debug)
+	zap.L().Info("启动配置已加载")
+	if err := secrets.Configure(boot.SecretKey); err != nil {
+		zap.L().Warn("加密密钥不可用，模型和 MCP 配置暂时无法应用", zap.Error(err))
+	}
 
-	logger.Init(cfg.App.LogLevel, cfg.App.Debug)
-	zap.L().Info("配置已加载", zap.String("path", configPath))
+	db, err := memory.OpenDB(boot.DatabaseDSN)
+	if err != nil {
+		zap.L().Fatal("打开 PostgreSQL 失败", zap.Error(err))
+	}
+	if err := migration.RunMigrations(db); err != nil {
+		zap.L().Fatal("数据库迁移失败", zap.Error(err))
+	}
+	if err := config.InitStore(db); err != nil {
+		zap.L().Fatal("加载动态配置失败", zap.Error(err))
+	}
+	modelStore := modelprofiles.NewStore(db)
+	mcpStore := mcp.NewStore(db)
 
-	botClient := onebot.NewClient()
+	botClient := onebot.NewClient(boot)
 	botClient.Connect()
 	selfID, err := botClient.WaitSelfID(context.Background())
 	if err != nil {
@@ -65,23 +82,11 @@ func main() {
 	}
 	zap.L().Info("OneBot 登录账号已就绪", zap.Int64("self_id", selfID))
 
-	db, err := memory.OpenDB()
-	if err != nil {
-		_ = botClient.Close()
-		zap.L().Fatal("打开 PostgreSQL 失败", zap.Error(err))
-	}
-	if err := migration.RunMigrations(db, selfID); err != nil {
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
-		_ = botClient.Close()
-		zap.L().Fatal("数据库迁移失败", zap.Error(err))
-	}
 	statsRecorder := modelstats.NewRecorder()
 	modelstats.SetDefault(statsRecorder)
 	statsRecorder.Start(db)
 
-	memoryMgr, err := memory.NewManager(db)
+	memoryMgr, err := memory.NewManager(db, boot.MediaDir)
 	if err != nil {
 		_ = botClient.Close()
 		zap.L().Fatal("记忆管理器创建失败", zap.Error(err))
@@ -119,21 +124,18 @@ func main() {
 		}
 	})
 
-	mumuAgent, err := agent.New(memoryMgr, botClient)
+	mumuAgent, err := agent.New(memoryMgr, botClient, modelStore, mcpStore)
 	if err != nil {
 		_ = botClient.Close()
 		zap.L().Fatal("Agent 创建失败", zap.Error(err))
 	}
 	if err := mumuAgent.Start(); err != nil {
 		mumuAgent.Stop()
-		zap.L().Fatal("恢复聊天上下文失败", zap.Error(err))
+		zap.L().Fatal("Agent 启动失败", zap.Error(err))
 	}
-
-	stickerDir := cfg.Sticker.StoragePath
-	adminService := services.NewAdminService(memoryMgr, stickerDir)
-	app := webapp.New(cfg, adminService, memoryMgr, mumuAgent)
+	adminService := services.NewAdminService(memoryMgr, boot.StickerDir)
+	app := webapp.New(boot, adminService, memoryMgr, mumuAgent, modelStore, mcpStore)
 	httpServer := app.Server()
-	botClient.ReleaseEventGate()
 
 	// 好友删除没有 OneBot 事件，靠定期同步兜底；被踢出群即使漏了事件也会在这里纠正
 	contactSyncStop := make(chan struct{})
@@ -161,6 +163,14 @@ func main() {
 			zap.L().Error("管理后台异常退出", zap.Error(err))
 		}
 	}()
+
+	if _, err := modelStore.Active(context.Background()); err == nil {
+		if err := mumuAgent.Activate(); err != nil {
+			zap.L().Warn("首次模型激活失败，等待后台修正", zap.Error(err))
+		}
+	} else {
+		zap.L().Info("尚未配置模型，等待后台设置")
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

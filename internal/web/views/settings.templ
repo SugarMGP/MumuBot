@@ -1,0 +1,159 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+)
+
+templ SettingsPage(data SettingsPageData, currentPath string) {
+	@Layout(LayoutData{Title: "设置", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, SettingsBody(data))
+}
+
+templ SettingsBody(data SettingsPageData) {
+	<div class="space-y-6">
+		<div class="flex items-end justify-between gap-6">
+			@PageHeader("设置", "调整人格、对话、思考和压缩行为，保存后无需重启进程。", "配置中心")
+			@SettingsTabs("/admin/settings")
+		</div>
+		if !data.SecretConfigured {
+			<div class="alert alert-warning"><span>加密密钥尚未配置；模型和 MCP 配置暂时不能应用。</span></div>
+		}
+		if !data.AgentReady {
+			<div class="alert alert-info"><span>尚未配置当前模型，机器人暂不回复。请先到模型管理添加并激活模型。</span></div>
+		}
+		if data.Error != "" {
+			<div class="alert alert-error"><span>{ data.Error }</span></div>
+		}
+		<div class="grid grid-cols-[repeat(auto-fit,minmax(430px,1fr))] items-start gap-5">
+			@PersonaSettings(data)
+			@AgentSettings(data)
+			@ChatSettings(data)
+			@CompactorSettings(data)
+			@mediaSettings(data)
+			@debugSettings(data)
+		</div>
+	</div>
+}
+
+templ SettingsTabs(current string) {
+	<div class="join shrink-0" role="tablist" aria-label="设置分类">
+		<a class={ joinClasses("join-item btn btn-sm", ternaryString(current == "/admin/settings", "btn-primary", "btn-ghost")) } href="/admin/settings" hx-get="/admin/settings" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">应用配置</a>
+		<a class={ joinClasses("join-item btn btn-sm", ternaryString(current == "/admin/settings/models", "btn-primary", "btn-ghost")) } href="/admin/settings/models" hx-get="/admin/settings/models" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">模型管理</a>
+		<a class={ joinClasses("join-item btn btn-sm", ternaryString(current == "/admin/settings/mcp", "btn-primary", "btn-ghost")) } href="/admin/settings/mcp" hx-get="/admin/settings/mcp" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">MCP 服务器</a>
+	</div>
+}
+
+templ PersonaSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">人格</h2><p class="mt-1 text-sm text-base-content/60">名称、别名和提示词会在下一次思考时生效。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="persona"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["persona"]) }/>
+				<label class="floating-label"><span>名称</span><input class="input w-full" name="name" value={ data.Current.Persona.Name } required/></label>
+				<label class="floating-label"><span>别名（每行一个）</span><textarea class="textarea w-full" name="aliases" rows="3">{ strings.Join(data.Current.Persona.AliasNames, "\n") }</textarea></label>
+				<label class="floating-label"><span>兴趣（每行一个）</span><textarea class="textarea w-full" name="interests" rows="4">{ strings.Join(data.Current.Persona.Interests, "\n") }</textarea></label>
+				<label class="floating-label"><span>群聊人格模板</span><textarea class="textarea w-full font-mono text-xs" name="group_prompt" rows="10" required>{ data.Current.Persona.GroupPromptTemplate }</textarea></label>
+				<label class="floating-label"><span>私聊人格模板</span><textarea class="textarea w-full font-mono text-xs" name="private_prompt" rows="10" required>{ data.Current.Persona.PrivatePromptTemplate }</textarea></label>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存人格设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}
+
+templ AgentSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">思考与并发</h2><p class="mt-1 text-sm text-base-content/60">步数和并发保存后会热重建运行态，不重启进程。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="agent"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["agent"]) }/>
+				<div class="grid grid-cols-2 gap-3">
+					<label class="floating-label"><span>思考间隔（秒）</span><input class="input w-full" type="number" min="1" name="think_interval" value={ fmt.Sprintf("%d", data.Current.Agent.ThinkInterval) }/></label>
+					<label class="floating-label"><span>聚合窗口（毫秒）</span><input class="input w-full" type="number" min="0" name="think_debounce_ms" value={ fmt.Sprintf("%d", data.Current.Agent.ThinkDebounceMS) }/></label>
+					<label class="floating-label"><span>单轮最大步数</span><input class="input w-full" type="number" min="1" max="1000" name="max_step" value={ fmt.Sprintf("%d", data.Current.Agent.MaxStep) }/></label>
+					<label class="floating-label"><span>群聊并发（0 不限制）</span><input class="input w-full" type="number" min="0" name="max_group_concurrency" value={ fmt.Sprintf("%d", data.Current.Agent.MaxGroupConcurrency) }/></label>
+					<label class="floating-label"><span>私聊并发（0 不限制）</span><input class="input w-full" type="number" min="0" name="max_private_concurrency" value={ fmt.Sprintf("%d", data.Current.Agent.MaxPrivateConcurrency) }/></label>
+				</div>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存思考设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}
+
+templ ChatSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">对话与限流</h2><p class="mt-1 text-sm text-base-content/60">时段规则每行格式：开始-结束,群号,频率；群号 0 表示全局。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="chat"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["chat"]) }/>
+				<div class="grid grid-cols-2 gap-3">
+					<label class="floating-label"><span>聊天频率（0-1）</span><input class="input w-full" type="number" step="0.01" min="0" max="1" name="talk_frequency" value={ fmt.Sprintf("%.2f", data.Current.Chat.TalkFrequency) }/></label>
+					<label class="floating-label"><span>打字速度（字符/秒）</span><input class="input w-full" type="number" min="1" name="typing_speed" value={ fmt.Sprintf("%d", data.Current.Chat.TypingSpeed) }/></label>
+				</div>
+				<label class="label cursor-pointer justify-start gap-3"><input class="checkbox checkbox-primary" type="checkbox" name="typing_simulation" checked?={ data.Current.Chat.TypingSimulation }/><span class="label-text">模拟打字延迟</span></label>
+				<label class="label cursor-pointer justify-start gap-3"><input class="checkbox checkbox-primary" type="checkbox" name="enable_time_rules" checked?={ data.Current.Chat.EnableTimeRules }/><span class="label-text">启用时段规则</span></label>
+				<label class="floating-label"><span>时段规则</span><textarea class="textarea w-full font-mono text-xs" name="time_rules" rows="5">{ TimeRulesText(data.Current.Chat.TimeRules) }</textarea></label>
+				<label class="label cursor-pointer justify-start gap-3"><input class="checkbox checkbox-primary" type="checkbox" name="rate_enabled" checked?={ data.Current.Chat.RateLimit.Enabled }/><span class="label-text">启用频率限制</span></label>
+				<div class="grid grid-cols-3 gap-3">
+					<label class="floating-label"><span>统计周期（秒）</span><input class="input w-full" type="number" min="1" name="period_sec" value={ fmt.Sprintf("%d", data.Current.Chat.RateLimit.PeriodSec) }/></label>
+					<label class="floating-label"><span>最大消息数</span><input class="input w-full" type="number" min="1" name="max_messages" value={ fmt.Sprintf("%d", data.Current.Chat.RateLimit.MaxMessages) }/></label>
+					<label class="floating-label"><span>最小概率</span><input class="input w-full" type="number" step="0.01" min="0" max="1" name="min_prob" value={ fmt.Sprintf("%.2f", data.Current.Chat.RateLimit.MinProb) }/></label>
+				</div>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存对话设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}
+
+templ CompactorSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">上下文压缩</h2><p class="mt-1 text-sm text-base-content/60">比例使用百分数；压缩器步数独立于主 Agent。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="compactor"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["compactor"]) }/>
+				<div class="grid grid-cols-3 gap-3">
+					<label class="floating-label"><span>触发比例（%）</span><input class="input w-full" type="number" step="0.1" min="1" max="99" name="trigger_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.TriggerRatio*100) }/></label>
+					<label class="floating-label"><span>目标比例（%）</span><input class="input w-full" type="number" step="0.1" min="1" max="55" name="target_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.TargetRatio*100) }/></label>
+					<label class="floating-label"><span>近期原文（%）</span><input class="input w-full" type="number" step="0.1" min="1" name="recent_tail_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.RecentTailRatio*100) }/></label>
+				</div>
+				<label class="floating-label"><span>压缩器最大步数</span><input class="input w-full" type="number" min="1" max="100" name="max_steps" value={ fmt.Sprintf("%d", data.Current.Compactor.MaxSteps) }/></label>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存压缩设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}
+
+templ mediaSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">图片处理</h2><p class="mt-1 text-sm text-base-content/60">保存后会重建运行态，不重启进程。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="media"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["media"]) }/>
+				<div class="grid grid-cols-3 gap-3">
+					<label class="floating-label"><span>大小上限（MB）</span><input class="input w-full" type="number" min="1" name="max_bytes_mb" value={ fmt.Sprintf("%d", data.Current.Media.MaxBytesMB) }/></label>
+					<label class="floating-label"><span>WebP 质量</span><input class="input w-full" type="number" min="1" max="100" name="image_quality" value={ fmt.Sprintf("%d", data.Current.Media.ImageQuality) }/></label>
+					<label class="floating-label"><span>窄边（像素）</span><input class="input w-full" type="number" min="1" name="narrow_edge" value={ fmt.Sprintf("%d", data.Current.Media.NarrowEdge) }/></label>
+				</div>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存图片设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}
+
+templ debugSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">调试</h2><p class="mt-1 text-sm text-base-content/60">控制工具调用日志的详细程度。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="debug"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["debug"]) }/>
+				<label class="label cursor-pointer justify-start gap-3"><input class="checkbox checkbox-primary" type="checkbox" name="show_tool_calls" checked?={ data.Current.Debug.ShowToolCalls }/><span class="label-text">记录工具调用名称、参数和结果摘要</span></label>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存调试设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}

@@ -10,13 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"mumu-bot/internal/config"
 )
 
 // SaveToolResultText 把大工具结果保存到内容寻址文件，返回 r 前缀句柄
 func (m *Manager) SaveToolResultText(ctx context.Context, content string) (string, error) {
-	dir := filepath.Join(config.Get().Media.StoragePath, "tool-results")
+	dir := filepath.Join(m.mediaDir, "tool-results")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -41,7 +39,7 @@ func (m *Manager) ReadToolResultText(ctx context.Context, ref string, offset, le
 	if _, err := hex.DecodeString(strings.TrimPrefix(ref, "r")); err != nil {
 		return "", 0, false, fmt.Errorf("无效的工具结果编号")
 	}
-	path := filepath.Join(config.Get().Media.StoragePath, "tool-results", strings.TrimPrefix(ref, "r")+".txt")
+	path := filepath.Join(m.mediaDir, "tool-results", strings.TrimPrefix(ref, "r")+".txt")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", 0, false, err
@@ -68,7 +66,7 @@ func (m *Manager) CleanupToolResults(ctx context.Context, minAge time.Duration) 
 	if minAge < 0 {
 		return fmt.Errorf("清理保留期不能为负数")
 	}
-	dir := filepath.Join(config.Get().Media.StoragePath, "tool-results")
+	dir := filepath.Join(m.mediaDir, "tool-results")
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil

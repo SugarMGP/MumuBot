@@ -151,7 +151,7 @@ func (a *App) renderPageResponse(w http.ResponseWriter, r *http.Request, full te
 
 // enabledGroups 返回当前启用且未被拉黑的群号，由需要群数据的页面各自调用，不混入运行时快照
 func (a *App) enabledGroups() []int64 {
-	if a.cfg == nil || a.memMgr == nil {
+	if a.memMgr == nil {
 		return nil
 	}
 	rows, err := a.memMgr.ListConversationTargets(context.Background(), memory.ConversationKindGroup, true)

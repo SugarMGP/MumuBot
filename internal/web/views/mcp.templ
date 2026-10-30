@@ -1,0 +1,80 @@
+package views
+
+import "fmt"
+
+templ MCPPage(data MCPPageData, currentPath string) {
+	@Layout(LayoutData{Title: "MCP 服务器", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, MCPBody(data))
+}
+
+templ MCPBody(data MCPPageData) {
+	<div class="space-y-6">
+		<div class="flex items-end justify-between gap-6">
+			@PageHeader("MCP 服务器", "接入外部工具；保存后重建运行态，不需要重启进程。", "扩展能力")
+			@SettingsTabs("/admin/settings/mcp")
+		</div>
+		if !data.SecretConfigured {
+			<div class="alert alert-warning"><span>加密密钥尚未配置，暂时不能保存 MCP 配置。</span></div>
+		}
+		if data.Error != "" {
+			<div class="alert alert-error"><span>{ data.Error }</span></div>
+		}
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<div><h2 class="text-lg font-semibold text-base-content">服务器列表</h2><p class="mt-1 text-sm text-base-content/60">连接配置整体加密保存。</p></div>
+				<div class="overflow-x-auto">
+					<table class="table">
+						<thead><tr><th>名称</th><th>传输</th><th>状态</th><th>版本</th><th class="text-right">操作</th></tr></thead>
+						<tbody>
+							for _, server := range data.Servers {
+								<tr>
+									<td class="font-medium">{ server.Name }</td>
+									<td>{ server.Transport }</td>
+									<td>
+										if server.Enabled {
+											<span class="badge badge-success badge-soft badge-sm">启用</span>
+										} else {
+											<span class="badge badge-ghost badge-sm">停用</span>
+										}
+									</td>
+									<td class="text-xs text-base-content/45">v{ fmt.Sprintf("%d", server.Version) }</td>
+									<td class="text-right whitespace-nowrap">
+										<div class="inline-flex gap-1">
+											<a class="btn btn-ghost btn-xs" href={ fmt.Sprintf("/admin/settings/mcp?edit=%d", server.ID) } hx-get={ fmt.Sprintf("/admin/settings/mcp?edit=%d", server.ID) } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">编辑</a>
+											<form method="post" action="/admin/settings/mcp"><input type="hidden" name="action" value="delete"/><input type="hidden" name="id" value={ fmt.Sprintf("%d", server.ID) }/><input type="hidden" name="version" value={ fmt.Sprintf("%d", server.Version) }/><button class="btn btn-ghost btn-xs text-error" type="submit">删除</button></form>
+										</div>
+									</td>
+								</tr>
+							}
+							if len(data.Servers) == 0 {
+								<tr><td colspan="5" class="text-center text-base-content/60">还没有 MCP 服务器。</td></tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</section>
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<div><h2 class="text-lg font-semibold text-base-content">添加或编辑服务器</h2><p class="mt-1 text-sm text-base-content/60">参数、环境变量和请求头每行一项；环境变量格式 KEY=VALUE。</p></div>
+				<form class="space-y-3" method="post" action="/admin/settings/mcp">
+					<input type="hidden" name="action" value="save"/>
+					<input type="hidden" name="id" value={ fmt.Sprintf("%d", data.EditID) }/>
+					<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.EditVersion) }/>
+					<input type="hidden" name="position" value={ fmt.Sprintf("%d", data.EditPosition) }/>
+					<div class="grid grid-cols-2 gap-3">
+						<label class="floating-label"><span>名称</span><input class="input w-full" name="name" value={ mcpName(data.Edit) } required/></label>
+						<label class="floating-label"><span>传输类型</span><select class="select w-full" name="type"><option value="sse" selected?={ mcpType(data.Edit) == "sse" }>SSE</option><option value="stdio" selected?={ mcpType(data.Edit) == "stdio" }>Stdio</option></select></label>
+					</div>
+					<label class="label cursor-pointer justify-start gap-3"><input class="checkbox checkbox-primary" type="checkbox" name="enabled" checked?={ data.Edit == nil || data.Edit.Enabled }/><span class="label-text">启用该服务器</span></label>
+					<label class="floating-label"><span>URL（SSE）</span><input class="input w-full" name="url" value={ mcpURL(data.Edit) }/></label>
+					<label class="floating-label"><span>命令（stdio）</span><input class="input w-full" name="command" value={ mcpCommand(data.Edit) }/></label>
+					<label class="floating-label"><span>参数（每行一个）</span><textarea class="textarea w-full font-mono text-xs" name="args" rows="4">{ mcpArgs(data.Edit) }</textarea></label>
+					<label class="floating-label"><span>环境变量（每行 KEY=VALUE）</span><textarea class="textarea w-full font-mono text-xs" name="env" rows="4">{ mcpEnv(data.Edit) }</textarea></label>
+					<label class="floating-label"><span>请求头（每行 KEY=VALUE）</span><textarea class="textarea w-full font-mono text-xs" name="headers" rows="4">{ mcpHeaders(data.Edit) }</textarea></label>
+					<label class="floating-label"><span>工具名单（逗号分隔，留空为全部）</span><input class="input w-full" name="tool_names" value={ mcpToolNames(data.Edit) }/></label>
+					<button class="btn btn-primary btn-sm" type="submit">{ mcpSubmitLabel(data.Edit) }</button>
+				</form>
+			</div>
+		</section>
+	</div>
+}

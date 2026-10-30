@@ -9,7 +9,9 @@ import (
 
 	"mumu-bot/internal/agent"
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/web/assets"
 	"mumu-bot/internal/web/auth"
 	"mumu-bot/internal/web/services"
@@ -28,12 +30,14 @@ type RuntimeSnapshot struct {
 }
 
 type App struct {
-	cfg       *config.Config
-	admin     *services.AdminService
-	auth      *auth.Manager
-	memMgr    *memory.Manager
-	mumuAgent *agent.Agent
-	router    http.Handler
+	boot       config.Bootstrap
+	admin      *services.AdminService
+	auth       *auth.Manager
+	memMgr     *memory.Manager
+	mumuAgent  *agent.Agent
+	modelStore *modelprofiles.Store
+	mcpStore   *mcp.Store
+	router     http.Handler
 }
 
 type sortOption struct {
@@ -44,20 +48,22 @@ type sortOption struct {
 const defaultListPageSize = 15
 const compactListPageSize = 12
 
-func New(cfg *config.Config, admin *services.AdminService, memMgr *memory.Manager, mumuAgent *agent.Agent) *App {
+func New(boot config.Bootstrap, admin *services.AdminService, memMgr *memory.Manager, mumuAgent *agent.Agent, models *modelprofiles.Store, mcpServers *mcp.Store) *App {
 	app := &App{
-		cfg:       cfg,
-		admin:     admin,
-		auth:      auth.NewManager(cfg.Web.AdminKey, 24*time.Hour),
-		memMgr:    memMgr,
-		mumuAgent: mumuAgent,
+		boot:       boot,
+		admin:      admin,
+		auth:       auth.NewManager(boot.WebAdminKey, 24*time.Hour),
+		memMgr:     memMgr,
+		mumuAgent:  mumuAgent,
+		modelStore: models,
+		mcpStore:   mcpServers,
 	}
 	app.router = app.routes()
 	return app
 }
 
 func (a *App) Addr() string {
-	return fmt.Sprintf(":%d", a.cfg.Server.Port)
+	return fmt.Sprintf(":%d", a.boot.ServerPort)
 }
 
 func (a *App) Server() *http.Server {
@@ -94,6 +100,12 @@ func (a *App) routes() http.Handler {
 		protected.Get("/admin/members", a.handleMembers)
 		protected.Get("/admin/contacts", a.handleContacts)
 		protected.Post("/admin/contacts/actions", a.handleContactAction)
+		protected.Get("/admin/settings", a.handleSettings)
+		protected.Post("/admin/settings", a.handleSettingsSave)
+		protected.Get("/admin/settings/models", a.handleModels)
+		protected.Post("/admin/settings/models", a.handleModelAction)
+		protected.Get("/admin/settings/mcp", a.handleMCP)
+		protected.Post("/admin/settings/mcp", a.handleMCPAction)
 		protected.Get("/admin/system", a.handleSystem)
 		protected.Get("/admin/system/logs/download", a.handleLogDownload)
 		protected.Get("/admin/dialogs/actions", a.handleActionDialogFragment)

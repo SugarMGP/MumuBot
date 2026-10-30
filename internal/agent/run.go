@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
@@ -26,13 +25,17 @@ import (
 
 // runAgent 跑一轮主模型，模型产生的消息由会话收集器统一写回
 func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*schema.AgenticMessage], messages []*schema.AgenticMessage) error {
-	if cfg := config.Get(); cfg != nil {
-		extra := []callbacks.Handler(nil)
-		if cfg.Debug.ShowToolCalls {
-			extra = append(extra, tools.NewToolLogHandler())
-		}
-		ctx = llm.WithTask(ctx, "react", cfg.ModelTiers.High.Model, extra...)
+	cfg := configFor(ctx)
+	generation := generationFrom(ctx)
+	extra := []callbacks.Handler(nil)
+	if cfg.Debug.ShowToolCalls {
+		extra = append(extra, tools.NewToolLogHandler())
 	}
+	modelName := ""
+	if generation != nil {
+		modelName = generation.modelName
+	}
+	ctx = llm.WithTask(ctx, "react", modelName, extra...)
 	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent})
 	iter := runner.Run(ctx, messages)
 	for {
@@ -119,17 +122,18 @@ func (h *sessionInjector) tryCompact(ctx context.Context, state *adk.TypedChatMo
 	if h.agent == nil || tc == nil || tc.Session == nil {
 		return nil
 	}
-	cfg := config.Get()
-	if cfg == nil || cfg.ModelTiers.High.ContextWindow <= 0 {
+	cfg := configFor(ctx)
+	generation := generationFrom(ctx)
+	if cfg == nil || generation == nil || generation.contextWindow <= 0 {
 		return nil
 	}
 	session, ok := tc.Session.(*Session)
 	if !ok || session == nil {
 		return nil
 	}
-	window := cfg.ModelTiers.High.ContextWindow
+	window := generation.contextWindow
 	estimated := session.EstimateRequestTokens(state.Messages, state.ToolInfos)
-	if estimated < int(float64(window)*cfg.Agent.Compaction.TriggerRatio) {
+	if estimated < int(float64(window)*cfg.Compactor.TriggerRatio) {
 		return nil
 	}
 	if tc.CompactionAttempts >= 2 {
@@ -150,23 +154,22 @@ func (h *sessionInjector) captureToolResults(ctx context.Context, state *adk.Typ
 }
 
 func (h *sessionInjector) compactNow(ctx context.Context, session *Session, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) error {
-	cfg := config.Get()
-	window := cfg.ModelTiers.High.ContextWindow
-	candidate, err := session.BuildCompactionCandidate(window, cfg.Agent.Compaction.RecentTailRatio)
+	cfg := configFor(ctx)
+	generation := generationFrom(ctx)
+	if generation == nil {
+		return fmt.Errorf("模型运行态未初始化")
+	}
+	window := generation.contextWindow
+	candidate, err := session.BuildCompactionCandidate(window, cfg.Compactor.RecentTailRatio)
 	if err != nil {
 		session.MarkCompactionFailure(time.Now())
 		return err
 	}
-	timeout := time.Duration(cfg.Agent.Compaction.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 300 * time.Second
-	}
-	compactionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	compactionCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	stopShutdownWatch := context.AfterFunc(h.agent.ctx, cancel)
 	defer stopShutdownWatch()
-	compactionCtx = withModelTimeout(compactionCtx, timeout)
-	remainingSteps := cfg.Agent.Compaction.MaxStep
+	remainingSteps := cfg.Compactor.MaxSteps
 	if remainingSteps <= 0 {
 		remainingSteps = 12
 	}
@@ -399,7 +402,7 @@ func (a *Agent) groupGenModelInput(ctx context.Context, _ string, input *adk.Typ
 		}
 	}
 	messages := make([]*schema.AgenticMessage, 0, len(input.Messages)+1)
-	messages = append(messages, schema.SystemAgenticMessage(a.persona.GetGroupInstruction(groupExtra)))
+	messages = append(messages, schema.SystemAgenticMessage(a.personaFor(ctx).GetGroupInstruction(groupExtra)))
 	messages = append(messages, input.Messages...)
 	return messages, nil
 }
@@ -407,7 +410,7 @@ func (a *Agent) groupGenModelInput(ctx context.Context, _ string, input *adk.Typ
 // privateGenModelInput 生成私聊模型输入：系统指令在前，会话消息在后
 func (a *Agent) privateGenModelInput(ctx context.Context, _ string, input *adk.TypedAgentInput[*schema.AgenticMessage]) ([]*schema.AgenticMessage, error) {
 	messages := make([]*schema.AgenticMessage, 0, len(input.Messages)+1)
-	messages = append(messages, schema.SystemAgenticMessage(a.persona.GetPrivateInstruction()))
+	messages = append(messages, schema.SystemAgenticMessage(a.personaFor(ctx).GetPrivateInstruction()))
 	messages = append(messages, input.Messages...)
 	return messages, nil
 }

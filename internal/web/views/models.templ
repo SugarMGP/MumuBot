@@ -1,0 +1,103 @@
+package views
+
+import (
+	"fmt"
+)
+
+templ ModelsPage(data ModelPageData, currentPath string) {
+	@Layout(LayoutData{Title: "模型管理", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, ModelsBody(data))
+}
+
+templ ModelsBody(data ModelPageData) {
+	<div class="space-y-6">
+		<div class="flex items-end justify-between gap-6">
+			@PageHeader("模型管理", "添加模型、设置推理参数并切换当前模型；切换无需重启进程。", "模型中心")
+			@SettingsTabs("/admin/settings/models")
+		</div>
+		if !data.SecretConfigured {
+			<div class="alert alert-warning"><span>加密密钥尚未配置，暂时不能保存模型 API Key。</span></div>
+		}
+		if data.Error != "" {
+			<div class="alert alert-error"><span>{ data.Error }</span></div>
+		}
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<div><h2 class="text-lg font-semibold text-base-content">模型列表</h2><p class="mt-1 text-sm text-base-content/60">主聊天和压缩器共用当前模型。</p></div>
+				<div class="overflow-x-auto">
+					<table class="table">
+						<thead><tr><th>名称</th><th>模型</th><th>上下文</th><th>推理参数</th><th>状态</th><th class="text-right">操作</th></tr></thead>
+						<tbody>
+							for _, profile := range data.Profiles {
+								<tr>
+									<td class="font-medium">{ profile.Name }</td>
+									<td>{ profile.ModelName }<div class="text-xs text-base-content/45">{ profile.BaseURL }</div></td>
+									<td>{ fmt.Sprintf("%d", profile.ContextWindow) }</td>
+									<td class="text-xs text-base-content/60">{ reasoningSummary(profile.ThinkingType, profile.ReasoningEffort) }</td>
+									<td>
+										if profile.Active {
+											<span class="badge badge-success badge-soft badge-sm">当前模型</span>
+										} else {
+											<span class="badge badge-ghost badge-sm">未启用</span>
+										}
+									</td>
+									<td class="text-right whitespace-nowrap">
+										<div class="inline-flex gap-1">
+											if !profile.Active {
+												<form method="post" action="/admin/settings/models"><input type="hidden" name="action" value="activate"/><input type="hidden" name="id" value={ fmt.Sprintf("%d", profile.ID) }/><button class="btn btn-ghost btn-xs" type="submit">切换</button></form>
+											}
+											<a class="btn btn-ghost btn-xs" href={ fmt.Sprintf("/admin/settings/models?edit=%d", profile.ID) } hx-get={ fmt.Sprintf("/admin/settings/models?edit=%d", profile.ID) } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">编辑</a>
+											<form method="post" action="/admin/settings/models"><input type="hidden" name="action" value="test"/><input type="hidden" name="id" value={ fmt.Sprintf("%d", profile.ID) }/><button class="btn btn-ghost btn-xs" type="submit">测试</button></form>
+											if !profile.Active {
+												<form method="post" action="/admin/settings/models"><input type="hidden" name="action" value="delete"/><input type="hidden" name="id" value={ fmt.Sprintf("%d", profile.ID) }/><input type="hidden" name="version" value={ fmt.Sprintf("%d", profile.Version) }/><button class="btn btn-ghost btn-xs text-error" type="submit">删除</button></form>
+											}
+										</div>
+									</td>
+								</tr>
+							}
+							if len(data.Profiles) == 0 {
+								<tr><td colspan="6" class="text-center text-base-content/60">还没有模型，先在下面添加一个。</td></tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</section>
+		<section class="card">
+			<div class="card-body gap-4 p-5">
+				<div><h2 class="text-lg font-semibold text-base-content">添加或编辑模型</h2><p class="mt-1 text-sm text-base-content/60">API Key 留空表示保留旧值；推理参数只有两个下拉选项。</p></div>
+				<form class="space-y-3" method="post" action="/admin/settings/models">
+					<input type="hidden" name="action" value="save"/>
+					if data.Edit != nil {
+						<input type="hidden" name="id" value={ fmt.Sprintf("%d", data.Edit.ID) }/>
+						<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Edit.Version) }/>
+					}
+					<div class="grid grid-cols-2 gap-3">
+						<label class="floating-label"><span>名称</span><input class="input w-full" name="name" value={ modelName(data.Edit) } required/></label>
+						<label class="floating-label"><span>Base URL</span><input class="input w-full" name="base_url" value={ modelBaseURL(data.Edit) } placeholder="https://api.example.com/v1" required/></label>
+						<label class="floating-label"><span>模型名</span><input class="input w-full" name="model_name" value={ modelModelName(data.Edit) } required/></label>
+						<label class="floating-label"><span>上下文窗口</span><input class="input w-full" type="number" min="1" name="context_window" value={ modelContextWindow(data.Edit) } required/></label>
+						<label class="floating-label"><span>API Key</span><input class="input w-full" type="password" name="api_key" autocomplete="new-password" placeholder={ modelKeyPlaceholder(data.Edit) }/></label>
+						<label class="floating-label"><span>思考模式</span>
+							<select class="select w-full" name="thinking_type">
+								<option value="" selected?={ modelThinking(data.Edit) == "" }>不传</option>
+								<option value="enabled" selected?={ modelThinking(data.Edit) == "enabled" }>启用</option>
+								<option value="disabled" selected?={ modelThinking(data.Edit) == "disabled" }>禁用</option>
+							</select>
+						</label>
+						<label class="floating-label"><span>推理强度</span>
+							<select class="select w-full" name="reasoning_effort">
+								<option value="" selected?={ modelEffort(data.Edit) == "" }>不传</option>
+								<option value="low" selected?={ modelEffort(data.Edit) == "low" }>low</option>
+								<option value="medium" selected?={ modelEffort(data.Edit) == "medium" }>medium</option>
+								<option value="high" selected?={ modelEffort(data.Edit) == "high" }>high</option>
+								<option value="xhigh" selected?={ modelEffort(data.Edit) == "xhigh" }>xhigh</option>
+								<option value="max" selected?={ modelEffort(data.Edit) == "max" }>max</option>
+							</select>
+						</label>
+					</div>
+					<button class="btn btn-primary btn-sm" type="submit">{ modelSubmitLabel(data.Edit) }</button>
+				</form>
+			</div>
+		</section>
+	</div>
+}

@@ -14,12 +14,9 @@ const latestSchemaVersion = 17
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
 // RunMigrations 只接受空数据库；旧 schema 不自动迁移或删除。
-func RunMigrations(db *gorm.DB, selfID int64) error {
+func RunMigrations(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("PostgreSQL 未初始化")
-	}
-	if selfID <= 0 {
-		return fmt.Errorf("OneBot self_id 无效")
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('mumubot_schema_migrations'))`).Error; err != nil {
@@ -75,7 +72,7 @@ func validateV17Schema(db *gorm.DB) error {
 		"topic_assignments", "topic_summaries", "topic_summary_sources", "knowledge_items",
 		"knowledge_revisions", "emotion_states", "emotion_revisions", "member_profiles",
 		"member_names", "stickers", "mood_state", "model_call_hourly", "conversation_targets",
-		"session_messages",
+		"session_messages", "app_config", "model_profiles", "mcp_servers",
 	} {
 		if !db.Migrator().HasTable(table) {
 			return fmt.Errorf("v17 缺少表 %s", table)
@@ -90,6 +87,10 @@ func validateV17Schema(db *gorm.DB) error {
 		{"knowledge_items", "pinned"},
 		{"topic_summary_sources", "is_anchor"},
 		{"context_compaction_checkpoints", "reference_versions"},
+		{"app_config", "config_key"},
+		{"model_profiles", "thinking_type"},
+		{"model_profiles", "reasoning_effort"},
+		{"mcp_servers", "config_ciphertext"},
 	} {
 		if !db.Migrator().HasColumn(column.table, column.name) {
 			return fmt.Errorf("v17 缺少字段 %s.%s", column.table, column.name)

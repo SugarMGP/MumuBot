@@ -16,7 +16,8 @@
 - `internal/migration/`：数据库 schema 版本与一次性数据迁移，只依赖 GORM 和 memory 的模型。
 - `internal/tools/`：暴露给主 Agent 和压缩 Agent 的受限工具集。
 - `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务（含会话管理）。
-- `config/`：运行配置、群聊人格提示词、私聊提示词和 MCP（模型上下文协议，用于接入外部工具）示例。
+- `internal/config/`：env 启动配置、代码内置默认值、PostgreSQL 动态配置快照和加密配置。
+- 管理后台“设置”页：人格、对话、压缩、并发、媒体、模型和 MCP 服务器。
 
 ## 常用入口
 
@@ -141,7 +142,7 @@ go vet ./...
 - 注释优先解释用途、约束和原因，不重复显而易见的代码；导出符号注释以符号名开头，保留工具之间现有的长分隔注释。
 - Go 代码统一使用 gofmt；import 按标准库、项目内包、第三方依赖分组，组内排序。仅整理风格时不修改业务逻辑、接口或提示词。
 - 人工维护的 `.go` 文件不超过 600 行；templ 等生成文件不受此限制。超过时按职责拆分，每个拆出的文件应有内聚的职责域，不要零散地把函数分到很多小文件。
-- 同一函数内不要重复调用 `config.Get()`，提取为局部变量复用。
+- 同一函数内不要重复调用 `config.Snapshot()`，提取为局部变量复用。
 - 同一函数内不要重复调用 `strings.TrimSpace` 处理同一个值；如果上层已经 Trim 过，下层不应再 Trim。
 - 不要在同一表达式或相邻行中对同一值重复调用（如 `a.bot.GetSelfID()` 在同一条件中出现两次），提取为局部变量。
 - 同一函数中多次使用同一缓冲区/切片时，取一次后复用变量，不要重复加锁取数据。
@@ -161,8 +162,9 @@ go vet ./...
 
 ## 核心架构约束
 
-- 主聊天和同步话题压缩共用唯一 high 模型；不再保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索，也不为它们补兼容路径。
-- 对话模型只走 OpenAI Responses 端点（`/responses`）；`model_tiers.high.context_window` 用于输入预算和压缩触发，设置 `max_output_tokens` 或固定输出预留不是本项目行为。
+- 主聊天和同步话题压缩共用当前模型；可添加多个模型档案并切换，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
+- 对话模型只走 OpenAI Responses 端点（`/responses`）；当前模型的上下文窗口用于输入预算和压缩触发，设置 `max_output_tokens` 或固定输出预留不是本项目行为。
+- 模型档案只开放 `thinking.type` 和 `reasoning.effort` 两个推理参数；API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
 - 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
 - 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
@@ -179,7 +181,7 @@ go vet ./...
 - 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
 - 每轮原样回传 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 保存同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。
 - 主上下文装配不静默截断 transcript；预算达到窗口 90% 时触发一次完整同步压缩，目标 40%，55% 为可接受上限，超过 55% 不提交。
-- 压缩最多两次模型尝试，共享 12 步和 300 秒；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和一次 `finishCompaction`；不提供 `readHistory`。
+- 压缩器步数独立配置（默认 12 步），不设置整体模型超时；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和一次 `finishCompaction`；不提供 `readHistory`。
 - 压缩只整理冻结的完整旧交互段，保护当前触发批次、活动工具链、未闭合 CallID 和近期尾部；提交事务原子写入话题、归属、`is_anchor` 来源、概览、检查点并删除覆盖 transcript；未分配超过 16 条或 20% 时只允许一次修正。
 - 压缩失败、参数遗漏、预算超限、数据库失败或提交结果不明时保留旧 transcript；失败后至少退避 60 秒，不能让模型带着超限上下文继续请求。
 - `conversation_tool_calls` 不存在；工具调用和结果直接是 `entry_kind=tool` 的 transcript 行。`run_id + call_id` 幂等，同 CallID 复用已有回执，不同 CallID 的重复搜索或多次发言不拦截。
@@ -209,7 +211,7 @@ go vet ./...
 - `overview` 是会话级滚动概览，不是新 Agent；压缩器必须写结论、不确定性、纠正、边界、动作结果和未完成事项，程序不静默截断摘要。
 - v17 只接受空库；不保留旧迁移、旧证据、关系或学习水位表，也不回填伪造的旧 assistant/tool 轨迹。
 - 跨会话检索允许用于记忆、话题和历史；记忆正文不保存来源，历史/话题结果必须带群聊或好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
-- 系统提示只做增量调整：群聊与私聊分别维护 `config/persona_group.prompt` 和 `config/persona_private.prompt`，不复用同一模板，也不恢复已删除的成组矫正案例。
+- 系统提示只做增量调整：群聊与私聊模板分别保存在数据库配置中，代码保留默认模板；不复用同一模板，也不恢复已删除的成组矫正案例。
 
 ## 数据与检索边界
 
@@ -219,7 +221,7 @@ go vet ./...
 - 话题检索先做标题、概况、关键词的精确子串召回，再用单一 similarity/更新时间/内部 ID 稳定排序；不做中文分词、向量检索或多层命中权重。
 - 长期记忆检索使用 `content/label/subject_target` 的精确子串召回，`pg_trgm` 只用于排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
 - Agent 历史查询使用不透明 cursor 和全局 OneBot message ID；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。
-- 持久化使用 PostgreSQL 18；OneBot 首次取得 `self_id` 后才打开数据库，连接建立后业务事件仍等待 schema 迁移、Agent 恢复和后台初始化完成。
+- 持久化使用 PostgreSQL 18；先打开数据库并完成 schema 迁移和动态配置加载，再连接 OneBot 取得 `self_id`；首次配置模型前事件门保持关闭。
 - schema 由 `schema_migrations` 记录并为 v17；只接受空库初始化，旧 schema 明确拒绝，不自动迁移或 DROP。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
 - 管理后台日志与模型统计口径保持现有约束；媒体和原文永久保留，只有 transcript、摘要版本和未被引用的工具结果文件会按各自规则变化。

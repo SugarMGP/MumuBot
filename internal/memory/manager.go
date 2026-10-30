@@ -8,8 +8,6 @@ import (
 	"slices"
 	"time"
 
-	"mumu-bot/internal/config"
-
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -17,12 +15,12 @@ import (
 )
 
 type Manager struct {
-	db *gorm.DB
+	db       *gorm.DB
+	mediaDir string
 }
 
-func OpenDB() (*gorm.DB, error) {
-	cfg := config.Get()
-	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
+func OpenDB(dsn string) (*gorm.DB, error) {
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
 			SlowThreshold:             200 * time.Millisecond,
 			IgnoreRecordNotFoundError: true,
@@ -35,11 +33,11 @@ func OpenDB() (*gorm.DB, error) {
 	return db, nil
 }
 
-func NewManager(db *gorm.DB) (*Manager, error) {
+func NewManager(db *gorm.DB, mediaDir string) (*Manager, error) {
 	if db == nil {
 		return nil, fmt.Errorf("PostgreSQL 未初始化")
 	}
-	return &Manager{db: db}, nil
+	return &Manager{db: db, mediaDir: mediaDir}, nil
 }
 
 func (m *Manager) GetRecentMessagesScope(ctx context.Context, kind string, targetID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {

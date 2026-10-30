@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 
@@ -164,8 +163,7 @@ func saveStickerFunc(ctx context.Context, input *SaveStickerInput) (*SaveSticker
 	if tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("表情包收藏能力未初始化"))
 	}
-	cfg := config.Get()
-	stored, err := storeStickerFile(item, cfg.Sticker.StoragePath)
+	stored, err := storeStickerFile(item, tc.StickerDir)
 	if err != nil {
 		return nil, err
 	}

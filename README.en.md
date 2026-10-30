@@ -65,23 +65,19 @@ Compose starts MumuBot, standard PostgreSQL 18, and SnowLuma together:
 
 ```bash
 cp .env.example .env
-# Fill in database, admin, and model settings in .env
+# Fill in database, admin, encryption key, and OneBot connection details
 docker compose up -d
 ```
 
-Compose pulls the `latest` image directly from GHCR. On first start, the container creates any missing `config.yaml`, `persona_group.prompt`, `persona_private.prompt`, and `mcp.json` files in the configuration directory without overwriting existing files.
+Compose pulls the `latest` image directly from GHCR. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
 
-Restart the service after editing the generated configuration files. Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
+Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
 
 ### Using Release Packages
 
 GitHub Releases provide pre-built packages for Linux, Windows, and macOS. Each archive contains:
 
 - Executable binary
-- `config/config.yaml` example configuration
-- `config/persona_group.prompt` group chat persona template
-- `config/persona_private.prompt` private chat persona template
-- `config/mcp.json` example configuration
 - `README.md` and `LICENSE`
 
 No separate frontend deployment is needed — admin dashboard assets are embedded in the binary.
@@ -109,26 +105,23 @@ Image transcoding uses cgo to link against libwebp. The Linux and Windows releas
 
 ### Configuration and Launch
 
-If you're using a GitHub Release archive, edit the bundled `config/config.yaml`, `config/persona_group.prompt`, `config/persona_private.prompt`, and `config/mcp.json` directly — skip the copy step below.
+Configuration has two parts:
+
+- `.env` only holds bootstrap connections and secrets: `MUMU_DATABASE_DSN`, `MUMU_WEB_ADMIN_KEY`, `MUMU_SECRET_KEY`, `MUMU_ONEBOT_WS_URL`, `MUMU_ONEBOT_TOKEN`, port, media directories, and log level.
+- Persona, prompts, chat, compaction, concurrency, and media settings live in PostgreSQL and are maintained in the admin dashboard. Model API keys and MCP configs are encrypted at rest.
 
 ```bash
-# 1. Copy example configs and edit as needed
-cp config/config.example.yaml config/config.yaml
-cp config/mcp.example.json config/mcp.json
+# 1. Prepare environment variables
+cp .env.example .env
+# Fill in the database DSN, admin key, MUMU_SECRET_KEY, and OneBot connection
 
-# 2. Edit config (fill in model, database, OneBot details, etc.)
-# Sensitive values can also be set via environment variables:
-#   MUMU_MODEL_HIGH_BASE_URL / API_KEY / MODEL - The single main model endpoint
-#   MUMU_ONEBOT_TOKEN                   - OneBot access token
-#   MUMU_DATABASE_DSN                   - PostgreSQL connection string
-
-# The static persona prompt template is at config/persona_group.prompt; the private chat prompt template is at config/persona_private.prompt
-# persona.name, persona.alias_names, and persona.interests are still set in config/config.yaml
-# The bot QQ is detected from OneBot; interests only shape persona context and do not change trigger probability
-
-# 3. Launch
+# 2. Launch
 ./mumu-bot
 ```
+
+Visit `/admin` after startup. The dashboard remains available when no model is configured; add and activate a model under Settings → Models. Settings changes do not require a process restart.
+
+Model profiles expose only two reasoning controls: `thinking.type` (omit/enabled/disabled) and `reasoning.effort` (omit/low/medium/high/xhigh/max).
 
 Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required.
 
@@ -138,50 +131,26 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 This release uses the v17 semantic schema and only initializes an empty database. Older schemas are rejected explicitly; no automatic migration or deletion is performed. Back up the database and media directory before reinitializing.
 
-The service listens on port `7468` by default (configurable).
+The service listens on port `7468` by default (configurable via `MUMU_SERVER_PORT`).
 
-Visit `/admin` to access the admin dashboard. The dashboard stays disabled until a secret key is configured.
+Visit `/admin` to access the admin dashboard. The dashboard stays disabled until an admin key is configured.
 
 ## 🧠 Context and Topics
 
-The main chat and synchronous topic compaction share one model. At 90% of the context window, the current turn may wait up to 300 seconds for a complete compaction. The target is 40%; results above 55% are rejected. Only transcript working-set rows covered by the new summaries are deleted. Original messages, media, and sent messages are retained permanently.
+The main chat and synchronous topic compaction share the current model. The main Agent runs at most 50 steps per turn by default, configurable; the compactor has its own step budget. Model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions, targeting 40% and rejecting results above 55%. Only transcript working-set rows covered by the new summaries are deleted. Original messages, media, and sent messages are retained permanently.
 
-Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around an `h` message ID.
+Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around a OneBot message ID.
 
 ## 🧠 Persona Template
 
-`config/persona_group.prompt` and `config/persona_private.prompt` are the static persona templates for group chats and private chats. They share the same structure but stay independent: the group template keeps group-specific interaction rules, while the private template drops them and adds one-on-one rules. Tune each file separately and iterate based on real conversations.
+Group and private persona templates are maintained separately under Settings → Persona. They share the same structure but stay independent: the group template keeps group-specific interaction rules, while the private template drops them and adds one-on-one rules. A code default is used when the database has no override.
 
 If you find a prompt that works better, feel free to share your use case and results via [Issues](https://github.com/SugarMGP/MumuBot/issues), or submit a Pull Request to improve the template together.
 
 ## 🔧 MCP Tool Extension
 
-Edit `config/mcp.json` to connect external MCP servers, supporting both SSE and Stdio transport. Loaded tools are available to both group chats and friend DMs and are named `mcp-<server>-<tool>` to avoid collisions with built-in tools or other servers:
+Add external MCP servers under Settings → MCP Servers, supporting both SSE and Stdio transport. Server configs are encrypted at rest. Loaded tools are available to both group chats and friend DMs and are named `mcp-<server>-<tool>` to avoid collisions with built-in tools or other servers:
 
-```json
-{
-    "servers": [
-        {
-            "name": "example-mcp-server-sse",
-            "enabled": false,
-            "type": "sse",
-            "url": "http://localhost:3333/sse",
-            "tool_name_list": [],
-            "custom_headers": {
-                "Authorization": "Bearer YOUR_TOKEN_HERE"
-            }
-        },
-        {
-            "name": "example-mcp-server-stdio",
-            "enabled": false,
-            "type": "stdio",
-            "command": "",
-            "args": [],
-            "env": []
-        }
-    ]
-}
-```
 
 ## 🤝 Contributing
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/tools"
@@ -60,7 +61,7 @@ func resolveMessageDisplayName(groupCard, nickname string) string {
 func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.ConversationMessage, userID int64) string {
 	selfID := a.bot.GetSelfID()
 	if selfID > 0 && userID == selfID {
-		return botMentionDisplayName(a.persona.GetName())
+		return botMentionDisplayName(a.personaFor(ctx).GetName())
 	}
 	if displayName := strings.TrimSpace(msg.AtNames[userID]); displayName != "" {
 		return displayName
@@ -89,6 +90,7 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		MemoryMgr:          a.memory.WithContext(ctx),
 		Bot:                a.bot,
 		Session:            session,
+		StickerDir:         config.Boot().StickerDir,
 		SnapshotLogID:      session.LatestLogID(),
 		RunID:              newRunID(),
 		MemoryReadVersions: map[uint]uint64{},

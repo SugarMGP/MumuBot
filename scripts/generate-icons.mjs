@@ -20,6 +20,7 @@ const mapping = [
   [["group-config", "groups"], "users"],
   [["sessions"], "messages-square"],
   [["system"], "activity"],
+  [["settings"], "settings"],
   [["sort"], "arrow-up-down"],
   [["filter"], "list-filter"],
   [["sort-desc"], "arrow-down-wide-narrow"],
