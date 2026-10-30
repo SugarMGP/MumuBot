@@ -5,13 +5,31 @@ import (
 	"time"
 )
 
+const (
+	SubjectGroup  = "group"
+	SubjectUser   = "user"
+	SubjectSelf   = "self"
+	SubjectObject = "object"
+
+	MemoryProfile    = "profile"
+	MemoryExperience = "experience"
+
+	ReferenceScopeAuto = "auto"
+	ReferenceScopeTool = "tool"
+)
+
+type ReferenceSeen struct {
+	Auto map[string]string `json:"auto"`
+	Tool map[string]string `json:"tool"`
+}
+
 // ConversationSession 保存单个会话的单调序号，消息编号和可见序号都在事务内分配
 type ConversationSession struct {
 	ConversationKind string    `gorm:"primaryKey;type:text" json:"conversation_kind"`
 	TargetID         int64     `gorm:"primaryKey;column:target_id" json:"target_id"`
 	NextInputSeq     uint64    `json:"next_input_seq"`
 	NextVisibleSeq   uint64    `json:"next_visible_seq"`
-	NextMessageRef   int       `json:"next_message_ref"`
+	ReferenceSeen    []byte    `gorm:"type:jsonb;not null" json:"reference_seen"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
@@ -47,7 +65,7 @@ type CompactionCheckpoint struct {
 	Overview            string          `gorm:"type:text;not null;default:''" json:"overview"`
 	ActiveTopicVersions json.RawMessage `gorm:"type:jsonb;not null;default:'[]'" json:"active_topic_versions"`
 	ReferenceBaseline   string          `gorm:"type:text;not null;default:''" json:"reference_baseline"`
-	ReferenceVersions   json.RawMessage `gorm:"type:jsonb;not null;default:'[]'" json:"reference_versions"`
+	ReferenceVersions   json.RawMessage `gorm:"type:jsonb;not null;default:'{}'" json:"reference_versions"`
 	BatchID             string          `gorm:"type:text;not null;default:''" json:"batch_id"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
@@ -80,29 +98,27 @@ func (TopicSummaryRow) TableName() string { return "topic_summaries" }
 
 // TopicSourceRow 记录摘要来源和用于分层查询的关键消息
 type TopicSourceRow struct {
-	SummaryID    uint   `gorm:"primaryKey" json:"summary_id"`
-	MessageLogID uint   `gorm:"primaryKey" json:"message_log_id"`
-	Role         string `gorm:"primaryKey;type:text;not null;default:'source'" json:"role"`
+	SummaryID    uint `gorm:"primaryKey" json:"summary_id"`
+	MessageLogID uint `gorm:"primaryKey" json:"message_log_id"`
+	IsAnchor     bool `gorm:"not null;default:false" json:"is_anchor"`
 }
 
 func (TopicSourceRow) TableName() string { return "topic_summary_sources" }
 
 // KnowledgeRecord 是新长期记忆模型，旧 knowledge_items 结构由迁移保留
 type KnowledgeRecord struct {
-	ID               uint      `gorm:"primaryKey" json:"id"`
-	ConversationKind string    `gorm:"type:text;not null" json:"conversation_kind"`
-	TargetID         int64     `gorm:"column:target_id;not null" json:"target_id"`
-	SubjectUserID    int64     `gorm:"not null" json:"subject_user_id"`
-	Kind             string    `gorm:"type:text;not null" json:"kind"`
-	Label            string    `gorm:"type:text;not null;default:''" json:"label"`
-	Content          string    `gorm:"type:text;not null" json:"content"`
-	Status           string    `gorm:"type:text;not null;default:'active'" json:"status"`
-	Version          uint64    `gorm:"not null;default:1" json:"version"`
-	IsCore           bool      `gorm:"not null;default:false" json:"is_core"`
-	SourceMeta       string    `gorm:"type:jsonb;not null;default:'{}'" json:"source_meta"`
-	ContentHash      string    `gorm:"type:text;not null;default:''" json:"content_hash"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	SubjectType   string    `gorm:"type:text;not null" json:"subject_type"`
+	SubjectTarget string    `gorm:"type:text;not null" json:"subject_target"`
+	MemoryType    string    `gorm:"type:text;not null" json:"memory_type"`
+	Label         string    `gorm:"type:text;not null;default:''" json:"label"`
+	Content       string    `gorm:"type:text;not null" json:"content"`
+	Pinned        bool      `gorm:"not null;default:false" json:"pinned"`
+	Status        string    `gorm:"type:text;not null;default:'active'" json:"status"`
+	Version       uint64    `gorm:"not null;default:1" json:"version"`
+	ContentHash   string    `gorm:"type:text;not null;default:''" json:"content_hash"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (KnowledgeRecord) TableName() string { return "knowledge_items" }
@@ -115,10 +131,9 @@ type KnowledgeRevision struct {
 	AfterContent  string    `gorm:"type:text;not null;default:''" json:"after_content"`
 	BeforeStatus  string    `gorm:"type:text;not null;default:''" json:"before_status"`
 	AfterStatus   string    `gorm:"type:text;not null;default:''" json:"after_status"`
-	BeforeCore    bool      `gorm:"not null;default:false" json:"before_core"`
-	AfterCore     bool      `gorm:"not null;default:false" json:"after_core"`
+	BeforePinned  bool      `gorm:"not null;default:false" json:"before_pinned"`
+	AfterPinned   bool      `gorm:"not null;default:false" json:"after_pinned"`
 	Reason        string    `gorm:"type:text;not null;default:''" json:"reason"`
-	SourceMeta    string    `gorm:"type:jsonb;not null;default:'{}'" json:"source_meta"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -134,7 +149,6 @@ type EmotionState struct {
 	AnchorAt    time.Time  `gorm:"not null" json:"anchor_at"`
 	DecayClass  string     `gorm:"type:text;not null;default:'lingering'" json:"decay_class"`
 	Reason      string     `gorm:"type:text;not null;default:''" json:"reason"`
-	SourceMeta  string     `gorm:"type:jsonb;not null;default:'{}'" json:"source_meta"`
 	Version     uint64     `gorm:"not null;default:1" json:"version"`
 	EndedAt     *time.Time `json:"ended_at,omitempty"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -148,7 +162,6 @@ type EmotionRevision struct {
 	BeforeStrength float64   `gorm:"not null;default:0" json:"before_strength"`
 	AfterStrength  float64   `gorm:"not null;default:0" json:"after_strength"`
 	Reason         string    `gorm:"type:text;not null;default:''" json:"reason"`
-	SourceMeta     string    `gorm:"type:jsonb;not null;default:'{}'" json:"source_meta"`
 	Version        uint64    `gorm:"not null" json:"version"`
 	CreatedAt      time.Time `json:"created_at"`
 }

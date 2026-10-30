@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"mumu-bot/internal/config"
@@ -12,7 +13,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// restoreSessions 先恢复持久化工作集，旧库没有工作集时才回退到最近原文
+// restoreSessions 先恢复持久化工作集，没有工作集时才回退到最近原文
 func (a *Agent) restoreSessions() error {
 	groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx)
 	if err != nil {
@@ -42,7 +43,6 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 	if err != nil {
 		return err
 	}
-	session.SetCheckpoint(checkpoint)
 	var after uint64
 	if checkpoint != nil && checkpoint.ThroughVisibleSeq != nil {
 		after = *checkpoint.ThroughVisibleSeq
@@ -55,15 +55,11 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 	if err != nil {
 		return err
 	}
-	for _, entry := range visible {
-		if entry.EntryKind != "internal_reference" {
-			continue
-		}
-		if versions := transcriptReferenceVersions(entry.Payload); len(versions) > 0 {
-			session.SetAutoReferenceVersions(versions)
-		}
+	pendingReferences, err := a.memory.PendingReferences(a.ctx, kind, targetID)
+	if err != nil {
+		return err
 	}
-	if len(visible) == 0 && len(pending) == 0 {
+	if len(visible) == 0 && len(pending) == 0 && len(pendingReferences) == 0 {
 		if checkpoint == nil {
 			logs, getErr := a.memory.GetRecentMessagesScope(a.ctx, kind, targetID, 0, restoreMessageLimit, 0)
 			if getErr != nil {
@@ -74,8 +70,77 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 		return nil
 	}
 
+	visibleRows, deferred := splitRestoredEntries(visible)
+	toolCalls := map[string]bool{}
+	for _, entry := range visible {
+		if entry.EntryKind == "tool" {
+			toolCalls[toolCallKey(entry.RunID, entry.ToolCallID)] = true
+		}
+	}
+	assistantEntries := make([]memory.TranscriptEntry, 0, len(visibleRows)+len(deferred))
+	assistantEntries = append(assistantEntries, visibleRows...)
+	assistantEntries = append(assistantEntries, deferred...)
+	missing, err := a.collectMissingToolResults(session, assistantEntries, toolCalls)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range visibleRows {
+		if entry.EntryKind != "user" {
+			if err := a.restoreSeenEntry(session, &entry, missing); err != nil {
+				return err
+			}
+			continue
+		}
+		if entry.MessageLogID == nil {
+			continue
+		}
+		log, getErr := a.memory.GetMessageLogByInternalID(*entry.MessageLogID)
+		if getErr != nil {
+			continue
+		}
+		msg := a.conversationMessageFromLog(*log)
+		if msg == nil {
+			continue
+		}
+		var payload schema.AgenticMessage
+		if sonic.Unmarshal(entry.Payload, &payload) != nil {
+			payload = *msgToPayload(msg)
+		}
+		session.RestoreUser(msg, log.ID, log.MediaRefs, entry.ID, valueOrZero(entry.VisibleSeq), true, &payload)
+	}
+
+	unvisible := append([]memory.TranscriptEntry(nil), deferred...)
+	unvisible = append(unvisible, pendingReferences...)
+	sort.SliceStable(unvisible, func(i, j int) bool { return unvisible[i].ID < unvisible[j].ID })
+	for _, entry := range unvisible {
+		if entry.EntryKind == "internal_reference" {
+			var payload schema.AgenticMessage
+			if sonic.Unmarshal(entry.Payload, &payload) != nil {
+				continue
+			}
+			var receipt memory.ReferenceReceipt
+			if raw, ok := payload.Extra["reference_receipts"]; ok {
+				data, _ := sonic.Marshal(raw)
+				_ = sonic.Unmarshal(data, &receipt)
+			}
+			session.RestorePendingReference(&payload, entry.ID, &receipt)
+			continue
+		}
+		if err := a.restoreSeenEntry(session, &entry, missing); err != nil {
+			return err
+		}
+	}
+
 	for _, entry := range pending {
 		if entry.InputSeq == nil {
+			continue
+		}
+		if entry.EntryKind == "agent_message" {
+			var payload schema.AgenticMessage
+			if sonic.Unmarshal(entry.Payload, &payload) == nil {
+				session.RestorePendingAgentMessage(&payload, entry.ID)
+			}
 			continue
 		}
 		if entry.EntryKind == "observation" {
@@ -92,7 +157,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 		if getErr != nil {
 			continue
 		}
-		msg := messageLogToSessionMessage(*log)
+		msg := a.conversationMessageFromLog(*log)
 		if msg == nil {
 			continue
 		}
@@ -100,17 +165,26 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 		if sonic.Unmarshal(entry.Payload, &payload) != nil {
 			payload = *msgToPayload(msg)
 		}
-		session.RestoreUser(msg, log.ID, log.MediaRefs, log.MessageRef, entry.ID, 0, false, &payload)
+		session.RestoreUser(msg, log.ID, log.MediaRefs, entry.ID, 0, false, &payload)
 	}
+	return nil
+}
 
-	toolCalls := map[string]bool{}
-	for _, entry := range visible {
-		if entry.EntryKind == "tool" {
-			toolCalls[toolCallKey(entry.RunID, entry.ToolCallID)] = true
+func splitRestoredEntries(entries []memory.TranscriptEntry) (visible, deferred []memory.TranscriptEntry) {
+	for _, entry := range entries {
+		if entry.VisibleSeq == nil {
+			deferred = append(deferred, entry)
+			continue
 		}
+		visible = append(visible, entry)
 	}
-	missing := map[int][]*memory.TranscriptEntry{}
-	for index, entry := range visible {
+	return visible, deferred
+}
+
+// collectMissingToolResults 为缺少回执的 assistant 工具调用补 not_executed 行
+func (a *Agent) collectMissingToolResults(session *Session, entries []memory.TranscriptEntry, toolCalls map[string]bool) (map[uint][]*memory.TranscriptEntry, error) {
+	missing := map[uint][]*memory.TranscriptEntry{}
+	for _, entry := range entries {
 		if entry.EntryKind != "assistant" {
 			continue
 		}
@@ -123,53 +197,38 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 				continue
 			}
 			call := block.FunctionToolCall
-			if toolCalls[toolCallKey(entry.RunID, call.CallID)] {
+			key := toolCallKey(entry.RunID, call.CallID)
+			if toolCalls[key] {
 				continue
 			}
-			created, createErr := session.AppendNotExecutedTool(a.ctx, entry.RunID, call.CallID, call.Name)
-			if createErr != nil {
-				return createErr
+			assistantID := entry.ID
+			toolEntry, created, err := session.AppendNotExecutedTool(a.ctx, entry.RunID, call.CallID, call.Name)
+			if err != nil {
+				return nil, err
 			}
-			missing[index] = append(missing[index], created)
-			toolCalls[toolCallKey(entry.RunID, call.CallID)] = true
+			toolCalls[key] = true
+			if created && toolEntry != nil {
+				missing[assistantID] = append(missing[assistantID], toolEntry)
+			}
 		}
 	}
+	return missing, nil
+}
 
-	for index, entry := range visible {
-		if entry.EntryKind == "user" {
-			if entry.MessageLogID == nil {
-				continue
-			}
-			log, getErr := a.memory.GetMessageLogByInternalID(*entry.MessageLogID)
-			if getErr != nil {
-				continue
-			}
-			msg := messageLogToSessionMessage(*log)
-			if msg == nil {
-				continue
-			}
-			var payload schema.AgenticMessage
-			if sonic.Unmarshal(entry.Payload, &payload) != nil {
-				continue
-			}
-			visibleSeq := valueOrZero(entry.VisibleSeq)
-			session.RestoreUser(msg, log.ID, log.MediaRefs, log.MessageRef, entry.ID, visibleSeq, true, &payload)
-			continue
+func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry, missing map[uint][]*memory.TranscriptEntry) error {
+	if entry.EntryKind == "tool" && (entry.ToolStatus == "running" || entry.ToolStatus == "planned") {
+		if err := session.RepairToolTranscript(a.ctx, entry, "unknown", "工具执行因进程退出而中断，没有可复用结果，请勿自动重放。"); err != nil {
+			return err
 		}
-		if entry.EntryKind == "tool" && (entry.ToolStatus == "running" || entry.ToolStatus == "planned") {
-			if err := session.RepairToolTranscript(a.ctx, &entry, "unknown", "工具执行因进程退出而中断，没有可复用结果，请勿自动重放。"); err != nil {
-				return err
-			}
-		}
-		var message schema.AgenticMessage
-		if sonic.Unmarshal(entry.Payload, &message) == nil {
-			session.AppendSeenMessage(&message, entry.ID, valueOrZero(entry.VisibleSeq))
-		}
-		for _, extra := range missing[index] {
-			var repaired schema.AgenticMessage
-			if sonic.Unmarshal(extra.Payload, &repaired) == nil {
-				session.AppendSeenMessage(&repaired, extra.ID, 0)
-			}
+	}
+	var message schema.AgenticMessage
+	if sonic.Unmarshal(entry.Payload, &message) == nil {
+		session.AppendSeenMessage(&message, entry.ID, valueOrZero(entry.VisibleSeq))
+	}
+	for _, extra := range missing[entry.ID] {
+		var repaired schema.AgenticMessage
+		if sonic.Unmarshal(extra.Payload, &repaired) == nil {
+			session.AppendSeenMessage(&repaired, extra.ID, 0)
 		}
 	}
 	return nil
@@ -186,7 +245,7 @@ func valueOrZero(value *uint64) uint64 {
 	return *value
 }
 
-// restoreSession 首次升级时把近期原文接成可见工作集，不伪造旧工具轨迹
+// restoreSession 在缺少工作集时把近期原文接成可见工作集，不伪造工具轨迹
 func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.MessageLog) {
 	if len(logs) == 0 {
 		return
@@ -196,16 +255,17 @@ func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.Messag
 	users := map[uint]*sessionUser{}
 	selfID := a.bot.GetSelfID()
 	for _, log := range logs {
-		payloadMessage := msgToPayload(messageLogToSessionMessage(log))
-		if payloadMessage == nil {
-			continue
-		}
+		var payloadMessage *schema.AgenticMessage
 		if log.UserID == selfID {
 			payloadMessage = assistantHistoryMessage(log)
 		} else {
-			msg := messageLogToSessionMessage(log)
+			msg := a.conversationMessageFromLog(log)
+			payloadMessage = msgToPayload(msg)
+			if payloadMessage == nil {
+				continue
+			}
 			session.mu.Lock()
-			user := session.newUserLocked(msg, log.ID, log.MediaRefs, log.MessageRef)
+			user := session.newUserLocked(msg, log.ID, log.MediaRefs)
 			session.mu.Unlock()
 			payloadMessage = user.Msg
 			users[log.ID] = user
@@ -279,22 +339,6 @@ func trimRestoreMessages(logs []memory.MessageLog, selfID int64) []memory.Messag
 	return logs[keepFrom:]
 }
 
-func transcriptReferenceVersions(payload []byte) []string {
-	var message schema.AgenticMessage
-	if sonic.Unmarshal(payload, &message) != nil || message.Extra == nil {
-		return nil
-	}
-	raw, err := sonic.Marshal(message.Extra["reference_versions"])
-	if err != nil {
-		return nil
-	}
-	var versions []string
-	if sonic.Unmarshal(raw, &versions) != nil {
-		return nil
-	}
-	return versions
-}
-
 func assistantHistoryMessage(log memory.MessageLog) *schema.AgenticMessage {
 	text := strings.TrimSpace(log.DisplayContent)
 	if text == "" {
@@ -314,8 +358,25 @@ func msgToPayload(msg *onebot.ConversationMessage) *schema.AgenticMessage {
 	return schema.UserAgenticMessage(fmt.Sprintf("[%d] %s %s(%d): %s", msg.MessageID, msg.Time.Format("2006-01-02 15:04:05"), msg.Nickname, msg.UserID, body))
 }
 
+// conversationMessageFromLog 恢复消息时补齐引用目标的发送者，供自动参考选择
+func (a *Agent) conversationMessageFromLog(log memory.MessageLog) *onebot.ConversationMessage {
+	msg := messageLogToSessionMessage(log)
+	if msg == nil || log.ReplyToMessageID == nil {
+		return msg
+	}
+	reply, err := a.memory.WithContext(a.ctx).GetMessageLogByScope(log.ConversationKind, log.TargetID, *log.ReplyToMessageID)
+	if err == nil && reply != nil {
+		msg.Reply.SenderID = reply.UserID
+	}
+	return msg
+}
+
 // messageLogToSessionMessage 把消息库记录转成会话消息
 func messageLogToSessionMessage(log memory.MessageLog) *onebot.ConversationMessage {
+	var reply *onebot.ReplyInfo
+	if log.ReplyToMessageID != nil {
+		reply = &onebot.ReplyInfo{MessageID: *log.ReplyToMessageID}
+	}
 	return &onebot.ConversationMessage{
 		MessageID:        log.OneBotMessageID,
 		ConversationKind: log.ConversationKind,
@@ -326,5 +387,6 @@ func messageLogToSessionMessage(log memory.MessageLog) *onebot.ConversationMessa
 		FinalContent:     log.DisplayContent,
 		IsMentioned:      log.IsMentioned,
 		Time:             log.MessageTime,
+		Reply:            reply,
 	}
 }

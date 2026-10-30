@@ -10,7 +10,6 @@ import (
 type KnowledgeDetailPageData struct {
 	ReturnTo, CurrentURL string
 	Detail               services.KnowledgeDetail
-	SelfID               int64
 	Flash                *FlashMessage
 }
 
@@ -26,5 +25,5 @@ func knowledgeTitle(item memory.KnowledgeRecord) string {
 	if len(text) > 0 {
 		return string(text)
 	}
-	return memoryKindText(item.Kind)
+	return memoryTypeText(item.MemoryType)
 }

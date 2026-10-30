@@ -1,7 +1,6 @@
 package views
 
 import (
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -59,30 +58,6 @@ func ConnectionText(v bool) string {
 		return "已连接"
 	}
 	return "未连接"
-}
-
-func intimacyDeltaText(delta float64) string {
-	if delta > 0 {
-		return fmt.Sprintf("+%.2f", delta)
-	}
-	return fmt.Sprintf("%.2f", delta)
-}
-
-func intimacyDeltaClass(delta float64) string {
-	if delta > 0 {
-		return "text-secondary"
-	}
-	if delta < 0 {
-		return "text-error"
-	}
-	return "text-base-content/60"
-}
-
-func intimacyReasonText(reason string) string {
-	if text := strings.TrimSpace(reason); text != "" {
-		return text
-	}
-	return "未记录原因"
 }
 
 func flashJSON(flash *FlashMessage) string {

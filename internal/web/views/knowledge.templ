@@ -16,7 +16,7 @@ templ KnowledgeListBody(data KnowledgeListPageData) {
 		<section class="card overflow-hidden">
 			<div class="overflow-x-auto">
 				<table class="table table-fixed w-full admin-memory-table">
-					<thead><tr><th class="w-[42%]">内容</th><th class="w-[20%]">对象与类型</th><th class="w-[10%]">状态</th><th class="w-[16%]">来源消息</th><th class="w-[12%] hidden min-[1200px]:table-cell">更新时间</th></tr></thead>
+					<thead><tr><th class="w-[48%]">内容</th><th class="w-[22%]">主体与类型</th><th class="w-[10%]">状态</th><th class="w-[10%]">置顶</th><th class="w-[10%] hidden min-[1200px]:table-cell">更新时间</th></tr></thead>
 					<tbody>
 						for _,item:=range data.Items {
 							<tr>
@@ -31,17 +31,15 @@ templ KnowledgeListBody(data KnowledgeListPageData) {
 									</a>
 								</td>
 								<td>
-									<p class="font-medium break-words">{ knowledgeSubject(item,data.SelfID,data.Metadata[item.ID]) }</p>
-									<p class="mt-1 text-xs text-base-content/60">{ memoryKindText(item.Kind) } · { conversationText(item.ConversationKind, item.TargetID) }</p>
-									if item.SubjectUserID>0 {
-										<a class="mt-1 block text-xs link link-hover text-base-content/60" href={ templ.SafeURL(WithQuery(data.Workspace.CurrentURL, "user_id", fmt.Sprint(item.SubjectUserID), "page", "1")) }>QQ { fmt.Sprint(item.SubjectUserID) }</a>
-									}
+									<p class="font-medium break-words">{ memorySubjectText(item.SubjectType, item.SubjectTarget) }</p>
+									<p class="mt-1 text-xs text-base-content/60">{ memoryTypeText(item.MemoryType) } · { memorySubjectTypeText(item.SubjectType) }</p>
 								</td>
 								<td class="whitespace-nowrap"><span class={ memoryStatusClass(item.Status) }>{ memoryStatusText(item.Status) }</span></td>
-								<td>
-									<span class={ ternaryString(data.Metadata[item.ID].ValidMessages() > 0, "text-secondary text-xs", "text-base-content/60 text-xs") }>{ evidenceSummary(data.Metadata[item.ID]) }</span>
-									if data.Metadata[item.ID].Recalled > 0 && data.Metadata[item.ID].ValidMessages() > 0 {
-										<p class="mt-1 text-xs text-warning">另有 { fmt.Sprint(data.Metadata[item.ID].Recalled) } 条原文已撤回</p>
+								<td class="whitespace-nowrap">
+									if item.Pinned {
+										<span class="badge badge-primary badge-soft badge-sm">置顶</span>
+									} else {
+										<span class="text-xs text-base-content/45">否</span>
 									}
 								</td>
 								<td class="hidden whitespace-nowrap text-xs text-base-content/60 min-[1200px]:table-cell">{ formatTime(item.UpdatedAt) }</td>
@@ -71,70 +69,27 @@ templ KnowledgeDetailBody(data KnowledgeDetailPageData) {
 		<header class="flex items-start justify-between gap-6">
 			<div>
 				<div class="flex items-center gap-3">
-					<h1 class="admin-page-title font-semibold">
-						{ knowledgeTitle(data.Detail.Item) }
-					</h1>
-					<span class={ memoryStatusClass(data.Detail.Item.Status) }>
-						{ memoryStatusText(data.Detail.Item.Status) }
-					</span>
-					if data.Detail.Item.IsCore {
-						<span class="badge badge-primary badge-soft badge-sm">核心记忆</span>
+					<h1 class="admin-page-title font-semibold">{ knowledgeTitle(data.Detail.Item) }</h1>
+					<span class={ memoryStatusClass(data.Detail.Item.Status) }>{ memoryStatusText(data.Detail.Item.Status) }</span>
+					if data.Detail.Item.Pinned {
+						<span class="badge badge-primary badge-soft badge-sm">置顶记忆</span>
 					}
 				</div>
-				<p class="mt-2 text-sm text-base-content/60">
-					{ memoryKindText(data.Detail.Item.Kind) } · { conversationText(data.Detail.Item.ConversationKind, data.Detail.Item.TargetID) } · { memorySubjectText(data.Detail.Item.SubjectUserID,data.SelfID) }
-					if data.Detail.Item.SubjectUserID>0 {
-						<span>QQ { fmt.Sprint(data.Detail.Item.SubjectUserID) }</span>
-					}
-				</p>
-			</div>@KnowledgeStatusForm("knowledge-status", data.Detail.Item.ID, data.Detail.Item.Status, data.CurrentURL)
+				<p class="mt-2 text-sm text-base-content/60">{ memoryTypeText(data.Detail.Item.MemoryType) } · { memorySubjectText(data.Detail.Item.SubjectType, data.Detail.Item.SubjectTarget) }</p>
+			</div>
+			@KnowledgeStatusForm("knowledge-status", data.Detail.Item.ID, data.Detail.Item.Status, data.CurrentURL)
 		</header>
 		<section class="card">
 			<div class="card-body gap-4 p-5">
-				<p class="whitespace-pre-wrap break-words text-base leading-8">
-					{ data.Detail.Item.Content }
-				</p>
+				<p class="whitespace-pre-wrap break-words text-base leading-8">{ data.Detail.Item.Content }</p>
 			</div>
 		</section>
 		<section class="card">
 			<div class="card-body gap-4 p-5">
-				<h2 class="text-lg font-semibold text-base-content">修订历史与来源</h2>
-			@KnowledgeRevisionList(data.Detail.Revisions)
-			<div class="divider my-1"></div>
-			@KnowledgeSourceList(data.Detail.Sources, data.Detail.Topics, data.CurrentURL)
-			if len(data.Detail.LegacySources)>0 || len(data.Detail.LegacyRelations)>0 {
-				<details class="mt-3 rounded-xl border border-dashed border-base-300 px-4 py-3">
-					<summary class="cursor-pointer text-sm font-medium">历史资料（旧版证据与关系）</summary>
-					<div class="mt-3 space-y-3 text-sm text-base-content/70">
-						if len(data.Detail.LegacySources)>0 {
-							<div>
-								<h4 class="text-xs font-semibold">旧版原文证据</h4>
-								for _,msg:=range data.Detail.LegacySources {
-									<p class="mt-2 whitespace-pre-wrap break-words">{ displayText(msg.Nickname,fmt.Sprint(msg.UserID)) }：{ msg.TextContent }</p>
-								}
-							</div>
-						}
-						if len(data.Detail.LegacyRelations)>0 {
-							<div>
-								<h4 class="text-xs font-semibold">旧版知识关系</h4>
-								for _,relation:=range data.Detail.LegacyRelations {
-									<p class="mt-2">{ memoryRelationKindText(relation.Kind) } · { memoryStatusText(relation.Status) } · #{ fmt.Sprint(relation.OtherID) } { relation.OtherLabel }</p>
-								}
-							</div>
-						}
-					</div>
-				</details>
-			}
+				<h2 class="text-lg font-semibold text-base-content">修订历史</h2>
+				@KnowledgeRevisionList(data.Detail.Revisions)
 			</div>
 		</section>
-		<div class="flex items-center justify-between">
-			if data.Detail.Page>1 {
-				<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(WithQuery(data.CurrentURL, "page", fmt.Sprint(data.Detail.Page-1))) }>上一页依据</a>
-			}
-			if data.Detail.HasMore {
-				<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(WithQuery(data.CurrentURL, "page", fmt.Sprint(data.Detail.Page+1))) }>下一页依据</a>
-			}
-		</div>
 	</div>
 }
 
@@ -151,54 +106,25 @@ templ KnowledgeStatusForm(kind string, id uint, status string, returnTo string) 
 }
 
 templ KnowledgeRevisionList(revisions []memory.KnowledgeRevision) {
-	<div>
-		<h3 class="text-sm font-semibold text-base-content">修订历史</h3>
-		if len(revisions)==0 {
-			<p class="mt-3 rounded-xl border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/60">暂无修订记录</p>
-		}
-		<div class="mt-3 space-y-2">
-			for _,revision:=range revisions {
-				<details class="rounded-xl border border-base-300 bg-base-200/50 px-4 py-3">
-					<summary class="flex cursor-pointer items-center justify-between gap-3 text-sm">
-						<span>版本 { fmt.Sprint(revision.Version) }</span>
-						<time class="text-xs text-base-content/60">{ formatTime(revision.CreatedAt) }</time>
-					</summary>
-					<div class="mt-3 space-y-2 text-sm leading-6">
-						if revision.AfterContent!="" {
-							<p class="whitespace-pre-wrap break-words">{ revision.AfterContent }</p>
-						}
-						if revision.Reason!="" {
-							<p class="text-xs text-base-content/60">原因：{ revision.Reason }</p>
-						}
-					</div>
-				</details>
-			}
-		</div>
-	</div>
-}
-
-templ KnowledgeSourceList(messages []memory.MessageLog, topics map[uint]uint, returnTo string) {
-	<div>
-		<h3 class="text-sm font-semibold text-base-content">来源消息</h3>
-		if len(messages)==0 {
-			<p class="mt-3 rounded-xl border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/60">这条记忆没有关联的具体消息</p>
-		}
-		<div class="mt-3 space-y-4">
-			for _,msg:=range messages {
-				<div class="text-sm">
-					<div class="flex flex-wrap gap-2 text-xs text-base-content/60">
-						<span>{ displayText(msg.Nickname,fmt.Sprint(msg.UserID)) } · { conversationText(msg.ConversationKind,msg.TargetID) }</span>
-						<time>{ formatTime(msg.MessageTime) }</time>
-						if topicID:=topics[msg.ID];topicID>0 {
-							<a class="link text-secondary" href={ templ.SafeURL(WithQuery(fmt.Sprintf("/admin/topics/%d", topicID), "return_to", returnTo)) }>查看话题</a>
-						}
-					</div>
-					if msg.RecalledAt!=nil {
-						<p class="mt-1 text-xs text-warning">消息已撤回，原文仍作为历史保留</p>
+	if len(revisions)==0 {
+		<p class="rounded-xl border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/60">暂无修订记录</p>
+	}
+	<div class="space-y-2">
+		for _,revision:=range revisions {
+			<details class="rounded-xl border border-base-300 bg-base-200/50 px-4 py-3">
+				<summary class="flex cursor-pointer items-center justify-between gap-3 text-sm">
+					<span>版本 { fmt.Sprint(revision.Version) }</span>
+					<time class="text-xs text-base-content/60">{ formatTime(revision.CreatedAt) }</time>
+				</summary>
+				<div class="mt-3 space-y-2 text-sm leading-6">
+					if revision.AfterContent!="" {
+						<p class="whitespace-pre-wrap break-words">{ revision.AfterContent }</p>
 					}
-					<p class="mt-1 whitespace-pre-wrap break-words leading-6">{ msg.TextContent }</p>
+					if revision.Reason!="" {
+						<p class="text-xs text-base-content/60">原因：{ revision.Reason }</p>
+					}
 				</div>
-			}
-		</div>
+			</details>
+		}
 	</div>
 }

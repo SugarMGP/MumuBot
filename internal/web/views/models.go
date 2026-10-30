@@ -107,10 +107,8 @@ type StickerListPageData struct {
 
 type KnowledgeListPageData struct {
 	Workspace KnowledgeWorkspaceData
-	Metadata  map[uint]services.KnowledgeMetadata
 	Sort      SortToolbarData
 	Items     []memory.KnowledgeRecord
-	SelfID    int64
 	Meta      ListMeta
 	Flash     *FlashMessage
 }

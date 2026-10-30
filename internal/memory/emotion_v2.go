@@ -24,7 +24,6 @@ type EmotionChange struct {
 	Intensity       string
 	DecayClass      string
 	Reason          string
-	SourceMeta      string
 	ExpectedVersion uint64
 }
 
@@ -110,7 +109,7 @@ func (m *Manager) UpdateEmotions(ctx context.Context, changes []EmotionChange) (
 				err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("about_user_id=? AND kind=?", change.AboutUserID, kind).Take(&state).Error
 			}
 			if err == gorm.ErrRecordNotFound {
-				state = EmotionState{AboutUserID: change.AboutUserID, Kind: kind, Strength: strength, OccurredAt: now, AnchorAt: now, DecayClass: decayClass, Reason: strings.TrimSpace(change.Reason), SourceMeta: normalizedSourceMeta(change.SourceMeta), Version: 1}
+				state = EmotionState{AboutUserID: change.AboutUserID, Kind: kind, Strength: strength, OccurredAt: now, AnchorAt: now, DecayClass: decayClass, Reason: strings.TrimSpace(change.Reason), Version: 1}
 				if state.DecayClass == "" {
 					state.DecayClass = "lingering"
 				}
@@ -126,7 +125,7 @@ func (m *Manager) UpdateEmotions(ctx context.Context, changes []EmotionChange) (
 				}
 				if err := tx.Create(&EmotionRevision{
 					EmotionID: state.ID, BeforeStrength: 0, AfterStrength: state.Strength,
-					Reason: state.Reason, SourceMeta: state.SourceMeta, Version: state.Version,
+					Reason: state.Reason, Version: state.Version,
 				}).Error; err != nil {
 					return err
 				}
@@ -144,9 +143,6 @@ func (m *Manager) UpdateEmotions(ctx context.Context, changes []EmotionChange) (
 				if state.Reason == "" && settled {
 					state.Reason = "情绪已平复"
 				}
-				if change.SourceMeta != "" {
-					state.SourceMeta = normalizedSourceMeta(change.SourceMeta)
-				}
 				if decayClass != "" {
 					state.DecayClass = decayClass
 				}
@@ -160,7 +156,7 @@ func (m *Manager) UpdateEmotions(ctx context.Context, changes []EmotionChange) (
 				if err := tx.Save(&state).Error; err != nil {
 					return err
 				}
-				if err := tx.Create(&EmotionRevision{EmotionID: state.ID, BeforeStrength: before, AfterStrength: state.Strength, Reason: state.Reason, SourceMeta: state.SourceMeta, Version: state.Version}).Error; err != nil {
+				if err := tx.Create(&EmotionRevision{EmotionID: state.ID, BeforeStrength: before, AfterStrength: state.Strength, Reason: state.Reason, Version: state.Version}).Error; err != nil {
 					return err
 				}
 			}

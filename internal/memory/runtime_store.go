@@ -12,52 +12,43 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// AllocateInputSeq 在事务内分配会话输入序号
-func (m *Manager) AllocateInputSeq(tx *gorm.DB, kind string, targetID int64) (uint64, error) {
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ConversationSession{ConversationKind: kind, TargetID: targetID}).Error; err != nil {
-		return 0, err
-	}
-	var session ConversationSession
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&session).Error; err != nil {
-		return 0, err
-	}
-	session.NextInputSeq++
-	if err := tx.Model(&ConversationSession{}).Where("conversation_kind=? AND target_id=?", kind, targetID).Updates(map[string]any{"next_input_seq": session.NextInputSeq, "updated_at": time.Now()}).Error; err != nil {
-		return 0, err
-	}
-	return session.NextInputSeq, nil
+var defaultReferenceSeen = []byte(`{"auto":{},"tool":{}}`)
+
+func ensureConversationSession(tx *gorm.DB, kind string, targetID int64) error {
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ConversationSession{
+		ConversationKind: kind, TargetID: targetID, ReferenceSeen: defaultReferenceSeen,
+	}).Error
 }
 
-// AllocateMessageRef 在消息落库事务内分配稳定的 m 编号
-func (m *Manager) AllocateMessageRef(tx *gorm.DB, kind string, targetID int64) (string, error) {
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ConversationSession{ConversationKind: kind, TargetID: targetID}).Error; err != nil {
-		return "", err
-	}
-	var session ConversationSession
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&session).Error; err != nil {
-		return "", err
-	}
-	session.NextMessageRef++
-	if err := tx.Model(&ConversationSession{}).Where("conversation_kind=? AND target_id=?", kind, targetID).Updates(map[string]any{"next_message_ref": session.NextMessageRef, "updated_at": time.Now()}).Error; err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("m%d", session.NextMessageRef), nil
+// AllocateInputSeq 在事务内分配会话输入序号
+func (m *Manager) AllocateInputSeq(tx *gorm.DB, kind string, targetID int64) (uint64, error) {
+	_, end, err := allocateSequenceRange(tx, kind, targetID, "next_input_seq", 1)
+	return end, err
 }
 
 // AllocateVisibleSeq 为一个即将进入模型的条目分配可见序号
 func (m *Manager) AllocateVisibleSeq(tx *gorm.DB, kind string, targetID int64) (uint64, error) {
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ConversationSession{ConversationKind: kind, TargetID: targetID}).Error; err != nil {
-		return 0, err
+	_, end, err := allocateSequenceRange(tx, kind, targetID, "next_visible_seq", 1)
+	return end, err
+}
+
+// allocateSequenceRange 一次推进会话序号并返回本次分配的连续区间
+func allocateSequenceRange(tx *gorm.DB, kind string, targetID int64, column string, count uint64) (uint64, uint64, error) {
+	if count == 0 {
+		return 0, 0, fmt.Errorf("序号分配数量无效")
 	}
-	var session ConversationSession
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&session).Error; err != nil {
-		return 0, err
+	if err := ensureConversationSession(tx, kind, targetID); err != nil {
+		return 0, 0, err
 	}
-	session.NextVisibleSeq++
-	if err := tx.Model(&ConversationSession{}).Where("conversation_kind=? AND target_id=?", kind, targetID).Updates(map[string]any{"next_visible_seq": session.NextVisibleSeq, "updated_at": time.Now()}).Error; err != nil {
-		return 0, err
+	var end uint64
+	sql := "UPDATE conversation_sessions SET " + column + "=" + column + "+?,updated_at=now() WHERE conversation_kind=? AND target_id=? RETURNING " + column
+	if err := tx.Raw(sql, count, kind, targetID).Scan(&end).Error; err != nil {
+		return 0, 0, err
 	}
-	return session.NextVisibleSeq, nil
+	if end < count {
+		return 0, 0, fmt.Errorf("会话序号分配失败")
+	}
+	return end - count + 1, end, nil
 }
 
 // AppendTranscript 保存一条工作集记录
@@ -73,10 +64,6 @@ func (m *Manager) AppendTranscript(ctx context.Context, entry *TranscriptEntry) 
 
 // AppendUserTranscript 将已落库的真人消息加入工作集
 func (m *Manager) AppendUserTranscript(ctx context.Context, kind string, targetID int64, logID uint, payload json.RawMessage, runID string) (*TranscriptEntry, error) {
-	inputSeq, err := m.AllocateInputSeq(m.db.WithContext(ctx), kind, targetID)
-	if err != nil {
-		return nil, err
-	}
 	entryKind := "user"
 	var messageLogID *uint
 	if logID == 0 {
@@ -84,27 +71,49 @@ func (m *Manager) AppendUserTranscript(ctx context.Context, kind string, targetI
 	} else {
 		messageLogID = &logID
 	}
-	entry := &TranscriptEntry{
-		ConversationKind: kind, TargetID: targetID, InputSeq: &inputSeq,
-		EntryKind: entryKind, MessageLogID: messageLogID, RunID: runID, Payload: payload,
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
 	}
-	if err := m.AppendTranscript(ctx, entry); err != nil {
+	var entry *TranscriptEntry
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		inputSeq, err := m.AllocateInputSeq(tx, kind, targetID)
+		if err != nil {
+			return err
+		}
+		entry = &TranscriptEntry{
+			ConversationKind: kind, TargetID: targetID, InputSeq: &inputSeq,
+			EntryKind: entryKind, MessageLogID: messageLogID, RunID: runID, Payload: payload,
+		}
+		return tx.Create(entry).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return entry, nil
 }
 
-// PendingInputs 返回尚未进入模型的真人输入
+// PendingInputs 返回尚未进入模型的输入，包括真人消息、观察和会话间消息
 func (m *Manager) PendingInputs(ctx context.Context, kind string, targetID int64) ([]TranscriptEntry, error) {
 	var rows []TranscriptEntry
-	err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND entry_kind IN ('user','observation') AND visible_seq IS NULL", kind, targetID).Order("input_seq,id").Find(&rows).Error
+	err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND entry_kind IN ('user','observation','agent_message') AND visible_seq IS NULL", kind, targetID).Order("input_seq,id").Find(&rows).Error
 	return rows, err
 }
 
-// MarkVisible 在模型请求成功后为一批工作集条目分配可见序号
-func (m *Manager) MarkVisible(ctx context.Context, ids []uint) (map[uint]uint64, error) {
+// PendingReferences 返回已经写入但尚未成功送进模型的参考条目。
+func (m *Manager) PendingReferences(ctx context.Context, kind string, targetID int64) ([]TranscriptEntry, error) {
+	var rows []TranscriptEntry
+	err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND entry_kind='internal_reference' AND visible_seq IS NULL", kind, targetID).Order("id").Find(&rows).Error
+	return rows, err
+}
+
+// MarkVisibleAndPersistReceipts 在模型成功后同时推进 visible_seq 和会话级 reference_seen。
+func (m *Manager) MarkVisibleAndPersistReceipts(ctx context.Context, kind string, targetID int64, ids []uint, receipt *ReferenceReceipt) (map[uint]uint64, error) {
+	return m.markVisibleAndPersistReceipts(ctx, kind, targetID, ids, receipt)
+}
+
+func (m *Manager) markVisibleAndPersistReceipts(ctx context.Context, kind string, targetID int64, ids []uint, receipt *ReferenceReceipt) (map[uint]uint64, error) {
 	result := map[uint]uint64{}
-	if len(ids) == 0 {
+	if len(ids) == 0 && (receipt == nil || len(receipt.Auto) == 0 && len(receipt.Tool) == 0 && len(receipt.AutoDelete) == 0) {
 		return result, nil
 	}
 	unique := make([]uint, 0, len(ids))
@@ -116,27 +125,129 @@ func (m *Manager) MarkVisible(ctx context.Context, ids []uint) (map[uint]uint64,
 		}
 	}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, id := range unique {
-			var row TranscriptEntry
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", id).Take(&row).Error; err != nil {
+		rows := make([]TranscriptEntry, 0, len(unique))
+		if len(unique) > 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id IN ? AND conversation_kind=? AND target_id=?", unique, kind, targetID).
+				Find(&rows).Error; err != nil {
 				return err
 			}
-			if row.VisibleSeq != nil {
-				result[id] = *row.VisibleSeq
-				continue
+			if len(rows) != len(unique) {
+				return fmt.Errorf("transcript 记录不存在或不属于当前会话")
 			}
-			seq, err := m.AllocateVisibleSeq(tx, row.ConversationKind, row.TargetID)
+		}
+		byID := make(map[uint]TranscriptEntry, len(rows))
+		for _, row := range rows {
+			byID[row.ID] = row
+			if row.VisibleSeq != nil {
+				result[row.ID] = *row.VisibleSeq
+			}
+		}
+		unvisible := make([]uint, 0, len(unique))
+		for _, id := range unique {
+			if byID[id].VisibleSeq == nil {
+				unvisible = append(unvisible, id)
+			}
+		}
+		if len(unvisible) > 0 {
+			start, _, err := allocateSequenceRange(tx, kind, targetID, "next_visible_seq", uint64(len(unvisible)))
 			if err != nil {
 				return err
 			}
-			if err := tx.Model(&TranscriptEntry{}).Where("id=?", id).Update("visible_seq", seq).Error; err != nil {
+			values := make([]string, 0, len(unvisible))
+			args := make([]any, 0, len(unvisible)*2)
+			for i, id := range unvisible {
+				seq := start + uint64(i)
+				values = append(values, "(?::bigint,?::bigint)")
+				args = append(args, int64(id), int64(seq))
+				result[id] = seq
+			}
+			sql := "UPDATE conversation_transcript SET visible_seq=v.seq::bigint FROM (VALUES " +
+				strings.Join(values, ",") + ") AS v(id,seq) WHERE conversation_transcript.id=v.id::bigint"
+			if err := tx.Exec(sql, args...).Error; err != nil {
 				return err
 			}
-			result[id] = seq
+		}
+		if kind != "" && targetID > 0 && receipt != nil && (len(receipt.Auto) > 0 || len(receipt.Tool) > 0 || len(receipt.AutoDelete) > 0) {
+			if err := m.mergeReferenceSeen(tx, kind, targetID, receipt); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
 	return result, err
+}
+
+func (m *Manager) mergeReferenceSeen(tx *gorm.DB, kind string, targetID int64, receipt *ReferenceReceipt) error {
+	if err := ensureConversationSession(tx, kind, targetID); err != nil {
+		return err
+	}
+	var row ConversationSession
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&row).Error; err != nil {
+		return err
+	}
+	seen := ReferenceSeen{Auto: map[string]string{}, Tool: map[string]string{}}
+	if len(row.ReferenceSeen) > 0 {
+		_ = sonic.Unmarshal(row.ReferenceSeen, &seen)
+	}
+	if seen.Auto == nil {
+		seen.Auto = map[string]string{}
+	}
+	if seen.Tool == nil {
+		seen.Tool = map[string]string{}
+	}
+	for key, version := range receipt.Auto {
+		seen.Auto[key] = version
+	}
+	for key, version := range receipt.Tool {
+		seen.Tool[key] = version
+	}
+	for _, key := range receipt.AutoDelete {
+		delete(seen.Auto, key)
+	}
+	raw, err := sonic.Marshal(seen)
+	if err != nil {
+		return err
+	}
+	return tx.Model(&ConversationSession{}).Where("conversation_kind=? AND target_id=?", kind, targetID).Updates(map[string]any{"reference_seen": raw, "updated_at": time.Now()}).Error
+}
+
+// ReferenceSeenForSession 读取会话级参考账本。
+func (m *Manager) ReferenceSeenForSession(ctx context.Context, kind string, targetID int64) (ReferenceSeen, error) {
+	var row ConversationSession
+	if err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID).Take(&row).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ReferenceSeen{Auto: map[string]string{}, Tool: map[string]string{}}, nil
+		}
+		return ReferenceSeen{}, err
+	}
+	seen := ReferenceSeen{Auto: map[string]string{}, Tool: map[string]string{}}
+	if len(row.ReferenceSeen) > 0 {
+		_ = sonic.Unmarshal(row.ReferenceSeen, &seen)
+	}
+	if seen.Auto == nil {
+		seen.Auto = map[string]string{}
+	}
+	if seen.Tool == nil {
+		seen.Tool = map[string]string{}
+	}
+	return seen, nil
+}
+
+// ResetReferenceSeen 用压缩 baseline 的 key/version 重置会话自动参考账本。
+func (m *Manager) ResetReferenceSeen(tx *gorm.DB, kind string, targetID int64, auto map[string]string) error {
+	if err := ensureConversationSession(tx, kind, targetID); err != nil {
+		return err
+	}
+	if auto == nil {
+		auto = map[string]string{}
+	}
+	seen := ReferenceSeen{Auto: auto, Tool: map[string]string{}}
+	raw, err := sonic.Marshal(seen)
+	if err != nil {
+		return err
+	}
+	return tx.Model(&ConversationSession{}).Where("conversation_kind=? AND target_id=?", kind, targetID).Updates(map[string]any{"reference_seen": raw, "updated_at": time.Now()}).Error
 }
 
 // ResumeToolTranscript 读取同一运行中相同 CallID 的已有回执，避免重复执行工具
@@ -209,15 +320,16 @@ func (m *Manager) GetTranscript(ctx context.Context, id uint) (*TranscriptEntry,
 }
 
 // VisibleTranscript 返回检查点之后的可见条目和尚未闭合的非用户条目
+// VisibleTranscript 返回检查点之后需要恢复进上下文的工作集记录
+// pending 的 user/observation/agent_message/internal_reference 由各自的 pending 查询恢复
 func (m *Manager) VisibleTranscript(ctx context.Context, kind string, targetID int64, afterVisibleSeq uint64) ([]TranscriptEntry, error) {
 	var rows []TranscriptEntry
 	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID)
 	if afterVisibleSeq > 0 {
-		q = q.Where("(visible_seq>? OR visible_seq IS NULL)", afterVisibleSeq)
+		q = q.Where("(visible_seq>? OR (visible_seq IS NULL AND entry_kind IN ('assistant','tool')))", afterVisibleSeq)
 	} else {
-		q = q.Where("visible_seq IS NOT NULL OR entry_kind<>'user'")
+		q = q.Where("visible_seq IS NOT NULL OR entry_kind IN ('assistant','tool')")
 	}
-	q = q.Where("entry_kind<>'user' OR visible_seq IS NOT NULL")
 	err := q.Order("visible_seq NULLS LAST,id").Find(&rows).Error
 	return rows, err
 }
@@ -286,18 +398,6 @@ func (m *Manager) EnsureToolTranscript(ctx context.Context, entry *TranscriptEnt
 	return &existing, false, nil
 }
 
-// ParseVersionList 读取检查点中的引用版本列表
-func ParseVersionList(raw []byte) ([]string, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	var result []string
-	if err := sonic.Unmarshal(raw, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
 type TranscriptSeed struct {
 	EntryKind    string
 	MessageLogID uint
@@ -305,7 +405,7 @@ type TranscriptSeed struct {
 	CreatedAt    time.Time
 }
 
-// SeedTranscriptIfEmpty 把升级前近期原文变成可见工作集，已有工作集时不写入
+// SeedTranscriptIfEmpty 把近期原文变成可见工作集，已有工作集时不写入
 func (m *Manager) SeedTranscriptIfEmpty(ctx context.Context, kind string, targetID int64, seeds []TranscriptSeed) ([]TranscriptEntry, bool, error) {
 	if kind == "" || targetID <= 0 || len(seeds) == 0 {
 		return nil, false, nil

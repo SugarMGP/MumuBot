@@ -100,7 +100,7 @@ func botMentionDisplayName(botName string) string {
 
 // afterMessagePersisted 只由新建的非自身消息调用，重复事件不增加画像计数
 func (a *Agent) afterMessagePersisted(ctx context.Context, msg *onebot.ConversationMessage) {
-	// 思考调度前先更新画像，让本轮读取的昵称、活跃信息和好感度主体已就绪
+	// 思考调度前先更新成员昵称和会话基础信息
 	a.updateMember(ctx, msg)
 	a.wg.Add(1)
 	go func() {

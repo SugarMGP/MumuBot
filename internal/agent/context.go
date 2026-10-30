@@ -113,6 +113,7 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		GetNewMessagesCallback: func(callCtx context.Context) (any, error) {
 			return a.readNewMessages(callCtx, session)
 		},
+		SessionMessageCallback: a.deliverSessionMessage,
 		ReadForwardCallback: func(callCtx context.Context, id string, index int) (any, error) {
 			return a.readForward(callCtx, id, index)
 		},
@@ -195,7 +196,7 @@ func (a *Agent) readNewMessages(ctx context.Context, session *Session) (any, err
 			tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, user.TranscriptID)
 		}
 		messages = append(messages, map[string]any{
-			"message_ref": user.Ref,
+			"message_id":  user.MessageID,
 			"sender_id":   user.SenderID,
 			"nickname":    user.Nickname,
 			"content":     user.Text,

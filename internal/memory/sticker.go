@@ -65,10 +65,38 @@ func (m *Manager) CollectedStickerHashes(hashes []string) (map[string]bool, erro
 	return collected, nil
 }
 
-// SearchStickers 搜索表情包
-func (m *Manager) SearchStickers(keyword string, limit int) ([]Sticker, error) {
-	var stickers []Sticker
-	q := m.db.Model(&Sticker{})
+type StickerPage struct {
+	Items      []Sticker `json:"items"`
+	NextCursor string    `json:"next_cursor,omitempty"`
+	HasMore    bool      `json:"has_more"`
+}
+
+type StickerFilter struct {
+	Keyword string `json:"keyword"`
+}
+
+func stickerCursorCondition(cursor PageCursor) (string, []any) {
+	useCount := int64(cursor.LastKey)
+	return "(use_count < ? OR (use_count = ? AND (updated_at < ? OR (updated_at = ? AND id < ?))))",
+		[]any{useCount, useCount, cursor.LastTime, cursor.LastTime, cursor.LastID}
+}
+
+func (m *Manager) SearchStickerPage(ctx context.Context, keyword, cursorRaw string, limit int) (StickerPage, error) {
+	limit = NormalizeLimit(limit)
+	filter := StickerFilter{Keyword: strings.TrimSpace(keyword)}
+	cursor, err := DecodeCursor(cursorRaw)
+	if err != nil {
+		return StickerPage{}, err
+	}
+	if cursor.FilterHash == "" {
+		cursor.FilterHash = CursorFilterHash(filter)
+	}
+	if err := ValidateCursorFilter(cursor, filter); err != nil {
+		return StickerPage{}, err
+	}
+	snapshot := CursorTimeOrNow(cursor)
+	var rows []Sticker
+	q := m.db.WithContext(ctx).Model(&Sticker{}).Where("updated_at<=?", snapshot)
 	if keyword != "" {
 		keywords := strings.Fields(keyword)
 		likeConditions := make([]string, 0, len(keywords))
@@ -79,8 +107,23 @@ func (m *Manager) SearchStickers(keyword string, limit int) ([]Sticker, error) {
 		}
 		q = q.Where(strings.Join(likeConditions, " OR "), args...)
 	}
-	err := q.Order("use_count DESC, updated_at DESC").Limit(limit).Find(&stickers).Error
-	return stickers, err
+	if cursor.LastID != 0 {
+		condition, args := stickerCursorCondition(cursor)
+		q = q.Where(condition, args...)
+	}
+	if err := q.Order("use_count DESC,updated_at DESC,id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
+		return StickerPage{}, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	page := StickerPage{Items: rows, HasMore: hasMore}
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		page.NextCursor = NewPageCursor("sticker", float64(last.UseCount), last.UpdatedAt, last.ID, snapshot, filter)
+	}
+	return page, nil
 }
 
 // UpdateStickerUsage 更新表情包使用记录

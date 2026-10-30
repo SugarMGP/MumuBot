@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -75,20 +76,8 @@ func (m *Manager) CleanupToolResults(ctx context.Context, minAge time.Duration) 
 	if err != nil {
 		return err
 	}
-	var refs []string
-	if err := m.db.WithContext(ctx).Model(&TranscriptEntry{}).Where("result_ref<>''").Distinct().Pluck("result_ref", &refs).Error; err != nil {
-		return err
-	}
-	var topicTexts []string
-	if err := m.db.WithContext(ctx).Model(&TopicSummaryRow{}).Select("summary_json::text").Scan(&topicTexts).Error; err != nil {
-		return err
-	}
-	var sourceTexts []string
-	if err := m.db.WithContext(ctx).Model(&KnowledgeRecord{}).Select("source_meta::text").Scan(&sourceTexts).Error; err != nil {
-		return err
-	}
-	referenceText := strings.Join(refs, "\n") + "\n" + strings.Join(topicTexts, "\n") + "\n" + strings.Join(sourceTexts, "\n")
 	cutoff := time.Now().Add(-minAge)
+	remaining := make(map[string]string)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
 			continue
@@ -97,11 +86,54 @@ func (m *Manager) CleanupToolResults(ctx context.Context, minAge time.Duration) 
 		if infoErr != nil || info.ModTime().After(cutoff) {
 			continue
 		}
-		ref := "r" + strings.TrimSuffix(entry.Name(), ".txt")
-		if strings.Contains(referenceText, ref) {
-			continue
+		remaining["r"+strings.TrimSuffix(entry.Name(), ".txt")] = filepath.Join(dir, entry.Name())
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	var refs []string
+	if err := m.db.WithContext(ctx).Model(&TranscriptEntry{}).Where("result_ref<>''").Distinct().Pluck("result_ref", &refs).Error; err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		delete(remaining, ref)
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	scanText := func(rows *sql.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var text string
+			if err := rows.Scan(&text); err != nil {
+				return err
+			}
+			for ref := range remaining {
+				if strings.Contains(text, ref) {
+					delete(remaining, ref)
+				}
+			}
 		}
-		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+		return rows.Err()
+	}
+	topicRows, err := m.db.WithContext(ctx).Model(&TopicSummaryRow{}).Select("summary_json::text").Rows()
+	if err != nil {
+		return err
+	}
+	if err := scanText(topicRows); err != nil {
+		return err
+	}
+	if len(remaining) > 0 {
+		memoryRows, err := m.db.WithContext(ctx).Model(&KnowledgeRecord{}).Select("content").Rows()
+		if err != nil {
+			return err
+		}
+		if err := scanText(memoryRows); err != nil {
+			return err
+		}
+	}
+	for _, path := range remaining {
+		if err := os.Remove(path); err != nil {
 			return err
 		}
 	}

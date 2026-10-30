@@ -20,20 +20,19 @@ import (
 
 // SessionContext 会话上下文能力：消息编号与媒体引用都由会话维护
 type SessionContext interface {
-	RegisterMessage(messageID int64) string
-	ResolveMessageRef(ref string) (int64, bool)
-	ResolveMessageLogRef(ref string) (uint, bool)
 	BeginToolTranscript(ctx context.Context, runID, toolName, callID, arguments string) (id uint, existingResult string, resumed bool, err error)
-	FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, resultRef string) (string, *schema.ToolResult, error)
+	FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, resultRef string, receipts map[string]string) (string, *schema.ToolResult, error)
 	RegisterMediaRefs(refs []media.Ref)
 	ResolveMediaByHash(hash string) (media.Ref, bool)
 	PendingAfter(seq uint64) []PendingMessage
+	PendingAgentMessages() []PendingMessage
 	MarkInjected(seq uint64)
 }
 
 // PendingMessage 待注入模型上下文的消息
 type PendingMessage struct {
 	ArrivalSeq   uint64
+	Order        uint64
 	Msg          *schema.AgenticMessage
 	TranscriptID uint
 }

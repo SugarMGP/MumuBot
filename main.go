@@ -39,7 +39,7 @@ func syncConversationContacts(botClient *onebot.Client, memoryMgr *memory.Manage
 	for _, contact := range contacts {
 		rows = append(rows, memory.ContactSnapshot{
 			Kind: contact.Kind, TargetID: contact.TargetID, Name: contact.Name,
-			RemoteRemark: contact.RemoteRemark, Active: contact.Active, LastSeenAt: contact.LastSeenAt,
+			RemoteRemark: contact.RemoteRemark, Active: contact.Active,
 		})
 	}
 	return memoryMgr.SyncConversationContacts(context.Background(), rows, fetchedAt)

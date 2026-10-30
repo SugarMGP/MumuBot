@@ -24,7 +24,6 @@ type MessageLog struct {
 	ReplyToMessageID *int64     `json:"reply_to_message_id,omitempty"`
 	IsMentioned      bool       `gorm:"not null" json:"is_mentioned"`
 	MessageTime      time.Time  `gorm:"index;not null" json:"message_time"`
-	MessageRef       string     `gorm:"type:text;not null" json:"message_ref"`
 	RecalledAt       *time.Time `json:"recalled_at,omitempty"`
 	MediaRefs        media.Refs `gorm:"column:media_refs;type:jsonb" json:"media_refs,omitempty"`
 }
@@ -56,11 +55,9 @@ func (TopicAssignment) TableName() string { return "topic_assignments" }
 type TopicParticipant struct {
 	UserID   int64  `json:"user_id"`
 	Nickname string `json:"nickname"`
-	Position string `json:"position"`
 }
 
 type TopicSummary struct {
-	Version      int                `json:"version"`
 	Title        string             `json:"title"`
 	Gist         string             `json:"gist"`
 	Participants []TopicParticipant `json:"participants"`
@@ -70,26 +67,12 @@ type TopicSummary struct {
 }
 
 type MemberProfile struct {
-	UserID       int64     `gorm:"primaryKey" json:"user_id"`
-	Nickname     string    `gorm:"type:text;not null" json:"nickname"`
-	LastSeenAt   time.Time `gorm:"not null" json:"last_seen_at"`
-	MessageCount int64     `gorm:"not null" json:"message_count"`
-	Intimacy     float64   `gorm:"not null;default:0" json:"intimacy"`
+	UserID    int64     `gorm:"primaryKey" json:"user_id"`
+	Nickname  string    `gorm:"type:text;not null" json:"nickname"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (MemberProfile) TableName() string { return "member_profiles" }
-
-type MemberIntimacyLog struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	UserID      int64     `gorm:"index;not null" json:"user_id"`
-	Delta       float64   `gorm:"not null" json:"delta"`
-	BeforeValue float64   `gorm:"not null" json:"before_value"`
-	AfterValue  float64   `gorm:"not null" json:"after_value"`
-	Reason      string    `gorm:"type:text;not null;default:''" json:"reason"`
-	CreatedAt   time.Time `json:"created_at"`
-}
-
-func (MemberIntimacyLog) TableName() string { return "member_intimacy_logs" }
 
 type MemberName struct {
 	UserID    int64     `gorm:"primaryKey" json:"user_id"`

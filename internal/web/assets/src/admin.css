@@ -131,7 +131,7 @@
 
   .admin-memory-table { background: #fff; }
   .admin-memory-table td { overflow-wrap: anywhere; }
-  .admin-member-row { display:grid; grid-template-columns:minmax(200px,1fr) minmax(260px,1.25fr) clamp(170px,16vw,220px); gap:clamp(14px,1.2vw,20px); align-items:center; padding:clamp(12px,1vw,16px) clamp(14px,1.4vw,20px); min-height:104px; }
+  .admin-member-row { display:grid; grid-template-columns:minmax(200px,1fr) minmax(260px,1.25fr); gap:clamp(14px,1.2vw,20px); align-items:center; padding:clamp(12px,1vw,16px) clamp(14px,1.4vw,20px); min-height:104px; }
   .admin-member-stat { display:grid; grid-template-columns:1fr 16px; gap:6px 8px; padding:10px 12px; border-radius:var(--admin-inner-radius); background:var(--color-base-200); font-size:var(--admin-caption-size); }
   .admin-member-stat strong { font-size:1.25rem; font-weight:600; grid-row:2; }
   .admin-member-stat svg { grid-column:2; grid-row:1 / 3; align-self:center; }
@@ -673,8 +673,6 @@
 }
 
 @layer components {
-  /* 悬停弹层与触发行之间的透明桥接层：避免鼠标经过空隙时被判定为移出 */
-  .admin-intimacy-popover::before,
   .admin-names-popover::before {
     position: absolute;
     top: -0.6rem;
@@ -683,22 +681,4 @@
     height: 0.6rem;
     content: "";
   }
-
-  /* 好感度变化：悬停停留或点击后显示最近记录 */
-  .admin-intimacy-details { position: relative; line-height: 1.6; }
-  .admin-intimacy-details > summary { list-style: none; }
-  .admin-intimacy-details > summary::marker { content: ""; }
-  .admin-intimacy-details > summary::-webkit-details-marker { display: none; }
-  .admin-intimacy-summary { cursor: pointer; }
-  .admin-intimacy-summary:hover strong { color: var(--color-primary); }
-  .admin-intimacy-popover {
-    position: absolute; z-index: 3; top: calc(100% + 0.5rem); right: 0; width: 320px;
-    max-height: min(360px, 55vh); overflow: auto; padding: 14px 16px;
-    border: 1px solid var(--color-base-300); border-radius: var(--admin-inner-radius);
-    background: rgb(255 250 252 / 0.94); color: var(--color-base-content); text-align: left;
-    box-shadow: 0 12px 32px rgb(49 30 40 / 0.14);
-  }
-  .admin-intimacy-row { padding: 8px 0; border-top: 1px solid rgb(228 223 231 / 0.8); }
-  .admin-intimacy-row:first-of-type { border-top: 0; }
-  .admin-memory-page article:has(.admin-intimacy-details[open]) { position: relative; z-index: 20; }
 }

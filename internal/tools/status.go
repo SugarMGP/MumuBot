@@ -13,18 +13,16 @@ import (
 )
 
 type GetCurrentStatusOutput struct {
-	Success      bool                    `json:"success"`
-	Time         string                  `json:"time"`
-	Group        string                  `json:"group,omitempty"`
-	Peer         string                  `json:"peer,omitempty"`
-	Mood         string                  `json:"mood,omitempty"`
-	Emotions     []memory.CurrentEmotion `json:"emotions,omitempty"`
-	Intimacy     float64                 `json:"intimacy,omitempty"`
-	IntimacyName string                  `json:"intimacy_name,omitempty"`
+	Success  bool                    `json:"success"`
+	Time     string                  `json:"time"`
+	Group    string                  `json:"group,omitempty"`
+	Peer     string                  `json:"peer,omitempty"`
+	Mood     string                  `json:"mood,omitempty"`
+	Emotions []memory.CurrentEmotion `json:"emotions,omitempty"`
 }
 
 func NewGetCurrentStatusTool() (tool.InvokableTool, error) {
-	return utils.InferTool("getCurrentStatus", "读取当前时间、会话对象、具体情感、精力、社交意愿和好感。", getCurrentStatusFunc)
+	return utils.InferTool("getCurrentStatus", "读取当前时间、会话对象、具体情感、精力和交流意愿。", getCurrentStatusFunc)
 }
 
 func getCurrentStatusFunc(ctx context.Context, _ *struct{}) (*GetCurrentStatusOutput, error) {
@@ -42,26 +40,17 @@ func getCurrentStatusFunc(ctx context.Context, _ *struct{}) (*GetCurrentStatusOu
 			if nickname := strings.TrimSpace(profile.Nickname); nickname != "" {
 				output.Peer = fmt.Sprintf("%s(%d)", nickname, tc.TargetID)
 			}
-			output.Intimacy = profile.Intimacy
-			output.IntimacyName = memory.IntimacyLevelName(profile.Intimacy)
 		}
 	}
 	if mood, err := tc.MemoryMgr.GetMoodState(); err == nil && mood != nil {
-		output.Mood = fmt.Sprintf("精力：%s；交流意愿：%s", affectText(mood.Energy), affectText(mood.Sociability))
+		output.Mood = fmt.Sprintf("精力：%s；交流意愿：%s", memory.AffectLevelText(mood.Energy), memory.AffectLevelText(mood.Sociability))
+		tc.MarkReferenceSeen("state:affect", mood.UpdatedAt.UTC().Format("20060102150405"))
 	}
 	output.Emotions, _ = tc.MemoryMgr.CurrentEmotions(ctx, -1, 3)
-	return output, nil
-}
-
-func affectText(value float64) string {
-	switch {
-	case value >= 0.67:
-		return "高"
-	case value <= 0.33:
-		return "低"
-	default:
-		return "一般"
+	for _, emotion := range output.Emotions {
+		tc.MarkReferenceSeen(fmt.Sprintf("emotion:%d", emotion.ID), fmt.Sprintf("v%d:%s", emotion.Version, memory.EmotionStrengthTier(emotion.Strength)))
 	}
+	return output, nil
 }
 
 func weekdayText(weekday time.Weekday) string {

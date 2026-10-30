@@ -15,7 +15,7 @@ func (m *Manager) RenderCheckpointDigest(ctx context.Context, kind string, targe
 		return "", err
 	}
 	if checkpoint == nil {
-		return m.renderLegacyTopicDigest(ctx, kind, targetID)
+		return "", nil
 	}
 	var snapshots []TopicSnapshot
 	if err := sonic.Unmarshal(checkpoint.ActiveTopicVersions, &snapshots); err != nil {
@@ -36,31 +36,6 @@ func (m *Manager) RenderCheckpointDigest(ctx context.Context, kind string, targe
 		topicIDs = append(topicIDs, snapshot.TopicID)
 	}
 	return renderContextDigest(checkpoint.Overview, summaries, topicIDs, checkpoint.ReferenceBaseline), nil
-}
-
-func (m *Manager) renderLegacyTopicDigest(ctx context.Context, kind string, targetID int64) (string, error) {
-	var topics []TopicThreadRow
-	if err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID).Order("updated_at DESC,id DESC").Limit(8).Find(&topics).Error; err != nil {
-		return "", err
-	}
-	var summaries []TopicSummary
-	var topicIDs []uint
-	for _, topic := range topics {
-		var row TopicSummaryRow
-		if err := m.db.WithContext(ctx).Where("topic_id=?", topic.ID).Order("version DESC,id DESC").Take(&row).Error; err != nil {
-			return "", fmt.Errorf("读取历史话题摘要有误: %w", err)
-		}
-		var summary TopicSummary
-		if err := sonic.UnmarshalString(row.SummaryJSON, &summary); err != nil {
-			return "", fmt.Errorf("解析历史话题摘要有误: %w", err)
-		}
-		summaries = append(summaries, summary)
-		topicIDs = append(topicIDs, topic.ID)
-	}
-	if len(summaries) == 0 {
-		return "", nil
-	}
-	return renderContextDigest("以下是升级前保留的历史摘要，仅作旧事参考。", summaries, topicIDs, ""), nil
 }
 
 // RenderCompactionPreview 渲染尚未提交的压缩摘要视图，用于提交前预算校验
@@ -101,20 +76,28 @@ func (m *Manager) RenderCompactionPreview(ctx context.Context, input *Compaction
 		active[id] = true
 	}
 	var existing []TopicThreadRow
-	qExisting := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID)
+	qExisting := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID).Order("id")
 	if input.ExpectedVersion > 0 {
 		qExisting = qExisting.Where("status='active'")
 	}
 	if err := qExisting.Find(&existing).Error; err != nil {
 		return "", err
 	}
+	existingIDs := make([]uint, 0, len(existing))
+	for _, topic := range existing {
+		existingIDs = append(existingIDs, topic.ID)
+	}
+	latestByTopic, err := latestTopicSummaries(m.db.WithContext(ctx), existingIDs)
+	if err != nil {
+		return "", err
+	}
 	for _, topic := range existing {
 		if active[topic.ID] {
 			continue
 		}
-		var latest TopicSummaryRow
-		if err := m.db.WithContext(ctx).Where("topic_id=?", topic.ID).Order("version DESC,id DESC").Take(&latest).Error; err != nil {
-			return "", fmt.Errorf("读取待降级话题失败: %w", err)
+		latest, ok := latestByTopic[topic.ID]
+		if !ok {
+			return "", fmt.Errorf("读取待降级话题失败: 话题 %d 缺少摘要", topic.ID)
 		}
 		var summary TopicSummary
 		if err := sonic.UnmarshalString(latest.SummaryJSON, &summary); err != nil {

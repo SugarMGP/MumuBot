@@ -12,7 +12,8 @@ import (
 
 type SearchStickersInput struct {
 	Keyword string `json:"keyword" jsonschema:"description=按关键词搜索，如：猫、开心、无语等，关键词之间用空格隔开"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"description=返回数量，默认10"`
+	Cursor  string `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
 }
 
 type StickerSummary struct {
@@ -22,9 +23,11 @@ type StickerSummary struct {
 }
 
 type SearchStickersOutput struct {
-	Success  bool             `json:"success"`
-	Stickers []StickerSummary `json:"stickers,omitempty"`
-	Message  string           `json:"message,omitempty"`
+	Success    bool             `json:"success"`
+	Stickers   []StickerSummary `json:"stickers,omitempty"`
+	Message    string           `json:"message,omitempty"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+	HasMore    bool             `json:"has_more"`
 }
 
 func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*SearchStickersOutput, error) {
@@ -36,22 +39,17 @@ func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*Searc
 		return nil, fmt.Errorf("搜索参数不能为空")
 	}
 
-	limit := input.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-
-	stickers, err := tc.MemoryMgr.SearchStickers(input.Keyword, limit)
+	page, err := tc.MemoryMgr.SearchStickerPage(ctx, input.Keyword, input.Cursor, input.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("搜索失败: %w", err)
 	}
 
-	if len(stickers) == 0 {
-		return &SearchStickersOutput{Success: true, Message: "没有找到相关表情包"}, nil
+	if len(page.Items) == 0 {
+		return &SearchStickersOutput{Success: true, Message: "没有找到相关表情包", HasMore: page.HasMore, NextCursor: page.NextCursor}, nil
 	}
 
-	results := make([]StickerSummary, 0, len(stickers))
-	for _, s := range stickers {
+	results := make([]StickerSummary, 0, len(page.Items))
+	for _, s := range page.Items {
 		results = append(results, StickerSummary{
 			ID:          s.ID,
 			Description: s.Description,
@@ -59,7 +57,7 @@ func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*Searc
 		})
 	}
 
-	return &SearchStickersOutput{Success: true, Stickers: results}, nil
+	return &SearchStickersOutput{Success: true, Stickers: results, NextCursor: page.NextCursor, HasMore: page.HasMore}, nil
 }
 
 func NewSearchStickersTool() (tool.InvokableTool, error) {

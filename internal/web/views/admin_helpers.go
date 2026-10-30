@@ -67,48 +67,44 @@ func stickerFileURL(fileName string) string {
 	return "/admin/stickers/files/" + neturl.PathEscape(fileName)
 }
 
-func memorySubjectText(subjectUserID, selfID int64) string {
-	switch {
-	case subjectUserID == 0:
+func memorySubjectText(subjectType, subjectTarget string) string {
+	switch subjectType {
+	case memory.SubjectGroup:
+		return "群组 " + subjectTarget
+	case memory.SubjectUser:
+		return "成员 " + subjectTarget
+	case memory.SubjectSelf:
+		return "自己"
+	case memory.SubjectObject:
+		return "事物 " + subjectTarget
+	default:
+		return subjectTarget
+	}
+}
+
+func memorySubjectTypeText(subjectType string) string {
+	switch subjectType {
+	case memory.SubjectGroup:
 		return "群组"
-	case subjectUserID == selfID && selfID > 0:
-		return "自身"
+	case memory.SubjectUser:
+		return "用户"
+	case memory.SubjectSelf:
+		return "自己"
+	case memory.SubjectObject:
+		return "事物"
 	default:
-		return "成员"
+		return "未知主体"
 	}
 }
 
-func memoryKindText(kind string) string {
-	switch kind {
-	case "fact":
-		return "事实"
-	case "preference":
-		return "偏好"
-	case "constraint":
-		return "约束"
-	case "goal":
-		return "目标"
-	case "term":
-		return "群术语"
-	case "expression":
-		return "表达方式"
-	case "alias":
-		return "别名"
+func memoryTypeText(memoryType string) string {
+	switch memoryType {
+	case memory.MemoryProfile:
+		return "画像"
+	case memory.MemoryExperience:
+		return "经历"
 	default:
-		return "未归类"
-	}
-}
-
-func memoryRelationKindText(kind string) string {
-	switch kind {
-	case "variant_of":
-		return "同义变体"
-	case "supersedes":
-		return "替代"
-	case "contradicts":
-		return "冲突"
-	default:
-		return "关联关系"
+		return "未分类"
 	}
 }
 

@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"mumu-bot/internal/memory"
@@ -27,12 +26,7 @@ func (a *App) handleKnowledge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "记忆列表加载失败，请稍后再试。", 500)
 		return
 	}
-	metadata, err := a.admin.KnowledgeMetadata(r.Context(), result.Items)
-	if err != nil {
-		http.Error(w, "原文依据加载失败", 500)
-		return
-	}
-	data := views.KnowledgeListPageData{Workspace: workspace, Metadata: metadata, Items: result.Items, SelfID: a.runtimeSnapshot().SelfID, Meta: a.listMeta(r.URL, result.Page, result.PageSize, result.Total), Flash: a.flashFromRequest(r), Sort: buildSortToolbar(r.URL, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}})}
+	data := views.KnowledgeListPageData{Workspace: workspace, Items: result.Items, Meta: a.listMeta(r.URL, result.Page, result.PageSize, result.Total), Flash: a.flashFromRequest(r), Sort: buildSortToolbar(r.URL, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}, {Key: "created", Label: "创建时间"}})}
 	a.renderPageResponse(w, r, views.KnowledgeListPage(data, r.URL.Path), views.PageContent(views.KnowledgeListBody(data)))
 }
 
@@ -42,7 +36,7 @@ func (a *App) handleKnowledgeDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	detail, err := a.admin.KnowledgeDetail(r.Context(), id, max(1, parsePositiveInt(r.URL.Query().Get("page"), 1)))
+	detail, err := a.admin.KnowledgeDetail(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.NotFound(w, r)
@@ -51,7 +45,7 @@ func (a *App) handleKnowledgeDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	a.render(w, views.KnowledgeDetailPage(views.KnowledgeDetailPageData{Detail: detail, ReturnTo: a.knowledgeReturn(r, "/admin/knowledge"), CurrentURL: views.WithQuery(r.URL.RequestURI(), "return_to", a.knowledgeReturn(r, "/admin/knowledge")), SelfID: a.runtimeSnapshot().SelfID, Flash: a.flashFromRequest(r)}, r.URL.Path))
+	a.render(w, views.KnowledgeDetailPage(views.KnowledgeDetailPageData{Detail: detail, ReturnTo: a.knowledgeReturn(r, "/admin/knowledge"), CurrentURL: views.WithQuery(r.URL.RequestURI(), "return_to", a.knowledgeReturn(r, "/admin/knowledge")), Flash: a.flashFromRequest(r)}, r.URL.Path))
 }
 
 func (a *App) handleKnowledgeAction(w http.ResponseWriter, r *http.Request) {
@@ -86,17 +80,20 @@ func (a *App) knowledgeWorkspace(r *http.Request) (views.KnowledgeWorkspaceData,
 	if status == "all" {
 		status = ""
 	}
-	kind := q.Get("kind")
-	conversationKind, targetID := parseConversationParam(q.Get("conversation"))
+	subjectType := strings.TrimSpace(q.Get("subject_type"))
+	subjectTarget := strings.TrimSpace(q.Get("subject_target"))
+	memoryType := strings.TrimSpace(q.Get("memory_type"))
 	sortKey, order := services.NormalizeMemorySort(q.Get("sort"), q.Get("order"))
-	conversation := ""
-	if conversationKind != "" {
-		conversation = conversationKind + ":" + strconv.FormatInt(targetID, 10)
+	f := services.KnowledgeFilter{
+		MemoryFilter: services.MemoryFilter{
+			SubjectType: subjectType, SubjectTarget: subjectTarget, MemoryType: memoryType,
+			Status: status, Keyword: strings.TrimSpace(q.Get("keyword")), Sort: sortKey, Order: order,
+			Page: parsePositiveInt(q.Get("page"), 1), PageSize: listPageSize(q.Get("page_size")),
+		},
+		UserID: parseInt64Query(q.Get("user_id")),
 	}
-	f := services.KnowledgeFilter{MemoryFilter: services.MemoryFilter{Kind: kind, Status: status, Keyword: strings.TrimSpace(q.Get("keyword")), Sort: sortKey, Order: order, Page: parsePositiveInt(q.Get("page"), 1), PageSize: listPageSize(q.Get("page_size"))}, ConversationKind: conversationKind, TargetID: targetID, UserID: parseInt64Query(q.Get("user_id")), AuthorID: parseInt64Query(q.Get("author_id"))}
-	conversations, err := a.admin.KnowledgeConversations(r.Context())
-	data := views.KnowledgeWorkspaceData{Filter: f, Conversations: conversations, CurrentURL: views.WithQuery(r.URL.RequestURI(), "conversation", conversation, "status", status, "kind", kind, "focus_kind", "", "focus_id", "", "selected_kind", "", "selected_id", "", "selected_related", "", "return_to", "", "flash_kind", "", "flash_title", "", "flash_body", "")}
-	return data, err
+	data := views.KnowledgeWorkspaceData{Filter: f, CurrentURL: views.WithQuery(r.URL.RequestURI(), "subject_type", subjectType, "subject_target", subjectTarget, "memory_type", memoryType, "status", status, "focus_kind", "", "focus_id", "", "selected_kind", "", "selected_id", "", "selected_related", "", "return_to", "", "flash_kind", "", "flash_title", "", "flash_body", "")}
+	return data, nil
 }
 
 // parseConversationParam 解析「群聊/好友:目标」形式的筛选值

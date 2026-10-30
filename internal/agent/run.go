@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,6 +59,26 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 		return ctx, state, nil
 	}
 	pending := tc.Session.PendingAfter(max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq))
+	visible := map[uint]bool{}
+	for _, id := range tc.VisibleTranscriptIDs {
+		if id != 0 {
+			visible[id] = true
+		}
+	}
+	for _, item := range pending {
+		if item.TranscriptID != 0 {
+			visible[item.TranscriptID] = true
+		}
+	}
+	for _, item := range tc.Session.PendingAgentMessages() {
+		if item.TranscriptID == 0 || !visible[item.TranscriptID] {
+			pending = append(pending, item)
+			if item.TranscriptID != 0 {
+				visible[item.TranscriptID] = true
+			}
+		}
+	}
+	sort.SliceStable(pending, func(i, j int) bool { return pending[i].Order < pending[j].Order })
 	captured, captureErr := h.captureToolResults(ctx, state, tc)
 	if captureErr != nil {
 		return ctx, state, captureErr
@@ -282,10 +303,31 @@ func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *ad
 	if entry != nil {
 		ids = append(ids, entry.ID)
 	}
-	seqs, err := session.memory.MarkVisible(ctx, ids)
+	receipt := session.PendingReferenceReceipt()
+	if receipt == nil {
+		receipt = &memory.ReferenceReceipt{}
+	}
+	toolSeen := tc.ReferenceSeenSnapshot()
+	for key, version := range session.PendingToolReceipts() {
+		if toolSeen == nil {
+			toolSeen = map[string]string{}
+		}
+		toolSeen[key] = version
+	}
+	if len(toolSeen) > 0 {
+		if receipt.Tool == nil {
+			receipt.Tool = map[string]string{}
+		}
+		for key, version := range toolSeen {
+			receipt.Tool[key] = version
+		}
+	}
+	seqs, err := session.memory.MarkVisibleAndPersistReceipts(ctx, session.kind, session.targetID, ids, receipt)
 	if err != nil {
 		return ctx, state, err
 	}
+	session.ClearPendingReferenceReceipt()
+	tc.ClearReferenceSeen()
 	session.ApplyVisibleSeqs(seqs)
 	session.MarkInjected(tc.InjectedArrivalSeq)
 	tc.VisibleTranscriptIDs = nil
@@ -304,11 +346,7 @@ func (a *Agent) appendSessionMessage(ctx context.Context, msg *onebot.Conversati
 		// 自身发言已经出现在模型的工具轨迹里，不再额外生成 user transcript
 		return
 	}
-	ref := ""
-	if log != nil {
-		ref = log.MessageRef
-	}
-	user := session.AppendUser(msg, logID, mediaRefs, ref)
+	user := session.AppendUser(msg, logID, mediaRefs)
 	if user != nil {
 		payload, err := sonic.Marshal(user.Msg)
 		if err == nil {

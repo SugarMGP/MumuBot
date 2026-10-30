@@ -2,7 +2,6 @@ package views
 
 import (
 	"fmt"
-	"mumu-bot/internal/memory"
 	"mumu-bot/internal/web/services"
 )
 
@@ -82,7 +81,7 @@ templ MemberListPage(data MemberListPageData, currentPath string) {
 
 templ MemberListBody(data MemberListPageData) {
 	<div class="admin-memory-page space-y-6">
-		@PageHeader("成员管理", "查看成员身份、会话知识与原文参与记录。", "")
+		@PageHeader("成员管理", "查看成员昵称、群内称呼和相关记忆。", "")
 		@FilterPanel("member-filters", "筛选条件", EmptyComponent(), false, MemberFilterForm(data))
 		@SortToolbar(data.Sort)
 		<div class="space-y-3">
@@ -105,47 +104,16 @@ templ MemberListBody(data MemberListPageData) {
 								@MemberNames(item)
 							</div>
 						</section>
-						<section class="grid grid-cols-2 gap-3 text-sm">
+						<section class="grid grid-cols-1 gap-3 text-sm">
 							<a class="admin-member-stat text-primary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?user_id=%d", item.UserID)) }>
-								<span>关于 TA 的会话记忆</span><strong>{ fmt.Sprint(item.KnowledgeCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-knowledge")
+								<span>关于 TA 的记忆</span><strong>{ fmt.Sprint(item.KnowledgeCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-knowledge")
 							</a>
-							<a class="admin-member-stat text-secondary" href={ templ.SafeURL(fmt.Sprintf("/admin/knowledge?author_id=%d", item.UserID)) }>
-								<span>提供依据的会话记忆</span><strong>{ fmt.Sprint(item.ParticipationCount) }</strong>@AdminIcon("arrow-right", "size-4", "member-evidence")
-							</a>
-						</section>
-						<section class="text-right text-xs text-base-content/60">
-							<details class="admin-intimacy-details" data-admin-hover-popover>
-								<summary class="admin-intimacy-summary" aria-label={ fmt.Sprintf("%s的好感度变化", memberPrimaryName(item)) }>
-									<p>好感度 <strong class="text-base text-base-content admin-number">{ fmt.Sprintf("%.2f", item.Intimacy) }</strong>（{ fmt.Sprintf("%d级·%s", memory.IntimacyLevel(item.Intimacy), memory.IntimacyLevelName(item.Intimacy)) }）</p>
-								</summary>
-								<div class="admin-intimacy-popover">
-									<p class="mb-2 text-xs font-semibold text-base-content/75">最近的好感度变化</p>
-									if len(item.IntimacyLogs) == 0 {
-										<p class="py-2 text-xs text-base-content/60">还没有变化记录</p>
-									}
-									for _, log := range item.IntimacyLogs {
-										@IntimacyLogRow(log)
-									}
-								</div>
-							</details>
-							<p class="mt-1">发言 <strong class="text-base text-base-content">{ fmt.Sprint(item.MessageCount) }</strong> 次</p><time class="mt-2 block" datetime={ formatTimeAttr(item.LastSeenAt) }>{ formatTime(item.LastSeenAt) }</time><span>最近活跃</span>
 						</section>
 					</div>
 				</article>
 			}
 		</div>
 		@ListFooter(data.Meta)
-	</div>
-}
-
-templ IntimacyLogRow(log memory.MemberIntimacyLog) {
-	<div class="admin-intimacy-row">
-		<div class="flex items-center justify-between gap-2">
-			<span class={ joinClasses("admin-number text-xs font-semibold", intimacyDeltaClass(log.Delta)) }>{ intimacyDeltaText(log.Delta) }</span>
-			<time class="admin-number text-xs text-base-content/45" datetime={ formatTimeAttr(log.CreatedAt) }>{ formatTime(log.CreatedAt) }</time>
-		</div>
-		<p class="mt-1 text-xs leading-5 text-base-content/75">{ intimacyReasonText(log.Reason) }</p>
-		<p class="admin-number mt-0.5 text-xs text-base-content/60">{ fmt.Sprintf("%.2f → %.2f", log.BeforeValue, log.AfterValue) }</p>
 	</div>
 }
 

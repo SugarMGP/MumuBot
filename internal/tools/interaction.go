@@ -20,8 +20,8 @@ import (
 type SpeakInput struct {
 	// Content 你想说的话
 	Content string `json:"content" jsonschema:"description=说话内容"`
-	// ReplyTo 要回复的消息编号（可选）
-	ReplyTo string `json:"reply_to,omitempty" jsonschema:"description=要回复的消息编号，例如 m3"`
+	// ReplyTo 要回复的 OneBot 消息 ID（可选）
+	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的 OneBot 消息 ID"`
 	// Mentions 要提及的用户 QQ 号列表（可选）
 	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
 }
@@ -29,7 +29,7 @@ type SpeakInput struct {
 // PrivateSpeakInput 私聊发言的输入参数
 type PrivateSpeakInput struct {
 	Content string `json:"content" jsonschema:"description=说话内容"`
-	ReplyTo string `json:"reply_to,omitempty" jsonschema:"description=要回复的消息编号，例如 m3"`
+	ReplyTo int64  `json:"reply_to,omitempty" jsonschema:"description=要回复的 OneBot 消息 ID"`
 }
 
 // SpeakOutput 发言的输出
@@ -39,7 +39,7 @@ type SpeakOutput struct {
 }
 
 // speakFunc 发言的实际实现 - 会通过回调实际发送消息
-func speakContent(ctx context.Context, content, replyRef string, inputMentions []int64) (*SpeakOutput, error) {
+func speakContent(ctx context.Context, content string, replyTo int64, inputMentions []int64) (*SpeakOutput, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
@@ -50,14 +50,6 @@ func speakContent(ctx context.Context, content, replyRef string, inputMentions [
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil, fmt.Errorf("说话内容不能为空")
-	}
-	replyTo := int64(0)
-	if replyRef != "" {
-		var ok bool
-		replyTo, ok = tc.Session.ResolveMessageRef(replyRef)
-		if !ok {
-			return nil, fmt.Errorf("reply_to 不是当前对话中的消息编号")
-		}
 	}
 
 	mentions := make([]int64, 0, len(inputMentions))
@@ -106,7 +98,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 - speak每次只能发送**一条消息**，一条消息只承载一个可独立成立的意思；需要表达多个意思时，请调用多次speak
 - “一条消息”按意思划分，不按句号数量判断；即使语法上是一句话，只要包含多个判断、原因、转折或建议，也要拆开
 - 不要用逗号、空格、分号、句号或换行符串联多个本可独立发送的意思
-- 要回复某条消息时填写reply_to参数，只有当发言内容与该消息强相关时才用；不要回复自己的消息
+- 要回复某条消息时填写 reply_to（OneBot 消息 ID）参数，只有当发言内容与该消息强相关时才用；不要回复自己的消息
 - 要at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号
 - 想发表情时在content里写%qface:名称%或%qface:编号%（例如%qface:微笑%），可以夹在文字中间任意位置；名称和编号先用searchFaces查。图片表情包用sendSticker单独发，不要写进文字里`,
 		speakFunc,
@@ -117,7 +109,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		`在私聊里说话。每次只能发送一条消息；需要回复某条消息时填写 reply_to，不需要填写 mentions。想发表情时在 content 里写 %qface:名称% 或 %qface:编号%，名称和编号先用 searchFaces 查；图片表情包用 sendSticker 单独发。`,
+		`在私聊里说话。每次只能发送一条消息；需要回复某条消息时填写 reply_to（OneBot 消息 ID），不需要填写 mentions。想发表情时在 content 里写 %qface:名称% 或 %qface:编号%，名称和编号先用 searchFaces 查；图片表情包用 sendSticker 单独发。`,
 		privateSpeakFunc,
 	)
 }
@@ -228,8 +220,7 @@ func NewPrivatePokeTool() (tool.InvokableTool, error) {
 
 // ReactToMessageInput 对消息贴表情的输入参数
 type ReactToMessageInput struct {
-	// MessageRef 要回应的本轮消息编号
-	MessageRef string `json:"message_ref" jsonschema:"description=聊天记录中的消息编号，例如 m3"`
+	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID"`
 	// Reaction 要使用的语义表情
 	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
 }
@@ -269,9 +260,9 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 	if input == nil {
 		return nil, fmt.Errorf("消息回应参数不能为空")
 	}
-	messageID, ok := tc.Session.ResolveMessageRef(input.MessageRef)
-	if !ok {
-		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
+	messageID := input.MessageID
+	if messageID == 0 {
+		return nil, fmt.Errorf("消息 ID 不能为空")
 	}
 	emojiID, ok := messageReactionEmojiIDs[input.Reaction]
 	if !ok {
@@ -298,8 +289,7 @@ func NewReactToMessageTool() (tool.InvokableTool, error) {
 
 // RecallMessageInput 撤回消息的输入参数
 type RecallMessageInput struct {
-	// MessageRef 要撤回的本轮消息编号
-	MessageRef string `json:"message_ref" jsonschema:"description=聊天记录中的消息编号，例如 m3"`
+	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID"`
 }
 
 // RecallMessageOutput 撤回消息的输出
@@ -323,32 +313,31 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 	if input == nil {
 		return nil, fmt.Errorf("撤回参数不能为空")
 	}
-	messageID, ok := tc.Session.ResolveMessageRef(input.MessageRef)
-	if !ok {
-		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
+	messageID := input.MessageID
+	if messageID == 0 {
+		return nil, fmt.Errorf("消息 ID 不能为空")
 	}
 	if tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("记忆管理器未初始化"))
 	}
 
 	log, err := tc.MemoryMgr.WithContext(ctx).GetMessageLogByScope(tc.ConversationKind, tc.TargetID, messageID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("未找到该消息记录，无法确认是否还能撤回")
-		}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	if log == nil || log.TargetID != tc.TargetID || (tc.ConversationKind != "" && log.ConversationKind != tc.ConversationKind) {
-		return nil, fmt.Errorf("该消息不属于当前会话")
-	}
-	if selfID := tc.Bot.GetSelfID(); selfID > 0 && log.UserID != 0 && log.UserID != selfID {
-		return nil, fmt.Errorf("只能撤回你自己发的消息")
-	}
-	if log.RecalledAt != nil {
-		return &RecallMessageOutput{Success: true, Message: "消息已撤回"}, nil
-	}
-	if time.Since(log.MessageTime) > 2*time.Minute {
-		return nil, fmt.Errorf("消息已超过两分钟，无法撤回")
+	if err == nil && log != nil {
+		if log.TargetID != tc.TargetID || (tc.ConversationKind != "" && log.ConversationKind != tc.ConversationKind) {
+			return nil, fmt.Errorf("该消息不属于当前会话")
+		}
+		if selfID := tc.Bot.GetSelfID(); selfID > 0 && log.UserID != 0 && log.UserID != selfID {
+			return nil, fmt.Errorf("只能撤回你自己发的消息")
+		}
+		if log.RecalledAt != nil {
+			return &RecallMessageOutput{Success: true, Message: "消息已撤回"}, nil
+		}
+		if time.Since(log.MessageTime) > 2*time.Minute {
+			return nil, fmt.Errorf("消息已超过两分钟，无法撤回")
+		}
 	}
 
 	arrivalSeq, err := tc.Bot.DeleteMsg(ctx, tc.ConversationKind, tc.TargetID, messageID)

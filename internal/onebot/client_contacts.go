@@ -3,7 +3,6 @@ package onebot
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/zjutjh/onebot-sdk/api"
 )
@@ -14,7 +13,6 @@ type Contact struct {
 	Name         string
 	RemoteRemark string
 	Active       bool
-	LastSeenAt   time.Time
 }
 
 func (c *Client) GetConversationContacts(ctx context.Context) ([]Contact, error) {
@@ -55,7 +53,6 @@ func (c *Client) getGroupContacts(ctx context.Context) ([]Contact, error) {
 			Name:         row.GroupName,
 			RemoteRemark: row.GroupRemark,
 			Active:       true,
-			LastSeenAt:   time.Now(),
 		})
 	}
 	return result, nil
@@ -91,7 +88,6 @@ func (c *Client) getFriendContacts(ctx context.Context) ([]Contact, error) {
 			Name:         row.Nickname,
 			RemoteRemark: remark,
 			Active:       true,
-			LastSeenAt:   time.Now(),
 		})
 	}
 	return result, nil

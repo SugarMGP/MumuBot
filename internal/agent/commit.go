@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"mumu-bot/internal/media"
@@ -87,16 +86,6 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 		if !created {
 			return tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", msg.ConversationKind, msg.TargetID, msg.MessageID).First(log).Error
 		}
-		if log != nil && strings.TrimSpace(log.MessageRef) == "" {
-			ref, err := a.memory.AllocateMessageRef(tx, msg.ConversationKind, msg.TargetID)
-			if err != nil {
-				return err
-			}
-			if err := tx.Model(&memory.MessageLog{}).Where("id=?", log.ID).Update("message_ref", ref).Error; err != nil {
-				return err
-			}
-			log.MessageRef = ref
-		}
 		return saveMessageForwards(tx, log, forwards)
 	})
 	return log, created, err
@@ -161,7 +150,7 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	if msg.ConversationKind == memory.ConversationKindPrivate {
 		a.schedulePrivateThink(msg.TargetID, msg.ReceivedAt)
 	} else {
-		a.scheduleGroupThink(msg.TargetID, msg.IsMentioned, msg.ReceivedAt)
+		a.scheduleGroupThink(msg.TargetID, msg.ReceivedAt)
 	}
 }
 

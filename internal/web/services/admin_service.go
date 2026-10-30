@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -25,8 +26,8 @@ type ListFilter struct {
 }
 
 type MemoryFilter struct {
-	Kind, Status, Keyword, Sort, Order string
-	Page, PageSize                     int
+	SubjectType, SubjectTarget, MemoryType, Status, Keyword, Sort, Order string
+	Page, PageSize                                                       int
 }
 
 type TopicSummaryView struct {
@@ -57,10 +58,8 @@ func (t TopicThreadView) LatestSummary() *TopicSummaryView {
 
 type MemberProfileView struct {
 	memory.MemberProfile
-	Names              []memory.MemberName
-	KnowledgeCount     int64
-	ParticipationCount int64
-	IntimacyLogs       []memory.MemberIntimacyLog
+	Names          []memory.MemberName
+	KnowledgeCount int64
 }
 
 type AdminService struct {
@@ -115,7 +114,7 @@ func NormalizeStickerSort(s, o string) (string, string) {
 	return normalizeSort(s, o, "use", "use", "updated", "created")
 }
 func NormalizeMemberSort(s, o string) (string, string) {
-	return normalizeSort(s, o, "messages", "messages", "recent")
+	return normalizeSort(s, o, "updated", "updated")
 }
 
 func order(q *gorm.DB, key, direction string, columns map[string]string) *gorm.DB {
@@ -244,7 +243,7 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThreadRow) ([]Topi
 			return nil, err
 		}
 		for _, row := range sourceRows {
-			if row.Role == "anchor" {
+			if row.IsAnchor {
 				anchors[row.SummaryID] = append(anchors[row.SummaryID], row.MessageLogID)
 			} else {
 				sources[row.SummaryID] = append(sources[row.SummaryID], row.MessageLogID)
@@ -296,9 +295,14 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThreadRow) ([]Topi
 
 func (s *AdminService) ListTopicMessages(topicID uint, limit int) ([]memory.MessageLog, error) {
 	var out []memory.MessageLog
-	q := s.db.Table("message_logs ml").Select("DISTINCT ml.*").
-		Joins("LEFT JOIN topic_assignments ta ON ta.message_log_id=ml.id").
-		Where("ta.topic_id=? OR ml.id IN (SELECT src.message_log_id FROM topic_summary_sources src JOIN topic_summaries ts ON ts.id=src.summary_id WHERE ts.topic_id=? AND ts.version=(SELECT MAX(version) FROM topic_summaries WHERE topic_id=?))", topicID, topicID, topicID).
+	q := s.db.Table("message_logs ml").Select("ml.*").
+		Where(`ml.id IN (
+			SELECT message_log_id FROM topic_assignments WHERE topic_id=?
+			UNION
+			SELECT src.message_log_id FROM topic_summary_sources src
+			JOIN topic_summaries ts ON ts.id=src.summary_id
+			WHERE ts.topic_id=? AND ts.version=(SELECT MAX(version) FROM topic_summaries WHERE topic_id=?)
+		)`, topicID, topicID, topicID).
 		Order("ml.id DESC")
 	if limit > 0 {
 		q = q.Limit(limit)
@@ -321,11 +325,7 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 	if err := q.Count(&total).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
-	if f.Sort == "recent" {
-		q = q.Order("last_seen_at " + strings.ToUpper(f.Order))
-	} else {
-		q = q.Order("message_count " + strings.ToUpper(f.Order))
-	}
+	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "default": "updated_at"})
 	var profiles []memory.MemberProfile
 	if err := q.Offset((page - 1) * size).Limit(size).Find(&profiles).Error; err != nil {
 		return Page[MemberProfileView]{}, err
@@ -349,35 +349,18 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 		UserID int64
 		Count  int64
 	}
-	if err := s.filterKnowledge(s.db.Table("knowledge_items ki"), KnowledgeFilter{}).
-		Select("ki.subject_user_id AS user_id, COUNT(*) AS count").Where("ki.subject_user_id IN ?", userIDs).
-		Group("ki.subject_user_id").Scan(&knowledgeCounts).Error; err != nil {
+	if err := s.db.Table("knowledge_items ki").Select("CAST(ki.subject_target AS BIGINT) AS user_id, COUNT(*) AS count").
+		Where("ki.subject_type='user' AND ki.subject_target IN ?", stringIDs(userIDs)).
+		Group("ki.subject_target").Scan(&knowledgeCounts).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
 	knowledgeByUser := make(map[int64]int64, len(knowledgeCounts))
 	for _, row := range knowledgeCounts {
 		knowledgeByUser[row.UserID] = row.Count
 	}
-	var participationCounts []struct {
-		UserID int64
-		Count  int64
-	}
-	if err := s.filterKnowledge(s.db.Table("member_profiles mp").Joins("JOIN knowledge_items ki ON "+knowledgeParticipationSQL("mp.user_id")), KnowledgeFilter{}).
-		Select("mp.user_id, COUNT(DISTINCT ki.id) AS count").Where("mp.user_id IN ?", userIDs).
-		Group("mp.user_id").Scan(&participationCounts).Error; err != nil {
-		return Page[MemberProfileView]{}, err
-	}
-	participationByUser := make(map[int64]int64, len(participationCounts))
-	for _, row := range participationCounts {
-		participationByUser[row.UserID] = row.Count
-	}
-	intimacyLogs, err := s.memory.RecentIntimacyLogs(userIDs, 8)
-	if err != nil {
-		return Page[MemberProfileView]{}, err
-	}
 	items := make([]MemberProfileView, 0, len(profiles))
 	for _, p := range profiles {
-		items = append(items, MemberProfileView{MemberProfile: p, Names: namesByUser[p.UserID], KnowledgeCount: knowledgeByUser[p.UserID], ParticipationCount: participationByUser[p.UserID], IntimacyLogs: intimacyLogs[p.UserID]})
+		items = append(items, MemberProfileView{MemberProfile: p, Names: namesByUser[p.UserID], KnowledgeCount: knowledgeByUser[p.UserID]})
 	}
 	return Page[MemberProfileView]{Items: items, Total: total, Page: page, PageSize: size}, nil
 }
@@ -395,4 +378,12 @@ func (s *AdminService) ListStickers(f ListFilter) (Page[memory.Sticker], error) 
 func (s *AdminService) GetSticker(id uint) (memory.Sticker, error) {
 	var v memory.Sticker
 	return v, s.db.First(&v, id).Error
+}
+
+func stringIDs(ids []int64) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, fmt.Sprintf("%d", id))
+	}
+	return out
 }

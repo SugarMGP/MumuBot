@@ -38,7 +38,7 @@ func (a *Agent) thinkCycle() {
 		if len(pending) == 0 {
 			continue
 		}
-		a.scheduleGroupThink(groupID, a.hasStrongInteraction(pending), latestReceivedAt(pending))
+		a.scheduleGroupThink(groupID, latestReceivedAt(pending))
 	}
 	targets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true)
 	if err != nil {
@@ -69,7 +69,7 @@ func latestReceivedAt(pending []*sessionUser) time.Time {
 	return latest
 }
 
-func (a *Agent) scheduleGroupThink(groupID int64, isMention bool, receivedAt time.Time) {
+func (a *Agent) scheduleGroupThink(groupID int64, receivedAt time.Time) {
 	debounce := time.Duration(config.Get().Agent.ThinkDebounceMS) * time.Millisecond
 	delay := remainingDebounce(receivedAt, time.Now(), debounce)
 
@@ -188,7 +188,7 @@ func (a *Agent) conversationAllowed(kind string, targetID int64) bool {
 // hasActionableMessage 观察事件只能进入后续上下文，不能单独触发回应
 func hasActionableMessage(pending []*sessionUser) bool {
 	for _, user := range pending {
-		if user != nil && user.MessageID != 0 {
+		if user != nil && (user.MessageID != 0 || user.IsAgentMessage) {
 			return true
 		}
 	}
@@ -197,11 +197,11 @@ func hasActionableMessage(pending []*sessionUser) bool {
 
 func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 	for _, user := range pending {
-		if user.Mentioned {
+		if user.IsAgentMessage {
 			return true
 		}
-		if user.ArrivalSeq == 0 {
-			continue
+		if user.Mentioned {
+			return true
 		}
 		if a.persona.IsMentioned(user.Content) {
 			return true

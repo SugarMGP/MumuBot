@@ -3,7 +3,6 @@ package views
 import (
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"mumu-bot/internal/memory"
@@ -11,9 +10,8 @@ import (
 )
 
 type KnowledgeWorkspaceData struct {
-	Filter        services.KnowledgeFilter
-	Conversations []services.KnowledgeConversation
-	CurrentURL    string
+	Filter     services.KnowledgeFilter
+	CurrentURL string
 }
 
 // conversationLabel 渲染知识筛选里的会话选项
@@ -56,21 +54,4 @@ func WithQuery(raw string, pairs ...string) string {
 
 func knowledgeDetailURL(id uint, returnTo string) string {
 	return WithQuery(knowledgeHref(id), "return_to", returnTo)
-}
-
-func knowledgeSubject(item memory.KnowledgeRecord, selfID int64, meta services.KnowledgeMetadata) string {
-	if item.SubjectUserID == 0 || item.SubjectUserID == selfID {
-		return memorySubjectText(item.SubjectUserID, selfID)
-	}
-	if meta.Name != "" {
-		return meta.Name
-	}
-	return "QQ " + strconv.FormatInt(item.SubjectUserID, 10)
-}
-
-func evidenceSummary(meta services.KnowledgeMetadata) string {
-	if meta.Messages == 0 {
-		return "暂无来源消息"
-	}
-	return fmt.Sprintf("来源 %d 条", meta.ValidMessages())
 }

@@ -179,9 +179,6 @@ templ TopicCurrentSummary(topic services.TopicThreadView) {
 						for _, participant := range topicSummary(topic).Participants {
 							<div class="flex items-center gap-2 rounded-lg border border-base-300 px-2.5 py-1.5 text-xs">
 								<span class="font-medium text-base-content/75">{ displayText(participant.Nickname, fmt.Sprintf("%d", participant.UserID)) }</span>
-								if participant.Position != "" {
-									<span class="text-base-content/45">{ participant.Position }</span>
-								}
 							</div>
 						}
 					</div>

@@ -15,7 +15,7 @@ import (
 // SearchFacesInput 查询 QQ 表情的参数
 type SearchFacesInput struct {
 	Keyword string `json:"keyword,omitempty" jsonschema:"description=表情名称关键词，留空返回常见表情"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"description=返回数量，默认20，最大50"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"description=返回数量，默认20，最大99"`
 }
 
 // FaceSummary 一条 QQ 自带表情
@@ -39,8 +39,8 @@ func searchFacesFunc(ctx context.Context, input *SearchFacesInput) (*SearchFaces
 	if limit <= 0 {
 		limit = 20
 	}
-	if limit > 50 {
-		limit = 50
+	if limit > 99 {
+		limit = 99
 	}
 	entries := onebot.SearchQQFaces(input.Keyword, limit)
 	if len(entries) == 0 {

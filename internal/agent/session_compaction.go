@@ -100,18 +100,6 @@ func (s *Session) RetainedAfterVisible(through uint64) []*schema.AgenticMessage 
 	return messages
 }
 
-// SetCheckpoint 恢复检查点中的内部参考版本
-func (s *Session) SetCheckpoint(checkpoint *memory.CompactionCheckpoint) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if checkpoint == nil {
-		return
-	}
-	if versions, err := memory.ParseVersionList(checkpoint.ReferenceVersions); err == nil {
-		s.autoRefVersions = versions
-	}
-}
-
 // ApplyCompaction 丢弃检查点覆盖的工作集，只保留完整尾部
 func (s *Session) ApplyCompaction(checkpoint *memory.CompactionCheckpoint) {
 	s.mu.Lock()
@@ -121,15 +109,23 @@ func (s *Session) ApplyCompaction(checkpoint *memory.CompactionCheckpoint) {
 	}
 	kept := s.seen[:0]
 	for _, entry := range s.seen {
+		if entry.visibleSeq == 0 && isReferenceEntry(entry.msg) {
+			continue
+		}
 		if entry.visibleSeq == 0 || entry.visibleSeq > *checkpoint.ThroughVisibleSeq {
 			kept = append(kept, entry)
 		}
 	}
 	s.seen = kept
-	if versions, err := memory.ParseVersionList(checkpoint.ReferenceVersions); err == nil {
-		s.autoRefVersions = versions
-	}
+	s.pendingReferenceReceipt = nil
 	s.compactionRetryAfter = time.Time{}
+}
+
+func isReferenceEntry(message *schema.AgenticMessage) bool {
+	if message == nil || message.Extra == nil {
+		return false
+	}
+	return message.Extra["kind"] == "reference"
 }
 
 // CompactionCoolingDown 判断会话是否仍在压缩失败退避期

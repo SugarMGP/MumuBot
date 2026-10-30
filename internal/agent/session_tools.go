@@ -35,7 +35,7 @@ func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, call
 }
 
 // FinishToolTranscript 更新工具回执；大文本只保留预览和内容寻址句柄
-func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, suppliedRef string) (string, *schema.ToolResult, error) {
+func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, suppliedRef string, receipts map[string]string) (string, *schema.ToolResult, error) {
 	if s.memory == nil || id == 0 {
 		return resultText, enhanced, nil
 	}
@@ -64,7 +64,7 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	}
 	payload, err := sonic.Marshal(&schema.AgenticMessage{
 		Role:  schema.AgenticRoleTypeUser,
-		Extra: map[string]any{"source": "tool_result", "tool_status": status},
+		Extra: map[string]any{"source": "tool_result", "tool_status": status, "context_receipts": receipts},
 		ContentBlocks: []*schema.ContentBlock{{
 			Type: schema.ContentBlockTypeFunctionToolResult,
 			FunctionToolResult: &schema.FunctionToolResult{
@@ -197,7 +197,7 @@ func (s *Session) RepairToolTranscript(ctx context.Context, entry *memory.Transc
 }
 
 // AppendNotExecutedTool 为缺少回执的工具调用补一条关闭协议的结果
-func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, toolName string) (*memory.TranscriptEntry, error) {
+func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, toolName string) (*memory.TranscriptEntry, bool, error) {
 	payload, err := sonic.Marshal(&schema.AgenticMessage{
 		Role: schema.AgenticRoleTypeUser,
 		ContentBlocks: []*schema.ContentBlock{{
@@ -209,19 +209,16 @@ func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, tool
 		}},
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	entry, created, err := s.memory.EnsureToolTranscript(ctx, &memory.TranscriptEntry{
 		ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "tool",
 		RunID: runID, ToolCallID: callID, ToolName: toolName, ToolStatus: "not_executed", Payload: payload,
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if created {
-		return entry, nil
-	}
-	return entry, nil
+	return entry, created, nil
 }
 
 func truncateRunes(value string, max int) string {

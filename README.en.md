@@ -36,11 +36,11 @@ Core capabilities of this project:
 - 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
 - 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
 - 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers, with more available through MCP
-- 📝 **Long-term Memory** — The main agent maintains facts, preferences, constraints, goals, terms, expressions, and aliases with revisions, core-memory selection, and keyword/fuzzy search
-- 👤 **Member Profiles** — Aggregates member knowledge and participation; intimacy remains a separate global signal
+- 📝 **Long-term Memory** — The main agent maintains profile and experience memories for groups, users, itself, and objects, with pinned selection, revisions, and keyword search
+- 👤 **Member Profiles** — Keeps basic member names and related long-term memories; no participation or intimacy scores
 - 🎭 **Specific Emotions** — Twelve emotion kinds plus energy and sociability, with lazy time-based decay
 - 🖼️ **Sticker System** — The agent inspects and collects stickers on demand; originals are kept
-- 🔎 **Active Retrieval** — The agent searches long-term memory, topics, and raw history itself; cross-conversation results keep source labels and are not injected every turn
+- 🔎 **Active Retrieval** — The agent searches long-term memory, topics, and raw history itself; cross-conversation results identify their conversation and are not injected every turn
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
@@ -136,7 +136,7 @@ Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-To upgrade from an older release, first use the old program to bring the database to v14, then start this version to run the v15 and v16 migrations. The v15 migration preserves old evidence, relations, learning watermarks, and private summaries as `legacy_*` history tables; v16 removes the obsolete working-note table. Back up the database and media directory before upgrading.
+This release uses the v17 semantic schema and only initializes an empty database. Older schemas are rejected explicitly; no automatic migration or deletion is performed. Back up the database and media directory before reinitializing.
 
 The service listens on port `7468` by default (configurable).
 

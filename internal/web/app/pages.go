@@ -106,7 +106,7 @@ func (a *App) handleMembers(w http.ResponseWriter, r *http.Request) {
 
 	data := views.MemberListPageData{
 		Keyword: filter.Keyword,
-		Sort:    buildSortToolbar(r.URL, sortKey, order, []sortOption{{Key: "messages", Label: "发言数"}, {Key: "recent", Label: "最近发言"}}),
+		Sort:    buildSortToolbar(r.URL, sortKey, order, []sortOption{{Key: "updated", Label: "最近更新"}}),
 		Items:   result.Items,
 		Meta:    a.listMeta(r.URL, result.Page, result.PageSize, result.Total),
 		Flash:   a.flashFromRequest(r),

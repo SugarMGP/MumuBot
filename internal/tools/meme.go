@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 	"unicode"
 
+	"mumu-bot/internal/memory"
 	projectutils "mumu-bot/internal/utils"
 
 	"github.com/bytedance/sonic"
@@ -20,20 +22,20 @@ const memeAPIBaseURL = "https://cnmeme.wiki/api/v1/public/memes"
 type SearchMemeInput struct {
 	Query  string `json:"query" jsonschema:"description=要搜索的黑话、网络梗或表情包词语，最多 80 字"`
 	Tag    string `json:"tag,omitempty" jsonschema:"description=可选的完整标签，最多 40 字"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"description=返回条数，默认 8，范围 1 到 30"`
-	Offset int    `json:"offset,omitempty" jsonschema:"description=跳过的条数，用于继续翻页，不得为负数"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"description=返回条数，默认 8，最大 99（上游最多 30）"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
 }
 
 // MemeSearchResult 是 searchMeme 返回的公开梗词条
 type MemeSearchResult struct {
-	Success bool        `json:"success"`
-	Action  string      `json:"action"`
-	Query   string      `json:"query,omitempty"`
-	Tag     string      `json:"tag,omitempty"`
-	Limit   int         `json:"limit"`
-	Offset  int         `json:"offset"`
-	HasMore bool        `json:"has_more"`
-	Results []MemeEntry `json:"results,omitempty"`
+	Success    bool        `json:"success"`
+	Action     string      `json:"action"`
+	Query      string      `json:"query,omitempty"`
+	Tag        string      `json:"tag,omitempty"`
+	Limit      int         `json:"limit"`
+	NextCursor string      `json:"next_cursor,omitempty"`
+	HasMore    bool        `json:"has_more"`
+	Results    []MemeEntry `json:"results,omitempty"`
 }
 
 // MemeEntry 是梗Wiki公开词条的摘要
@@ -74,15 +76,27 @@ func searchMeme(ctx context.Context, input *SearchMemeInput) (*MemeSearchResult,
 	if query == "" && tag == "" {
 		return nil, fmt.Errorf("query 和 tag 至少填写一个")
 	}
-	if input.Offset < 0 {
-		return nil, fmt.Errorf("offset 不得为负数")
+	filter := struct {
+		Query string `json:"query"`
+		Tag   string `json:"tag"`
+	}{Query: query, Tag: tag}
+	cursor, err := memory.DecodeCursor(input.Cursor)
+	if err != nil {
+		return nil, err
 	}
+	if cursor.FilterHash == "" {
+		cursor.FilterHash = memory.CursorFilterHash(filter)
+	}
+	if err := memory.ValidateCursorFilter(cursor, filter); err != nil {
+		return nil, err
+	}
+	offset := int(cursor.LastID)
 	limit := input.Limit
-	if limit == 0 {
+	if limit <= 0 {
 		limit = 8
 	}
-	if limit < 1 || limit > 30 {
-		return nil, fmt.Errorf("limit 必须在 1 到 30 之间")
+	if limit > 30 {
+		limit = 30
 	}
 
 	params := url.Values{}
@@ -93,7 +107,7 @@ func searchMeme(ctx context.Context, input *SearchMemeInput) (*MemeSearchResult,
 		params.Set("tag", tag)
 	}
 	params.Set("limit", fmt.Sprint(limit))
-	params.Set("offset", fmt.Sprint(input.Offset))
+	params.Set("offset", fmt.Sprint(offset))
 	body, _, err := projectutils.FetchPublicText(ctx, memeAPIBaseURL+"?"+params.Encode())
 	if err != nil {
 		return nil, err
@@ -103,7 +117,7 @@ func searchMeme(ctx context.Context, input *SearchMemeInput) (*MemeSearchResult,
 		return nil, fmt.Errorf("梗Wiki 响应解析失败: %w", err)
 	}
 	if payload.SchemaVersion != 1 || payload.Items == nil || payload.Limit != limit ||
-		payload.Offset == nil || *payload.Offset != input.Offset || payload.HasMore == nil {
+		payload.Offset == nil || *payload.Offset != offset || payload.HasMore == nil {
 		return nil, fmt.Errorf("梗Wiki 响应结构无效或版本不受支持")
 	}
 	for i := range payload.Items {
@@ -112,16 +126,11 @@ func searchMeme(ctx context.Context, input *SearchMemeInput) (*MemeSearchResult,
 		}
 		payload.Items[i].DetailURL = memeAPIBaseURL + "/" + url.PathEscape(payload.Items[i].Slug)
 	}
-	return &MemeSearchResult{
-		Success: true,
-		Action:  "search_meme",
-		Query:   query,
-		Tag:     tag,
-		Limit:   payload.Limit,
-		Offset:  *payload.Offset,
-		HasMore: *payload.HasMore,
-		Results: payload.Items,
-	}, nil
+	next := ""
+	if *payload.HasMore {
+		next = memory.NewPageCursor("meme", 0, time.Time{}, uint(offset+len(payload.Items)), time.Time{}, filter)
+	}
+	return &MemeSearchResult{Success: true, Action: "search_meme", Query: query, Tag: tag, Limit: payload.Limit, NextCursor: next, HasMore: *payload.HasMore, Results: payload.Items}, nil
 }
 
 func cleanMemeTerm(raw string, limit int) string {

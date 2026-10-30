@@ -84,13 +84,12 @@ func (m *Manager) GetMemberProfile(userID int64) (*MemberProfile, error) {
 }
 
 func (m *Manager) GetOrCreateMemberProfile(userID int64, nickname string, seenAt time.Time) (*MemberProfile, error) {
-	profile := MemberProfile{UserID: userID, Nickname: nickname, LastSeenAt: seenAt, MessageCount: 1}
+	profile := MemberProfile{UserID: userID, Nickname: nickname, UpdatedAt: seenAt}
 	err := m.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"nickname":      gorm.Expr("CASE WHEN EXCLUDED.last_seen_at>=member_profiles.last_seen_at THEN EXCLUDED.nickname ELSE member_profiles.nickname END"),
-			"last_seen_at":  gorm.Expr("GREATEST(member_profiles.last_seen_at,EXCLUDED.last_seen_at)"),
-			"message_count": gorm.Expr("member_profiles.message_count+1"),
+			"nickname":   gorm.Expr("CASE WHEN EXCLUDED.updated_at>=member_profiles.updated_at THEN EXCLUDED.nickname ELSE member_profiles.nickname END"),
+			"updated_at": gorm.Expr("GREATEST(member_profiles.updated_at, EXCLUDED.updated_at)"),
 		}),
 	}, clause.Returning{}).Create(&profile).Error
 	if err != nil {

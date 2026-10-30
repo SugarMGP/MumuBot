@@ -19,20 +19,22 @@ import (
 )
 
 type sessionUser struct {
-	LogID         uint
-	TranscriptID  uint
-	Ref           string
-	Text          string
-	Content       string
-	At            time.Time
-	ReceivedAt    time.Time
-	Mentioned     bool
-	SenderID      int64
-	Nickname      string
-	ReferencedIDs []int64
-	ArrivalSeq    uint64
-	MessageID     int64
-	Msg           *schema.AgenticMessage
+	LogID          uint
+	TranscriptID   uint
+	Ref            string
+	Text           string
+	Content        string
+	At             time.Time
+	ReceivedAt     time.Time
+	Mentioned      bool
+	SenderID       int64
+	Nickname       string
+	ReferencedIDs  []int64
+	ArrivalSeq     uint64
+	Order          uint64
+	MessageID      int64
+	Msg            *schema.AgenticMessage
+	IsAgentMessage bool
 }
 
 type sessionEntry struct {
@@ -51,20 +53,18 @@ type Session struct {
 	targetID int64
 	memory   *memory.Manager
 
-	mu                   sync.Mutex
-	seen                 []sessionEntry
-	pending              []*sessionUser
-	media                *mediaIndex
-	refs                 map[string]int64
-	refsLog              map[string]uint
-	nextRef              int
-	injected             uint64
-	selfAt               []time.Time
-	notes                []string
-	autoRefVersions      []string
-	tokenScale           float64
-	tokenSamples         int
-	compactionRetryAfter time.Time
+	mu                      sync.Mutex
+	seen                    []sessionEntry
+	pending                 []*sessionUser
+	media                   *mediaIndex
+	injected                uint64
+	selfAt                  []time.Time
+	notes                   []string
+	pendingReferenceReceipt *memory.ReferenceReceipt
+	nextOrder               uint64
+	tokenScale              float64
+	tokenSamples            int
+	compactionRetryAfter    time.Time
 }
 
 type sessionStore struct {
@@ -93,28 +93,49 @@ func sessionKey(kind string, targetID int64) string {
 	return kind + ":" + strconv.FormatInt(targetID, 10)
 }
 
-func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref, ref string) *sessionUser {
+func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref) *sessionUser {
 	if msg == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	user := s.newUserLocked(msg, logID, mediaRefs, ref)
+	user := s.newUserLocked(msg, logID, mediaRefs)
+	s.pending = append(s.pending, user)
+	return user
+}
+
+// AppendAgentMessage 把另一个会话投递的内部消息加入待处理工作集
+func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptID uint, at time.Time) *sessionUser {
+	if message == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if at.IsZero() {
+		at = time.Now()
+	}
+	user := &sessionUser{
+		Text: agenticMessageText(message), Msg: message, IsAgentMessage: true,
+		TranscriptID: transcriptID, ReceivedAt: time.Now(), At: at, Order: s.nextOrderLocked(),
+	}
 	s.pending = append(s.pending, user)
 	return user
 }
 
 // RestoreUser 用 transcript 中保存的原始消息体恢复用户条目
-func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref, ref string, transcriptID uint, visibleSeq uint64, visible bool, payload *schema.AgenticMessage) *sessionUser {
+func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref, transcriptID uint, visibleSeq uint64, visible bool, payload *schema.AgenticMessage) *sessionUser {
 	if msg == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	user := s.newUserLocked(msg, logID, mediaRefs, ref)
+	user := s.newUserLocked(msg, logID, mediaRefs)
 	user.TranscriptID = transcriptID
 	if payload != nil {
 		user.Msg = payload
+		if text := agenticMessageText(payload); text != "" {
+			user.Text = text
+		}
 	}
 	if visible {
 		s.seen = append(s.seen, sessionEntry{user: user, msg: user.Msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
@@ -130,7 +151,39 @@ func (s *Session) RestorePendingObservation(payload *schema.AgenticMessage, tran
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pending = append(s.pending, &sessionUser{Msg: payload, TranscriptID: transcriptID})
+	s.pending = append(s.pending, &sessionUser{Msg: payload, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
+}
+
+func (s *Session) RestorePendingAgentMessage(payload *schema.AgenticMessage, transcriptID uint) {
+	if payload == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = append(s.pending, &sessionUser{Msg: payload, Text: agenticMessageText(payload), IsAgentMessage: true, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
+}
+
+func (s *Session) RestorePendingReference(payload *schema.AgenticMessage, transcriptID uint, receipt *memory.ReferenceReceipt) {
+	if payload == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seen = append(s.seen, sessionEntry{msg: payload, transcriptID: transcriptID})
+	s.pendingReferenceReceipt = receipt
+}
+
+func agenticMessageText(message *schema.AgenticMessage) string {
+	if message == nil {
+		return ""
+	}
+	var parts []string
+	for _, block := range message.ContentBlocks {
+		if block != nil && block.UserInputText != nil {
+			parts = append(parts, block.UserInputText.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (s *Session) AppendSeenMessage(msg *schema.AgenticMessage, transcriptID uint, visibleSeq uint64) {
@@ -164,14 +217,15 @@ func (s *Session) ApplyVisibleSeqs(seqs map[uint]uint64) {
 	s.pending = kept
 }
 
-func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref, ref string) *sessionUser {
-	if msg.MessageID == 0 {
-		ref = ""
-	} else if ref == "" {
-		s.nextRef++
-		ref = "m" + strconv.Itoa(s.nextRef)
-	} else if n, err := strconv.Atoi(strings.TrimPrefix(ref, "m")); err == nil && n > s.nextRef {
-		s.nextRef = n
+func (s *Session) nextOrderLocked() uint64 {
+	s.nextOrder++
+	return s.nextOrder
+}
+
+func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref) *sessionUser {
+	ref := ""
+	if msg.MessageID != 0 {
+		ref = strconv.FormatInt(msg.MessageID, 10)
 	}
 	referenced := append([]int64(nil), msg.AtList...)
 	if msg.Reply != nil && msg.Reply.SenderID > 0 {
@@ -181,22 +235,10 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		LogID: logID, Ref: ref, Content: strings.TrimSpace(msg.Content), At: msg.Time,
 		ReceivedAt: msg.ReceivedAt, Mentioned: msg.IsMentioned, SenderID: msg.UserID,
 		Nickname: msg.Nickname, ReferencedIDs: referenced, ArrivalSeq: msg.ArrivalSeq,
-		MessageID: msg.MessageID,
+		MessageID: msg.MessageID, Order: s.nextOrderLocked(),
 	}
 	user.Text = s.renderUserText(msg, ref, mediaRefs)
 	user.Msg = schema.UserAgenticMessage(user.Text)
-	if s.refs == nil {
-		s.refs = map[string]int64{}
-	}
-	if s.refsLog == nil {
-		s.refsLog = map[string]uint{}
-	}
-	if ref != "" {
-		s.refs[ref] = msg.MessageID
-		if logID != 0 {
-			s.refsLog[ref] = logID
-		}
-	}
 	for _, item := range mediaRefs {
 		s.media.register(item)
 	}
@@ -270,7 +312,20 @@ func (s *Session) PendingAfter(seq uint64) []tools.PendingMessage {
 		if user.ArrivalSeq <= seq || user.ArrivalSeq <= s.injected {
 			continue
 		}
-		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Msg: user.Msg, TranscriptID: user.TranscriptID})
+		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
+	}
+	return list
+}
+
+// PendingAgentMessages 返回尚未被当前模型请求包含的会话间消息。
+func (s *Session) PendingAgentMessages() []tools.PendingMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list := make([]tools.PendingMessage, 0)
+	for _, user := range s.pending {
+		if user != nil && user.IsAgentMessage {
+			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
+		}
 	}
 	return list
 }
@@ -316,50 +371,6 @@ func (s *Session) NoteSelfSpoke(at time.Time) {
 	s.selfAt = append(s.selfAt, at)
 }
 
-func (s *Session) ResolveMessageRef(ref string) (int64, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	messageID, ok := s.refs[strings.TrimSpace(ref)]
-	return messageID, ok
-}
-
-func (s *Session) ResolveMessageLogRef(ref string) (uint, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	logID, ok := s.refsLog[strings.TrimSpace(ref)]
-	return logID, ok
-}
-
-func (s *Session) RegisterMessage(messageID int64) string {
-	if messageID == 0 {
-		return ""
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, user := range s.pending {
-		if user.MessageID == messageID {
-			return user.Ref
-		}
-	}
-	for _, entry := range s.seen {
-		if entry.user != nil && entry.user.MessageID == messageID {
-			return entry.user.Ref
-		}
-	}
-	for ref, id := range s.refs {
-		if id == messageID {
-			return ref
-		}
-	}
-	s.nextRef++
-	ref := "m" + strconv.Itoa(s.nextRef)
-	if s.refs == nil {
-		s.refs = map[string]int64{}
-	}
-	s.refs[ref] = messageID
-	return ref
-}
-
 func (s *Session) RegisterMediaRefs(refs []media.Ref) {
 	if len(refs) == 0 {
 		return
@@ -377,10 +388,16 @@ func (s *Session) ResolveMediaByHash(hash string) (media.Ref, bool) {
 	return s.media.resolve(hash)
 }
 
+// LatestLogID 返回当前会话已经进入工作集的最新消息日志编号，用作工具读取快照
 func (s *Session) LatestLogID() uint {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var latest uint
+	for _, entry := range s.seen {
+		if entry.user != nil && entry.user.LogID > latest {
+			latest = entry.user.LogID
+		}
+	}
 	for _, user := range s.pending {
 		if user.LogID > latest {
 			latest = user.LogID
@@ -394,12 +411,12 @@ func (s *Session) RecentWindow(now time.Time, window time.Duration) (total int, 
 	defer s.mu.Unlock()
 	since := now.Add(-window)
 	for _, entry := range s.seen {
-		if entry.user != nil && !entry.user.At.Before(since) {
+		if entry.user != nil && !entry.user.IsAgentMessage && !entry.user.At.Before(since) {
 			total++
 		}
 	}
 	for _, user := range s.pending {
-		if !user.At.Before(since) {
+		if !user.IsAgentMessage && !user.At.Before(since) {
 			total++
 		}
 	}
@@ -419,7 +436,6 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager) ([]*schema.
 	s.mu.Lock()
 	entries := append([]sessionEntry(nil), s.seen...)
 	pending := append([]*sessionUser(nil), s.pending...)
-	refVersions := append([]string(nil), s.autoRefVersions...)
 	s.mu.Unlock()
 
 	digestText := ""
@@ -449,30 +465,49 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager) ([]*schema.
 	}
 	var referenceID uint
 	if mem != nil {
-		refText, versions, refErr := mem.BuildAutoReference(ctx, s.kind, s.autoReferenceUserIDs())
-		if refErr != nil {
-			return nil, refErr
+		pendingTexts := make([]string, 0, len(pending))
+		for _, user := range pending {
+			if user != nil {
+				pendingTexts = append(pendingTexts, user.Text)
+			}
 		}
-		if !equalVersionList(versions, refVersions) {
-			content := refText
-			if content == "" {
-				content = "【内部参考更新】先前的内部参考已不再有效。"
-			} else {
-				content = "【内部参考更新】以下为当前有效内部参考；若与压缩基线冲突，以本条为准。\n" + content
+		var pendingEntry *sessionEntry
+		for i := range entries {
+			if entries[i].transcriptID != 0 && entries[i].visibleSeq == 0 && entries[i].msg != nil && entries[i].msg.Extra["kind"] == "reference" {
+				pendingEntry = &entries[i]
+				break
 			}
-			refMsg := schema.UserAgenticMessage(content)
-			refMsg.Extra = map[string]any{"source": "internal_context", "reference_versions": versions}
-			payload, _ := sonic.Marshal(refMsg)
-			entry := &memory.TranscriptEntry{ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "internal_reference", Payload: payload}
-			if err := mem.AppendTranscript(ctx, entry); err != nil {
-				return nil, err
+		}
+		if pendingEntry != nil {
+			referenceID = pendingEntry.transcriptID
+		} else {
+			snapshot, refErr := mem.BuildAutoReference(ctx, s.kind, s.targetID, s.autoReferenceUserIDs(), pendingTexts)
+			if refErr != nil {
+				return nil, refErr
 			}
-			referenceID = entry.ID
-			messages = append(messages, refMsg)
-			s.mu.Lock()
-			s.seen = append(s.seen, sessionEntry{msg: refMsg, transcriptID: entry.ID})
-			s.autoRefVersions = append([]string(nil), versions...)
-			s.mu.Unlock()
+			seen, seenErr := mem.ReferenceSeenForSession(ctx, s.kind, s.targetID)
+			if seenErr != nil {
+				return nil, seenErr
+			}
+			delta, deltaErr := mem.BuildReferenceDelta(ctx, snapshot, seen)
+			if deltaErr != nil {
+				return nil, deltaErr
+			}
+			if delta.Text != "" {
+				refMsg := schema.UserAgenticMessage(delta.Text)
+				refMsg.Extra = map[string]any{"source": "internal_context", "kind": "reference", "reference_receipts": delta.Receipt}
+				payload, _ := sonic.Marshal(refMsg)
+				entry := &memory.TranscriptEntry{ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "internal_reference", Payload: payload}
+				if err := mem.AppendTranscript(ctx, entry); err != nil {
+					return nil, err
+				}
+				referenceID = entry.ID
+				messages = append(messages, refMsg)
+				s.mu.Lock()
+				s.seen = append(s.seen, sessionEntry{msg: refMsg, transcriptID: entry.ID})
+				s.pendingReferenceReceipt = &delta.Receipt
+				s.mu.Unlock()
+			}
 		}
 	}
 
@@ -495,13 +530,6 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager) ([]*schema.
 		}
 	}
 	return messages, nil
-}
-
-// SetAutoReferenceVersions 恢复已经注入过的内部参考版本，避免重启后重复追加
-func (s *Session) SetAutoReferenceVersions(versions []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.autoRefVersions = append([]string(nil), versions...)
 }
 
 func (s *Session) autoReferenceUserIDs() []int64 {
@@ -537,16 +565,4 @@ func maxPendingSeq(pending []*sessionUser) uint64 {
 		}
 	}
 	return seq
-}
-
-func equalVersionList(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

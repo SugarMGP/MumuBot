@@ -168,7 +168,9 @@ go vet ./...
 - 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
 - 戳一戳只作为普通观察事件，不能成为回应理由；它没有稳定消息 ID，正文以 `[观察]` 渲染，不能借用其他消息 ID 回应。
 - 每个会话维护 `conversation_sessions` + `conversation_transcript` 持续工作集；真人消息各自是 user 行，助手与工具轨迹原样保存，压缩成功后只删除被 checkpoint 覆盖的 transcript 行。
-- `m1`、`m2` 是 `message_logs.message_ref` 上的稳定会话编号，压缩删除 transcript 后仍然存在；`h12345` 是全局内部消息 ID，只用于历史读取，不能当作当前会话可回复编号。
+- `conversation_sessions.reference_seen` 保存每个会话的 auto/tool 已见版本；参考 pending receipt 写入 transcript extra，模型请求成功后才合并。
+- 会话间消息写入 `session_messages`，目标 transcript 使用 `entry_kind=agent_message`；只记录来源会话和投递时间，不保存 requester/reply_to，不共享 transcript。`listSessions` 可返回全部会话元数据，`sendSessionMessage` 只允许 active 且未 blocked 的目标，不自动回复。
+- Agent-facing 消息只使用全局唯一的 `one_bot_message_id`；不维护 `message_ref`、`next_message_ref`、`m` 或 `h` 自定义编号。消息 ID 不保证有序，聊天顺序继续使用 `ArrivalSeq`。
 - `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚、不自动重试，下一次由新消息触发。
 - `visible_seq` 必须按模型请求中的真实消息顺序分配：摘要/内部参考在前、待处理输入在后；不要按数据库主键重新排序。
 - 上下文顺序固定为：稳定系统指令和工具 → checkpoint 概览 → active 话题摘要 → `reference_baseline` → checkpoint 后 transcript → 新内部参考 → 新真人消息 → assistant/tool。
@@ -177,8 +179,8 @@ go vet ./...
 - 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
 - 每轮原样回传 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 保存同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。
 - 主上下文装配不静默截断 transcript；预算达到窗口 90% 时触发一次完整同步压缩，目标 40%，55% 为可接受上限，超过 55% 不提交。
-- 压缩最多两次模型尝试，共享 12 步和 300 秒；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readHistory`、`readToolResult` 和一次 `finishCompaction`。
-- 压缩只整理冻结的完整旧交互段，保护当前触发批次、活动工具链、未闭合 CallID 和近期尾部；提交事务原子写入话题、归属、来源、概览、检查点并删除覆盖 transcript。
+- 压缩最多两次模型尝试，共享 12 步和 300 秒；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和一次 `finishCompaction`；不提供 `readHistory`。
+- 压缩只整理冻结的完整旧交互段，保护当前触发批次、活动工具链、未闭合 CallID 和近期尾部；提交事务原子写入话题、归属、`is_anchor` 来源、概览、检查点并删除覆盖 transcript；未分配超过 16 条或 20% 时只允许一次修正。
 - 压缩失败、参数遗漏、预算超限、数据库失败或提交结果不明时保留旧 transcript；失败后至少退避 60 秒，不能让模型带着超限上下文继续请求。
 - `conversation_tool_calls` 不存在；工具调用和结果直接是 `entry_kind=tool` 的 transcript 行。`run_id + call_id` 幂等，同 CallID 复用已有回执，不同 CallID 的重复搜索或多次发言不拦截。
 - 大工具结果超过约 4000 token 时，完整文本保存为内容寻址文件，模型只看到约 1000 token 预览和 `result_ref`；孤立文件至少保留 24 小时后再清理。
@@ -193,20 +195,20 @@ go vet ./...
 - 停机时不清零运行时账号；提交队列排空期间仍按真实账号识别自身消息。
 - 思考从会话起始到达序号开始；运行期间新消息由 `BeforeModelRewriteState` 注入，`getNewMessages` 重复调用不重复返回同一批。
 - 消息时间固定、不注入“最近在场的人”；群聊自动参考最多选当前批次发送者、提及和回复目标 3 人。
-- 长期记忆由主 Agent 通过 `searchMemory`、`readMemory`、`manageMemory` 维护；类型只允许 fact/preference/constraint/goal/term/expression/alias，更新和归档必须基于已读取版本。
-- `knowledge_items` 用 `subject_user_id` 表示主体（0 群组、运行时 self 自身、正数人物），模型输入 `-1` 必须在工具边界解析；`conversation_kind + target_id` 只是来源，不是检索隔离。
+- 长期记忆由主 Agent 通过 `searchMemory`、`readMemory`、`manageMemory` 维护；只使用 `profile/experience` 两种 memory type，更新和归档必须基于已读取版本。
+- `knowledge_items` 使用 `subject_type + subject_target` 表示主体，`subject_target` 为字符串；主体类型只允许 group/user/self/object，self 由后端固定为 `self`；记忆类型只允许 profile/experience，来源字段不保存。
 - 知识正文语义变化新增条目；同主体、同类型、同内容哈希精确去重，重复创建不复活归档条目。
 - `manageMemory` 一批 1–8 项全成功或全回滚；主 Agent 不物理删除，后台只提供启用、归档和查看修订。
 - 具体情感固定 12 类；同一对象同一情感只保留一份当前状态，变化写入 `emotion_revisions`。强度只接收轻微/明显/强烈/已平复，按真实时间惰性衰减，不做定时写库或独立情感判断模型。
-- 精力与交流意愿保留辅助状态；好感度继续保持全局 `user_id` 维度，不按群隔离，也不由情感状态替代。
-- 自动内部参考预算固定约 1200 token：核心记忆 800、明确约定 200、情感与总体状态 200；完整条目原子选取，无内容不凑满。
+- 精力与交流意愿保留辅助状态；不再保留 intimacy、成员发言量或最近活跃统计，关系由 profile/experience 记忆表达。
+- 自动内部参考预算约 1200 token：pinned 记忆 1000、情感与总体状态 200；只选择当前会话主体和精确匹配的 pinned object，按 `reference_seen` 的 auto/tool 账本生成增量。
 - 内部参考是独立 user 类型 `internal_context`，不计真人消息、不触发门控；只在版本、语义或强度档位变化时追加，压缩写入新的 `reference_baseline`，不回头修改旧 transcript。
 - 话题系统承担三项职责：压缩后的会话表示、后台浏览管理单位、关键词 → 话题概览 → 关键消息 → 原文前后文的分层查询。
-- 话题只有 active/dormant，统一群聊和私聊作用域；摘要不可变且按版本保存，来源分 source/anchor，撤回不改写、不使话题失效。
+- 话题只有 active/dormant，统一群聊和私聊作用域；摘要不可变且按版本保存，消息来源用 `is_anchor` 标记关键消息，撤回不改写、不使话题失效。
 - `context_compaction_checkpoints.active_topic_versions` 保持稳定顺序；dormant 话题不进入当前摘要块但始终可搜索。退出 active 仍有 open loop 时，程序必须把未完成事项补进 overview。
 - `overview` 是会话级滚动概览，不是新 Agent；压缩器必须写结论、不确定性、纠正、边界、动作结果和未完成事项，程序不静默截断摘要。
-- 首次从旧版升级接续旧摘要与预算内近期原文，不回填伪造的旧 assistant/tool 轨迹；旧证据、关系、学习水位、私聊摘要和旧心情原表保留为 `legacy_*`。
-- 跨会话检索允许用于记忆、话题和历史，结果必须带群聊/好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
+- v17 只接受空库；不保留旧迁移、旧证据、关系或学习水位表，也不回填伪造的旧 assistant/tool 轨迹。
+- 跨会话检索允许用于记忆、话题和历史；记忆正文不保存来源，历史/话题结果必须带群聊或好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
 - 系统提示只做增量调整：群聊与私聊分别维护 `config/persona_group.prompt` 和 `config/persona_private.prompt`，不复用同一模板，也不恢复已删除的成组矫正案例。
 
 ## 数据与检索边界
@@ -214,11 +216,11 @@ go vet ./...
 - `ConversationMessage.Content`、`MessageLog.TextContent` 保存原始文本；`FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文，历史工具可同时返回两者以保留媒体占位。
 - 禁止用展示文本替代原始文本做知识主体判断；原始文本为空时，语义记忆提取跳过，但话题压缩仍可整理当时可见的展示动作与工具结果。
 - 摘要和记忆涉及机器人自己时用第一人称，涉及他人时用第三人称；人称不改变主体与来源校验。
-- 话题检索先做标题、概况、关键词的精确子串和 `pg_trgm` 近似候选，再按关键词命中数、标题命中、相似度、更新时间和内部 ID 排序；不做中文分词或向量检索。
-- 长期记忆检索使用 `content/label` 的 ILIKE + `pg_trgm` 候选；历史原文使用 `text_content` 的 ILIKE + `pg_trgm`。空关键词可浏览，失败不伪造结果。
-- 跨会话历史倒序分页使用内部 ID 的 `before_id`（`id < before_id`）；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。
+- 话题检索先做标题、概况、关键词的精确子串召回，再用单一 similarity/更新时间/内部 ID 稳定排序；不做中文分词、向量检索或多层命中权重。
+- 长期记忆检索使用 `content/label/subject_target` 的精确子串召回，`pg_trgm` 只用于排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
+- Agent 历史查询使用不透明 cursor 和全局 OneBot message ID；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。
 - 持久化使用 PostgreSQL 18；OneBot 首次取得 `self_id` 后才打开数据库，连接建立后业务事件仍等待 schema 迁移、Agent 恢复和后台初始化完成。
-- schema 由 `schema_migrations` 记录并顺序执行；完全空库直接初始化 v15 后执行 v16 清理，v14 原地升级到 v15 再执行 v16；更旧、断档、部分结构或高版本数据库拒绝启动。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
+- schema 由 `schema_migrations` 记录并为 v17；只接受空库初始化，旧 schema 明确拒绝，不自动迁移或 DROP。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
 - 管理后台日志与模型统计口径保持现有约束；媒体和原文永久保留，只有 transcript、摘要版本和未被引用的工具结果文件会按各自规则变化。
 - 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。
@@ -233,4 +235,4 @@ go vet ./...
 ## 消息保留规则
 
 - `message_logs`、媒体原文和机器人已发送消息永久保留，不恢复按条数或时间清理。
-- 被压缩删除的只有 `conversation_transcript`；话题摘要、anchor/source、长期记忆和情感修订不能因清理工作集而丢失。
+- 被压缩删除的只有 `conversation_transcript`；话题摘要、`is_anchor` 来源、长期记忆和情感修订不能因清理工作集而丢失。

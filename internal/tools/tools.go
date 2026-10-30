@@ -23,6 +23,7 @@ type SpeakCallback func(ctx context.Context, targetID int64, content string, rep
 type SendStickerCallback func(ctx context.Context, targetID int64, fileName string, description string) error
 type SendImageURLCallback func(ctx context.Context, imageURL string) error
 type GetNewMessagesCallback func(ctx context.Context) (any, error)
+type SessionMessageCallback func(ctx context.Context, fromKind string, fromTargetID int64, toKind string, toTargetID int64, text string) (*memory.SessionMessage, error)
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
@@ -38,10 +39,12 @@ type ToolContext struct {
 	CurrentConversationOnly bool
 	RequestTokenEstimate    int
 	MemoryReadVersions      map[uint]uint64
+	ReferenceSeenPending    map[string]string
 	SpeakCallback           SpeakCallback       // 发言回调
 	SendStickerCallback     SendStickerCallback // 发送表情包回调
 	SendImageURLCallback    SendImageURLCallback
 	GetNewMessagesCallback  GetNewMessagesCallback
+	SessionMessageCallback  SessionMessageCallback
 	ReadForwardCallback     func(ctx context.Context, id string, index int) (any, error)
 	GroupInfoCallback       func(ctx context.Context) string
 	Session                 SessionContext
@@ -49,9 +52,8 @@ type ToolContext struct {
 	ObservedThroughSeq      uint64
 	RecallCallback          func(messageID int64, arrivalSeq uint64)
 
-	seenMu        sync.Mutex
-	seenToolCalls map[string]struct{}
-	memoryMu      sync.Mutex
+	memoryMu    sync.Mutex
+	referenceMu sync.Mutex
 }
 
 // ctxKey 上下文键类型
@@ -71,28 +73,6 @@ func GetToolContext(ctx context.Context) *ToolContext {
 		return tc
 	}
 	return nil
-}
-
-// IsToolCallSeen 判断本轮是否已经成功执行过相同工具调用
-func (tc *ToolContext) IsToolCallSeen(toolName string, arguments string) bool {
-	key := toolName + "-" + arguments
-
-	tc.seenMu.Lock()
-	defer tc.seenMu.Unlock()
-
-	_, ok := tc.seenToolCalls[key]
-	return ok
-}
-
-// MarkToolCallSucceeded 记录已经成功执行的工具调用
-func (tc *ToolContext) MarkToolCallSucceeded(toolName string, arguments string) {
-	key := toolName + "-" + arguments
-	tc.seenMu.Lock()
-	defer tc.seenMu.Unlock()
-	if tc.seenToolCalls == nil {
-		tc.seenToolCalls = make(map[string]struct{}, 8)
-	}
-	tc.seenToolCalls[key] = struct{}{}
 }
 
 func truncateToolLogString(raw string, max int) string {
@@ -123,6 +103,39 @@ func (tc *ToolContext) MarkMemoryRead(id uint, version uint64) {
 		tc.MemoryReadVersions = map[uint]uint64{}
 	}
 	tc.MemoryReadVersions[id] = version
+}
+
+// MarkReferenceSeen 记录本轮工具实际展示过的参考项；模型请求成功后才由会话落库。
+func (tc *ToolContext) MarkReferenceSeen(key, version string) {
+	if tc == nil || key == "" || version == "" {
+		return
+	}
+	tc.referenceMu.Lock()
+	defer tc.referenceMu.Unlock()
+	if tc.ReferenceSeenPending == nil {
+		tc.ReferenceSeenPending = map[string]string{}
+	}
+	tc.ReferenceSeenPending[key] = version
+}
+
+// ReferenceSeenSnapshot 返回本轮待提交的参考回执。
+func (tc *ToolContext) ReferenceSeenSnapshot() map[string]string {
+	if tc == nil {
+		return nil
+	}
+	tc.referenceMu.Lock()
+	defer tc.referenceMu.Unlock()
+	return tc.ReferenceSeenPending
+}
+
+// ClearReferenceSeen 在 receipt 成功落库后清空。
+func (tc *ToolContext) ClearReferenceSeen() {
+	if tc == nil {
+		return
+	}
+	tc.referenceMu.Lock()
+	defer tc.referenceMu.Unlock()
+	tc.ReferenceSeenPending = nil
 }
 
 // MemoryVersion 读取本轮已经读取过的记忆版本
@@ -271,6 +284,9 @@ func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*Get
 	if limit <= 0 {
 		limit = 5
 	}
+	if limit > 99 {
+		limit = 99
+	}
 	if len(notices) > limit {
 		notices = notices[:limit]
 	}
@@ -303,7 +319,7 @@ type GetEssenceMessagesInput struct {
 }
 
 type EssenceMessageSummary struct {
-	MessageRef   string `json:"message_ref"`
+	MessageID    int64  `json:"message_id"`
 	SenderNick   string `json:"sender_nick"`
 	OperatorNick string `json:"operator_nick"`
 	OperatorTime string `json:"operator_time"`
@@ -337,6 +353,9 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 	if limit <= 0 {
 		limit = 8
 	}
+	if limit > 99 {
+		limit = 99
+	}
 	if len(messages) > limit {
 		messages = messages[:limit]
 	}
@@ -344,7 +363,7 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 	results := make([]EssenceMessageSummary, 0, len(messages))
 	for _, m := range messages {
 		results = append(results, EssenceMessageSummary{
-			MessageRef:   tc.Session.RegisterMessage(m.MessageID),
+			MessageID:    m.MessageID,
 			SenderNick:   m.SenderNick,
 			OperatorNick: m.OperatorNick,
 			OperatorTime: time.Unix(m.OperatorTime, 0).Format("2006-01-02 15:04:05"),
@@ -366,7 +385,7 @@ func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
 // ==================== 获取消息表情回应工具 ====================
 
 type GetMessageReactionsInput struct {
-	MessageRef string `json:"message_ref" jsonschema:"description=聊天记录中的消息编号，例如 m3"`
+	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID"`
 }
 
 type ReactionSummary struct {
@@ -391,9 +410,9 @@ func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInpu
 	if input == nil {
 		return nil, fmt.Errorf("表情回应查询参数不能为空")
 	}
-	messageID, ok := tc.Session.ResolveMessageRef(input.MessageRef)
-	if !ok {
-		return nil, fmt.Errorf("消息编号不是当前对话中的消息")
+	messageID := input.MessageID
+	if messageID == 0 {
+		return nil, fmt.Errorf("消息 ID 不能为空")
 	}
 
 	reactions, err := tc.Bot.GetMessageReactions(ctx, messageID)
