@@ -92,6 +92,17 @@ func main() {
 		zap.L().Fatal("记忆管理器创建失败", zap.Error(err))
 	}
 	defer memoryMgr.Close()
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := bootstrapPersonaPresets(bootstrapCtx, memoryMgr); err != nil {
+		bootstrapCancel()
+		_ = botClient.Close()
+		zap.L().Fatal("初始化人格预设失败", zap.Error(err))
+	}
+	bootstrapCancel()
+	if err := config.Reload(); err != nil {
+		_ = botClient.Close()
+		zap.L().Fatal("加载人格预设失败", zap.Error(err))
+	}
 	defer statsRecorder.Close()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := memoryMgr.CleanupToolResults(cleanupCtx, 24*time.Hour); err != nil {
@@ -189,4 +200,11 @@ func main() {
 	}
 
 	zap.L().Info("再见！")
+}
+
+// bootstrapPersonaPresets 用代码内置文本维护内置预设，空库时它同时是当前预设
+func bootstrapPersonaPresets(ctx context.Context, mgr *memory.Manager) error {
+	card, simulation := config.BuiltinPersonaTexts()
+	_, err := mgr.EnsureBuiltinPersonaPreset(ctx, card, simulation)
+	return err
 }

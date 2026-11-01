@@ -24,7 +24,8 @@ func (a *App) settingsPageData(r *http.Request, errorText string) views.Settings
 }
 
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
-	a.render(w, views.SettingsPage(a.settingsPageData(r, ""), r.URL.Path))
+	data := a.settingsPageData(r, "")
+	a.renderPageResponse(w, r, views.SettingsPage(data, r.URL.Path), views.PageContent(views.SettingsBody(data)))
 }
 
 func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
@@ -56,14 +57,6 @@ func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	var value any
 	var err error
 	switch section {
-	case config.SectionPersona:
-		value = config.PersonaConfig{
-			Name:                  strings.TrimSpace(r.FormValue("name")),
-			AliasNames:            splitLines(r.FormValue("aliases")),
-			Interests:             splitLines(r.FormValue("interests")),
-			GroupPromptTemplate:   strings.TrimSpace(r.FormValue("group_prompt")),
-			PrivatePromptTemplate: strings.TrimSpace(r.FormValue("private_prompt")),
-		}
 	case config.SectionAgent:
 		value = config.AgentConfig{
 			ThinkInterval:         parseIntValue(r.FormValue("think_interval")),
@@ -133,11 +126,17 @@ func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) renderSettingsError(w http.ResponseWriter, r *http.Request, message string) {
-	a.renderStatus(w, http.StatusBadRequest, views.SettingsPage(a.settingsPageData(r, message), r.URL.Path))
+	data := a.settingsPageData(r, message)
+	a.renderPageStatusResponse(w, r, http.StatusBadRequest, views.SettingsPage(data, r.URL.Path), views.PageContent(views.SettingsBody(data)))
 }
 
 func (a *App) redirectFlash(w http.ResponseWriter, r *http.Request, target, kind, title, body string) {
-	values := url.Values{}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		http.Redirect(w, r, target, http.StatusSeeOther)
+		return
+	}
+	values := parsed.Query()
 	if kind != "" {
 		values.Set("flash_kind", kind)
 	}
@@ -147,10 +146,8 @@ func (a *App) redirectFlash(w http.ResponseWriter, r *http.Request, target, kind
 	if body != "" {
 		values.Set("flash_body", body)
 	}
-	if encoded := values.Encode(); encoded != "" {
-		target += "?" + encoded
-	}
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	parsed.RawQuery = values.Encode()
+	http.Redirect(w, r, parsed.String(), http.StatusSeeOther)
 }
 
 func splitLines(raw string) []string {

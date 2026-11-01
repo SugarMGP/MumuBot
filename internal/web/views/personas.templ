@@ -1,0 +1,144 @@
+package views
+
+import (
+	"fmt"
+	"strconv"
+)
+
+templ PersonasPage(data PersonasPageData, currentPath string) {
+	@Layout(LayoutData{Title: "人格预设", CurrentPath: currentPath, NavItems: NavItems(), Flash: data.Flash}, PersonasBody(data))
+}
+
+templ PersonasBody(data PersonasPageData) {
+	<div class="space-y-6">
+		<div class="flex items-end justify-between gap-6">
+			@PageHeader("人格预设", "一份预设包含人格卡与仿真提示词；切换后在下一段对话总结时生效。", "人格")
+			<a class="btn btn-primary btn-sm" href="/admin/personas?new=1" hx-get="/admin/personas?new=1" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">新建预设</a>
+		</div>
+		if data.Error != "" {
+			<div class="alert alert-error"><span>{ data.Error }</span></div>
+		}
+		<div class="grid grid-cols-[clamp(240px,20vw,300px)_minmax(0,1fr)] items-start gap-5">
+			@personaPresetList(data)
+			@personaPresetEditor(data)
+		</div>
+	</div>
+	@personaDeleteDialog()
+}
+
+templ personaPresetList(data PersonasPageData) {
+	<section class="card">
+		<div class="card-body gap-3 p-4">
+			<h2 class="text-lg font-semibold text-base-content">全部预设</h2>
+			if len(data.Presets) == 0 {
+				<p class="text-sm text-base-content/60">还没有预设。</p>
+			}
+			<div class="space-y-2">
+				for _, preset := range data.Presets {
+					<a class={ joinClasses("block rounded-[var(--admin-inner-radius)] border p-3 transition", ternaryString(preset.ID == data.Selected.ID && !data.Creating, "border-primary/40 bg-primary/5", "border-base-300 bg-base-100 hover:border-primary/30")) } href={ templ.SafeURL(fmt.Sprintf("/admin/personas?id=%d", preset.ID)) } hx-get={ fmt.Sprintf("/admin/personas?id=%d", preset.ID) } hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">
+						<div class="flex items-center justify-between gap-2">
+							<span class="truncate text-sm font-medium text-base-content">{ preset.Name }</span>
+							<span class="flex shrink-0 items-center gap-1">
+								if preset.Active {
+									<span class="badge badge-primary badge-soft badge-sm">使用中</span>
+								}
+								if preset.Builtin {
+									<span class="badge badge-ghost badge-sm">内置</span>
+								}
+							</span>
+						</div>
+						<p class="mt-1 text-xs text-base-content/60">{ fmt.Sprintf("人格卡 %d 字 · 仿真 %d 字", preset.CardChars, preset.SimChars) }</p>
+						<p class="mt-0.5 text-xs text-base-content/45">{ formatTime(preset.UpdatedAt) } 更新</p>
+					</a>
+				}
+			</div>
+		</div>
+	</section>
+}
+
+templ personaPresetEditor(data PersonasPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<form id="persona-form" class="space-y-4" method="post" action="/admin/personas">
+				<input type="hidden" name="id" value={ fmt.Sprintf("%d", data.Selected.ID) }/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Selected.Version) }/>
+				<div>
+					<h2 class="text-lg font-semibold text-base-content">
+						if data.Creating {
+							新建预设
+						} else {
+							{ data.Selected.Name }
+						}
+					</h2>
+					<p class="mt-1 text-sm text-base-content/60">
+						if data.Selected.Builtin {
+							内置预设随版本更新，不能直接编辑；需要改动请先克隆一份。
+						} else {
+							改完保存即可；标记按行首 [群] / [私] / [通用] 识别，也可以直接用下面的按钮设置。
+						}
+					</p>
+				</div>
+				<div class="grid grid-cols-2 gap-3">
+					<label class="floating-label"><span>名称</span><input class="input w-full" name="name" value={ data.Selected.Name } required/></label>
+					<label class="floating-label"><span>说明</span><input class="input w-full" name="description" value={ data.Selected.Description }/></label>
+				</div>
+				<div class="flex flex-wrap items-center gap-2">
+					<button class="btn btn-primary btn-sm" type="submit" name="action" value={ ternaryString(data.Creating, "create", "save") } disabled?={ data.Selected.Builtin && !data.Creating }>
+						if data.Creating {
+							创建预设
+						} else {
+							保存
+						}
+					</button>
+					if !data.Creating && !data.Selected.Active {
+						<button class="btn btn-ghost btn-sm" type="submit" name="action" value="activate">设为当前使用</button>
+					}
+					if !data.Creating {
+						<button class="btn btn-ghost btn-sm" type="submit" name="action" value="clone">克隆一份</button>
+					}
+					if !data.Creating && !data.Selected.Builtin && !data.Selected.Active {
+						<button class="btn btn-ghost btn-sm text-error" type="button" data-persona-delete>删除</button>
+					}
+					<span class="badge badge-warning badge-soft badge-sm" data-dirty-chip hidden>未保存</span>
+				</div>
+				@personaTextEditor("persona_card", "人格卡", "她是谁、怎么说话。不要在这里写工具名。", data.Selected.PersonaCard, data.Selected.CardChars, data.CardLimit, data.Selected.Builtin && !data.Creating)
+				@personaTextEditor("simulation_prompt", "仿真提示词", "协议、时序、安全与工具指引。", data.Selected.Simulation, data.Selected.SimChars, data.SimLimit, data.Selected.Builtin && !data.Creating)
+			</form>
+		</div>
+	</section>
+}
+
+templ personaTextEditor(name string, title string, hint string, value string, chars int, limit int, readonly bool) {
+	<div class="space-y-2" data-persona-editor data-limit={ strconv.Itoa(limit) }>
+		<div class="flex items-center justify-between gap-3">
+			<div>
+				<h3 class="text-sm font-semibold text-base-content">{ title }</h3>
+				<p class="mt-0.5 text-xs text-base-content/60">{ hint }</p>
+			</div>
+			<div class="join" role="group" aria-label={ title + "段落场合" }>
+				<button type="button" class="btn btn-sm join-item btn-ghost" data-mode="群" aria-pressed="false" disabled?={ readonly }>群聊</button>
+				<button type="button" class="btn btn-sm join-item btn-ghost" data-mode="私" aria-pressed="false" disabled?={ readonly }>私聊</button>
+				<button type="button" class="btn btn-sm join-item btn-ghost" data-mode="通用" aria-pressed="false" disabled?={ readonly }>通用</button>
+			</div>
+		</div>
+		<textarea class="textarea w-full font-mono text-xs leading-relaxed" name={ name } rows="16" data-editor aria-label={ title } readonly?={ readonly }>{ value }</textarea>
+		<div class="flex items-center justify-between text-xs text-base-content/60">
+			<span data-counter>{ fmt.Sprintf("%d 字 / 上限 %d", chars, limit) }</span>
+			<span>标记不显示，用底色区分；不写标记就是通用</span>
+		</div>
+		<div class="space-y-1 rounded-[var(--admin-inner-radius)] border border-base-300 bg-base-100 p-3" data-preview></div>
+	</div>
+}
+
+templ personaDeleteDialog() {
+	<dialog id="persona-delete-dialog" class="modal" aria-labelledby="persona-delete-title">
+		<div class="modal-box max-w-md border border-base-300 p-6">
+			@DialogHeader("删除这份预设？", "删除后无法找回，正在使用的预设不能删除。", "persona-delete-title", "#persona-delete-dialog")
+			<div class="modal-action">
+				<form method="dialog"><button class="btn btn-ghost">取消</button></form>
+				<button class="btn btn-error" type="submit" form="persona-form" name="action" value="delete" data-persona-delete-confirm>删除</button>
+			</div>
+		</div>
+		<form method="dialog" class="modal-backdrop"><button aria-label="关闭弹层">关闭</button></form>
+	</dialog>
+}

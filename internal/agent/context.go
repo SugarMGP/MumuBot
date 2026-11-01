@@ -61,7 +61,7 @@ func resolveMessageDisplayName(groupCard, nickname string) string {
 func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.ConversationMessage, userID int64) string {
 	selfID := a.bot.GetSelfID()
 	if selfID > 0 && userID == selfID {
-		return botMentionDisplayName(a.personaFor(ctx).GetName())
+		return botMentionDisplayName(a.botName())
 	}
 	if displayName := strings.TrimSpace(msg.AtNames[userID]); displayName != "" {
 		return displayName

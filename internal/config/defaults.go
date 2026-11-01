@@ -4,11 +4,9 @@ package config
 func DefaultRuntime() RuntimeConfig {
 	return RuntimeConfig{
 		Persona: PersonaConfig{
-			Name:                  "沐沐大魔王",
-			AliasNames:            []string{"mumu", "牢沐", "沐沐"},
-			Interests:             []string{"编程", "数码科技", "二次元", "单机游戏", "少女乐队番", "异世界番", "Minecraft"},
-			GroupPromptTemplate:   defaultGroupPrompt,
-			PrivatePromptTemplate: defaultPrivatePrompt,
+			PresetName:  PersonaPresetFallbackName,
+			PersonaCard: builtinPersonaCard,
+			Simulation:  builtinSimulationPrompt,
 		},
 		Agent: AgentConfig{
 			ThinkInterval:         15,

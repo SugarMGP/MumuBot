@@ -67,7 +67,7 @@ func initializeV17Schema(db *gorm.DB) error {
 			target_id BIGINT NOT NULL CHECK(target_id>0),
 			input_seq BIGINT,
 			visible_seq BIGINT,
-			entry_kind TEXT NOT NULL CHECK(entry_kind IN ('user','assistant','tool','internal_reference','observation','agent_message')),
+			entry_kind TEXT NOT NULL CHECK(entry_kind IN ('user','assistant','tool','internal_reference','observation','agent_message','system_prompt','context_digest','group_note','system_note')),
 			message_log_id BIGINT REFERENCES message_logs(id) ON DELETE RESTRICT,
 			run_id TEXT NOT NULL DEFAULT '',
 			tool_call_id TEXT NOT NULL DEFAULT '',
@@ -279,6 +279,20 @@ func initializeV17Schema(db *gorm.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`CREATE TABLE persona_presets (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE CHECK(btrim(name)<>''),
+			description TEXT NOT NULL DEFAULT '',
+			persona_card TEXT NOT NULL CHECK(btrim(persona_card)<>''),
+			simulation_prompt TEXT NOT NULL CHECK(btrim(simulation_prompt)<>''),
+			builtin BOOLEAN NOT NULL DEFAULT false,
+			active BOOLEAN NOT NULL DEFAULT false,
+			version BIGINT NOT NULL DEFAULT 1 CHECK(version>0),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE UNIQUE INDEX uq_persona_presets_active ON persona_presets(active) WHERE active`,
+		`CREATE UNIQUE INDEX uq_persona_presets_builtin ON persona_presets(builtin) WHERE builtin`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

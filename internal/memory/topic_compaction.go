@@ -280,6 +280,9 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 		if err := tx.Where("conversation_kind=? AND target_id=? AND entry_kind='internal_reference' AND visible_seq IS NULL", input.ConversationKind, input.TargetID).Delete(&TranscriptEntry{}).Error; err != nil {
 			return err
 		}
+		if err := m.DeleteTranscriptHeads(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq); err != nil {
+			return err
+		}
 		if err := m.DeleteTranscriptThrough(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq); err != nil {
 			return err
 		}

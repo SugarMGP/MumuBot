@@ -64,10 +64,21 @@ func Reload() error {
 	versions := make(map[string]int64)
 	for _, row := range rows {
 		versions[row.ConfigKey] = row.Version
+		// 旧版人格配置已改由 persona_presets 管理，这里的残留行在启动时导入一次后忽略
+		if row.ConfigKey == SectionPersona {
+			continue
+		}
 		if err := applySection(&cfg, row.ConfigKey, row.ConfigValue); err != nil {
 			zap.L().Warn("动态配置项无效，使用默认值", zap.String("key", row.ConfigKey), zap.Error(err))
 			continue
 		}
+	}
+	persona, err := loadActivePersona(db)
+	if err != nil {
+		return err
+	}
+	if persona != nil {
+		cfg.Persona = *persona
 	}
 	validated, err := cfg.Validate()
 	if err != nil {
@@ -174,8 +185,6 @@ func ResetSection(ctx context.Context, key string, expectedVersion int64) error 
 
 func applySection(cfg *RuntimeConfig, key string, raw json.RawMessage) error {
 	switch key {
-	case SectionPersona:
-		return json.Unmarshal(raw, &cfg.Persona)
 	case SectionAgent:
 		return json.Unmarshal(raw, &cfg.Agent)
 	case SectionChat:

@@ -325,13 +325,22 @@ func (m *Manager) GetTranscript(ctx context.Context, id uint) (*TranscriptEntry,
 func (m *Manager) VisibleTranscript(ctx context.Context, kind string, targetID int64, afterVisibleSeq uint64) ([]TranscriptEntry, error) {
 	var rows []TranscriptEntry
 	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID)
+	// 代头行在首次成功请求前没有 visible_seq，必须一并恢复，否则重启会重复写入
+	openKinds := "('assistant','tool','system_prompt','context_digest','group_note','system_note')"
 	if afterVisibleSeq > 0 {
-		q = q.Where("(visible_seq>? OR (visible_seq IS NULL AND entry_kind IN ('assistant','tool')))", afterVisibleSeq)
+		q = q.Where("(visible_seq>? OR (visible_seq IS NULL AND entry_kind IN "+openKinds+"))", afterVisibleSeq)
 	} else {
-		q = q.Where("visible_seq IS NOT NULL OR entry_kind IN ('assistant','tool')")
+		q = q.Where("visible_seq IS NOT NULL OR entry_kind IN " + openKinds)
 	}
-	err := q.Order("visible_seq NULLS LAST,id").Find(&rows).Error
+	// 代头三类永远排在最前，其余按交付顺序
+	err := q.Order("CASE WHEN entry_kind IN ('system_prompt','group_note','context_digest') THEN 0 ELSE 1 END, visible_seq NULLS LAST, id").Find(&rows).Error
 	return rows, err
+}
+
+// DeleteTranscriptHeads 删除压缩换代的头部行，下一代由新的预设重新写入
+func (m *Manager) DeleteTranscriptHeads(tx *gorm.DB, kind string, targetID int64, visibleSeq uint64) error {
+	return tx.Where("conversation_kind=? AND target_id=? AND entry_kind IN ('system_prompt','group_note','context_digest') AND (visible_seq IS NULL OR visible_seq<=?)", kind, targetID, visibleSeq).
+		Delete(&TranscriptEntry{}).Error
 }
 
 // DeleteTranscriptThrough 删除检查点覆盖的工作集记录

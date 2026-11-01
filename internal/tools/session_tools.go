@@ -157,5 +157,5 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 }
 
 func NewSendSessionMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendSessionMessage", "向另一个 active 且未 blocked 的群聊或私聊会话投递一条自然语言消息；只发送必要信息，不读取目标会话的聊天正文。", sendSessionMessage)
+	return utils.InferTool("sendSessionMessage", "向另一个会话投递一条消息。", sendSessionMessage)
 }

@@ -38,7 +38,8 @@ func (a *App) modelsPageData(r *http.Request, errorText string) views.ModelPageD
 }
 
 func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
-	a.render(w, views.ModelsPage(a.modelsPageData(r, ""), r.URL.Path))
+	data := a.modelsPageData(r, "")
+	a.renderPageResponse(w, r, views.ModelsPage(data, r.URL.Path), views.PageContent(views.ModelsBody(data)))
 }
 
 func (a *App) handleModelAction(w http.ResponseWriter, r *http.Request) {
@@ -163,5 +164,6 @@ func (a *App) testModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) renderModelError(w http.ResponseWriter, r *http.Request, message string) {
-	a.renderStatus(w, http.StatusBadRequest, views.ModelsPage(a.modelsPageData(r, message), r.URL.Path))
+	data := a.modelsPageData(r, message)
+	a.renderPageStatusResponse(w, r, http.StatusBadRequest, views.ModelsPage(data, r.URL.Path), views.PageContent(views.ModelsBody(data)))
 }

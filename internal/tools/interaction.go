@@ -93,14 +93,7 @@ func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutp
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		`在群里说话。只有当你真的想说什么的时候才用，不用强迫自己每次都说话。
-【重要】使用规则：
-- speak每次只能发送**一条消息**，一条消息只承载一个可独立成立的意思；需要表达多个意思时，请调用多次speak
-- “一条消息”按意思划分，不按句号数量判断；即使语法上是一句话，只要包含多个判断、原因、转折或建议，也要拆开
-- 不要用逗号、空格、分号、句号或换行符串联多个本可独立发送的意思
-- 要回复某条消息时填写 reply_to（OneBot 消息 ID）参数，只有当发言内容与该消息强相关时才用；不要回复自己的消息
-- 要at群友时用mentions参数（可同时at多个人），不要在content里直接写"@"符号
-- 想发表情时在content里写%qface:名称%或%qface:编号%（例如%qface:微笑%），可以夹在文字中间任意位置；名称和编号先用searchFaces查。图片表情包用sendSticker单独发，不要写进文字里`,
+		"在群里说话。",
 		speakFunc,
 	)
 }
@@ -109,7 +102,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		`在私聊里说话。每次只能发送一条消息；需要回复某条消息时填写 reply_to（OneBot 消息 ID），不需要填写 mentions。想发表情时在 content 里写 %qface:名称% 或 %qface:编号%，名称和编号先用 searchFaces 查；图片表情包用 sendSticker 单独发。`,
+		"在私聊里说话。",
 		privateSpeakFunc,
 	)
 }
@@ -140,7 +133,7 @@ func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput
 func NewStayQuietTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"stayQuiet",
-		`保持沉默并结束思考。当话题你不熟悉、不感兴趣、或者觉得没必要插嘴时可直接使用。当你已经发言完毕且不再有新的内容要表达，使用本工具来结束思考。`,
+		"结束这一轮，不说话。",
 		stayQuietFunc,
 	)
 }
@@ -202,7 +195,7 @@ func privatePokeFunc(ctx context.Context, _ *PrivatePokeInput) (*PokeOutput, err
 func NewPokeTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"poke",
-		"戳一戳当前群里的群友。可以用来打招呼、吸引注意力或逗逗对方，不要频繁使用。",
+		"戳一戳群里的某个人。",
 		pokeFunc,
 	)
 }
@@ -211,7 +204,7 @@ func NewPokeTool() (tool.InvokableTool, error) {
 func NewPrivatePokeTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"poke",
-		"戳一戳当前私聊好友。可以用来打招呼、吸引注意力或逗逗对方，不需要填写 QQ 号。不要频繁使用。",
+		"戳一戳对方。",
 		privatePokeFunc,
 	)
 }

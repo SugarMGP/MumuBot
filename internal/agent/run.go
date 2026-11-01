@@ -179,16 +179,12 @@ func (h *sessionInjector) compactNow(ctx context.Context, session *Session, stat
 		tc.CompactionAttempts++
 		lastErr = h.agent.runCompaction(compactionCtx, session, candidate, state, tc.CompactionAttempts, &remainingSteps, feedback)
 		if lastErr == nil {
-			system := make([]*schema.AgenticMessage, 0, 1)
-			if len(state.Messages) > 0 && state.Messages[0] != nil && state.Messages[0].Role == schema.AgenticRoleTypeSystem {
-				system = append(system, state.Messages[0])
-			}
-			rebuilt, buildErr := session.Assemble(compactionCtx, h.agent.memory)
+			rebuilt, buildErr := h.agent.assembleMessages(compactionCtx, session)
 			if buildErr != nil {
 				lastErr = buildErr
 				break
 			}
-			state.Messages = append(system, rebuilt...)
+			state.Messages = rebuilt
 			tc.RequestTokenEstimate = session.EstimateRequestTokens(state.Messages, state.ToolInfos)
 			return nil
 		}
@@ -222,7 +218,7 @@ func (a *Agent) compactAfterOverflow(ctx context.Context, kind string, targetID 
 	tc = tools.GetToolContext(retryCtx)
 	pending := session.PendingMessages()
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
-	assembled, err := session.Assemble(retryCtx, a.memory)
+	assembled, err := a.assembleMessages(retryCtx, session)
 	if err != nil {
 		return false
 	}
@@ -390,29 +386,9 @@ func (a *Agent) markSessionRecalled(kind string, targetID, messageID int64) {
 	a.sessions.get(kind, targetID).MarkRecalledByMessageID(messageID)
 }
 
-// groupGenModelInput 生成群聊模型输入：系统指令在前，会话消息在后
-func (a *Agent) groupGenModelInput(ctx context.Context, _ string, input *adk.TypedAgentInput[*schema.AgenticMessage]) ([]*schema.AgenticMessage, error) {
-	groupExtra := ""
-	if tc := tools.GetToolContext(ctx); tc != nil {
-		extra, err := a.memory.WithContext(ctx).GetGroupExtraPrompt(ctx, tc.TargetID)
-		if err != nil {
-			zap.L().Warn("读取群额外提示词失败", zap.Int64("target_id", tc.TargetID), zap.Error(err))
-		} else {
-			groupExtra = extra
-		}
-	}
-	messages := make([]*schema.AgenticMessage, 0, len(input.Messages)+1)
-	messages = append(messages, schema.SystemAgenticMessage(a.personaFor(ctx).GetGroupInstruction(groupExtra)))
-	messages = append(messages, input.Messages...)
-	return messages, nil
-}
-
-// privateGenModelInput 生成私聊模型输入：系统指令在前，会话消息在后
-func (a *Agent) privateGenModelInput(ctx context.Context, _ string, input *adk.TypedAgentInput[*schema.AgenticMessage]) ([]*schema.AgenticMessage, error) {
-	messages := make([]*schema.AgenticMessage, 0, len(input.Messages)+1)
-	messages = append(messages, schema.SystemAgenticMessage(a.personaFor(ctx).GetPrivateInstruction()))
-	messages = append(messages, input.Messages...)
-	return messages, nil
+// passthroughModelInput 原样返回装配结果，人格与群说明已作为 transcript 行写入
+func (a *Agent) passthroughModelInput(ctx context.Context, _ string, input *adk.TypedAgentInput[*schema.AgenticMessage]) ([]*schema.AgenticMessage, error) {
+	return input.Messages, nil
 }
 
 func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID int64, chatAgent *adk.TypedChatModelAgent[*schema.AgenticMessage], session *Session) error {
@@ -420,7 +396,7 @@ func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID in
 	tc := tools.GetToolContext(retryCtx)
 	pending := session.PendingMessages()
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
-	messages, err := session.Assemble(retryCtx, a.memory)
+	messages, err := a.assembleMessages(retryCtx, session)
 	if err != nil {
 		return err
 	}

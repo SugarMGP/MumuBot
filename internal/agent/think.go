@@ -177,13 +177,13 @@ func (a *Agent) thinkGroup(groupID int64) {
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
-	messages, err := session.Assemble(ctx, a.memory)
+	messages, err := a.assembleMessages(ctx, session)
 	if err != nil {
 		zap.L().Warn("装配群聊上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
 	if runErr := a.runAgent(ctx, generation.groupAgent, messages); runErr != nil {
-		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.groupGenModelInput, session) {
+		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.passthroughModelInput, session) {
 			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupAgent, session); retryErr == nil {
 				return
 			}
@@ -222,9 +222,6 @@ func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 			return true
 		}
 		if user.Mentioned {
-			return true
-		}
-		if p := a.currentPersona(); p != nil && p.IsMentioned(user.Content) {
 			return true
 		}
 	}
@@ -276,7 +273,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 		MessageID:        msgID,
 		TargetID:         groupID,
 		UserID:           a.bot.GetSelfID(),
-		Nickname:         a.currentPersona().GetName(),
+		Nickname:         a.botName(),
 		Content:          content,
 		MessageParts:     parts,
 		Time:             time.Now(),
@@ -316,7 +313,7 @@ func (a *Agent) doSendSticker(ctx context.Context, groupID int64, fileName strin
 		MessageID:        msgID,
 		TargetID:         groupID,
 		UserID:           a.bot.GetSelfID(),
-		Nickname:         a.currentPersona().GetName(),
+		Nickname:         a.botName(),
 		Content:          "",
 		MessageParts:     []onebot.MessagePart{{Kind: "image", Index: 0}},
 		Time:             time.Now(),
@@ -343,7 +340,7 @@ func (a *Agent) doSendImageURL(ctx context.Context, groupID int64, imageURL stri
 		MessageID:        msgID,
 		TargetID:         groupID,
 		UserID:           a.bot.GetSelfID(),
-		Nickname:         a.currentPersona().GetName(),
+		Nickname:         a.botName(),
 		MessageParts:     []onebot.MessagePart{{Kind: "image", Index: 0}},
 		Images:           []onebot.ImageInfo{{URL: imageURL}},
 		Time:             time.Now(),

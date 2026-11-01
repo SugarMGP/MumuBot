@@ -37,7 +37,8 @@ func (a *App) mcpPageData(r *http.Request, errorText string) views.MCPPageData {
 }
 
 func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
-	a.render(w, views.MCPPage(a.mcpPageData(r, ""), r.URL.Path))
+	data := a.mcpPageData(r, "")
+	a.renderPageResponse(w, r, views.MCPPage(data, r.URL.Path), views.PageContent(views.MCPBody(data)))
 }
 
 func (a *App) handleMCPAction(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +101,8 @@ func (a *App) deleteMCPServer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) renderMCPError(w http.ResponseWriter, r *http.Request, message string) {
-	a.renderStatus(w, http.StatusBadRequest, views.MCPPage(a.mcpPageData(r, message), r.URL.Path))
+	data := a.mcpPageData(r, message)
+	a.renderPageStatusResponse(w, r, http.StatusBadRequest, views.MCPPage(data, r.URL.Path), views.PageContent(views.MCPBody(data)))
 }
 
 func splitComma(raw string) []string {

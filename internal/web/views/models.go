@@ -1,5 +1,7 @@
 package views
 
+import "time"
+
 import (
 	"mumu-bot/internal/logger"
 	"mumu-bot/internal/memory"
@@ -197,4 +199,30 @@ type TopicTextDiffView struct {
 type TopicTextDiffSegmentView struct {
 	Text string
 	Kind string
+}
+
+// PersonaPresetView 是人格预设列表与编辑区共用的一份数据
+type PersonaPresetView struct {
+	ID          uint
+	Name        string
+	Description string
+	PersonaCard string
+	Simulation  string
+	Builtin     bool
+	Active      bool
+	Version     int64
+	UpdatedAt   time.Time
+	CardChars   int
+	SimChars    int
+}
+
+// PersonasPageData 是人格预设页的全部数据
+type PersonasPageData struct {
+	Presets   []PersonaPresetView
+	Selected  PersonaPresetView
+	Creating  bool
+	Flash     *FlashMessage
+	Error     string
+	CardLimit int
+	SimLimit  int
 }

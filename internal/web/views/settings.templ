@@ -2,7 +2,6 @@ package views
 
 import (
 	"fmt"
-	"strings"
 )
 
 templ SettingsPage(data SettingsPageData, currentPath string) {
@@ -12,8 +11,11 @@ templ SettingsPage(data SettingsPageData, currentPath string) {
 templ SettingsBody(data SettingsPageData) {
 	<div class="space-y-6">
 		<div class="flex items-end justify-between gap-6">
-			@PageHeader("设置", "调整人格、对话、思考和压缩行为，保存后无需重启进程。", "配置中心")
-			@SettingsTabs("/admin/settings")
+			@PageHeader("设置", "调整对话、思考和压缩行为，保存后无需重启进程。", "配置中心")
+			<div class="flex items-center gap-2">
+				<a class="link link-hover mr-2 text-sm text-base-content/60" href="/admin/personas" hx-get="/admin/personas" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">人格预设</a>
+				@SettingsTabs("/admin/settings")
+			</div>
 		</div>
 		if !data.SecretConfigured {
 			<div class="alert alert-warning"><span>加密密钥尚未配置；模型和 MCP 配置暂时不能应用。</span></div>
@@ -25,7 +27,6 @@ templ SettingsBody(data SettingsPageData) {
 			<div class="alert alert-error"><span>{ data.Error }</span></div>
 		}
 		<div class="grid grid-cols-[repeat(auto-fit,minmax(430px,1fr))] items-start gap-5">
-			@PersonaSettings(data)
 			@AgentSettings(data)
 			@ChatSettings(data)
 			@CompactorSettings(data)
@@ -41,24 +42,6 @@ templ SettingsTabs(current string) {
 		<a class={ joinClasses("join-item btn btn-sm", ternaryString(current == "/admin/settings/models", "btn-primary", "btn-ghost")) } href="/admin/settings/models" hx-get="/admin/settings/models" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">模型管理</a>
 		<a class={ joinClasses("join-item btn btn-sm", ternaryString(current == "/admin/settings/mcp", "btn-primary", "btn-ghost")) } href="/admin/settings/mcp" hx-get="/admin/settings/mcp" hx-target="#admin-page-body" hx-swap="outerHTML" hx-push-url="true">MCP 服务器</a>
 	</div>
-}
-
-templ PersonaSettings(data SettingsPageData) {
-	<section class="card">
-		<div class="card-body gap-4 p-5">
-			<div><h2 class="text-lg font-semibold text-base-content">人格</h2><p class="mt-1 text-sm text-base-content/60">名称、别名和提示词会在下一次思考时生效。</p></div>
-			<form class="space-y-3" method="post" action="/admin/settings">
-				<input type="hidden" name="section" value="persona"/>
-				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["persona"]) }/>
-				<label class="floating-label"><span>名称</span><input class="input w-full" name="name" value={ data.Current.Persona.Name } required/></label>
-				<label class="floating-label"><span>别名（每行一个）</span><textarea class="textarea w-full" name="aliases" rows="3">{ strings.Join(data.Current.Persona.AliasNames, "\n") }</textarea></label>
-				<label class="floating-label"><span>兴趣（每行一个）</span><textarea class="textarea w-full" name="interests" rows="4">{ strings.Join(data.Current.Persona.Interests, "\n") }</textarea></label>
-				<label class="floating-label"><span>群聊人格模板</span><textarea class="textarea w-full font-mono text-xs" name="group_prompt" rows="10" required>{ data.Current.Persona.GroupPromptTemplate }</textarea></label>
-				<label class="floating-label"><span>私聊人格模板</span><textarea class="textarea w-full font-mono text-xs" name="private_prompt" rows="10" required>{ data.Current.Persona.PrivatePromptTemplate }</textarea></label>
-				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存人格设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
-			</form>
-		</div>
-	</section>
 }
 
 templ AgentSettings(data SettingsPageData) {

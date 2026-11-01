@@ -18,6 +18,7 @@ func NavItems() []NavItem {
 		{Label: "成员管理", Href: "/admin/members"},
 		{Label: "会话管理", Href: "/admin/contacts"},
 		{Label: "表情包", Href: "/admin/stickers"},
+		{Label: "人格预设", Href: "/admin/personas"},
 		{Label: "设置", Href: "/admin/settings"},
 		{Label: "系统状态", Href: "/admin/system"},
 	}

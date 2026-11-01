@@ -353,13 +353,13 @@ func (s *Session) MarkRecalledByMessageID(messageID int64) {
 	defer s.mu.Unlock()
 	for _, user := range s.pending {
 		if user.MessageID == messageID {
-			s.notes = append(s.notes, fmt.Sprintf("（%s 已撤回，不要再回应或引用其内容）", user.Ref))
+			s.notes = append(s.notes, systemNote("消息撤回", user.Ref+" 已撤回，不要再回应或引用其内容"))
 			return
 		}
 	}
 	for _, entry := range s.seen {
 		if entry.user != nil && entry.user.MessageID == messageID {
-			s.notes = append(s.notes, fmt.Sprintf("（%s 已撤回，不要再回应或引用其内容）", entry.user.Ref))
+			s.notes = append(s.notes, systemNote("消息撤回", entry.user.Ref+" 已撤回，不要再回应或引用其内容"))
 			return
 		}
 	}
@@ -432,27 +432,18 @@ func (s *Session) RecentWindow(now time.Time, window time.Duration) (total int, 
 	return total, self, lastSelf
 }
 
-func (s *Session) Assemble(ctx context.Context, mem *memory.Manager) ([]*schema.AgenticMessage, error) {
+// Assemble 装配本轮上下文：本代头部（人格、群说明、摘要）已在 transcript 中，这里只按顺序展开
+func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction, groupExtra string) ([]*schema.AgenticMessage, error) {
+	if err := s.ensureGenerationHead(ctx, mem, instruction, groupExtra); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	entries := append([]sessionEntry(nil), s.seen...)
 	pending := append([]*sessionUser(nil), s.pending...)
 	s.mu.Unlock()
 
-	digestText := ""
-	var err error
-	if mem != nil {
-		digestText, err = mem.RenderCheckpointDigest(ctx, s.kind, s.targetID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	messages := make([]*schema.AgenticMessage, 0, len(entries)+len(pending)+2)
-	if digestText != "" {
-		digestMessage := schema.UserAgenticMessage(digestText)
-		digestMessage.Extra = map[string]any{"source": "internal_context", "kind": "checkpoint_digest"}
-		messages = append(messages, digestMessage)
-	}
-	for _, entry := range entries {
+	for _, entry := range orderEntries(entries) {
 		if entry.msg != nil {
 			messages = append(messages, entry.msg)
 		}
@@ -494,7 +485,7 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager) ([]*schema.
 				return nil, deltaErr
 			}
 			if delta.Text != "" {
-				refMsg := schema.UserAgenticMessage(delta.Text)
+				refMsg := schema.UserAgenticMessage(systemNote("内部参考", delta.Text))
 				refMsg.Extra = map[string]any{"source": "internal_context", "kind": "reference", "reference_receipts": delta.Receipt}
 				payload, _ := sonic.Marshal(refMsg)
 				entry := &memory.TranscriptEntry{ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "internal_reference", Payload: payload}

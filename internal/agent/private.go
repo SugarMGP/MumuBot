@@ -73,13 +73,13 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
-	messages, err := session.Assemble(ctx, a.memory)
+	messages, err := a.assembleMessages(ctx, session)
 	if err != nil {
 		zap.L().Warn("装配私聊上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
 	}
 	if runErr := a.runAgent(ctx, generation.privateAgent, messages); runErr != nil {
-		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.privateGenModelInput, session) {
+		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
 			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateAgent, session); retryErr == nil {
 				return
 			}
@@ -107,7 +107,7 @@ func (a *Agent) doPrivateSpeak(ctx context.Context, targetID int64, content stri
 	if err != nil {
 		return err
 	}
-	msg := &onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.personaFor(ctx).GetName(), Content: content, MessageParts: []onebot.MessagePart{{Kind: "text", Text: content}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq}
+	msg := &onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.botName(), Content: content, MessageParts: []onebot.MessagePart{{Kind: "text", Text: content}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq}
 	if replyTo != 0 {
 		msg.Reply = &onebot.ReplyInfo{MessageID: replyTo}
 	}
@@ -121,7 +121,7 @@ func (a *Agent) doPrivateSticker(ctx context.Context, targetID int64, fileName s
 		zap.L().Error("发送私聊表情包失败", zap.Int64("target_id", targetID), zap.String("file_name", fileName), zap.Error(err))
 		return err
 	}
-	a.onMessage(&onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.personaFor(ctx).GetName(), Images: []onebot.ImageInfo{{SubType: 1, Desc: description}}, MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq})
+	a.onMessage(&onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.botName(), Images: []onebot.ImageInfo{{SubType: 1, Desc: description}}, MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq})
 	return nil
 }
 
@@ -130,6 +130,6 @@ func (a *Agent) doPrivateImage(ctx context.Context, targetID int64, imageURL str
 	if err != nil {
 		return err
 	}
-	a.onMessage(&onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.personaFor(ctx).GetName(), Images: []onebot.ImageInfo{{URL: imageURL}}, MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq})
+	a.onMessage(&onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.botName(), Images: []onebot.ImageInfo{{URL: imageURL}}, MessageParts: []onebot.MessagePart{{Kind: "image", Index: 0}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq})
 	return nil
 }

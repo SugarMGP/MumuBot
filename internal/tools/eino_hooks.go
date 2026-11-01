@@ -24,11 +24,6 @@ type toolLogState struct {
 	Input string
 }
 
-type duplicateToolOutput struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-}
-
 type toolErrorOutput struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`

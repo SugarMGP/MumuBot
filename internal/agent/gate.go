@@ -266,8 +266,6 @@ func (a *Agent) gateProbability(session *Session, pending []*sessionUser) float6
 		}
 		if user.Mentioned {
 			mention = true
-		} else if p := a.currentPersona(); p != nil && p.IsMentioned(content) {
-			mention = true
 		}
 	}
 	if mention {

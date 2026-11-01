@@ -109,6 +109,10 @@ func (s *Session) ApplyCompaction(checkpoint *memory.CompactionCheckpoint) {
 	}
 	kept := s.seen[:0]
 	for _, entry := range s.seen {
+		// 代头随换代重建，旧的一律丢弃，避免出现两份人格
+		if isHeadEntry(entry.msg) {
+			continue
+		}
 		if entry.visibleSeq == 0 && isReferenceEntry(entry.msg) {
 			continue
 		}

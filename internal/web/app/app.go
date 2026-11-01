@@ -100,6 +100,8 @@ func (a *App) routes() http.Handler {
 		protected.Get("/admin/members", a.handleMembers)
 		protected.Get("/admin/contacts", a.handleContacts)
 		protected.Post("/admin/contacts/actions", a.handleContactAction)
+		protected.Get("/admin/personas", a.handlePersonas)
+		protected.Post("/admin/personas", a.handlePersonasAction)
 		protected.Get("/admin/settings", a.handleSettings)
 		protected.Post("/admin/settings", a.handleSettingsSave)
 		protected.Get("/admin/settings/models", a.handleModels)

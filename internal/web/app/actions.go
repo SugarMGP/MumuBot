@@ -149,6 +149,15 @@ func (a *App) renderPageResponse(w http.ResponseWriter, r *http.Request, full te
 	a.render(w, full)
 }
 
+// renderPageStatusResponse 与 renderPageResponse 相同，但用于错误状态码
+func (a *App) renderPageStatusResponse(w http.ResponseWriter, r *http.Request, status int, full templ.Component, body templ.Component) {
+	if isHTMXRequest(r) {
+		a.renderStatus(w, status, body)
+		return
+	}
+	a.renderStatus(w, status, full)
+}
+
 // enabledGroups 返回当前启用且未被拉黑的群号，由需要群数据的页面各自调用，不混入运行时快照
 func (a *App) enabledGroups() []int64 {
 	if a.memMgr == nil {
@@ -301,6 +310,16 @@ func (a *App) respondActionError(w http.ResponseWriter, r *http.Request, status 
 	}
 	w.Header().Set("HX-Reswap", "none")
 	w.WriteHeader(status)
+}
+
+// botName 返回机器人账号昵称，取不到时用固定自称
+func (a *App) botName() string {
+	if a.mumuAgent != nil {
+		if name := a.mumuAgent.BotName(); name != "" {
+			return name
+		}
+	}
+	return "沐沐"
 }
 
 func (a *App) flashFromRequest(r *http.Request) *views.FlashMessage {

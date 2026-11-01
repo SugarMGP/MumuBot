@@ -107,12 +107,12 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 		media:         mediaManager,
 		toolNames:     toolNames,
 	}
-	generation.groupAgent, err = a.newChatAgent(generation, groupTools, a.groupGenModelInput)
+	generation.groupAgent, err = a.newChatAgent(generation, groupTools, a.passthroughModelInput)
 	if err != nil {
 		mcpManager.Close()
 		return nil, err
 	}
-	generation.privateAgent, err = a.newChatAgent(generation, privateTools, a.privateGenModelInput)
+	generation.privateAgent, err = a.newChatAgent(generation, privateTools, a.passthroughModelInput)
 	if err != nil {
 		mcpManager.Close()
 		return nil, err

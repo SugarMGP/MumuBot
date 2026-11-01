@@ -39,9 +39,10 @@ func (a *App) systemSections() []views.SystemSection {
 		return append(fields, views.SystemField{Label: label, Value: value})
 	}
 
-	personaFields := make([]views.SystemField, 0, 5)
-	personaFields = appendField(personaFields, "名称", views.EmptyDash(cfg.Persona.Name))
-	personaFields = appendField(personaFields, "别名", joinOrDash(cfg.Persona.AliasNames))
+	personaFields := make([]views.SystemField, 0, 4)
+	personaFields = appendField(personaFields, "当前预设", views.EmptyDash(cfg.Persona.PresetName))
+	personaFields = appendField(personaFields, "人格卡", fmt.Sprintf("%d 字", len([]rune(cfg.Persona.PersonaCard))))
+	personaFields = appendField(personaFields, "仿真提示词", fmt.Sprintf("%d 字", len([]rune(cfg.Persona.Simulation))))
 
 	groupFields := []views.SystemField{
 		{Label: "启用群数", Value: fmt.Sprintf("%d", groupCount)},
@@ -216,13 +217,6 @@ func parseInt64Query(raw string) int64 {
 func parseUintParam(raw string) (uint, error) {
 	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
 	return uint(value), err
-}
-
-func joinOrDash(values []string) string {
-	if len(values) == 0 {
-		return "-"
-	}
-	return strings.Join(values, "、")
 }
 
 func deleteActionErrorText(err error) string {

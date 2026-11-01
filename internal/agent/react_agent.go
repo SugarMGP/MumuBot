@@ -184,6 +184,9 @@ func (a *Agent) MCPToolCount() int {
 }
 
 // Ready 返回是否已构建 generation
+// BotName 返回机器人账号昵称，供后台展示
+func (a *Agent) BotName() string { return a.botName() }
+
 func (a *Agent) Ready() bool {
 	return a.currentGeneration() != nil
 }

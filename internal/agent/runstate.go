@@ -44,6 +44,19 @@ func (a *Agent) personaFor(ctx context.Context) *persona.Persona {
 	return a.currentPersona()
 }
 
+// fallbackBotName 是取不到 QQ 昵称时的自称
+const fallbackBotName = "沐沐"
+
+// botName 返回机器人账号昵称，用于自身消息与 @ 渲染
+func (a *Agent) botName() string {
+	if a.bot != nil {
+		if name := a.bot.GetSelfName(); name != "" {
+			return name
+		}
+	}
+	return fallbackBotName
+}
+
 func (a *Agent) currentPersona() *persona.Persona {
 	p, err := persona.NewPersona(&config.Snapshot().Persona)
 	if err != nil {

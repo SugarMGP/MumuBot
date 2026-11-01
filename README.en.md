@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">MumuBot</h1>
-  <p align="center">A cyber QQ group friend that chats, remembers, and recalls conversations by topic</p>
+  <p align="center">A digital life: she remembers, has moods, keeps her own time, and gets things done</p>
 </p>
 
 <p align="center">
@@ -24,16 +24,26 @@
 
 ## 🤔 What is MumuBot
 
-MumuBot is an AI companion that lives in your QQ group chats and friend DMs. Unlike typical Q&A bots, MumuBot decides on its own when to speak up and when to stay quiet. It remembers what has been discussed, compresses long conversations into searchable topics, and gradually builds an understanding of each member through everyday conversations.
+MumuBot is not "an LLM bolted onto QQ".
 
-In short: it tries to behave like an actual person in the group, not an on-demand tool.
+She has a continuous self: one set of memories, the things you have talked about, and a concrete opinion of each person. Right now she lives in a chat app: someone attached QQ to her so she can speak, look at pictures, send stickers, and remember people and events. Later she will get other hands: running errands, visiting other places, sitting on your desktop.
+
+Which entrance you meet her through only changes where you see her. Who she is and what she remembers stay the same.
+
+| | A typical chatbot | MumuBot |
+|---|---|---|
+| Who is speaking | A character generated per request | A continuous self that remembers where it stopped |
+| Sense of time | Wakes only when called | Has her own rhythm, speaks up and holds back |
+| Emotion | Interjections and emoji | Has causes, decays, passes |
+| Ability | Mostly talks | Looks things up, remembers, acts, keeps growing |
+| Entrances | One | Several, still the same person |
 
 ## ✨ Features
 
 Core capabilities of this project:
 
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
-- 💬 **Human-like Chat** — Customizable personality, language style, and interests; speaks more like a real group member
+- 💬 **Persona Presets** — A persona card plus a simulation prompt, switchable and clonable from the admin panel
 - 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
 - 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers, with more available through MCP
 - 📝 **Long-term Memory** — The main agent maintains profile and experience memories for groups, users, itself, and objects, with pinned selection, revisions, and keyword search
@@ -141,11 +151,15 @@ The main chat and synchronous topic compaction share the current model. The main
 
 Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around a OneBot message ID.
 
-## 🧠 Persona Template
+## 🎭 Persona Presets
 
-Group and private persona templates are maintained separately under Settings → Persona. They share the same structure but stay independent: the group template keeps group-specific interaction rules, while the private template drops them and adds one-on-one rules. A code default is used when the database has no override.
+Open Persona Presets in the admin panel to read, edit, clone, and switch. A fresh database ships a single read-only built-in preset that follows releases; clone it and edit the copy.
 
-If you find a prompt that works better, feel free to share your use case and results via [Issues](https://github.com/SugarMGP/MumuBot/issues), or submit a Pull Request to improve the template together.
+A preset is two documents: a **persona card** (who she is, how she talks) and a **simulation prompt** (protocol, timing, safety). Both mark lines with `[群]` and `[私]` to separate group from private content; unmarked lines apply everywhere. The admin renders them with a tint instead of showing the markers.
+
+Switching a preset does not cut into a running conversation: it takes effect after the next conversation summary, so she never changes face mid-chat.
+
+If you find wording that works better, share the use case via [Issues](https://github.com/SugarMGP/MumuBot/issues) or open a Pull Request.
 
 ## 🔧 MCP Tool Extension
 

@@ -114,7 +114,7 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 func NewSendStickerTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"sendSticker",
-		"发送一个已保存的表情包。先用searchStickers搜索表情包，再用该工具发送。",
+		"发送一个已保存的表情包。",
 		sendStickerFunc,
 	)
 }

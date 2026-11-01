@@ -41,9 +41,6 @@ func (a *Agent) onMessage(msg *onebot.ConversationMessage) {
 	} else {
 		mediaRefs, forwards = a.prepareMessageContent(ctx, msg)
 		selfID := a.bot.GetSelfID()
-		if p := a.personaFor(ctx); p != nil && p.IsMentioned(msg.Content) {
-			msg.IsMentioned = true
-		}
 		msg.IsMentioned = msg.IsMentioned || (msg.Reply != nil && msg.Reply.SenderID == selfID)
 	}
 	if msg.ConversationKind == memory.ConversationKindPrivate {

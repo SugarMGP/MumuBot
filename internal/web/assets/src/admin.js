@@ -495,3 +495,171 @@ document.addEventListener("admin:toast", (event) => {
   if (detail) showAdminToast(detail);
 });
 document.addEventListener("admin:action-dialog-close", () => closeDialog("#admin-action-dialog"));
+
+// 人格预设编辑器：按行首 [群]/[私]/[通用] 分块，预览用底色区分，工具栏改当前块的模式
+const personaMarkerPattern = /^\[\s*(群|私|通用)\s*\]\s*([\s\S]*)$/;
+const personaModeLabels = { 群: "群聊", 私: "私聊", 通用: "通用" };
+
+function parsePersonaBlocks(text) {
+  const lines = text.split("\n");
+  const blocks = [];
+  let current = { mode: "通用", startLine: 0, markerLine: -1, rest: "", lines: [] };
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    const marker = trimmed.match(personaMarkerPattern);
+    if (marker) {
+      if (current.lines.length) blocks.push(current);
+      current = { mode: marker[1], startLine: index, markerLine: index, rest: marker[2].trim(), lines: [] };
+      return;
+    }
+    if (/^##\s/.test(trimmed)) {
+      if (current.lines.length) blocks.push(current);
+      current = { mode: "通用", startLine: index, markerLine: -1, rest: "", lines: [line] };
+      return;
+    }
+    if (!current.lines.length) current.startLine = index;
+    current.lines.push(line);
+  });
+  if (current.lines.length) blocks.push(current);
+  return blocks;
+}
+
+function personaTextWidth(text) {
+  return parsePersonaBlocks(text).reduce((sum, block) => {
+    const body = [block.rest || "", ...block.lines].join("\n").trim();
+    return sum + Array.from(body).filter((char) => char.trim() !== "").length;
+  }, 0);
+}
+
+function blockAtCaret(blocks, line) {
+  for (const block of blocks) {
+    const end = block.startLine + block.lines.length + (block.markerLine >= 0 ? 1 : 0);
+    if (line >= block.startLine && line <= end) return block;
+  }
+  return blocks[blocks.length - 1] || null;
+}
+
+function updatePersonaEditors(root) {
+  root.querySelectorAll("[data-persona-editor]").forEach((container) => {
+    if (container.dataset.personaReady === "1") return;
+    const textarea = container.querySelector("[data-editor]");
+    const preview = container.querySelector("[data-preview]");
+    const counter = container.querySelector("[data-counter]");
+    const buttons = Array.from(container.querySelectorAll("[data-mode]"));
+    if (!(textarea instanceof HTMLTextAreaElement) || !(preview instanceof HTMLElement)) return;
+    container.dataset.personaReady = "1";
+    const limit = Number(container.dataset.limit || 0);
+
+    const caretLine = () => {
+      const upto = textarea.value.slice(0, textarea.selectionStart || 0);
+      return upto.split("\n").length - 1;
+    };
+
+    const syncActive = () => {
+      const block = blockAtCaret(parsePersonaBlocks(textarea.value), caretLine());
+      const mode = block ? block.mode : "通用";
+      buttons.forEach((button) => {
+        const active = button.dataset.mode === mode;
+        button.classList.toggle("btn-primary", active);
+        button.classList.toggle("btn-ghost", !active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    };
+
+    const renderPreview = () => {
+      const blocks = parsePersonaBlocks(textarea.value);
+      preview.replaceChildren();
+      blocks.forEach((block) => {
+        const body = [block.rest || "", ...block.lines].join("\n").replace(/^\n+|\n+$/g, "");
+        if (!body.trim()) return;
+        const wrap = document.createElement("div");
+        wrap.className = "rounded-[var(--admin-inner-radius)] px-3 py-2";
+        if (block.mode === "群") {
+          wrap.style.background = "color-mix(in oklab, var(--color-primary) 8%, transparent)";
+          wrap.style.borderLeft = "3px solid var(--color-primary)";
+        } else if (block.mode === "私") {
+          wrap.style.background = "color-mix(in oklab, var(--color-secondary) 8%, transparent)";
+          wrap.style.borderLeft = "3px solid var(--color-secondary)";
+        } else {
+          wrap.style.borderLeft = "3px solid transparent";
+        }
+        if (block.mode !== "通用") {
+          const label = document.createElement("div");
+          label.className = "mb-1 text-xs font-medium text-base-content/45";
+          label.textContent = personaModeLabels[block.mode] || "";
+          wrap.appendChild(label);
+        }
+        const pre = document.createElement("pre");
+        pre.className = "whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-base-content/75";
+        pre.textContent = body;
+        wrap.appendChild(pre);
+        preview.appendChild(wrap);
+      });
+      if (!preview.childElementCount) {
+        const empty = document.createElement("p");
+        empty.className = "text-xs text-base-content/45";
+        empty.textContent = "还没有内容。";
+        preview.appendChild(empty);
+      }
+      if (counter instanceof HTMLElement) {
+        const chars = personaTextWidth(textarea.value);
+        counter.textContent = `${chars} 字 / 上限 ${limit}`;
+        counter.classList.toggle("text-warning", limit > 0 && chars > limit);
+      }
+      syncActive();
+    };
+
+    const applyMode = (mode) => {
+      if (textarea.readOnly) return;
+      const blocks = parsePersonaBlocks(textarea.value);
+      if (!blocks.length) {
+        if (mode !== "通用") textarea.value = `[${mode}]\n${textarea.value}`;
+        renderPreview();
+        return;
+      }
+      const block = blockAtCaret(blocks, caretLine());
+      if (!block) return;
+      const lines = textarea.value.split("\n");
+      const rest = block.rest ? ` ${block.rest}` : "";
+      if (block.markerLine >= 0) {
+        if (mode === "通用") lines.splice(block.markerLine, 1, rest.trim());
+        else lines[block.markerLine] = `[${mode}]${rest}`;
+      } else if (mode !== "通用") {
+        // 标题行是块的边界，标记要插在标题之后，否则会立刻被标题重置
+        const heading = block.lines[0] && /^##\s/.test(block.lines[0].trim());
+        lines.splice(block.startLine + (heading ? 1 : 0), 0, `[${mode}]`);
+      }
+      textarea.value = lines.join("\n");
+      renderPreview();
+    };
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => applyMode(button.dataset.mode || "通用"));
+    });
+    textarea.addEventListener("input", () => {
+      renderPreview();
+      const form = textarea.closest("form");
+      if (!form) return;
+      form.dataset.dirty = "true";
+      const chip = form.querySelector("[data-dirty-chip]");
+      if (chip instanceof HTMLElement) chip.hidden = false;
+    });
+    ["click", "keyup", "focus", "select"].forEach((event) => textarea.addEventListener(event, syncActive));
+    renderPreview();
+  });
+}
+
+function bootPersonaEditors() {
+  updatePersonaEditors(document);
+}
+
+document.addEventListener("DOMContentLoaded", bootPersonaEditors);
+document.addEventListener("htmx:afterSwap", bootPersonaEditors);
+
+// 人格预设删除确认：走应用内弹层，和后台其它确认交互保持一致
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  if (!event.target.closest("[data-persona-delete]")) return;
+  const dialog = document.getElementById("persona-delete-dialog");
+  if (dialog instanceof HTMLDialogElement) dialog.showModal();
+});

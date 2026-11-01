@@ -2,7 +2,6 @@ package config
 
 import (
 	"strings"
-	"text/template"
 )
 
 // RuntimeConfig 是进程内不可变的动态配置快照
@@ -15,13 +14,12 @@ type RuntimeConfig struct {
 	Debug     DebugConfig     `json:"debug"`
 }
 
-// PersonaConfig 人格配置，提示词模板由后台维护
+// PersonaConfig 是当前生效的人格预设，内容来自 persona_presets 表
 type PersonaConfig struct {
-	Name                  string   `json:"name"`
-	AliasNames            []string `json:"alias_names"`
-	Interests             []string `json:"interests"`
-	GroupPromptTemplate   string   `json:"group_prompt_template"`
-	PrivatePromptTemplate string   `json:"private_prompt_template"`
+	PresetID    uint   `json:"preset_id"`
+	PresetName  string `json:"preset_name"`
+	PersonaCard string `json:"persona_card"`
+	Simulation  string `json:"simulation_prompt"`
 }
 
 // AgentConfig Agent 决策配置
@@ -92,14 +90,14 @@ func validationError(message string) error {
 // Validate 校验动态配置并返回补齐后的副本
 func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 	cfg := c
-	if strings.TrimSpace(cfg.Persona.Name) == "" {
-		return cfg, validationError("人格名称不能为空")
+	if strings.TrimSpace(cfg.Persona.PersonaCard) == "" {
+		return cfg, validationError("人格卡不能为空")
 	}
-	if err := validatePrompt("群聊人格模板", cfg.Persona.GroupPromptTemplate, cfg.Persona); err != nil {
-		return cfg, err
+	if strings.TrimSpace(cfg.Persona.Simulation) == "" {
+		return cfg, validationError("仿真提示词不能为空")
 	}
-	if err := validatePrompt("私聊人格模板", cfg.Persona.PrivatePromptTemplate, cfg.Persona); err != nil {
-		return cfg, err
+	if strings.TrimSpace(cfg.Persona.PresetName) == "" {
+		cfg.Persona.PresetName = PersonaPresetFallbackName
 	}
 	if cfg.Agent.ThinkInterval <= 0 {
 		return cfg, validationError("思考间隔必须大于 0")
@@ -162,28 +160,5 @@ func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 		return cfg, validationError("图片窄边必须大于 0")
 	}
 	cfg.Chat.TimeRules = append([]TimeRuleConfig(nil), cfg.Chat.TimeRules...)
-	cfg.Persona.AliasNames = append([]string(nil), cfg.Persona.AliasNames...)
-	cfg.Persona.Interests = append([]string(nil), cfg.Persona.Interests...)
 	return cfg, nil
-}
-func validatePrompt(name, body string, persona PersonaConfig) error {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return validationError(name + "不能为空")
-	}
-	tmpl, err := template.New(name).Option("missingkey=error").Parse(body)
-	if err != nil {
-		return validationError(name + "格式错误: " + err.Error())
-	}
-	var b strings.Builder
-	if err := tmpl.Execute(&b, map[string]string{
-		"Name":      persona.Name,
-		"Interests": strings.Join(persona.Interests, "、"),
-	}); err != nil {
-		return validationError(name + "渲染失败: " + err.Error())
-	}
-	if strings.TrimSpace(b.String()) == "" {
-		return validationError(name + "渲染结果为空")
-	}
-	return nil
 }

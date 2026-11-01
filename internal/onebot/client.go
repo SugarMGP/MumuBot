@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,7 @@ type Client struct {
 	mutedMu    sync.RWMutex
 	mutedUntil map[int64]time.Time
 	selfID     atomic.Int64
+	selfName   atomic.Value
 	selfReady  chan struct{}
 	selfOnce   sync.Once
 	eventGate  chan struct{}
@@ -95,6 +97,7 @@ func (c *Client) connect() error {
 		return context.Canceled
 	}
 	c.selfID.Store(selfID)
+	c.selfName.Store(strings.TrimSpace(login.Nickname))
 	c.selfOnce.Do(func() { close(c.selfReady) })
 	old := c.sdk
 	c.sdk = sdk
@@ -246,6 +249,12 @@ func (c *Client) runConnectedHandlers() {
 func (c *Client) OnGroupLeft(handler func(groupID int64)) { c.onGroupLeft = handler }
 func (c *Client) OnFriendAdd(handler func(userID int64))  { c.onFriendAdd = handler }
 func (c *Client) GetSelfID() int64                        { return c.selfID.Load() }
+func (c *Client) GetSelfName() string {
+	if name, ok := c.selfName.Load().(string); ok {
+		return name
+	}
+	return ""
+}
 func (c *Client) WaitSelfID(ctx context.Context) (int64, error) {
 	if selfID := c.GetSelfID(); selfID > 0 {
 		return selfID, nil

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/logger"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/modelstats"
@@ -30,7 +29,7 @@ func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	flash := a.flashFromRequest(r)
 
 	a.render(w, views.DashboardPage(views.DashboardPageData{
-		BotName:           config.Snapshot().Persona.Name,
+		BotName:           a.botName(),
 		EnabledGroupCount: len(a.enabledGroups()),
 		MemoryCount:       stats.MemoryCount,
 		MemberCount:       stats.MemberCount,

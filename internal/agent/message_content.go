@@ -8,7 +8,6 @@ import (
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/onebot"
 
-	"github.com/zjutjh/onebot-sdk/message"
 	"go.uber.org/zap"
 )
 
@@ -112,7 +111,6 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 	var pending []pendingMedia
 	var forwards []forwardDraft
 
-	var allForward []message.ForwardNode
 	forwardTotal := 0
 	for _, part := range msg.MessageParts {
 		if part.Kind != "forward" {
@@ -123,7 +121,6 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 		if start >= end {
 			continue
 		}
-		allForward = append(allForward, msg.ForwardContent[start:end]...)
 		forwardTotal += end - start
 	}
 	for _, part := range msg.MessageParts {
