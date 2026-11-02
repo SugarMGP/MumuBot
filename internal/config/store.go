@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	SectionPersona   = "persona"
-	SectionAgent     = "agent"
-	SectionChat      = "chat"
-	SectionCompactor = "compactor"
-	SectionMedia     = "media"
-	SectionDebug     = "debug"
+	SectionPersona     = "persona"
+	SectionAgent       = "agent"
+	SectionChat        = "chat"
+	SectionCompactor   = "compactor"
+	SectionMaintenance = "maintenance"
+	SectionMedia       = "media"
+	SectionDebug       = "debug"
 )
 
 var store struct {
@@ -191,6 +192,8 @@ func applySection(cfg *RuntimeConfig, key string, raw json.RawMessage) error {
 		return json.Unmarshal(raw, &cfg.Chat)
 	case SectionCompactor:
 		return json.Unmarshal(raw, &cfg.Compactor)
+	case SectionMaintenance:
+		return json.Unmarshal(raw, &cfg.Maintenance)
 	case SectionMedia:
 		return json.Unmarshal(raw, &cfg.Media)
 	case SectionDebug:

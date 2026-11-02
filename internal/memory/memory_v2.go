@@ -15,23 +15,29 @@ import (
 type MemorySearchQuery struct {
 	Keywords        []string
 	Match           string
+	Mode            string
 	ExcludeKeywords []string
 	SubjectType     string
 	SubjectTarget   string
 	MemoryType      string
 	Status          string
+	UpdatedFrom     *time.Time
+	UpdatedTo       *time.Time
 	Cursor          string
 	Limit           int
 }
 
 type MemorySearchFilter struct {
-	Keywords        []string `json:"keywords"`
-	Match           string   `json:"match"`
-	ExcludeKeywords []string `json:"exclude_keywords"`
-	SubjectType     string   `json:"subject_type"`
-	SubjectTarget   string   `json:"subject_target"`
-	MemoryType      string   `json:"memory_type"`
-	Status          string   `json:"status"`
+	Keywords        []string   `json:"keywords"`
+	Match           string     `json:"match"`
+	Mode            string     `json:"mode"`
+	ExcludeKeywords []string   `json:"exclude_keywords"`
+	SubjectType     string     `json:"subject_type"`
+	SubjectTarget   string     `json:"subject_target"`
+	MemoryType      string     `json:"memory_type"`
+	Status          string     `json:"status"`
+	UpdatedFrom     *time.Time `json:"updated_from,omitempty"`
+	UpdatedTo       *time.Time `json:"updated_to,omitempty"`
 }
 
 type MemoryHit struct {
@@ -50,6 +56,7 @@ type MemoryHit struct {
 
 type MemoryPage struct {
 	Items      []MemoryHit `json:"items"`
+	Mode       string      `json:"mode"`
 	NextCursor string      `json:"next_cursor,omitempty"`
 	HasMore    bool        `json:"has_more"`
 }
@@ -124,10 +131,23 @@ func memoryContentHash(subjectType, subjectTarget, memoryType, content string) s
 func searchFilter(query MemorySearchQuery) MemorySearchFilter {
 	return MemorySearchFilter{
 		Keywords: NormalizeKeywords(query.Keywords), Match: strings.ToLower(strings.TrimSpace(query.Match)),
+		Mode:            strings.ToLower(strings.TrimSpace(query.Mode)),
 		ExcludeKeywords: NormalizeKeywords(query.ExcludeKeywords), SubjectType: strings.ToLower(strings.TrimSpace(query.SubjectType)),
 		SubjectTarget: strings.TrimSpace(query.SubjectTarget), MemoryType: strings.ToLower(strings.TrimSpace(query.MemoryType)),
-		Status: strings.ToLower(strings.TrimSpace(query.Status)),
+		Status: strings.ToLower(strings.TrimSpace(query.Status)), UpdatedFrom: query.UpdatedFrom, UpdatedTo: query.UpdatedTo,
 	}
+}
+
+// NormalizeMemorySearchMode 归一化记忆检索模式：默认精确子串，fuzzy 用 trigram 召回
+func NormalizeMemorySearchMode(raw string) (string, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return memorySearchExact, nil
+	}
+	if raw != memorySearchExact && raw != memorySearchFuzzy {
+		return "", fmt.Errorf("mode 只能是 exact 或 fuzzy")
+	}
+	return raw, nil
 }
 
 func memorySearchTextExpr(alias string) string {
@@ -155,13 +175,37 @@ func memoryCursorCondition(scoreExpr string, scoreArgs []any, cursor PageCursor)
 	return "(" + scoreExpr + " < ? OR (" + scoreExpr + " = ? AND (ki.updated_at < ? OR (ki.updated_at = ? AND ki.id < ?))))", args
 }
 
+const (
+	memorySearchExact            = "exact"
+	memorySearchFuzzy            = "fuzzy"
+	fuzzySimilarityThreshold     = "0.20"
+	fuzzyWordSimilarityThreshold = "0.40"
+)
+
+func memoryFuzzyKeywordCondition(textExpr, keyword string) (string, []any) {
+	query := strings.ToLower(keyword)
+	return "(" + textExpr + " % ? OR ? <% " + textExpr + ")", []any{query, query}
+}
+
+func memoryFuzzyKeywordScore(textExpr, keyword string) string {
+	return "GREATEST(similarity(" + textExpr + ", ?), word_similarity(?, " + textExpr + "))"
+}
+
 func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (MemoryPage, error) {
 	match, err := NormalizeMatch(query.Match)
 	if err != nil {
 		return MemoryPage{}, err
 	}
+	mode, err := NormalizeMemorySearchMode(query.Mode)
+	if err != nil {
+		return MemoryPage{}, err
+	}
 	filter := searchFilter(query)
 	filter.Match = match
+	filter.Mode = mode
+	if filter.UpdatedFrom != nil && filter.UpdatedTo != nil && filter.UpdatedFrom.After(*filter.UpdatedTo) {
+		return MemoryPage{}, fmt.Errorf("updated_from 不能晚于 updated_to")
+	}
 	limit := NormalizeLimit(query.Limit)
 	status := filter.Status
 	if status == "" {
@@ -179,8 +223,31 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 		return MemoryPage{}, err
 	}
 	snapshot := CursorTimeOrNow(cursor)
+	keywords := NormalizeKeywords(query.Keywords)
+	excludes := NormalizeKeywords(query.ExcludeKeywords)
 
-	q := m.db.WithContext(ctx).Table("knowledge_items ki").Where("ki.updated_at<=?", snapshot)
+	db := m.db.WithContext(ctx)
+	var tx *gorm.DB
+	if mode == memorySearchFuzzy && len(keywords) > 0 {
+		tx = db.Begin()
+		if tx.Error != nil {
+			return MemoryPage{}, tx.Error
+		}
+		defer func() {
+			if tx != nil {
+				_ = tx.Rollback().Error
+			}
+		}()
+		if err := tx.Exec("SELECT set_config('pg_trgm.similarity_threshold', ?, true)", fuzzySimilarityThreshold).Error; err != nil {
+			return MemoryPage{}, err
+		}
+		if err := tx.Exec("SELECT set_config('pg_trgm.word_similarity_threshold', ?, true)", fuzzyWordSimilarityThreshold).Error; err != nil {
+			return MemoryPage{}, err
+		}
+		db = tx
+	}
+
+	q := db.Table("knowledge_items ki").Where("ki.updated_at<=?", snapshot)
 	if status != "all" {
 		q = q.Where("ki.status=?", status)
 	}
@@ -193,9 +260,13 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 	if filter.MemoryType != "" {
 		q = q.Where("ki.memory_type=?", filter.MemoryType)
 	}
+	if filter.UpdatedFrom != nil {
+		q = q.Where("ki.updated_at>=?", *filter.UpdatedFrom)
+	}
+	if filter.UpdatedTo != nil {
+		q = q.Where("ki.updated_at<=?", *filter.UpdatedTo)
+	}
 
-	keywords := NormalizeKeywords(query.Keywords)
-	excludes := NormalizeKeywords(query.ExcludeKeywords)
 	textExpr := memorySearchTextExpr("ki")
 	scoreExpr := ""
 	scoreArgs := []any{}
@@ -204,11 +275,19 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 		args := make([]any, 0, len(keywords)*2)
 		scoreParts := make([]string, 0, len(keywords))
 		for _, keyword := range keywords {
-			condition, conditionArgs := memoryKeywordCondition(textExpr, keyword)
+			var condition string
+			var conditionArgs []any
+			if mode == memorySearchFuzzy {
+				condition, conditionArgs = memoryFuzzyKeywordCondition(textExpr, keyword)
+				scoreParts = append(scoreParts, memoryFuzzyKeywordScore(textExpr, keyword))
+				scoreArgs = append(scoreArgs, strings.ToLower(keyword), strings.ToLower(keyword))
+			} else {
+				condition, conditionArgs = memoryKeywordCondition(textExpr, keyword)
+				scoreParts = append(scoreParts, memoryKeywordScore(textExpr, keyword))
+				scoreArgs = append(scoreArgs, strings.ToLower(keyword))
+			}
 			parts = append(parts, condition)
 			args = append(args, conditionArgs...)
-			scoreParts = append(scoreParts, memoryKeywordScore(textExpr, keyword))
-			scoreArgs = append(scoreArgs, strings.ToLower(keyword))
 		}
 		join := " AND "
 		if match == "or" {
@@ -243,6 +322,12 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 	if err := q.Order(order).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return MemoryPage{}, err
 	}
+	if tx != nil {
+		if err := tx.Commit().Error; err != nil {
+			return MemoryPage{}, err
+		}
+		tx = nil
+	}
 	hasMore := len(rows) > limit
 	if hasMore {
 		rows = rows[:limit]
@@ -255,24 +340,12 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 			Pinned: row.Pinned, UpdatedAt: row.UpdatedAt, Similarity: row.SearchScore,
 		})
 	}
-	page := MemoryPage{Items: items, HasMore: hasMore}
+	page := MemoryPage{Items: items, Mode: mode, HasMore: hasMore}
 	if len(items) > 0 {
 		last := items[len(items)-1]
 		page.NextCursor = NewPageCursor("similarity", last.Similarity, last.UpdatedAt, last.ID, snapshot, filter)
 	}
 	return page, nil
-}
-
-func similarityScore(text, keyword string) float64 {
-	text = strings.ToLower(text)
-	keyword = strings.ToLower(keyword)
-	if keyword == "" {
-		return 0
-	}
-	if strings.Contains(text, keyword) {
-		return 1
-	}
-	return 0
 }
 
 func (m *Manager) ReadMemory(ctx context.Context, id uint) (*MemoryDetail, error) {

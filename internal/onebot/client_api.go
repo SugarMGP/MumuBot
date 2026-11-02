@@ -214,6 +214,31 @@ func (c *Client) GetGroupInfo(ctx context.Context, groupID int64) (*GroupInfo, e
 }
 
 // GetGroupMemberInfo 获取群成员信息
+
+// GetStrangerInfo 查询陌生人资料
+func (c *Client) GetStrangerInfo(ctx context.Context, userID int64, noCache bool) (*StrangerInfo, error) {
+	client, err := c.apiClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.GetStrangerInfo(ctx, api.GetStrangerInfoRequest{
+		UserID:  message.ID(userID),
+		NoCache: api.GetStrangerInfoRequestNoCacheUnion{Raw: []byte(strconv.FormatBool(noCache))},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || resp.UserID <= 0 {
+		return nil, fmt.Errorf("get_stranger_info 返回无效的用户标识")
+	}
+	return &StrangerInfo{
+		UserID: int64(resp.UserID), Nickname: resp.Nickname, Remark: resp.Remark,
+		LongNick: resp.LongNick, QID: resp.Qid, Sex: resp.Sex, Age: int(resp.Age),
+		QQLevel: int(resp.QqLevel), IsVip: resp.IsVip, VipLevel: int(resp.VipLevel),
+		LoginDays: int(resp.LoginDays),
+	}, nil
+}
+
 func (c *Client) GetGroupMemberInfo(ctx context.Context, groupID, userID int64, noCache bool) (*GroupMemberInfo, error) {
 	cacheKey := groupMemberCacheKey(groupID, userID)
 	if !noCache {

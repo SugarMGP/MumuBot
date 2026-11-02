@@ -26,11 +26,14 @@ func DefaultRuntime() RuntimeConfig {
 			RateLimit: RateLimitConfig{Enabled: true, PeriodSec: 300, MaxMessages: 30, MinProb: 0.1},
 		},
 		Compactor: CompactorConfig{
-			TriggerRatio:    0.90,
-			TargetRatio:     0.40,
-			RecentTailRatio: 0.10,
-			MaxSteps:        12,
+			TriggerRatio:      0.90,
+			DigestBudgetRatio: 0.30,
+			RecentTailRatio:   0.10,
+			MaxSteps:          12,
+			IdleMinutes:       20,
+			IdleMinRatio:      0.60,
 		},
+		Maintenance: MaintenanceConfig{MemoryTurns: 8, TopicTurns: 6},
 		Media: MediaConfig{
 			MaxBytesMB:   10,
 			ImageQuality: 75,

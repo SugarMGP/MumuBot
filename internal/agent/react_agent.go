@@ -58,6 +58,10 @@ type Agent struct {
 
 	stopping atomic.Bool
 	wg       sync.WaitGroup
+
+	idleMu    sync.Mutex
+	idleWg    sync.WaitGroup
+	idleSlots chan struct{}
 }
 
 type pendingThink struct {
@@ -87,6 +91,7 @@ func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.St
 		pendingPrivateThinks: make(map[int64]*pendingThink),
 		pendingRecalls:       make(map[recallCommit]pendingRecall),
 		replyCache:           newAgentTTLCache[string, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
+		idleSlots:            make(chan struct{}, 2),
 	}
 	cfg := config.Snapshot()
 	a.groupConcurrency = NewThinkConcurrency(a.ctx, cfg.Agent.MaxGroupConcurrency, a.thinkGroup)
@@ -134,6 +139,9 @@ func (a *Agent) shutdown() {
 	a.privateCommits.close()
 
 	a.wg.Wait()
+	a.idleMu.Lock()
+	a.idleWg.Wait()
+	a.idleMu.Unlock()
 	a.stopCaches()
 	a.closeGeneration()
 }

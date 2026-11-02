@@ -63,6 +63,8 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		return
 	}
 	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
+	session.maintenanceMu.Lock()
+	defer session.maintenanceMu.Unlock()
 	pending := session.PendingMessages()
 	if len(pending) == 0 || !hasActionableMessage(pending) {
 		return
@@ -72,6 +74,7 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	ctx = a.buildConversationToolContext(ctx, memory.ConversationKindPrivate, targetID, session)
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
+	a.injectMaintenanceHint(ctx, session)
 
 	messages, err := a.assembleMessages(ctx, session)
 	if err != nil {
@@ -81,12 +84,14 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	if runErr := a.runAgent(ctx, generation.privateAgent, messages); runErr != nil {
 		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
 			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateAgent, session); retryErr == nil {
+				a.finishSuccessfulThink(ctx, session, tc)
 				return
 			}
 		}
 		zap.L().Warn("私聊思考失败", zap.Int64("target_id", targetID), zap.Error(runErr))
 		return
 	}
+	a.finishSuccessfulThink(ctx, session, tc)
 }
 
 // stopPrivateTimers 停止私聊防抖定时器并禁止新的私聊思考，供停机排空使用

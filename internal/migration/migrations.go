@@ -79,14 +79,12 @@ func validateV17Schema(db *gorm.DB) error {
 		}
 	}
 	for _, column := range []struct{ table, name string }{
-		{"conversation_sessions", "reference_seen"},
 		{"message_logs", "one_bot_message_id"},
 		{"knowledge_items", "subject_type"},
 		{"knowledge_items", "subject_target"},
 		{"knowledge_items", "memory_type"},
 		{"knowledge_items", "pinned"},
 		{"topic_summary_sources", "is_anchor"},
-		{"context_compaction_checkpoints", "reference_versions"},
 		{"app_config", "config_key"},
 		{"model_profiles", "thinking_type"},
 		{"model_profiles", "reasoning_effort"},

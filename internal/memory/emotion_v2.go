@@ -204,6 +204,18 @@ func (m *Manager) CurrentEmotions(ctx context.Context, aboutUserID int64, limit 
 	return items[:limit], nil
 }
 
+// AffectLevelText 把精力或交流意愿数值转成可读档位
+func AffectLevelText(value float64) string {
+	switch {
+	case value >= 0.67:
+		return "高"
+	case value <= 0.33:
+		return "低"
+	default:
+		return "一般"
+	}
+}
+
 // AffectLevel 将玩家可读档位转换成辅助状态数值
 func AffectLevel(value string, current float64) float64 {
 	switch strings.TrimSpace(value) {

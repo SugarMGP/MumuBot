@@ -6,12 +6,13 @@ import (
 
 // RuntimeConfig 是进程内不可变的动态配置快照
 type RuntimeConfig struct {
-	Persona   PersonaConfig   `json:"persona"`
-	Agent     AgentConfig     `json:"agent"`
-	Chat      ChatConfig      `json:"chat"`
-	Compactor CompactorConfig `json:"compactor"`
-	Media     MediaConfig     `json:"media"`
-	Debug     DebugConfig     `json:"debug"`
+	Persona     PersonaConfig     `json:"persona"`
+	Agent       AgentConfig       `json:"agent"`
+	Chat        ChatConfig        `json:"chat"`
+	Compactor   CompactorConfig   `json:"compactor"`
+	Maintenance MaintenanceConfig `json:"maintenance"`
+	Media       MediaConfig       `json:"media"`
+	Debug       DebugConfig       `json:"debug"`
 }
 
 // PersonaConfig 是当前生效的人格预设，内容来自 persona_presets 表
@@ -33,10 +34,18 @@ type AgentConfig struct {
 
 // CompactorConfig 控制主模型同步话题压缩
 type CompactorConfig struct {
-	TriggerRatio    float64 `json:"trigger_ratio"`
-	TargetRatio     float64 `json:"target_ratio"`
-	RecentTailRatio float64 `json:"recent_tail_ratio"`
-	MaxSteps        int     `json:"max_steps"`
+	TriggerRatio      float64 `json:"trigger_ratio"`
+	DigestBudgetRatio float64 `json:"digest_budget_ratio"`
+	RecentTailRatio   float64 `json:"recent_tail_ratio"`
+	MaxSteps          int     `json:"max_steps"`
+	IdleMinutes       int     `json:"idle_minutes"`
+	IdleMinRatio      float64 `json:"idle_min_ratio"`
+}
+
+// MaintenanceConfig 控制长期记忆和话题维护提醒
+type MaintenanceConfig struct {
+	MemoryTurns int `json:"memory_turns"`
+	TopicTurns  int `json:"topic_turns"`
 }
 
 // ChatConfig 聊天行为配置
@@ -141,14 +150,29 @@ func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 	if compactor.TriggerRatio <= 0 || compactor.TriggerRatio >= 1 {
 		return cfg, validationError("压缩触发比例必须在 0 到 1 之间")
 	}
-	if compactor.TargetRatio <= 0 || compactor.TargetRatio > 0.55 || compactor.TargetRatio >= compactor.TriggerRatio {
-		return cfg, validationError("压缩目标必须大于 0、不超过 0.55 且小于触发比例")
+	if compactor.DigestBudgetRatio < 0.10 || compactor.DigestBudgetRatio > 0.60 {
+		return cfg, validationError("摘要注入预算必须在 10% 到 60% 之间")
 	}
-	if compactor.RecentTailRatio <= 0 || compactor.RecentTailRatio >= compactor.TargetRatio {
-		return cfg, validationError("近期原文比例必须大于 0 且小于压缩目标")
+	if compactor.RecentTailRatio < 0.05 || compactor.RecentTailRatio > 0.30 {
+		return cfg, validationError("近期原文比例必须在 5% 到 30% 之间")
+	}
+	if compactor.RecentTailRatio+compactor.DigestBudgetRatio >= compactor.TriggerRatio {
+		return cfg, validationError("摘要预算与近期原文之和必须小于压缩触发比例")
 	}
 	if compactor.MaxSteps <= 0 || compactor.MaxSteps > 100 {
 		return cfg, validationError("压缩器步数必须在 1 到 100 之间")
+	}
+	if compactor.IdleMinutes != 0 && (compactor.IdleMinutes < 5 || compactor.IdleMinutes > 240) {
+		return cfg, validationError("空闲压缩分钟必须是 0（关闭）或在 5 到 240 之间")
+	}
+	if compactor.IdleMinRatio < 0.45 || compactor.IdleMinRatio > 0.85 {
+		return cfg, validationError("空闲压缩最低占用必须在 45% 到 85% 之间")
+	}
+	if compactor.IdleMinRatio <= compactor.DigestBudgetRatio+compactor.RecentTailRatio {
+		return cfg, validationError("空闲压缩最低占用必须高于摘要预算与近期原文之和")
+	}
+	if cfg.Maintenance.MemoryTurns < 0 || cfg.Maintenance.MemoryTurns > 50 || cfg.Maintenance.TopicTurns < 0 || cfg.Maintenance.TopicTurns > 50 {
+		return cfg, validationError("维护提醒间隔必须在 0 到 50 轮之间")
 	}
 	if cfg.Media.MaxBytesMB <= 0 {
 		return cfg, validationError("媒体大小上限必须大于 0")

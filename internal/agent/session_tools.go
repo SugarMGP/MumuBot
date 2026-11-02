@@ -35,7 +35,7 @@ func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, call
 }
 
 // FinishToolTranscript 更新工具回执；大文本只保留预览和内容寻址句柄
-func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, suppliedRef string, receipts map[string]string) (string, *schema.ToolResult, error) {
+func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, suppliedRef string) (string, *schema.ToolResult, error) {
 	if s.memory == nil || id == 0 {
 		return resultText, enhanced, nil
 	}
@@ -50,7 +50,7 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 		enhanced = nil
 	}
 	if resultRef == "" && row.ToolName != "readToolResult" && !hasMediaBlock(blocks) {
-		if fullText := blocksText(blocks); estimateTokens(fullText) > 4000 {
+		if fullText := blocksText(blocks); len([]rune(fullText)) > 5000 {
 			ref, saveErr := s.memory.SaveToolResultText(ctx, fullText)
 			if saveErr != nil {
 				return "", nil, saveErr
@@ -64,7 +64,7 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	}
 	payload, err := sonic.Marshal(&schema.AgenticMessage{
 		Role:  schema.AgenticRoleTypeUser,
-		Extra: map[string]any{"source": "tool_result", "tool_status": status, "context_receipts": receipts},
+		Extra: map[string]any{"source": "tool_result", "tool_status": status},
 		ContentBlocks: []*schema.ContentBlock{{
 			Type: schema.ContentBlockTypeFunctionToolResult,
 			FunctionToolResult: &schema.FunctionToolResult{

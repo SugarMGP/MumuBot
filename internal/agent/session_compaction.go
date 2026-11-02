@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"mumu-bot/internal/memory"
@@ -22,7 +23,16 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 	s.mu.Lock()
 	entries := append([]sessionEntry(nil), s.seen...)
 	s.mu.Unlock()
-	segments := splitSegments(entries)
+	heads := make([]sessionEntry, 0)
+	work := make([]sessionEntry, 0, len(entries))
+	for _, entry := range entries {
+		if isHeadEntry(entry.msg) {
+			heads = append(heads, entry)
+			continue
+		}
+		work = append(work, entry)
+	}
+	segments := splitSegments(work)
 	if len(segments) < 2 {
 		return nil, fmt.Errorf("没有可安全压缩的完整旧交互")
 	}
@@ -57,6 +67,11 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 		return nil, fmt.Errorf("最近工作集尚未进入模型上下文，不能压缩")
 	}
 	candidate := &compactionCandidate{}
+	for _, entry := range heads {
+		if entry.visibleSeq > candidate.ThroughVisibleSeq {
+			candidate.ThroughVisibleSeq = entry.visibleSeq
+		}
+	}
 	for _, segment := range segments[:cut] {
 		for _, entry := range segment.items {
 			if entry.msg != nil {
@@ -82,24 +97,6 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 	return candidate, nil
 }
 
-// RetainedAfterVisible 返回检查点之后的完整工作集消息
-func (s *Session) RetainedAfterVisible(through uint64) []*schema.AgenticMessage {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	messages := make([]*schema.AgenticMessage, 0)
-	for _, entry := range s.seen {
-		if entry.msg != nil && (entry.visibleSeq == 0 || entry.visibleSeq > through) {
-			messages = append(messages, entry.msg)
-		}
-	}
-	for _, user := range s.pending {
-		if user.Msg != nil {
-			messages = append(messages, user.Msg)
-		}
-	}
-	return messages
-}
-
 // ApplyCompaction 丢弃检查点覆盖的工作集，只保留完整尾部
 func (s *Session) ApplyCompaction(checkpoint *memory.CompactionCheckpoint) {
 	s.mu.Lock()
@@ -113,23 +110,13 @@ func (s *Session) ApplyCompaction(checkpoint *memory.CompactionCheckpoint) {
 		if isHeadEntry(entry.msg) {
 			continue
 		}
-		if entry.visibleSeq == 0 && isReferenceEntry(entry.msg) {
-			continue
-		}
 		if entry.visibleSeq == 0 || entry.visibleSeq > *checkpoint.ThroughVisibleSeq {
 			kept = append(kept, entry)
 		}
 	}
 	s.seen = kept
-	s.pendingReferenceReceipt = nil
+	s.tokenBase = nil
 	s.compactionRetryAfter = time.Time{}
-}
-
-func isReferenceEntry(message *schema.AgenticMessage) bool {
-	if message == nil || message.Extra == nil {
-		return false
-	}
-	return message.Extra["kind"] == "reference"
 }
 
 // CompactionCoolingDown 判断会话是否仍在压缩失败退避期
@@ -146,34 +133,100 @@ func (s *Session) MarkCompactionFailure(now time.Time) {
 	s.compactionRetryAfter = now.Add(60 * time.Second)
 }
 
-// EstimateRequestTokens 用 provider 实际用量校准后的比例估算请求输入
-func (s *Session) EstimateRequestTokens(messages []*schema.AgenticMessage, tools []*schema.ToolInfo) int {
-	raw := requestTokens(messages, tools)
+// SetTokenBase 记录最后一条 assistant 的完整 usage，供压缩和空闲判断使用
+func (s *Session) SetTokenBase(message *schema.AgenticMessage, usage *schema.TokenUsage) {
+	if message == nil || usage == nil {
+		return
+	}
+	total := usage.TotalTokens
+	if total <= 0 {
+		total = usage.PromptTokens + usage.CompletionTokens
+	}
+	if total <= 0 {
+		return
+	}
 	s.mu.Lock()
-	scale := s.tokenScale
+	defer s.mu.Unlock()
+	s.tokenBase = &tokenBase{
+		message: message, prompt: usage.PromptTokens, completion: usage.CompletionTokens, total: total,
+	}
+}
+
+// LastResponseTokens 返回最后一条 assistant 的实际总 token 数
+func (s *Session) LastResponseTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokenBase == nil {
+		return 0
+	}
+	return s.tokenBase.total
+}
+
+// ClearTokenBase 在压缩或恢复后清空实际用量基线
+func (s *Session) ClearTokenBase() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokenBase = nil
+}
+
+// estimateTextTokens 用 provider 实际用量校准后的比例估算静态文本块
+func (s *Session) estimateTextTokens(text string) int {
+	if strings.TrimSpace(text) == "" {
+		return 0
+	}
+	s.mu.Lock()
+	scale := s.fullScale
 	s.mu.Unlock()
 	if scale <= 0 {
 		scale = 1
 	}
-	return int(float64(raw) * scale)
+	return int(float64(estimateTokens(text)) * scale)
 }
 
-// ObserveTokenUsage 用 provider 返回的 prompt token 校准后续估算
-func (s *Session) ObserveTokenUsage(estimated, actual int) {
-	if estimated <= 0 || actual <= 0 {
+// ObserveResponseUsage 用 provider 的真实 prompt 用量校准文本估算比例
+func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage, tools []*schema.ToolInfo, usage *schema.TokenUsage) {
+	if usage == nil {
 		return
 	}
-	ratio := float64(actual) / float64(estimated)
+	promptTokens := usage.PromptTokens
+	if promptTokens <= 0 || len(requestMessages) == 0 {
+		return
+	}
+	s.mu.Lock()
+	base := s.tokenBase
+	s.mu.Unlock()
+	if base != nil {
+		for i, message := range requestMessages {
+			if message != base.message {
+				continue
+			}
+			// prompt 是精确输入量；上一次 prompt+completion 就是这次输入会带上的前缀
+			actualIncrement := promptTokens - (base.prompt + base.completion)
+			estimatedIncrement := requestTokens(requestMessages[i+1:], nil)
+			if actualIncrement > 0 && estimatedIncrement > 0 {
+				s.updateFullScale(float64(actualIncrement) / float64(estimatedIncrement))
+				return
+			}
+			break
+		}
+	}
+	estimatedFull := requestTokens(requestMessages, tools)
+	if estimatedFull > 0 {
+		s.updateFullScale(float64(promptTokens) / float64(estimatedFull))
+	}
+}
+
+func (s *Session) updateFullScale(ratio float64) {
 	ratio = min(max(ratio, 0.5), 2.0)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.tokenScale <= 0 {
-		s.tokenScale = 1
+	if s.fullScale <= 0 {
+		s.fullScale = 1
 	}
-	if s.tokenSamples == 0 {
-		s.tokenScale = ratio
+	if s.fullSamples == 0 {
+		s.fullScale = ratio
 	} else {
-		s.tokenScale = s.tokenScale*0.7 + ratio*0.3
+		s.fullScale = s.fullScale*0.7 + ratio*0.3
 	}
-	s.tokenSamples++
+	s.fullSamples++
 }

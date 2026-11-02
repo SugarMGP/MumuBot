@@ -121,6 +121,20 @@ type GroupInfo struct {
 }
 
 // GroupMemberInfo 群成员信息
+type StrangerInfo struct {
+	UserID    int64  `json:"user_id"`
+	Nickname  string `json:"nickname"`
+	Remark    string `json:"remark"`
+	LongNick  string `json:"long_nick"`
+	QID       string `json:"qid"`
+	Sex       string `json:"sex"`
+	Age       int    `json:"age"`
+	QQLevel   int    `json:"qq_level"`
+	IsVip     bool   `json:"is_vip"`
+	VipLevel  int    `json:"vip_level"`
+	LoginDays int    `json:"login_days"`
+}
+
 type GroupMemberInfo struct {
 	GroupID      int64  `json:"group_id"`
 	UserID       int64  `json:"user_id"`

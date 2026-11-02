@@ -170,26 +170,26 @@ go vet ./...
 - 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
 - 戳一戳只作为普通观察事件，不能成为回应理由；它没有稳定消息 ID，正文以 `[观察]` 渲染，不能借用其他消息 ID 回应。
 - 每个会话维护 `conversation_sessions` + `conversation_transcript` 持续工作集；真人消息各自是 user 行，助手与工具轨迹原样保存，压缩成功后只删除被 checkpoint 覆盖的 transcript 行。
-- `conversation_sessions.reference_seen` 保存每个会话的 auto/tool 已见版本；参考 pending receipt 写入 transcript extra，模型请求成功后才合并。
 - 会话间消息写入 `session_messages`，目标 transcript 使用 `entry_kind=agent_message`；只记录来源会话和投递时间，不保存 requester/reply_to，不共享 transcript。`listSessions` 可返回全部会话元数据，`sendSessionMessage` 只允许 active 且未 blocked 的目标，不自动回复。
 - Agent-facing 消息只使用全局唯一的 `one_bot_message_id`；不维护 `message_ref`、`next_message_ref`、`m` 或 `h` 自定义编号。消息 ID 不保证有序，聊天顺序继续使用 `ArrivalSeq`。
 - `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚、不自动重试，下一次由新消息触发。
-- `visible_seq` 必须按模型请求中的真实消息顺序分配：摘要/内部参考在前、待处理输入在后；不要按数据库主键重新排序。
-- 上下文顺序固定为：`system_prompt` 行（人格） → `group_note` 行（群说明） → `context_digest` 行（checkpoint 概览与话题摘要） → checkpoint 后 transcript → 新内部参考 → 新真人消息 → assistant/tool。
-- 人格、群说明和摘要都是 `conversation_transcript` 里的行，每代第一条消息前写入一次，之后只追加不修改；只有压缩换代才重写这三行。预设切换因此只在换代后生效，不得在轮次之间替换 system。
-- 代头三类必须按 kind 优先级排在最前（`visible_seq` 查询与内存装配两处都要），不能依赖插入顺序；压缩提交时在同一事务里删除旧代头，避免出现两份人格。
+- `visible_seq` 必须按模型请求中的真实消息顺序分配：代头在前、待处理输入在后；不要按数据库主键重新排序。
+- 上下文顺序固定为：`system_prompt` 行（人格） → `group_note` 行（群说明） → `context_digest` 行（checkpoint 概览与话题摘要） → `pinned_memory` 行（当前主体与自己的置顶记忆） → checkpoint 后 transcript → 新真人消息 → assistant/tool。
+- 人格、群说明、摘要和置顶记忆都是 `conversation_transcript` 里的行，每代第一条消息前写入一次，之后只追加不修改；只有压缩换代才重写这些代头。预设切换因此只在换代后生效，不得在轮次之间替换 system。
+- 代头按 kind 优先级排在最前（`visible_seq` 查询与内存装配两处都要），不能依赖插入顺序；压缩提交时在同一事务里删除旧代头，避免出现两份人格。
 - 人格卡与仿真提示词用行首 `[群]`、`[私]`、`[通用]` 标记段落，作用域到下一个标记或下一个 `##` 标题；只认这三种，其它方括号按原文保留，不做兼容归一化。
-- 系统注入的提示行统一以 `[系统消息：…]` 开头，群说明、说明变更、说明取消、消息撤回属于要求，上下文摘要与内部参考属于背景，两者在提示词里必须分开描述。
+- 系统注入的提示行统一以 `[系统消息：…]` 开头，群说明、说明变更、说明取消、消息撤回属于要求，上下文摘要与长期记忆属于背景，两者在提示词里必须分开描述。
 - 消息正文进入上下文后不再变化：首次渲染写入 transcript，时间固定为 `YYYY-MM-DD HH:MM:SS`；当前时间、群信息和情感只由 `getCurrentStatus` 查询。
 - 工作便签已移除；跨轮临时状态由连续 transcript、checkpoint overview 和话题 open_loops 承担，不保留 `saveWorkingNote`、状态查询字段或后台入口。
 - 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
 - 每轮原样回传 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 保存同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。
-- 主上下文装配不静默截断 transcript；预算达到窗口 90% 时触发一次完整同步压缩，目标 40%，55% 为可接受上限，超过 55% 不提交。
+- 主上下文装配不静默截断 transcript；一轮 think 完整结束后，最后一条 assistant 的实际用量达到窗口 90% 时触发一次完整同步压缩，压缩阶段不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
 - 压缩器步数独立配置（默认 12 步），不设置整体模型超时；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和一次 `finishCompaction`；不提供 `readHistory`。
+- 注入预算默认摘要 30%（含 overview、置顶记忆和话题）+ 最近原文 10%；摘要话题按 `active_topic_refs` 从尾部裁剪，固定部分超预算时保留并记录日志。
 - 压缩只整理冻结的完整旧交互段，保护当前触发批次、活动工具链、未闭合 CallID 和近期尾部；提交事务原子写入话题、归属、`is_anchor` 来源、概览、检查点并删除覆盖 transcript；未分配超过 16 条或 20% 时只允许一次修正。
 - 压缩失败、参数遗漏、预算超限、数据库失败或提交结果不明时保留旧 transcript；失败后至少退避 60 秒，不能让模型带着超限上下文继续请求。
 - `conversation_tool_calls` 不存在；工具调用和结果直接是 `entry_kind=tool` 的 transcript 行。`run_id + call_id` 幂等，同 CallID 复用已有回执，不同 CallID 的重复搜索或多次发言不拦截。
-- 大工具结果超过约 4000 token 时，完整文本保存为内容寻址文件，模型只看到约 1000 token 预览和 `result_ref`；孤立文件至少保留 24 小时后再清理。
+- 大工具结果超过 5000 字符时，完整文本保存为内容寻址文件，模型只看到截断预览和 `result_ref`；孤立文件至少保留 24 小时后再清理。
 - 工具中间件只保留协议层：`ToolErrorMiddleware`、`UnknownToolsHandler`、参数规范化、顺序执行、`ReturnDirectly` 和终端错误；不要恢复全局 ToolAction/ToolDedup 或消费水位。
 - `conversation_targets.active/blocked` 是会话可用性事实源；启动、重连和每 5 分钟兜底同步，允许真实空列表。机器人退群/被踢和好友建立分别由事件即时纠正，好友删除靠兜底同步。
 - 事件直接并发分发；每个会话按到达顺序分配单调 `ArrivalSeq`，主动发言也进入同一序列。提交重排只使用 `ArrivalSeq`，OneBot `message_id` 只做不透明等值键，不能排序或当水位。
@@ -207,8 +207,11 @@ go vet ./...
 - `manageMemory` 一批 1–8 项全成功或全回滚；主 Agent 不物理删除，后台只提供启用、归档和查看修订。
 - 具体情感固定 12 类；同一对象同一情感只保留一份当前状态，变化写入 `emotion_revisions`。强度只接收轻微/明显/强烈/已平复，按真实时间惰性衰减，不做定时写库或独立情感判断模型。
 - 精力与交流意愿保留辅助状态；不再保留 intimacy、成员发言量或最近活跃统计，关系由 profile/experience 记忆表达。
-- 自动内部参考预算约 1200 token：pinned 记忆 1000、情感与总体状态 200；只选择当前会话主体和精确匹配的 pinned object，按 `reference_seen` 的 auto/tool 账本生成增量。
-- 内部参考是独立 user 类型 `internal_context`，不计真人消息、不触发门控；只在版本、语义或强度档位变化时追加，压缩写入新的 `reference_baseline`，不回头修改旧 transcript。
+- 置顶记忆按当前群聊/私聊主体和自己的 active pinned 全量注入，不按 token 裁剪；通过 `pinned_memory` 代头展示，不再维护自动参考账本。
+- 情感、精力与交流意愿不再自动注入；需要时由主 Agent 调用 `getCurrentStatus` 查询。
+- 主 Agent 可用 `updateTopic` 维护话题摘要和 active/dormant 状态；它只改话题索引，当前摘要头和 checkpoint 不变，下一次压缩后才可能进入上下文。
+- 空闲压缩在会话无真实消息、上下文达到配置阈值时异步整理，默认 20 分钟/60%；`IdleMinutes=0` 关闭。
+- 长期记忆和话题维护有轮次提醒，提醒以 `system_note` 持久化并复用 pending 输入；`MemoryTurns`/`TopicTurns` 为 0 时关闭对应提醒。
 - 话题系统承担三项职责：压缩后的会话表示、后台浏览管理单位、关键词 → 话题概览 → 关键消息 → 原文前后文的分层查询。
 - 话题只有 active/dormant，统一群聊和私聊作用域；摘要不可变且按版本保存，消息来源用 `is_anchor` 标记关键消息，撤回不改写、不使话题失效。
 - `context_compaction_checkpoints.active_topic_versions` 保持稳定顺序；dormant 话题不进入当前摘要块但始终可搜索。退出 active 仍有 open loop 时，程序必须把未完成事项补进 overview。

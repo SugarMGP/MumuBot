@@ -13,6 +13,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
+	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -22,7 +23,6 @@ type SpeakCallback func(ctx context.Context, targetID int64, content string, rep
 // SendStickerCallback 发送表情包回调函数类型
 type SendStickerCallback func(ctx context.Context, targetID int64, fileName string, description string) error
 type SendImageURLCallback func(ctx context.Context, imageURL string) error
-type GetNewMessagesCallback func(ctx context.Context) (any, error)
 type SessionMessageCallback func(ctx context.Context, fromKind string, fromTargetID int64, toKind string, toTargetID int64, text string) (*memory.SessionMessage, error)
 
 // ToolContext 工具执行上下文
@@ -37,13 +37,12 @@ type ToolContext struct {
 	InjectedArrivalSeq      uint64
 	CompactionAttempts      int
 	CurrentConversationOnly bool
-	RequestTokenEstimate    int
 	MemoryReadVersions      map[uint]uint64
-	ReferenceSeenPending    map[string]string
+	MemoryMaintained        bool
+	TopicMaintained         bool
 	SpeakCallback           SpeakCallback       // 发言回调
 	SendStickerCallback     SendStickerCallback // 发送表情包回调
 	SendImageURLCallback    SendImageURLCallback
-	GetNewMessagesCallback  GetNewMessagesCallback
 	SessionMessageCallback  SessionMessageCallback
 	ReadForwardCallback     func(ctx context.Context, id string, index int) (any, error)
 	GroupInfoCallback       func(ctx context.Context) string
@@ -53,8 +52,7 @@ type ToolContext struct {
 	ObservedThroughSeq      uint64
 	RecallCallback          func(messageID int64, arrivalSeq uint64)
 
-	memoryMu    sync.Mutex
-	referenceMu sync.Mutex
+	memoryMu sync.Mutex
 }
 
 // ctxKey 上下文键类型
@@ -106,39 +104,6 @@ func (tc *ToolContext) MarkMemoryRead(id uint, version uint64) {
 	tc.MemoryReadVersions[id] = version
 }
 
-// MarkReferenceSeen 记录本轮工具实际展示过的参考项；模型请求成功后才由会话落库。
-func (tc *ToolContext) MarkReferenceSeen(key, version string) {
-	if tc == nil || key == "" || version == "" {
-		return
-	}
-	tc.referenceMu.Lock()
-	defer tc.referenceMu.Unlock()
-	if tc.ReferenceSeenPending == nil {
-		tc.ReferenceSeenPending = map[string]string{}
-	}
-	tc.ReferenceSeenPending[key] = version
-}
-
-// ReferenceSeenSnapshot 返回本轮待提交的参考回执。
-func (tc *ToolContext) ReferenceSeenSnapshot() map[string]string {
-	if tc == nil {
-		return nil
-	}
-	tc.referenceMu.Lock()
-	defer tc.referenceMu.Unlock()
-	return tc.ReferenceSeenPending
-}
-
-// ClearReferenceSeen 在 receipt 成功落库后清空。
-func (tc *ToolContext) ClearReferenceSeen() {
-	if tc == nil {
-		return
-	}
-	tc.referenceMu.Lock()
-	defer tc.referenceMu.Unlock()
-	tc.ReferenceSeenPending = nil
-}
-
 // MemoryVersion 读取本轮已经读取过的记忆版本
 func (tc *ToolContext) MemoryVersion(id uint) (uint64, bool) {
 	if tc == nil || id == 0 {
@@ -166,82 +131,21 @@ func LogToolCall(toolName string, inputJSON string, outputJSON string, err error
 
 // ==================== 获取群成员详情工具 ====================
 
-// GetGroupMemberDetailInput 获取群成员详情的输入参数
-type GetGroupMemberDetailInput struct {
-	// UserID 要查询的群成员 QQ 号
-	UserID int64 `json:"user_id" jsonschema:"description=要查询的群成员QQ号"`
-}
-
-// GetGroupMemberDetailOutput 获取群成员详情的输出
-type GetGroupMemberDetailOutput struct {
-	Success       bool   `json:"success"`
-	Message       string `json:"message,omitempty"`
-	UserID        int64  `json:"user_id,omitempty"`
-	Nickname      string `json:"nickname,omitempty"`
-	GroupNickname string `json:"group_nickname,omitempty"` // 群昵称
-	Role          string `json:"role,omitempty"`           // 群主（owner）、管理员（admin）或成员（member）
-	Title         string `json:"title,omitempty"`          // 专属头衔
-	Level         string `json:"level,omitempty"`          // 群等级
-	JoinTime      string `json:"join_time,omitempty"`      // 入群时间
-	LastSentTime  string `json:"last_sent_time,omitempty"` // 最后发言时间
-}
-
-// getGroupMemberDetailFunc 获取群成员详情的实际实现
-func getGroupMemberDetailFunc(ctx context.Context, input *GetGroupMemberDetailInput) (*GetGroupMemberDetailOutput, error) {
-	tc := GetToolContext(ctx)
-	if tc == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("工具上下文未初始化"))
-	}
-	if tc.Bot == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
-	}
-	if input == nil || input.UserID == 0 {
-		return nil, fmt.Errorf("用户 ID 不能为空")
-	}
-
-	info, err := tc.Bot.GetGroupMemberInfo(ctx, tc.TargetID, input.UserID, false)
-	if err != nil {
-		return nil, err
-	}
-
-	output := &GetGroupMemberDetailOutput{
-		Success:       true,
-		UserID:        info.UserID,
-		Nickname:      info.Nickname,
-		GroupNickname: info.Card,
-		Role:          info.Role,
-		Title:         info.Title,
-		Level:         info.Level,
-	}
-
-	if info.JoinTime > 0 {
-		output.JoinTime = time.Unix(info.JoinTime, 0).Format("2006-01-02 15:04:05")
-	}
-	if info.LastSentTime > 0 {
-		output.LastSentTime = time.Unix(info.LastSentTime, 0).Format("2006-01-02 15:04:05")
-	}
-
-	return output, nil
-}
-
-// NewGetGroupMemberDetailTool 创建获取群成员详情工具
-func NewGetGroupMemberDetailTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
-		"getGroupMemberDetail",
-		"获取某个群成员的详细信息，包括群昵称、角色、头衔、等级、入群时间、最后发言时间等。",
-		getGroupMemberDetailFunc,
-	)
-}
-
 // ==================== 获取短期记忆工具 ====================
 
-func NewGetNewMessagesTool() (tool.InvokableTool, error) {
-	return utils.InferTool("getNewMessages", "读取上次读取之后新到的消息；不会等待。", func(ctx context.Context, _ *struct{}) (any, error) {
+func NewGetNewMessagesTool() (tool.EnhancedInvokableTool, error) {
+	return utils.InferEnhancedTool("getNewMessages", "刷新本轮上下文；有新消息会作为随后的用户消息出现，不在工具结果里返回。", func(ctx context.Context, _ *struct{}) (*schema.ToolResult, error) {
 		tc := GetToolContext(ctx)
-		if tc == nil || tc.GetNewMessagesCallback == nil {
+		if tc == nil || tc.Session == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("新消息读取能力未初始化"))
 		}
-		return tc.GetNewMessagesCallback(ctx)
+		floor := max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
+		count := len(tc.Session.PendingAfter(floor)) + len(tc.Session.PendingAgentMessages())
+		text := "没有新消息。"
+		if count > 0 {
+			text = "新消息已随上下文提供（见随后的用户消息）。"
+		}
+		return &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: text}}}, nil
 	})
 }
 

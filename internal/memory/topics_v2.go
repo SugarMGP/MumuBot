@@ -92,13 +92,9 @@ type CompactionCommit struct {
 	ActiveTopicRefs     []string
 	Topics              []CompactionTopicInput
 	CandidateMessageIDs []uint
-	ReferenceBaseline   string
-	ReferenceVersions   map[string]string
 	Coverage            float64
 	UnassignedCount     int
 	BatchID             string
-	OutputTokens        int
-	MaxInputTokens      int
 }
 
 func summaryTitle(summary TopicSummary, topicID uint) string {
@@ -131,10 +127,10 @@ func topicKeywordMatch(summary TopicSummary, keywords []string, match string) bo
 	if len(keywords) == 0 {
 		return true
 	}
-	text := strings.ToLower(summaryText(summary))
+	text := summaryText(summary)
 	matched := 0
 	for _, keyword := range keywords {
-		if strings.Contains(text, strings.ToLower(keyword)) {
+		if textSimilarity(text, keyword) >= topicSimilarityThreshold {
 			matched++
 		}
 	}
@@ -151,7 +147,7 @@ func topicKeywordScore(summary TopicSummary, keywords []string, match string) fl
 	text := summaryText(summary)
 	scores := make([]float64, 0, len(keywords))
 	for _, keyword := range keywords {
-		scores = append(scores, similarityScore(text, keyword))
+		scores = append(scores, textSimilarity(text, keyword))
 	}
 	if len(scores) == 0 {
 		return 0

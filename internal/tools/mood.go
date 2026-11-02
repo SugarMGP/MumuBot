@@ -70,12 +70,6 @@ func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (any, error) {
 		}
 	}
 	all, _ := tc.MemoryMgr.CurrentEmotions(ctx, -1, 3)
-	for _, emotion := range all {
-		tc.MarkReferenceSeen(fmt.Sprintf("emotion:%d", emotion.ID), fmt.Sprintf("v%d:%s", emotion.Version, memory.EmotionStrengthTier(emotion.Strength)))
-	}
-	if mood, err := tc.MemoryMgr.GetMoodState(); err == nil && mood != nil {
-		tc.MarkReferenceSeen("state:affect", mood.UpdatedAt.UTC().Format("20060102150405"))
-	}
 	return map[string]any{"success": true, "emotions": emotions, "current": all}, nil
 }
 

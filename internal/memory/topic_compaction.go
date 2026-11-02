@@ -16,9 +16,6 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 	if input.ConversationKind == "" || input.TargetID <= 0 || input.ThroughMessageID == 0 || input.ThroughVisibleSeq == 0 || strings.TrimSpace(input.BatchID) == "" {
 		return fmt.Errorf("压缩提交范围无效")
 	}
-	if input.MaxInputTokens > 0 && input.OutputTokens > input.MaxInputTokens {
-		return fmt.Errorf("压缩结果仍超过 55%% 上限：%d > %d", input.OutputTokens, input.MaxInputTokens)
-	}
 	if input.UnassignedCount > 16 || (input.UnassignedCount > 0 && input.Coverage < 0.80) {
 		return fmt.Errorf("话题覆盖率不足：未分配 %d 条", input.UnassignedCount)
 	}
@@ -267,17 +264,9 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 			ConversationKind: input.ConversationKind, TargetID: input.TargetID, Version: nextVersion,
 			ThroughVisibleSeq: &throughVisible, ThroughMessageLogID: &throughMessage,
 			Overview: overview, ActiveTopicVersions: snapshotJSON,
-			ReferenceBaseline: input.ReferenceBaseline, ReferenceVersions: mustJSONMap(input.ReferenceVersions),
 			BatchID: input.BatchID, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		}
 		if err := m.SaveCheckpoint(tx, checkpoint); err != nil {
-			return err
-		}
-		if err := m.ResetReferenceSeen(tx, input.ConversationKind, input.TargetID, input.ReferenceVersions); err != nil {
-			return err
-		}
-		// 压缩基线已覆盖当前参考状态，旧的 pending 参考不再进入下一轮上下文
-		if err := tx.Where("conversation_kind=? AND target_id=? AND entry_kind='internal_reference' AND visible_seq IS NULL", input.ConversationKind, input.TargetID).Delete(&TranscriptEntry{}).Error; err != nil {
 			return err
 		}
 		if err := m.DeleteTranscriptHeads(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq); err != nil {
@@ -352,12 +341,4 @@ func validateTopicMessages(input CompactionCommit, messageByOneBot map[int64]uin
 		}
 	}
 	return nil
-}
-
-func mustJSONMap(values map[string]string) []byte {
-	if values == nil {
-		values = map[string]string{}
-	}
-	raw, _ := sonic.Marshal(values)
-	return raw
 }

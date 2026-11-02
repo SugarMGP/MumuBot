@@ -1,0 +1,2 @@
+{"id":"q1","query":"上次说的那张显卡","keywords":["显卡","GPU","4090"],"match":"or","expected_ids":[123]}
+{"id":"q2","query":"她是不是说过不吃香菜","keywords":["香菜","忌口","不吃"],"match":"or","expected_ids":[124]}

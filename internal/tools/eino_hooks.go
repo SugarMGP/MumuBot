@@ -172,7 +172,7 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				} else if output != nil && !toolOutputSucceeded(output) {
 					status = "failed"
 				}
-				display, _, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, nil, "", tc.ReferenceSeenSnapshot())
+				display, _, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, nil, "")
 				if finishErr != nil {
 					return nil, finishErr
 				}
@@ -215,7 +215,7 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				if output != nil {
 					enhanced = output.Result
 				}
-				displayText, displayEnhanced, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, enhanced, "", tc.ReferenceSeenSnapshot())
+				displayText, displayEnhanced, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, enhanced, "")
 				if finishErr != nil {
 					return nil, finishErr
 				}

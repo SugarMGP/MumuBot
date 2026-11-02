@@ -55,9 +55,10 @@ func (a *App) systemSections() []views.SystemSection {
 	}
 	groupFields = append(groupFields,
 		views.SystemField{Label: "上下文压缩", Value: fmt.Sprintf("达到 %d%% 后一次性整理", int(cfg.Compactor.TriggerRatio*100))},
-		views.SystemField{Label: "压缩目标", Value: fmt.Sprintf("目标 %d%%，最多接受 %d%%", int(cfg.Compactor.TargetRatio*100), 55)},
+		views.SystemField{Label: "摘要注入预算", Value: fmt.Sprintf("约 %d%%（含置顶记忆与话题）", int(cfg.Compactor.DigestBudgetRatio*100))},
 		views.SystemField{Label: "最近原文", Value: fmt.Sprintf("保留约 %d%%", int(cfg.Compactor.RecentTailRatio*100))},
 		views.SystemField{Label: "压缩器步数", Value: fmt.Sprintf("%d 步", cfg.Compactor.MaxSteps)},
+		views.SystemField{Label: "空闲压缩", Value: idleCompactionText(cfg.Compactor)},
 	)
 
 	modelFields := make([]views.SystemField, 0, 8)
@@ -111,6 +112,13 @@ func (a *App) systemSections() []views.SystemSection {
 		sections = append(sections, views.SystemSection{Title: "连接与数据", Fields: runtimeFields})
 	}
 	return sections
+}
+
+func idleCompactionText(cfg config.CompactorConfig) string {
+	if cfg.IdleMinutes <= 0 {
+		return "已关闭"
+	}
+	return fmt.Sprintf("%d 分钟无消息且占用达到 %d%% 后整理", cfg.IdleMinutes, int(cfg.IdleMinRatio*100))
 }
 
 func isSafeAdminTarget(target *neturl.URL) bool {

@@ -86,10 +86,17 @@ func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		}
 	case config.SectionCompactor:
 		value = config.CompactorConfig{
-			TriggerRatio:    parseFloatValue(r.FormValue("trigger_ratio")) / 100,
-			TargetRatio:     parseFloatValue(r.FormValue("target_ratio")) / 100,
-			RecentTailRatio: parseFloatValue(r.FormValue("recent_tail_ratio")) / 100,
-			MaxSteps:        parseIntValue(r.FormValue("max_steps")),
+			TriggerRatio:      parseFloatValue(r.FormValue("trigger_ratio")) / 100,
+			DigestBudgetRatio: parseFloatValue(r.FormValue("digest_budget_ratio")) / 100,
+			RecentTailRatio:   parseFloatValue(r.FormValue("recent_tail_ratio")) / 100,
+			MaxSteps:          parseIntValue(r.FormValue("max_steps")),
+			IdleMinutes:       parseIntValue(r.FormValue("idle_minutes")),
+			IdleMinRatio:      parseFloatValue(r.FormValue("idle_min_ratio")) / 100,
+		}
+	case config.SectionMaintenance:
+		value = config.MaintenanceConfig{
+			MemoryTurns: parseIntValue(r.FormValue("memory_turns")),
+			TopicTurns:  parseIntValue(r.FormValue("topic_turns")),
 		}
 	case config.SectionMedia:
 		value = config.MediaConfig{

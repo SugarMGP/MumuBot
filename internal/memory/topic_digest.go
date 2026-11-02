@@ -8,115 +8,65 @@ import (
 	"github.com/bytedance/sonic"
 )
 
-// RenderCheckpointDigest 按固定顺序渲染检查点中的概览、活跃话题和内部参考基线
-func (m *Manager) RenderCheckpointDigest(ctx context.Context, kind string, targetID int64) (string, error) {
+type ContextTopic struct {
+	ID      uint
+	Summary TopicSummary
+}
+
+type ContextDigest struct {
+	Overview string
+	Topics   []ContextTopic
+}
+
+// LoadContextDigest 读取当前检查点的概览和活跃话题摘要
+func (m *Manager) LoadContextDigest(ctx context.Context, kind string, targetID int64) (*ContextDigest, error) {
 	checkpoint, err := m.GetCheckpoint(ctx, kind, targetID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if checkpoint == nil {
-		return "", nil
+		return &ContextDigest{}, nil
 	}
 	var snapshots []TopicSnapshot
 	if err := sonic.Unmarshal(checkpoint.ActiveTopicVersions, &snapshots); err != nil {
-		return "", err
+		return nil, err
 	}
-	summaries := make([]TopicSummary, 0, len(snapshots))
-	topicIDs := make([]uint, 0, len(snapshots))
+	topics := make([]ContextTopic, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		var row TopicSummaryRow
 		if err := m.db.WithContext(ctx).Where("id=? AND topic_id=?", snapshot.SummaryID, snapshot.TopicID).Take(&row).Error; err != nil {
-			return "", fmt.Errorf("读取活跃话题摘要有误: %w", err)
+			return nil, fmt.Errorf("读取活跃话题摘要有误: %w", err)
 		}
 		var summary TopicSummary
 		if err := sonic.UnmarshalString(row.SummaryJSON, &summary); err != nil {
-			return "", fmt.Errorf("解析活跃话题摘要有误: %w", err)
+			return nil, fmt.Errorf("解析活跃话题摘要有误: %w", err)
 		}
-		summaries = append(summaries, summary)
-		topicIDs = append(topicIDs, snapshot.TopicID)
+		topics = append(topics, ContextTopic{ID: snapshot.TopicID, Summary: summary})
 	}
-	return renderContextDigest(checkpoint.Overview, summaries, topicIDs, checkpoint.ReferenceBaseline), nil
+	return &ContextDigest{Overview: checkpoint.Overview, Topics: topics}, nil
 }
 
-// RenderCompactionPreview 渲染尚未提交的压缩摘要视图，用于提交前预算校验
-func (m *Manager) RenderCompactionPreview(ctx context.Context, input *CompactionCommit) (string, error) {
-	if input == nil {
-		return "", fmt.Errorf("压缩预览参数为空")
-	}
-	topicSummaries := make(map[string]TopicSummary, len(input.Topics))
-	for _, topic := range input.Topics {
-		topicSummaries[strings.TrimSpace(topic.Ref)] = topic.Summary
-		if topic.TopicID > 0 {
-			topicSummaries[fmt.Sprintf("t%d", topic.TopicID)] = topic.Summary
-		}
-	}
-	summaries := make([]TopicSummary, 0, len(input.ActiveTopicRefs))
-	topicIDs := make([]uint, 0, len(input.ActiveTopicRefs))
-	for _, rawRef := range input.ActiveTopicRefs {
-		ref := strings.TrimSpace(rawRef)
-		if summary, ok := topicSummaries[ref]; ok {
-			summaries = append(summaries, summary)
-			topicIDs = append(topicIDs, parseTopicIDRef(ref))
-			continue
-		}
-		topicID := parseTopicIDRef(ref)
-		if topicID == 0 {
-			continue
-		}
-		detail, err := m.ReadTopic(ctx, topicID)
-		if err != nil || detail == nil {
-			return "", fmt.Errorf("读取待激活话题失败: %w", err)
-		}
-		summaries = append(summaries, detail.Summary)
-		topicIDs = append(topicIDs, topicID)
-	}
-	overview := strings.TrimSpace(input.Overview)
-	active := map[uint]bool{}
-	for _, id := range topicIDs {
-		active[id] = true
-	}
-	var existing []TopicThreadRow
-	qExisting := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID).Order("id")
-	if input.ExpectedVersion > 0 {
-		qExisting = qExisting.Where("status='active'")
-	}
-	if err := qExisting.Find(&existing).Error; err != nil {
-		return "", err
-	}
-	existingIDs := make([]uint, 0, len(existing))
-	for _, topic := range existing {
-		existingIDs = append(existingIDs, topic.ID)
-	}
-	latestByTopic, err := latestTopicSummaries(m.db.WithContext(ctx), existingIDs)
+// RenderCheckpointDigest 渲染检查点中的概览和全部活跃话题
+func (m *Manager) RenderCheckpointDigest(ctx context.Context, kind string, targetID int64) (string, error) {
+	digest, err := m.LoadContextDigest(ctx, kind, targetID)
 	if err != nil {
 		return "", err
 	}
-	for _, topic := range existing {
-		if active[topic.ID] {
-			continue
-		}
-		latest, ok := latestByTopic[topic.ID]
-		if !ok {
-			return "", fmt.Errorf("读取待降级话题失败: 话题 %d 缺少摘要", topic.ID)
-		}
-		var summary TopicSummary
-		if err := sonic.UnmarshalString(latest.SummaryJSON, &summary); err != nil {
-			return "", fmt.Errorf("解析待降级话题失败: %w", err)
-		}
-		for _, loop := range summary.OpenLoops {
-			loop = strings.TrimSpace(loop)
-			if loop != "" && !strings.Contains(overview, loop) {
-				if overview != "" {
-					overview += "\n"
-				}
-				overview += "未完成事项延续：" + loop
-			}
-		}
-	}
-	return renderContextDigest(overview, summaries, topicIDs, input.ReferenceBaseline), nil
+	return RenderContextDigest(digest.Overview, digest.Topics, 0), nil
 }
 
-func renderContextDigest(overview string, summaries []TopicSummary, topicIDs []uint, baseline string) string {
+// RenderContextDigest 渲染概览、保留的话题和未展开数量
+func RenderContextDigest(overview string, topics []ContextTopic, omitted int) string {
+	summaries := make([]TopicSummary, 0, len(topics))
+	topicIDs := make([]uint, 0, len(topics))
+	for _, topic := range topics {
+		summaries = append(summaries, topic.Summary)
+		topicIDs = append(topicIDs, topic.ID)
+	}
+	return renderContextDigest(overview, summaries, topicIDs, omitted)
+}
+
+func renderContextDigest(overview string, summaries []TopicSummary, topicIDs []uint, omitted int) string {
 	var sections []string
 	if overview = strings.TrimSpace(overview); overview != "" {
 		sections = append(sections, "【会话概览】\n"+overview)
@@ -159,9 +109,6 @@ func renderContextDigest(overview string, summaries []TopicSummary, topicIDs []u
 			}
 			sections = append(sections, block)
 		}
-	}
-	if baseline = strings.TrimSpace(baseline); baseline != "" {
-		sections = append(sections, "【内部参考基线】\n"+baseline)
 	}
 	return strings.Join(sections, "\n\n")
 }

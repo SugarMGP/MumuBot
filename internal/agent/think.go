@@ -65,12 +65,16 @@ func (a *Agent) thinkCycle() {
 		}
 		a.schedulePrivateThink(target.TargetID, latestReceivedAt(pending))
 	}
+	a.scanIdleCompactions()
 }
 
 // latestReceivedAt 取待处理消息里最新的一条进入时间，防抖从消息进来到达开始算
 func latestReceivedAt(pending []*sessionUser) time.Time {
 	var latest time.Time
 	for _, user := range pending {
+		if user == nil || user.IsMaintenanceHint {
+			continue
+		}
 		if user.ReceivedAt.After(latest) {
 			latest = user.ReceivedAt
 		}
@@ -162,6 +166,8 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 	session := a.sessions.get(memory.ConversationKindGroup, groupID)
+	session.maintenanceMu.Lock()
+	defer session.maintenanceMu.Unlock()
 	pending := session.PendingMessages()
 	if len(pending) == 0 || !hasActionableMessage(pending) {
 		return
@@ -176,6 +182,7 @@ func (a *Agent) thinkGroup(groupID int64) {
 	ctx = a.buildConversationToolContext(ctx, memory.ConversationKindGroup, groupID, session)
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
+	a.injectMaintenanceHint(ctx, session)
 
 	messages, err := a.assembleMessages(ctx, session)
 	if err != nil {
@@ -185,11 +192,69 @@ func (a *Agent) thinkGroup(groupID int64) {
 	if runErr := a.runAgent(ctx, generation.groupAgent, messages); runErr != nil {
 		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.passthroughModelInput, session) {
 			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupAgent, session); retryErr == nil {
+				a.finishSuccessfulThink(ctx, session, tc)
 				return
 			}
 		}
 		zap.L().Error("群聊思考失败", zap.Int64("group_id", groupID), zap.Error(runErr))
 		return
+	}
+	a.finishSuccessfulThink(ctx, session, tc)
+}
+
+// finishSuccessfulThink 在一轮 think 完整结束后再判断压缩并推进维护计数
+func (a *Agent) finishSuccessfulThink(ctx context.Context, session *Session, tc *tools.ToolContext) {
+	a.compactAfterThink(ctx, session)
+	if tc != nil {
+		session.CompleteTurn(tc.MemoryMaintained, tc.TopicMaintained)
+	}
+}
+
+// compactAfterThink 用上一条 assistant 的真实用量判断是否需要在下一轮前压缩
+func (a *Agent) compactAfterThink(ctx context.Context, session *Session) {
+	cfg := configFor(ctx)
+	generation := generationFrom(ctx)
+	if cfg == nil || generation == nil || generation.contextWindow <= 0 || session == nil {
+		return
+	}
+	total := session.LastResponseTokens()
+	if total <= 0 || total < int(float64(generation.contextWindow)*cfg.Compactor.TriggerRatio) {
+		return
+	}
+	if session.CompactionCoolingDown(time.Now()) {
+		return
+	}
+	candidate, err := session.BuildCompactionCandidate(generation.contextWindow, cfg.Compactor.RecentTailRatio)
+	if err != nil {
+		session.MarkCompactionFailure(time.Now())
+		return
+	}
+	compactionCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stopShutdownWatch := context.AfterFunc(a.ctx, cancel)
+	defer stopShutdownWatch()
+	remaining := cfg.Compactor.MaxSteps
+	if remaining <= 0 {
+		remaining = 12
+	}
+	if err := a.runCompaction(compactionCtx, session, candidate, 1, &remaining, ""); err != nil {
+		session.MarkCompactionFailure(time.Now())
+		zap.L().Warn("一轮结束后压缩失败", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
+	}
+}
+
+// injectMaintenanceHint 在下一轮输入末尾追加持久化维护提醒
+func (a *Agent) injectMaintenanceHint(ctx context.Context, session *Session) {
+	cfg := configFor(ctx)
+	if cfg == nil || session == nil {
+		return
+	}
+	text, memoryTurn, topicTurn := session.MaintenanceDue(cfg.Maintenance.MemoryTurns, cfg.Maintenance.TopicTurns)
+	if text == "" {
+		return
+	}
+	if err := session.AppendMaintenanceHint(ctx, a.memory, text, memoryTurn, topicTurn); err != nil {
+		zap.L().Warn("写入维护提醒失败", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
 	}
 }
 

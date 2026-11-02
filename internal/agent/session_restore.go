@@ -39,6 +39,10 @@ func (a *Agent) restoreSessions() error {
 // restoreTranscriptSession 读取检查点、保留尾部和工作集 pending
 func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 	session := a.sessions.get(kind, targetID)
+	session.ClearTokenBase()
+	if latest, timeErr := a.memory.LatestMessageTime(a.ctx, kind, targetID, a.bot.GetSelfID()); timeErr == nil && !latest.IsZero() {
+		session.SetLastActivity(latest)
+	}
 	checkpoint, err := a.memory.GetCheckpoint(a.ctx, kind, targetID)
 	if err != nil {
 		return err
@@ -55,11 +59,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 	if err != nil {
 		return err
 	}
-	pendingReferences, err := a.memory.PendingReferences(a.ctx, kind, targetID)
-	if err != nil {
-		return err
-	}
-	if len(visible) == 0 && len(pending) == 0 && len(pendingReferences) == 0 {
+	if len(visible) == 0 && len(pending) == 0 {
 		if checkpoint == nil {
 			logs, getErr := a.memory.GetRecentMessagesScope(a.ctx, kind, targetID, 0, restoreMessageLimit, 0)
 			if getErr != nil {
@@ -111,22 +111,8 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 	}
 
 	unvisible := append([]memory.TranscriptEntry(nil), deferred...)
-	unvisible = append(unvisible, pendingReferences...)
 	sort.SliceStable(unvisible, func(i, j int) bool { return unvisible[i].ID < unvisible[j].ID })
 	for _, entry := range unvisible {
-		if entry.EntryKind == "internal_reference" {
-			var payload schema.AgenticMessage
-			if sonic.Unmarshal(entry.Payload, &payload) != nil {
-				continue
-			}
-			var receipt memory.ReferenceReceipt
-			if raw, ok := payload.Extra["reference_receipts"]; ok {
-				data, _ := sonic.Marshal(raw)
-				_ = sonic.Unmarshal(data, &receipt)
-			}
-			session.RestorePendingReference(&payload, entry.ID, &receipt)
-			continue
-		}
 		if err := a.restoreSeenEntry(session, &entry, missing); err != nil {
 			return err
 		}
@@ -223,7 +209,11 @@ func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry
 	}
 	var message schema.AgenticMessage
 	if sonic.Unmarshal(entry.Payload, &message) == nil {
-		session.AppendSeenMessage(&message, entry.ID, valueOrZero(entry.VisibleSeq))
+		if entry.EntryKind == "system_note" && messageKind(&message) == "maintenance_hint" && entry.VisibleSeq == nil {
+			session.RestorePendingMaintenanceHint(&message, entry.ID)
+		} else {
+			session.AppendSeenMessage(&message, entry.ID, valueOrZero(entry.VisibleSeq))
+		}
 	}
 	for _, extra := range missing[entry.ID] {
 		var repaired schema.AgenticMessage
@@ -251,6 +241,10 @@ func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.Messag
 		return
 	}
 	session := a.sessions.get(kind, targetID)
+	session.ClearTokenBase()
+	if latest, timeErr := a.memory.LatestMessageTime(a.ctx, kind, targetID, a.bot.GetSelfID()); timeErr == nil && !latest.IsZero() {
+		session.SetLastActivity(latest)
+	}
 	seeds := make([]memory.TranscriptSeed, 0, len(logs))
 	users := map[uint]*sessionUser{}
 	selfID := a.bot.GetSelfID()

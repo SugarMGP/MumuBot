@@ -88,11 +88,6 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	}
 	tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, captured...)
 	if len(pending) == 0 {
-		if err := h.tryCompact(ctx, state, tc); err != nil {
-			zap.L().Warn("同步话题压缩失败，结束本轮", zap.Error(err))
-			return ctx, state, err
-		}
-		tc.RequestTokenEstimate = sessionEstimate(state, tc)
 		return ctx, state, nil
 	}
 	messages := make([]*schema.AgenticMessage, 0, len(pending))
@@ -110,39 +105,7 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	if observed > tc.InjectedArrivalSeq {
 		tc.InjectedArrivalSeq = observed
 	}
-	if err := h.tryCompact(ctx, state, tc); err != nil {
-		zap.L().Warn("同步话题压缩失败，结束本轮", zap.Error(err))
-		return ctx, state, err
-	}
-	tc.RequestTokenEstimate = sessionEstimate(state, tc)
 	return ctx, state, nil
-}
-
-func (h *sessionInjector) tryCompact(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) error {
-	if h.agent == nil || tc == nil || tc.Session == nil {
-		return nil
-	}
-	cfg := configFor(ctx)
-	generation := generationFrom(ctx)
-	if cfg == nil || generation == nil || generation.contextWindow <= 0 {
-		return nil
-	}
-	session, ok := tc.Session.(*Session)
-	if !ok || session == nil {
-		return nil
-	}
-	window := generation.contextWindow
-	estimated := session.EstimateRequestTokens(state.Messages, state.ToolInfos)
-	if estimated < int(float64(window)*cfg.Compactor.TriggerRatio) {
-		return nil
-	}
-	if tc.CompactionAttempts >= 2 {
-		return fmt.Errorf("上下文仍超过触发水位，但本轮压缩尝试已用尽")
-	}
-	if session.CompactionCoolingDown(time.Now()) {
-		return fmt.Errorf("上下文仍超过触发水位，压缩正在退避")
-	}
-	return h.compactNow(ctx, session, state, tc)
 }
 
 func (h *sessionInjector) captureToolResults(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) ([]uint, error) {
@@ -177,7 +140,7 @@ func (h *sessionInjector) compactNow(ctx context.Context, session *Session, stat
 	feedback := ""
 	for tc.CompactionAttempts < 2 {
 		tc.CompactionAttempts++
-		lastErr = h.agent.runCompaction(compactionCtx, session, candidate, state, tc.CompactionAttempts, &remainingSteps, feedback)
+		lastErr = h.agent.runCompaction(compactionCtx, session, candidate, tc.CompactionAttempts, &remainingSteps, feedback)
 		if lastErr == nil {
 			rebuilt, buildErr := h.agent.assembleMessages(compactionCtx, session)
 			if buildErr != nil {
@@ -185,7 +148,6 @@ func (h *sessionInjector) compactNow(ctx context.Context, session *Session, stat
 				break
 			}
 			state.Messages = rebuilt
-			tc.RequestTokenEstimate = session.EstimateRequestTokens(state.Messages, state.ToolInfos)
 			return nil
 		}
 		var inputErr *compactionInputError
@@ -196,16 +158,7 @@ func (h *sessionInjector) compactNow(ctx context.Context, session *Session, stat
 			}
 			continue
 		}
-		var tooLarge *compactionTooLargeError
-		if !errors.As(lastErr, &tooLarge) {
-			break
-		}
-		if tooLarge.Previous != nil {
-			feedback = fmt.Sprintf("上一次提交预计 %d token，超过 %d token 上限。请进一步压缩概览和 gist、合并重复话题；上一版概览可参考：%s", tooLarge.Tokens, tooLarge.Maximum, truncateRunes(tooLarge.Previous.Overview, 1200))
-		}
-		if remainingSteps <= 0 {
-			break
-		}
+
 	}
 	session.MarkCompactionFailure(time.Now())
 	return lastErr
@@ -262,17 +215,6 @@ func isContextOverflowError(err error) bool {
 	return false
 }
 
-func sessionEstimate(state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) int {
-	if state == nil || tc == nil {
-		return 0
-	}
-	session, ok := tc.Session.(*Session)
-	if !ok || session == nil {
-		return requestTokens(state.Messages, state.ToolInfos)
-	}
-	return session.EstimateRequestTokens(state.Messages, state.ToolInfos)
-}
-
 // sessionPersister 在每次模型成功后保存 assistant 并把本批可见输入标记为 visible
 type sessionPersister struct {
 	*adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]
@@ -291,8 +233,12 @@ func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *ad
 	if last == nil || last.Role != schema.AgenticRoleTypeAssistant {
 		return ctx, state, nil
 	}
-	if last.ResponseMeta != nil && last.ResponseMeta.TokenUsage != nil {
-		session.ObserveTokenUsage(tc.RequestTokenEstimate, last.ResponseMeta.TokenUsage.PromptTokens)
+	if last.ResponseMeta != nil && last.ResponseMeta.TokenUsage != nil && last.ResponseMeta.TokenUsage.TotalTokens > 0 {
+		requestMessages := state.Messages[:len(state.Messages)-1]
+		session.ObserveResponseUsage(requestMessages, state.ToolInfos, last.ResponseMeta.TokenUsage)
+		session.SetTokenBase(last, last.ResponseMeta.TokenUsage)
+	} else {
+		session.ClearTokenBase()
 	}
 	entry, err := session.AppendAssistant(ctx, tc.RunID, last)
 	if err != nil {
@@ -302,31 +248,10 @@ func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *ad
 	if entry != nil {
 		ids = append(ids, entry.ID)
 	}
-	receipt := session.PendingReferenceReceipt()
-	if receipt == nil {
-		receipt = &memory.ReferenceReceipt{}
-	}
-	toolSeen := tc.ReferenceSeenSnapshot()
-	for key, version := range session.PendingToolReceipts() {
-		if toolSeen == nil {
-			toolSeen = map[string]string{}
-		}
-		toolSeen[key] = version
-	}
-	if len(toolSeen) > 0 {
-		if receipt.Tool == nil {
-			receipt.Tool = map[string]string{}
-		}
-		for key, version := range toolSeen {
-			receipt.Tool[key] = version
-		}
-	}
-	seqs, err := session.memory.MarkVisibleAndPersistReceipts(ctx, session.kind, session.targetID, ids, receipt)
+	seqs, err := session.memory.MarkVisible(ctx, session.kind, session.targetID, ids)
 	if err != nil {
 		return ctx, state, err
 	}
-	session.ClearPendingReferenceReceipt()
-	tc.ClearReferenceSeen()
 	session.ApplyVisibleSeqs(seqs)
 	session.MarkInjected(tc.InjectedArrivalSeq)
 	tc.VisibleTranscriptIDs = nil

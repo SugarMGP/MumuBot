@@ -275,6 +275,20 @@ func modelUsageCoverage(row modelstats.AggregateRow) string {
 	return fmt.Sprintf("%.1f%%", float64(row.UsageReportedCount)*100/float64(success))
 }
 
+func modelCacheHit(row modelstats.AggregateRow) string {
+	if row.PromptTokens == 0 {
+		return "暂无数据"
+	}
+	return fmt.Sprintf("%.1f%%", float64(row.CachedTokens)*100/float64(row.PromptTokens))
+}
+
+func modelCacheTokens(row modelstats.AggregateRow) string {
+	if row.PromptTokens == 0 {
+		return "暂无输入统计"
+	}
+	return fmt.Sprintf("缓存 %d / 输入 %d", row.CachedTokens, row.PromptTokens)
+}
+
 func modelAverageTokens(row modelstats.AggregateRow) string {
 	if row.UsageReportedCount == 0 {
 		return "暂无数据"

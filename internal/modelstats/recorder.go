@@ -24,6 +24,8 @@ type aggregate struct {
 	FailureCount       int64
 	LatencyMSSum       int64
 	TotalTokens        int64
+	PromptTokens       int64
+	CachedTokens       int64
 	UsageReportedCount int64
 }
 
@@ -75,7 +77,7 @@ func (r *Recorder) Close() {
 	}
 }
 
-func (r *Recorder) Record(task, modelName string, duration time.Duration, failed bool, totalTokens int, usageReported bool) {
+func (r *Recorder) Record(task, modelName string, duration time.Duration, failed bool, totalTokens, promptTokens, cachedTokens int, usageReported bool) {
 	if r == nil || task == "" || modelName == "" {
 		return
 	}
@@ -90,6 +92,8 @@ func (r *Recorder) Record(task, modelName string, duration time.Duration, failed
 	item.LatencyMSSum += latency
 	if usageReported {
 		item.TotalTokens += int64(totalTokens)
+		item.PromptTokens += int64(promptTokens)
+		item.CachedTokens += int64(cachedTokens)
 		item.UsageReportedCount++
 	}
 	r.pending[k] = item
@@ -109,14 +113,16 @@ func (r *Recorder) flush() {
 	}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		for k, item := range batch {
-			if err := tx.Exec(`INSERT INTO model_call_hourly(bucket_start,task,model,request_count,failure_count,latency_ms_sum,total_tokens,usage_reported_count)
-				VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(bucket_start,task,model) DO UPDATE SET
+			if err := tx.Exec(`INSERT INTO model_call_hourly(bucket_start,task,model,request_count,failure_count,latency_ms_sum,total_tokens,prompt_tokens,cached_tokens,usage_reported_count)
+				VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(bucket_start,task,model) DO UPDATE SET
 				request_count=model_call_hourly.request_count+EXCLUDED.request_count,
 				failure_count=model_call_hourly.failure_count+EXCLUDED.failure_count,
 				latency_ms_sum=model_call_hourly.latency_ms_sum+EXCLUDED.latency_ms_sum,
 				total_tokens=model_call_hourly.total_tokens+EXCLUDED.total_tokens,
+				prompt_tokens=model_call_hourly.prompt_tokens+EXCLUDED.prompt_tokens,
+				cached_tokens=model_call_hourly.cached_tokens+EXCLUDED.cached_tokens,
 				usage_reported_count=model_call_hourly.usage_reported_count+EXCLUDED.usage_reported_count`,
-				k.Bucket, k.Task, k.Model, item.RequestCount, item.FailureCount, item.LatencyMSSum, item.TotalTokens, item.UsageReportedCount).Error; err != nil {
+				k.Bucket, k.Task, k.Model, item.RequestCount, item.FailureCount, item.LatencyMSSum, item.TotalTokens, item.PromptTokens, item.CachedTokens, item.UsageReportedCount).Error; err != nil {
 				return err
 			}
 		}
@@ -140,6 +146,8 @@ func mergeAggregate(target *aggregate, source aggregate) {
 	target.FailureCount += source.FailureCount
 	target.LatencyMSSum += source.LatencyMSSum
 	target.TotalTokens += source.TotalTokens
+	target.PromptTokens += source.PromptTokens
+	target.CachedTokens += source.CachedTokens
 	target.UsageReportedCount += source.UsageReportedCount
 }
 
@@ -153,15 +161,15 @@ func Handler(task, modelName string) callbacks.Handler {
 				return context.WithValue(ctx, startedAtKey{}, time.Now())
 			},
 			OnEnd: func(ctx context.Context, _ *callbacks.RunInfo, output *model.AgenticCallbackOutput) context.Context {
-				total, reported := 0, false
+				total, prompt, cached, reported := 0, 0, 0, false
 				if output != nil && output.TokenUsage != nil {
-					total, reported = output.TokenUsage.TotalTokens, true
+					total, prompt, cached, reported = output.TokenUsage.TotalTokens, output.TokenUsage.PromptTokens, output.TokenUsage.PromptTokenDetails.CachedTokens, true
 				}
-				recorder.Record(task, modelName, elapsed(ctx), false, total, reported)
+				recorder.Record(task, modelName, elapsed(ctx), false, total, prompt, cached, reported)
 				return ctx
 			},
 			OnError: func(ctx context.Context, _ *callbacks.RunInfo, _ error) context.Context {
-				recorder.Record(task, modelName, elapsed(ctx), true, 0, false)
+				recorder.Record(task, modelName, elapsed(ctx), true, 0, 0, 0, false)
 				return ctx
 			},
 		}).Handler()
@@ -181,6 +189,8 @@ type AggregateRow struct {
 	FailureCount       int64   `json:"failure_count"`
 	AverageLatencyMS   float64 `json:"average_latency_ms"`
 	TotalTokens        int64   `json:"total_tokens"`
+	PromptTokens       int64   `json:"prompt_tokens"`
+	CachedTokens       int64   `json:"cached_tokens"`
 	UsageReportedCount int64   `json:"usage_reported_count"`
 }
 
@@ -208,18 +218,18 @@ func Query(ctx context.Context, db *gorm.DB, since time.Time) (Snapshot, error) 
 	}
 	if err := db.WithContext(ctx).Raw(`SELECT '全部' label, COALESCE(sum(request_count),0) request_count, COALESCE(sum(failure_count),0) failure_count,
 		CASE WHEN sum(request_count)>0 THEN sum(latency_ms_sum)::float8/sum(request_count) ELSE 0 END average_latency_ms,
-		COALESCE(sum(total_tokens),0) total_tokens, COALESCE(sum(usage_reported_count),0) usage_reported_count `+base, args...).Scan(&snapshot.Totals).Error; err != nil {
+		COALESCE(sum(total_tokens),0) total_tokens, COALESCE(sum(prompt_tokens),0) prompt_tokens, COALESCE(sum(cached_tokens),0) cached_tokens, COALESCE(sum(usage_reported_count),0) usage_reported_count `+base, args...).Scan(&snapshot.Totals).Error; err != nil {
 		return Snapshot{}, err
 	}
 	if err := db.WithContext(ctx).Raw(`SELECT task label, sum(request_count) request_count, sum(failure_count) failure_count,
-		sum(latency_ms_sum)::float8/sum(request_count) average_latency_ms, sum(total_tokens) total_tokens, sum(usage_reported_count) usage_reported_count `+base+` GROUP BY task ORDER BY request_count DESC`, args...).Scan(&snapshot.ByTask).Error; err != nil {
+		sum(latency_ms_sum)::float8/sum(request_count) average_latency_ms, sum(total_tokens) total_tokens, sum(prompt_tokens) prompt_tokens, sum(cached_tokens) cached_tokens, sum(usage_reported_count) usage_reported_count `+base+` GROUP BY task ORDER BY request_count DESC`, args...).Scan(&snapshot.ByTask).Error; err != nil {
 		return Snapshot{}, err
 	}
 	for i := range snapshot.ByTask {
 		snapshot.ByTask[i].Label = taskLabel(snapshot.ByTask[i].Label)
 	}
 	if err := db.WithContext(ctx).Raw(`SELECT model label, sum(request_count) request_count, sum(failure_count) failure_count,
-		sum(latency_ms_sum)::float8/sum(request_count) average_latency_ms, sum(total_tokens) total_tokens, sum(usage_reported_count) usage_reported_count `+base+` GROUP BY model ORDER BY request_count DESC`, args...).Scan(&snapshot.ByModel).Error; err != nil {
+		sum(latency_ms_sum)::float8/sum(request_count) average_latency_ms, sum(total_tokens) total_tokens, sum(prompt_tokens) prompt_tokens, sum(cached_tokens) cached_tokens, sum(usage_reported_count) usage_reported_count `+base+` GROUP BY model ORDER BY request_count DESC`, args...).Scan(&snapshot.ByModel).Error; err != nil {
 		return Snapshot{}, err
 	}
 	bucket := seriesBucketExpression(since)

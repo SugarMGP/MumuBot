@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,26 +14,28 @@ import (
 	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
+
 	"github.com/cloudwego/eino/schema"
 )
 
 type sessionUser struct {
-	LogID          uint
-	TranscriptID   uint
-	Ref            string
-	Text           string
-	Content        string
-	At             time.Time
-	ReceivedAt     time.Time
-	Mentioned      bool
-	SenderID       int64
-	Nickname       string
-	ReferencedIDs  []int64
-	ArrivalSeq     uint64
-	Order          uint64
-	MessageID      int64
-	Msg            *schema.AgenticMessage
-	IsAgentMessage bool
+	LogID             uint
+	TranscriptID      uint
+	Ref               string
+	Text              string
+	Content           string
+	At                time.Time
+	ReceivedAt        time.Time
+	Mentioned         bool
+	SenderID          int64
+	Nickname          string
+	ReferencedIDs     []int64
+	ArrivalSeq        uint64
+	Order             uint64
+	MessageID         int64
+	Msg               *schema.AgenticMessage
+	IsAgentMessage    bool
+	IsMaintenanceHint bool
 }
 
 type sessionEntry struct {
@@ -53,18 +54,34 @@ type Session struct {
 	targetID int64
 	memory   *memory.Manager
 
-	mu                      sync.Mutex
-	seen                    []sessionEntry
-	pending                 []*sessionUser
-	media                   *mediaIndex
-	injected                uint64
-	selfAt                  []time.Time
-	notes                   []string
-	pendingReferenceReceipt *memory.ReferenceReceipt
-	nextOrder               uint64
-	tokenScale              float64
-	tokenSamples            int
-	compactionRetryAfter    time.Time
+	mu                   sync.Mutex
+	seen                 []sessionEntry
+	pending              []*sessionUser
+	media                *mediaIndex
+	injected             uint64
+	selfAt               []time.Time
+	notes                []string
+	nextOrder            uint64
+	fullScale            float64
+	fullSamples          int
+	tokenBase            *tokenBase
+	compactionRetryAfter time.Time
+	turnSeq              uint64
+	lastMemoryTurn       uint64
+	lastTopicTurn        uint64
+	lastMemoryHintTurn   uint64
+	lastTopicHintTurn    uint64
+	lastActivityAt       time.Time
+	maintenanceMu        sync.Mutex
+	idleDoneForActivity  bool
+	idleCancel           context.CancelFunc
+}
+
+type tokenBase struct {
+	message    *schema.AgenticMessage
+	prompt     int
+	completion int
+	total      int
 }
 
 type sessionStore struct {
@@ -77,13 +94,23 @@ func newSessionStore(mem *memory.Manager) *sessionStore {
 	return &sessionStore{memory: mem, sessions: map[string]*Session{}}
 }
 
+func (s *sessionStore) snapshot() []*Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list := make([]*Session, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		list = append(list, session)
+	}
+	return list
+}
+
 func (s *sessionStore) get(kind string, targetID int64) *Session {
 	key := sessionKey(kind, targetID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[key]
 	if !ok {
-		session = &Session{kind: kind, targetID: targetID, memory: s.memory, media: newMediaIndex(), tokenScale: 1}
+		session = &Session{kind: kind, targetID: targetID, memory: s.memory, media: newMediaIndex(), fullScale: 1}
 		s.sessions[key] = session
 	}
 	return session
@@ -101,6 +128,14 @@ func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaR
 	defer s.mu.Unlock()
 	user := s.newUserLocked(msg, logID, mediaRefs)
 	s.pending = append(s.pending, user)
+	if msg.ReceivedAt.After(s.lastActivityAt) {
+		s.lastActivityAt = msg.ReceivedAt
+	}
+	s.idleDoneForActivity = false
+	if s.idleCancel != nil {
+		s.idleCancel()
+		s.idleCancel = nil
+	}
 	return user
 }
 
@@ -119,6 +154,14 @@ func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptI
 		TranscriptID: transcriptID, ReceivedAt: time.Now(), At: at, Order: s.nextOrderLocked(),
 	}
 	s.pending = append(s.pending, user)
+	if at.After(s.lastActivityAt) {
+		s.lastActivityAt = at
+	}
+	s.idleDoneForActivity = false
+	if s.idleCancel != nil {
+		s.idleCancel()
+		s.idleCancel = nil
+	}
 	return user
 }
 
@@ -163,14 +206,14 @@ func (s *Session) RestorePendingAgentMessage(payload *schema.AgenticMessage, tra
 	s.pending = append(s.pending, &sessionUser{Msg: payload, Text: agenticMessageText(payload), IsAgentMessage: true, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
 }
 
-func (s *Session) RestorePendingReference(payload *schema.AgenticMessage, transcriptID uint, receipt *memory.ReferenceReceipt) {
+// RestorePendingMaintenanceHint 恢复尚未进入模型输入的维护提醒
+func (s *Session) RestorePendingMaintenanceHint(payload *schema.AgenticMessage, transcriptID uint) {
 	if payload == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seen = append(s.seen, sessionEntry{msg: payload, transcriptID: transcriptID})
-	s.pendingReferenceReceipt = receipt
+	s.pending = append(s.pending, &sessionUser{Msg: payload, Text: agenticMessageText(payload), IsMaintenanceHint: true, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
 }
 
 func agenticMessageText(message *schema.AgenticMessage) string {
@@ -209,7 +252,11 @@ func (s *Session) ApplyVisibleSeqs(seqs map[uint]uint64) {
 	kept := s.pending[:0]
 	for _, user := range s.pending {
 		if seq, ok := seqs[user.TranscriptID]; ok {
-			s.seen = append(s.seen, sessionEntry{user: user, msg: user.Msg, transcriptID: user.TranscriptID, visibleSeq: seq})
+			entry := sessionEntry{msg: user.Msg, transcriptID: user.TranscriptID, visibleSeq: seq}
+			if !user.IsMaintenanceHint {
+				entry.user = user
+			}
+			s.seen = append(s.seen, entry)
 			continue
 		}
 		kept = append(kept, user)
@@ -293,6 +340,19 @@ func (s *Session) takeNotesLocked() []string {
 func (s *Session) PendingMessages() []*sessionUser {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	list := make([]*sessionUser, 0, len(s.pending))
+	for _, user := range s.pending {
+		if user != nil && !user.IsMaintenanceHint {
+			list = append(list, user)
+		}
+	}
+	return list
+}
+
+// AllPendingMessages 返回包含维护提醒在内的待处理项
+func (s *Session) AllPendingMessages() []*sessionUser {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return append([]*sessionUser(nil), s.pending...)
 }
 
@@ -309,7 +369,7 @@ func (s *Session) PendingAfter(seq uint64) []tools.PendingMessage {
 	defer s.mu.Unlock()
 	var list []tools.PendingMessage
 	for _, user := range s.pending {
-		if user.ArrivalSeq <= seq || user.ArrivalSeq <= s.injected {
+		if user == nil || user.IsMaintenanceHint || user.ArrivalSeq <= seq || user.ArrivalSeq <= s.injected {
 			continue
 		}
 		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
@@ -323,28 +383,10 @@ func (s *Session) PendingAgentMessages() []tools.PendingMessage {
 	defer s.mu.Unlock()
 	list := make([]tools.PendingMessage, 0)
 	for _, user := range s.pending {
-		if user != nil && user.IsAgentMessage {
+		if user != nil && !user.IsMaintenanceHint && user.IsAgentMessage {
 			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
 		}
 	}
-	return list
-}
-
-func (s *Session) MessagesAfter(seq uint64) []*sessionUser {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var list []*sessionUser
-	for _, entry := range s.seen {
-		if entry.user != nil && entry.user.ArrivalSeq > seq {
-			list = append(list, entry.user)
-		}
-	}
-	for _, user := range s.pending {
-		if user.ArrivalSeq > seq {
-			list = append(list, user)
-		}
-	}
-	sort.SliceStable(list, func(i, j int) bool { return list[i].ArrivalSeq < list[j].ArrivalSeq })
 	return list
 }
 
@@ -454,57 +496,6 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction
 			visibleIDs = append(visibleIDs, entry.transcriptID)
 		}
 	}
-	var referenceID uint
-	if mem != nil {
-		pendingTexts := make([]string, 0, len(pending))
-		for _, user := range pending {
-			if user != nil {
-				pendingTexts = append(pendingTexts, user.Text)
-			}
-		}
-		var pendingEntry *sessionEntry
-		for i := range entries {
-			if entries[i].transcriptID != 0 && entries[i].visibleSeq == 0 && entries[i].msg != nil && entries[i].msg.Extra["kind"] == "reference" {
-				pendingEntry = &entries[i]
-				break
-			}
-		}
-		if pendingEntry != nil {
-			referenceID = pendingEntry.transcriptID
-		} else {
-			snapshot, refErr := mem.BuildAutoReference(ctx, s.kind, s.targetID, s.autoReferenceUserIDs(), pendingTexts)
-			if refErr != nil {
-				return nil, refErr
-			}
-			seen, seenErr := mem.ReferenceSeenForSession(ctx, s.kind, s.targetID)
-			if seenErr != nil {
-				return nil, seenErr
-			}
-			delta, deltaErr := mem.BuildReferenceDelta(ctx, snapshot, seen)
-			if deltaErr != nil {
-				return nil, deltaErr
-			}
-			if delta.Text != "" {
-				refMsg := schema.UserAgenticMessage(systemNote("内部参考", delta.Text))
-				refMsg.Extra = map[string]any{"source": "internal_context", "kind": "reference", "reference_receipts": delta.Receipt}
-				payload, _ := sonic.Marshal(refMsg)
-				entry := &memory.TranscriptEntry{ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "internal_reference", Payload: payload}
-				if err := mem.AppendTranscript(ctx, entry); err != nil {
-					return nil, err
-				}
-				referenceID = entry.ID
-				messages = append(messages, refMsg)
-				s.mu.Lock()
-				s.seen = append(s.seen, sessionEntry{msg: refMsg, transcriptID: entry.ID})
-				s.pendingReferenceReceipt = &delta.Receipt
-				s.mu.Unlock()
-			}
-		}
-	}
-
-	if referenceID != 0 {
-		visibleIDs = append(visibleIDs, referenceID)
-	}
 	for _, user := range pending {
 		if user.Msg != nil {
 			messages = append(messages, user.Msg)
@@ -523,31 +514,6 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction
 	return messages, nil
 }
 
-func (s *Session) autoReferenceUserIDs() []int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.kind == memory.ConversationKindPrivate {
-		return []int64{s.targetID}
-	}
-	seen := map[int64]bool{}
-	ids := make([]int64, 0, 3)
-	add := func(id int64) {
-		if id > 0 && !seen[id] && len(ids) < 3 {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	for i := len(s.pending) - 1; i >= 0; i-- {
-		add(s.pending[i].SenderID)
-	}
-	for i := len(s.pending) - 1; i >= 0; i-- {
-		for _, id := range s.pending[i].ReferencedIDs {
-			add(id)
-		}
-	}
-	return ids
-}
-
 func maxPendingSeq(pending []*sessionUser) uint64 {
 	var seq uint64
 	for _, user := range pending {
@@ -556,4 +522,111 @@ func maxPendingSeq(pending []*sessionUser) uint64 {
 		}
 	}
 	return seq
+}
+
+// CompleteTurn 在成功完成一次思考后推进维护计数
+func (s *Session) CompleteTurn(memoryMaintained, topicMaintained bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.turnSeq++
+	if memoryMaintained {
+		s.lastMemoryTurn = s.turnSeq
+	}
+	if topicMaintained {
+		s.lastTopicTurn = s.turnSeq
+	}
+}
+
+// MaintenanceDue 返回本轮需要追加的维护提醒和对应计数
+func (s *Session) MaintenanceDue(memoryTurns, topicTurns int) (string, uint64, uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var labels []string
+	nextMemory, nextTopic := s.lastMemoryHintTurn, s.lastTopicHintTurn
+	if memoryTurns > 0 && s.turnSeq-s.lastMemoryTurn >= uint64(memoryTurns) && s.turnSeq-s.lastMemoryHintTurn >= uint64(max(1, memoryTurns/2)) {
+		labels = append(labels, fmt.Sprintf("你已经连续 %d 轮没有更新长期记忆。如果有稳定偏好、身份、约定、重要经历或需要纠正的旧记忆，先用 searchMemory 查重，再用 manageMemory 新建或更新；没有就继续，不要为了清空提醒而硬写。", memoryTurns))
+		nextMemory = s.turnSeq
+	}
+	if topicTurns > 0 && s.turnSeq-s.lastTopicTurn >= uint64(topicTurns) && s.turnSeq-s.lastTopicHintTurn >= uint64(max(1, topicTurns/2)) {
+		labels = append(labels, fmt.Sprintf("你已经连续 %d 轮没有更新话题。如果刚才的对话有实质进展、结论、未完事项或收尾，用 updateTopic 更新摘要和关键消息；没有就继续，不要硬造话题。", topicTurns))
+		nextTopic = s.turnSeq
+	}
+	if len(labels) == 0 {
+		return "", nextMemory, nextTopic
+	}
+	return strings.Join(labels, "\n"), nextMemory, nextTopic
+}
+
+// AppendMaintenanceHint 写入持久化系统提醒并加入待处理输入
+func (s *Session) AppendMaintenanceHint(ctx context.Context, mem *memory.Manager, text string, memoryTurn, topicTurn uint64) error {
+	if mem == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	msg := schema.UserAgenticMessage(systemNote("维护提醒", text))
+	msg.Extra = map[string]any{"kind": "maintenance_hint"}
+	payload, err := sonic.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	entry := &memory.TranscriptEntry{ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "system_note", Payload: payload}
+	if err := mem.AppendTranscript(ctx, entry); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pending = append(s.pending, &sessionUser{Msg: msg, Text: text, TranscriptID: entry.ID, IsMaintenanceHint: true, Order: s.nextOrderLocked()})
+	s.lastMemoryHintTurn = memoryTurn
+	s.lastTopicHintTurn = topicTurn
+	s.mu.Unlock()
+	return nil
+}
+
+// IdleAvailable 判断当前空闲周期是否已经尝试过压缩
+func (s *Session) IdleAvailable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.idleDoneForActivity
+}
+
+// MarkIdleStart 登记空闲压缩取消函数
+func (s *Session) MarkIdleStart(cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idleCancel = cancel
+}
+
+// ClearIdleStart 清除空闲压缩取消函数
+func (s *Session) ClearIdleStart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idleCancel = nil
+}
+
+// MarkIdleDone 标记当前空闲周期已经处理过
+func (s *Session) MarkIdleDone() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idleDoneForActivity = true
+}
+
+// MarkTopicMaintained 记录话题维护
+func (s *Session) MarkTopicMaintained() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastTopicTurn = s.turnSeq
+}
+
+// LastActivityAt 返回最近真实消息时间
+func (s *Session) LastActivityAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastActivityAt
+}
+
+// SetLastActivity 更新最近真实消息时间
+func (s *Session) SetLastActivity(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if at.After(s.lastActivityAt) {
+		s.lastActivityAt = at
+	}
 }

@@ -13,15 +13,7 @@ const (
 
 	MemoryProfile    = "profile"
 	MemoryExperience = "experience"
-
-	ReferenceScopeAuto = "auto"
-	ReferenceScopeTool = "tool"
 )
-
-type ReferenceSeen struct {
-	Auto map[string]string `json:"auto"`
-	Tool map[string]string `json:"tool"`
-}
 
 // ConversationSession 保存单个会话的单调序号，消息编号和可见序号都在事务内分配
 type ConversationSession struct {
@@ -29,7 +21,6 @@ type ConversationSession struct {
 	TargetID         int64     `gorm:"primaryKey;column:target_id" json:"target_id"`
 	NextInputSeq     uint64    `json:"next_input_seq"`
 	NextVisibleSeq   uint64    `json:"next_visible_seq"`
-	ReferenceSeen    []byte    `gorm:"type:jsonb;not null" json:"reference_seen"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
@@ -64,8 +55,6 @@ type CompactionCheckpoint struct {
 	ThroughMessageLogID *uint           `json:"through_message_log_id,omitempty"`
 	Overview            string          `gorm:"type:text;not null;default:''" json:"overview"`
 	ActiveTopicVersions json.RawMessage `gorm:"type:jsonb;not null;default:'[]'" json:"active_topic_versions"`
-	ReferenceBaseline   string          `gorm:"type:text;not null;default:''" json:"reference_baseline"`
-	ReferenceVersions   json.RawMessage `gorm:"type:jsonb;not null;default:'{}'" json:"reference_versions"`
 	BatchID             string          `gorm:"type:text;not null;default:''" json:"batch_id"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`

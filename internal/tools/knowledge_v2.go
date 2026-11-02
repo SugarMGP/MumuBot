@@ -13,13 +13,16 @@ import (
 )
 
 type SearchMemoryInputV2 struct {
-	Keywords        []string `json:"keywords,omitempty" jsonschema:"description=关键词数组；支持 or/and"`
+	Keywords        []string `json:"keywords,omitempty" jsonschema:"description=关键词数组；一次给多个同义词/别名/相关词，配合 or 提高召回"`
 	Match           string   `json:"match,omitempty" jsonschema:"description=or 或 and，默认 or"`
+	Mode            string   `json:"mode,omitempty" jsonschema:"description=exact 或 fuzzy；默认 exact；精确找不到时用 fuzzy 再查一次"`
 	ExcludeKeywords []string `json:"exclude_keywords,omitempty" jsonschema:"description=排除关键词"`
 	SubjectType     string   `json:"subject_type,omitempty" jsonschema:"description=group/user/self/object"`
 	SubjectTarget   string   `json:"subject_target,omitempty" jsonschema:"description=主体 ID 或 object 名称"`
 	MemoryType      string   `json:"memory_type,omitempty" jsonschema:"description=profile 或 experience"`
 	Status          string   `json:"status,omitempty" jsonschema:"description=active 或 archived，默认 active"`
+	UpdatedFrom     string   `json:"updated_from,omitempty" jsonschema:"description=更新时间下限，格式 2006-01-02 或 RFC3339"`
+	UpdatedTo       string   `json:"updated_to,omitempty" jsonschema:"description=更新时间上限，格式 2006-01-02 或 RFC3339"`
 	Cursor          string   `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
 	Limit           int      `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
 }
@@ -101,15 +104,26 @@ func searchMemoryV2(ctx context.Context, input *SearchMemoryInputV2) (any, error
 	if input == nil {
 		input = &SearchMemoryInputV2{}
 	}
+	updatedFrom, err := parseHistoryTime(input.UpdatedFrom)
+	if err != nil {
+		return nil, err
+	}
+	updatedTo, err := parseHistoryTime(input.UpdatedTo)
+	if err != nil {
+		return nil, err
+	}
+	if updatedFrom != nil && updatedTo != nil && updatedFrom.After(*updatedTo) {
+		return nil, fmt.Errorf("updated_from 不能晚于 updated_to")
+	}
 	page, err := tc.MemoryMgr.SearchMemories(ctx, memory.MemorySearchQuery{
-		Keywords: input.Keywords, Match: input.Match, ExcludeKeywords: input.ExcludeKeywords,
+		Keywords: input.Keywords, Match: input.Match, Mode: input.Mode, ExcludeKeywords: input.ExcludeKeywords,
 		SubjectType: input.SubjectType, SubjectTarget: input.SubjectTarget, MemoryType: input.MemoryType,
-		Status: input.Status, Cursor: input.Cursor, Limit: input.Limit,
+		Status: input.Status, UpdatedFrom: updatedFrom, UpdatedTo: updatedTo, Cursor: input.Cursor, Limit: input.Limit,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"success": true, "matches": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore}, nil
+	return map[string]any{"success": true, "mode": page.Mode, "matches": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore}, nil
 }
 
 func readMemoryV2(ctx context.Context, input *ReadMemoryInputV2) (any, error) {
@@ -125,7 +139,6 @@ func readMemoryV2(ctx context.Context, input *ReadMemoryInputV2) (any, error) {
 		return nil, err
 	}
 	tc.MarkMemoryRead(detail.Item.ID, detail.Item.Version)
-	tc.MarkReferenceSeen("memory:"+fmt.Sprint(detail.Item.ID), fmt.Sprintf("v%d", detail.Item.Version))
 	return map[string]any{"success": true, "item": detail.Item}, nil
 }
 
@@ -159,8 +172,8 @@ func manageMemoryV2(ctx context.Context, input *ManageMemoryInputV2) (any, error
 	}
 	for _, result := range results {
 		tc.MarkMemoryRead(result.ItemID, result.Version)
-		tc.MarkReferenceSeen("memory:"+fmt.Sprint(result.ItemID), fmt.Sprintf("v%d", result.Version))
 	}
+	tc.MemoryMaintained = true
 	return map[string]any{"success": true, "results": results}, nil
 }
 
@@ -318,7 +331,7 @@ func historyViewPreview(row memory.MessageLog) HistoryMessageView {
 }
 
 func NewSearchMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("searchMemory", "按关键词、主体和类型检索长期记忆；支持 or/and 和 cursor 翻页。", searchMemoryV2)
+	return utils.InferTool("searchMemory", "按关键词、主体、类型和更新时间检索长期记忆；默认精确子串，mode=fuzzy 用相似度召回；支持 or/and 和 cursor 翻页。", searchMemoryV2)
 }
 
 func NewReadMemoryToolV2() (tool.InvokableTool, error) {
@@ -330,7 +343,7 @@ func NewManageMemoryToolV2() (tool.InvokableTool, error) {
 }
 
 func NewSearchTopicsTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchTopics", "按关键词检索群聊和私聊话题，返回概览、未完事项和关键消息编号。", searchTopics)
+	return utils.InferTool("searchTopics", "按关键词和相似度检索群聊与私聊话题，返回概览、未完事项和关键消息编号。", searchTopics)
 }
 
 func NewReadTopicTool() (tool.InvokableTool, error) {

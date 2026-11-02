@@ -112,9 +112,6 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 			}
 			return a.doSendImageURL(callCtx, targetID, imageURL)
 		},
-		GetNewMessagesCallback: func(callCtx context.Context) (any, error) {
-			return a.readNewMessages(callCtx, session)
-		},
 		SessionMessageCallback: a.deliverSessionMessage,
 		ReadForwardCallback: func(callCtx context.Context, id string, index int) (any, error) {
 			return a.readForward(callCtx, id, index)
@@ -181,31 +178,4 @@ func forwardPreview(content string) string {
 		return string(runes[:40]) + "…"
 	}
 	return content
-}
-
-// readNewMessages 读取本轮思考开始后到达的新消息
-func (a *Agent) readNewMessages(ctx context.Context, session *Session) (any, error) {
-	tc := tools.GetToolContext(ctx)
-	if tc == nil {
-		return nil, tools.NewTerminalToolError(fmt.Errorf("消息读取能力未初始化"))
-	}
-	// 只返回上次读取之后的新消息，重复读取不会把同一批消息再喂一遍
-	floor := max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
-	messages := make([]map[string]any, 0, 4)
-	observed := floor
-	for _, user := range session.MessagesAfter(floor) {
-		if user.TranscriptID != 0 {
-			tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, user.TranscriptID)
-		}
-		messages = append(messages, map[string]any{
-			"message_id":  user.MessageID,
-			"sender_id":   user.SenderID,
-			"nickname":    user.Nickname,
-			"content":     user.Text,
-			"arrival_seq": user.ArrivalSeq,
-		})
-		observed = max(observed, user.ArrivalSeq)
-	}
-	tc.ObservedThroughSeq = observed
-	return map[string]any{"success": true, "complete": true, "messages": messages}, nil
 }

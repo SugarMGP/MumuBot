@@ -19,6 +19,7 @@ import (
 const (
 	kindSystemPrompt  = "system_prompt"
 	kindContextDigest = "context_digest"
+	kindPinnedMemory  = "pinned_memory"
 	kindGroupNote     = "group_note"
 	kindSystemNote    = "system_note"
 
@@ -52,6 +53,8 @@ func headPriority(kind string) int {
 		return 1
 	case kindContextDigest:
 		return 2
+	case kindPinnedMemory:
+		return 3
 	}
 	return -1
 }
@@ -70,9 +73,9 @@ func isHeadEntry(msg *schema.AgenticMessage) bool {
 	return headPriority(messageKind(msg)) >= 0
 }
 
-// orderEntries 把代头三类提到最前，其余保持原顺序
+// orderEntries 把代头提到最前，其余保持原顺序
 func orderEntries(entries []sessionEntry) []sessionEntry {
-	heads := make([]sessionEntry, 0, 3)
+	heads := make([]sessionEntry, 0, 4)
 	rest := make([]sessionEntry, 0, len(entries))
 	for _, entry := range entries {
 		if isHeadEntry(entry.msg) {
@@ -125,18 +128,82 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 			return err
 		}
 	}
-	digest, err := mem.RenderCheckpointDigest(ctx, s.kind, s.targetID)
+	digest, err := mem.LoadContextDigest(ctx, s.kind, s.targetID)
 	if err != nil {
 		return err
 	}
-	if digest = strings.TrimSpace(digest); digest != "" {
-		digestMsg := schema.UserAgenticMessage(systemNote("上下文摘要", digest))
+	pinned, err := mem.PinnedMemoriesForConversation(ctx, s.kind, s.targetID)
+	if err != nil {
+		return err
+	}
+	pinnedText := renderPinnedMemories(pinned)
+	digestText, omitted := renderBoundedDigest(ctx, s, digest, pinnedText)
+	if omitted > 0 {
+		zap.L().Warn("摘要话题超出注入预算", zap.String("kind", s.kind), zap.Int64("target_id", s.targetID), zap.Int("omitted", omitted))
+	}
+	if digestText = strings.TrimSpace(digestText); digestText != "" {
+		digestMsg := schema.UserAgenticMessage(systemNote("上下文摘要", digestText))
 		digestMsg.Extra = map[string]any{"kind": kindContextDigest}
 		if err := s.appendHeadEntry(ctx, mem, kindContextDigest, digestMsg); err != nil {
 			return err
 		}
 	}
+	if pinnedText = strings.TrimSpace(pinnedText); pinnedText != "" {
+		pinnedMsg := schema.UserAgenticMessage(systemNote("长期记忆", pinnedText))
+		pinnedMsg.Extra = map[string]any{"kind": kindPinnedMemory}
+		if err := s.appendHeadEntry(ctx, mem, kindPinnedMemory, pinnedMsg); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// renderPinnedMemories 渲染当前会话主体和自己的全部 active 置顶记忆
+func renderPinnedMemories(records []memory.KnowledgeRecord) string {
+	lines := make([]string, 0, len(records))
+	for _, record := range records {
+		line := fmt.Sprintf("- #%d [%s] %s", record.ID, record.SubjectType, strings.TrimSpace(record.Label))
+		if content := strings.TrimSpace(record.Content); content != "" {
+			if strings.TrimSpace(record.Label) != "" {
+				line += "：" + content
+			} else {
+				line += " " + content
+			}
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderBoundedDigest 在 30% 摘要预算内保留话题，pinned 和 overview 固定
+func renderBoundedDigest(ctx context.Context, session *Session, digest *memory.ContextDigest, pinnedText string) (string, int) {
+	if digest == nil {
+		return "", 0
+	}
+	window := 0
+	if generation := generationFrom(ctx); generation != nil {
+		window = generation.contextWindow
+	}
+	cfg := configFor(ctx)
+	if window <= 0 || cfg == nil {
+		return memory.RenderContextDigest(digest.Overview, digest.Topics, 0), 0
+	}
+	budget := int(float64(window) * cfg.Compactor.DigestBudgetRatio)
+	fixed := session.estimateTextTokens(systemNote("长期记忆", pinnedText)) + session.estimateTextTokens(systemNote("上下文摘要", memory.RenderContextDigest(digest.Overview, nil, 0)))
+	selected := make([]memory.ContextTopic, 0, len(digest.Topics))
+	for _, topic := range digest.Topics {
+		candidate := append(selected, topic)
+		text := memory.RenderContextDigest(digest.Overview, candidate, len(digest.Topics)-len(candidate))
+		if fixed+session.estimateTextTokens(systemNote("上下文摘要", text)) > budget {
+			break
+		}
+		selected = candidate
+	}
+	omitted := len(digest.Topics) - len(selected)
+	if omitted > 0 {
+		return memory.RenderContextDigest(digest.Overview, selected, omitted), omitted
+	}
+	return memory.RenderContextDigest(digest.Overview, selected, 0), 0
 }
 
 // syncGroupNote 在群说明变化时追加一条系统消息，头部保持不动

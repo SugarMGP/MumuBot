@@ -30,6 +30,7 @@ templ SettingsBody(data SettingsPageData) {
 			@AgentSettings(data)
 			@ChatSettings(data)
 			@CompactorSettings(data)
+			@MaintenanceSettings(data)
 			@mediaSettings(data)
 			@debugSettings(data)
 		</div>
@@ -99,11 +100,32 @@ templ CompactorSettings(data SettingsPageData) {
 				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["compactor"]) }/>
 				<div class="grid grid-cols-3 gap-3">
 					<label class="floating-label"><span>触发比例（%）</span><input class="input w-full" type="number" step="0.1" min="1" max="99" name="trigger_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.TriggerRatio*100) }/></label>
-					<label class="floating-label"><span>目标比例（%）</span><input class="input w-full" type="number" step="0.1" min="1" max="55" name="target_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.TargetRatio*100) }/></label>
-					<label class="floating-label"><span>近期原文（%）</span><input class="input w-full" type="number" step="0.1" min="1" name="recent_tail_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.RecentTailRatio*100) }/></label>
+					<label class="floating-label"><span>摘要注入预算（%）</span><input class="input w-full" type="number" step="0.1" min="10" max="60" name="digest_budget_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.DigestBudgetRatio*100) }/></label>
+					<label class="floating-label"><span>近期原文（%）</span><input class="input w-full" type="number" step="0.1" min="5" max="30" name="recent_tail_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.RecentTailRatio*100) }/></label>
 				</div>
-				<label class="floating-label"><span>压缩器最大步数</span><input class="input w-full" type="number" min="1" max="100" name="max_steps" value={ fmt.Sprintf("%d", data.Current.Compactor.MaxSteps) }/></label>
+				<div class="grid grid-cols-3 gap-3">
+					<label class="floating-label"><span>压缩器最大步数</span><input class="input w-full" type="number" min="1" max="100" name="max_steps" value={ fmt.Sprintf("%d", data.Current.Compactor.MaxSteps) }/></label>
+					<label class="floating-label"><span>空闲多少分钟后压缩</span><input class="input w-full" type="number" min="0" max="240" name="idle_minutes" value={ fmt.Sprintf("%d", data.Current.Compactor.IdleMinutes) }/><span class="text-xs text-base-content/60">0 表示关闭</span></label>
+					<label class="floating-label"><span>空闲压缩最低占用（%）</span><input class="input w-full" type="number" step="0.1" min="45" max="85" name="idle_min_ratio" value={ fmt.Sprintf("%.1f", data.Current.Compactor.IdleMinRatio*100) }/></label>
+				</div>
 				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存压缩设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
+			</form>
+		</div>
+	</section>
+}
+
+templ MaintenanceSettings(data SettingsPageData) {
+	<section class="card">
+		<div class="card-body gap-4 p-5">
+			<div><h2 class="text-lg font-semibold text-base-content">记忆维护</h2><p class="mt-1 text-sm text-base-content/60">连续这么多轮没有维护时，下一轮会提醒一次；0 表示关闭。</p></div>
+			<form class="space-y-3" method="post" action="/admin/settings">
+				<input type="hidden" name="section" value="maintenance"/>
+				<input type="hidden" name="version" value={ fmt.Sprintf("%d", data.Versions["maintenance"]) }/>
+				<div class="grid grid-cols-2 gap-3">
+					<label class="floating-label"><span>记忆维护提醒（轮）</span><input class="input w-full" type="number" min="0" max="50" name="memory_turns" value={ fmt.Sprintf("%d", data.Current.Maintenance.MemoryTurns) }/></label>
+					<label class="floating-label"><span>话题维护提醒（轮）</span><input class="input w-full" type="number" min="0" max="50" name="topic_turns" value={ fmt.Sprintf("%d", data.Current.Maintenance.TopicTurns) }/></label>
+				</div>
+				<div class="flex gap-2"><button class="btn btn-primary btn-sm" type="submit" name="action" value="save">保存维护设置</button><button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">恢复默认</button></div>
 			</form>
 		</div>
 	</section>
