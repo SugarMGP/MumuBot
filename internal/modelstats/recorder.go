@@ -225,9 +225,6 @@ func Query(ctx context.Context, db *gorm.DB, since time.Time) (Snapshot, error) 
 		sum(latency_ms_sum)::float8/sum(request_count) average_latency_ms, sum(total_tokens) total_tokens, sum(prompt_tokens) prompt_tokens, sum(cached_tokens) cached_tokens, sum(usage_reported_count) usage_reported_count `+base+` GROUP BY task ORDER BY request_count DESC`, args...).Scan(&snapshot.ByTask).Error; err != nil {
 		return Snapshot{}, err
 	}
-	for i := range snapshot.ByTask {
-		snapshot.ByTask[i].Label = taskLabel(snapshot.ByTask[i].Label)
-	}
 	if err := db.WithContext(ctx).Raw(`SELECT model label, sum(request_count) request_count, sum(failure_count) failure_count,
 		sum(latency_ms_sum)::float8/sum(request_count) average_latency_ms, sum(total_tokens) total_tokens, sum(prompt_tokens) prompt_tokens, sum(cached_tokens) cached_tokens, sum(usage_reported_count) usage_reported_count `+base+` GROUP BY model ORDER BY request_count DESC`, args...).Scan(&snapshot.ByModel).Error; err != nil {
 		return Snapshot{}, err
@@ -251,15 +248,4 @@ func seriesBucketExpression(since time.Time) string {
 		return `date_bin('6 hours', bucket_start, TIMESTAMPTZ '2000-01-01')`
 	}
 	return `bucket_start`
-}
-
-func taskLabel(task string) string {
-	switch task {
-	case "react":
-		return "主对话"
-	case "compaction":
-		return "上下文压缩"
-	default:
-		return task
-	}
 }

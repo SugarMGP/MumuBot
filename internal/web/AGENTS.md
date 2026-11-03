@@ -1,52 +1,47 @@
 # AGENTS
 
-本目录负责管理后台：HTTP 路由、登录鉴权、页面模板、前端资源、后台服务和嵌入式静态资源。
+本目录负责管理后台的 HTTP 层：JSON 接口、登录鉴权、后台业务查询和嵌入式前端产物。界面代码在仓库根目录的 `web/`。
 
 ## 入口与职责
 
-- `app/app.go`：应用依赖和 chi 路由；`pages.go`、`actions.go`、`system.go` 分别承载页面、管理动作和系统信息处理器。
+- `app/app.go`：依赖、chi 路由、SPA 外壳与静态资源挂载。
+- `app/api.go`、`app/api_errors.go`：统一响应信封、错误码映射、分页参数。
+- `app/auth.go`：管理员密钥登录、会话 Cookie、同源写保护。
+- `app/*.go`：按资源拆分的接口实现；`dto.go` 是响应结构，字段与 `web/src/api/types.ts` 一一对应。
+- `app/topic_view.go`：话题摘要与差异的只读模型。
+- `app/logs_stream.go`：日志 SSE。
 - `auth/`：后台访问鉴权。
-- `services/`：给页面和接口使用的后台业务查询。
-- `views/*.templ`：templ 页面模板源码。
-- `views/*_templ.go`：templ 生成产物，禁止手动修改。
-- `assets/src/`：前端资源源码。
-- `assets/dist/`：前端构建产物，禁止手动修改。
+- `services/`：给接口使用的后台业务查询。
+- `assets/embed.go`：内嵌 `assets/dist` 并设置缓存头。
 
-## 页面与文案
+## 接口约定
 
-- 后台文案面向使用者，不暴露文件路径、配置键名、构建方式、源码术语或是否写库。
-- 状态、类型、枚举值必须转成可读中文。
-- 文案描述“当前能看到什么、能做什么、状态如何”，不要描述实现细节。
-- 后台面向 1000px 及以上的横屏窗口，通过流式字号、间距和栅格自适应；不增加手机竖屏抽屉或独立布局。
+- 成功返回 `{"data": ...}`，列表为 `{"items","total","page","page_size"}`；已落库但运行态未应用时追加 `{"warning":{"code":"runtime_reload_failed"}}`。
+- 失败返回 `{"error":{"code","message","details"}}`；`code` 是稳定机器码，前端按码本地化，`message` 只是兜底。
+- 写接口校验同源 `Origin`；修改类写请求体使用 JSON。
+- 时间返回 RFC3339；枚举返回原始值（如 `active`、`group`、`profile`），中文展示由前端负责。
+- 不在 Go 里拼用户可见的中文句子；服务层已有的错误文本只作为 `message` 兜底。
 
-## 设计与实现
+## 静态资源
 
-- 新增或大改页面前必须先用 Stitch 完成设计，再按确认稿实现；允许 daisyUI 控件细节略有不同，但内容、排版、风格、配色和圆角层级不能明显偏离。
-- 设计基线是纯白或微粉近白工作区、暖白侧栏、樱粉主色、青绿状态色和较多圆角；整体年轻、Anime Friendly、轻松但不幼稚，不做大面积粉色背景或板正的传统企业后台。
-- 所有页面保持一致的间距、字重、颜色、圆角和交互反馈。
-- 页面结构与控件优先使用 daisyUI，局部动态更新使用 HTMX，通知使用 Toastify，图表使用 ECharts；少量通用交互使用浏览器原生能力和集中式 JavaScript。
-- 优先使用 daisyUI 组件及原生 `<dialog>`、`<details>`、`<summary>`、`<select>`，不重复手搓常见控件，也不重新引入 Preline、Alpine 或 React/Vue SPA。
+- `/assets/*` 从内嵌产物读取，文件名带内容哈希，设置一年 immutable 缓存。
+- `/admin`、`/admin/*`、`/login` 返回 `index.html`，并设置 `no-store`。
+- `/health` 保持原有 JSON 结构，容器健康检查依赖它。
 
 ## 修改流程
 
-- 修改图标映射后先运行 `bun run gen:icons` 生成 `views/icons.templ` 与 `assets/src/icons.generated.js`，再运行 templ 生成。
-
-- 修改 `.templ` 后运行：
-
-```bash
-templ generate ./internal/web/views
-```
-
-- 修改 `assets/src/` 后运行：
+- 改接口时同步修改 `web/src/api/types.ts` 与 `web/src/api/client-endpoints.ts`，两边的字段名必须完全一致。
+- 改前端后运行：
 
 ```bash
-bun run build
+cd web && bun run typecheck && bun run lint && bun run lint:i18n && bun run build
 ```
 
-- 涉及后台 UI 的改动，交付前使用 Codex 内置浏览器做真实页面验证，包含截图、交互、控制台和网络请求检查；不要使用 Chrome DevTools MCP。完整集成环境不可用时可以使用真实模板、前端资源和 mock 数据，但验收后必须清理临时进程与目录。
+- 改 Go 后运行 `go build ./...` 与 `go vet ./...`。
+- 涉及 UI 的改动按根目录 `AGENTS.md` 的验收要求，用真实浏览器截图检查浅色/深色与中文/英文。
 
-## 修改注意
+## 注意
 
-- 不手工编辑 `views/*_templ.go` 和 `assets/dist/`。
-- 不要为了一个页面的临时样式新建全局模式；多个页面稳定复用后再提炼。
-- 后台错误提示要保留真实失败含义，但表达成使用者能理解的中文。
+- 不要在 `app/` 里重新引入模板渲染、HTMX 片段或 HTML 页面。
+- 不要手工修改 `assets/dist/`。
+- 后台错误提示保留真实失败含义，但由前端错误码目录表达成使用者能看懂的话。

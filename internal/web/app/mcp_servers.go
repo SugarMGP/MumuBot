@@ -2,130 +2,203 @@ package app
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/secrets"
-	"mumu-bot/internal/web/views"
+
+	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
-func (a *App) mcpPageData(r *http.Request, errorText string) views.MCPPageData {
-	servers, err := a.mcpStore.List(r.Context())
-	if err != nil && errorText == "" {
-		errorText = err.Error()
+type mcpInput struct {
+	Name      string            `json:"name"`
+	Enabled   bool              `json:"enabled"`
+	Type      string            `json:"type"`
+	URL       string            `json:"url"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args"`
+	Env       []string          `json:"env"`
+	Headers   map[string]string `json:"headers"`
+	ToolNames []string          `json:"tool_names"`
+	Version   int64             `json:"version"`
+}
+
+func (a *App) handleMCPServers(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.mcpStore.List(r.Context())
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
 	}
-	data := views.MCPPageData{
-		Servers:          servers,
+	items := make([]mcpServerSummaryDTO, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, mcpServerSummary(row))
+	}
+	respondData(w, http.StatusOK, mcpServersResponse{
+		Items:            items,
 		SecretConfigured: secrets.Configured(),
-		Error:            errorText,
-		Flash:            a.flashFromRequest(r),
-	}
-	if raw := strings.TrimSpace(r.URL.Query().Get("edit")); raw != "" {
-		id, parseErr := strconv.ParseUint(raw, 10, 64)
-		if parseErr == nil {
-			cfg, row, getErr := a.mcpStore.Get(r.Context(), uint(id))
-			if getErr == nil {
-				data.Edit = &cfg
-				data.EditID = row.ID
-				data.EditVersion = row.Version
-				data.EditPosition = row.Position
-			}
-		}
-	}
-	return data
+	}, nil)
 }
 
-func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
-	data := a.mcpPageData(r, "")
-	a.renderPageResponse(w, r, views.MCPPage(data, r.URL.Path), views.PageContent(views.MCPBody(data)))
-}
-
-func (a *App) handleMCPAction(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		a.renderMCPError(w, r, "请求格式不正确。")
+func (a *App) handleMCPServerDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
 		return
 	}
-	switch strings.TrimSpace(r.FormValue("action")) {
-	case "save":
-		a.saveMCPServer(w, r)
-	case "delete":
-		a.deleteMCPServer(w, r)
-	default:
-		a.renderMCPError(w, r, "未识别的 MCP 操作。")
-	}
-}
-
-func (a *App) saveMCPServer(w http.ResponseWriter, r *http.Request) {
-	id := uint(parseInt64Query(r.FormValue("id")))
-	version := parseInt64Query(r.FormValue("version"))
-	position := parseIntValue(r.FormValue("position"))
-	cfg := mcp.ServerConfig{
-		Name:          strings.TrimSpace(r.FormValue("name")),
-		Enabled:       r.FormValue("enabled") != "",
-		Type:          strings.TrimSpace(r.FormValue("type")),
-		URL:           strings.TrimSpace(r.FormValue("url")),
-		Command:       strings.TrimSpace(r.FormValue("command")),
-		Args:          splitLines(r.FormValue("args")),
-		Env:           splitLines(r.FormValue("env")),
-		ToolNameList:  splitComma(r.FormValue("tool_names")),
-		CustomHeaders: parseKeyValues(r.FormValue("headers")),
-	}
-	if _, err := a.mcpStore.Save(r.Context(), id, cfg, version, position); err != nil {
-		a.renderMCPError(w, r, err.Error())
+	cfg, row, err := a.mcpStore.Get(r.Context(), id)
+	if err != nil {
+		a.failFromError(w, r, err)
 		return
 	}
-	if a.mumuAgent != nil && a.mumuAgent.Ready() {
-		if err := a.mumuAgent.Reload(); err != nil {
-			a.renderMCPError(w, r, "MCP 配置已保存，但运行态应用失败，继续使用旧连接："+err.Error())
-			return
-		}
-	}
-	a.redirectFlash(w, r, "/admin/settings/mcp", "success", "MCP 配置已保存", "")
+	respondData(w, http.StatusOK, mcpServerDetail(cfg, row), nil)
 }
 
-func (a *App) deleteMCPServer(w http.ResponseWriter, r *http.Request) {
-	id := uint(parseInt64Query(r.FormValue("id")))
-	version := parseInt64Query(r.FormValue("version"))
+func (a *App) handleMCPServerCreate(w http.ResponseWriter, r *http.Request) {
+	if !secrets.Configured() {
+		a.failSecretUnavailable(w)
+		return
+	}
+	var body mcpInput
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
+	}
+	cfg := mcpConfigFromInput(body)
+	rows, err := a.mcpStore.List(r.Context())
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	position := 0
+	for _, row := range rows {
+		if row.Position >= position {
+			position = row.Position + 1
+		}
+	}
+	saved, err := a.mcpStore.Save(r.Context(), 0, cfg, 0, position)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	storedCfg, storedRow, err := a.mcpStore.Get(r.Context(), saved.ID)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusCreated, mcpServerDetail(storedCfg, storedRow), a.reloadMCPWarning())
+}
+
+func (a *App) handleMCPServerUpdate(w http.ResponseWriter, r *http.Request) {
+	if !secrets.Configured() {
+		a.failSecretUnavailable(w)
+		return
+	}
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	var body mcpInput
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
+	}
+	_, existing, err := a.mcpStore.Get(r.Context(), id)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	cfg := mcpConfigFromInput(body)
+	if _, err := a.mcpStore.Save(r.Context(), id, cfg, body.Version, existing.Position); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	storedCfg, storedRow, err := a.mcpStore.Get(r.Context(), id)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusOK, mcpServerDetail(storedCfg, storedRow), a.reloadMCPWarning())
+}
+
+func (a *App) handleMCPServerDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	version := queryInt64(r, "version")
 	if err := a.mcpStore.Delete(r.Context(), id, version); err != nil {
-		a.renderMCPError(w, r, err.Error())
+		a.failFromError(w, r, err)
 		return
 	}
-	if a.mumuAgent != nil && a.mumuAgent.Ready() {
-		if err := a.mumuAgent.Reload(); err != nil {
-			a.renderMCPError(w, r, "MCP 已删除，但运行态应用失败："+err.Error())
-			return
-		}
-	}
-	a.redirectFlash(w, r, "/admin/settings/mcp", "success", "MCP 服务器已删除", "")
+	_ = a.reloadMCPWarning()
+	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) renderMCPError(w http.ResponseWriter, r *http.Request, message string) {
-	data := a.mcpPageData(r, message)
-	a.renderPageStatusResponse(w, r, http.StatusBadRequest, views.MCPPage(data, r.URL.Path), views.PageContent(views.MCPBody(data)))
+func mcpServerSummary(row mcp.StoredServer) mcpServerSummaryDTO {
+	return mcpServerSummaryDTO{
+		ID:        row.ID,
+		Name:      row.Name,
+		Enabled:   row.Enabled,
+		Transport: row.Transport,
+		Version:   row.Version,
+		Position:  row.Position,
+		UpdatedAt: row.UpdatedAt,
+	}
 }
 
-func splitComma(raw string) []string {
-	var result []string
-	for _, part := range strings.Split(raw, ",") {
-		if value := strings.TrimSpace(part); value != "" {
-			result = append(result, value)
-		}
+func mcpServerDetail(cfg mcp.ServerConfig, row mcp.StoredServer) mcpServerDetailDTO {
+	args := cfg.Args
+	if args == nil {
+		args = []string{}
 	}
-	return result
+	env := cfg.Env
+	if env == nil {
+		env = []string{}
+	}
+	headers := cfg.CustomHeaders
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	tools := cfg.ToolNameList
+	if tools == nil {
+		tools = []string{}
+	}
+	return mcpServerDetailDTO{
+		mcpServerSummaryDTO: mcpServerSummary(row),
+		Type:                cfg.Type,
+		URL:                 cfg.URL,
+		Command:             cfg.Command,
+		Args:                args,
+		Env:                 env,
+		Headers:             headers,
+		ToolNames:           tools,
+	}
 }
 
-func parseKeyValues(raw string) map[string]string {
-	result := make(map[string]string)
-	for _, line := range splitLines(raw) {
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		if key != "" {
-			result[key] = strings.TrimSpace(value)
-		}
+func mcpConfigFromInput(body mcpInput) mcp.ServerConfig {
+	return mcp.ServerConfig{
+		Name:          strings.TrimSpace(body.Name),
+		Enabled:       body.Enabled,
+		Type:          strings.TrimSpace(body.Type),
+		URL:           strings.TrimSpace(body.URL),
+		Command:       strings.TrimSpace(body.Command),
+		Args:          body.Args,
+		Env:           body.Env,
+		ToolNameList:  body.ToolNames,
+		CustomHeaders: body.Headers,
 	}
-	return result
+}
+
+func (a *App) reloadMCPWarning() *warningPayload {
+	if a.mumuAgent == nil || !a.agentReady() {
+		return nil
+	}
+	if err := a.mumuAgent.Reload(); err != nil {
+		zap.L().Warn("MCP 配置已保存但运行态应用失败", zap.Error(err))
+		return &warningPayload{Code: "runtime_reload_failed"}
+	}
+	return nil
 }

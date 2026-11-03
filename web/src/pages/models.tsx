@@ -1,0 +1,406 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { ApiError } from "@/api/client";
+import { modelApi } from "@/api/client-endpoints";
+import type { ModelProfile } from "@/api/types";
+import { ConfirmDialog } from "@/components/admin/confirm-dialog";
+import { PageHeader } from "@/components/admin/page-header";
+import { PageSkeleton } from "@/components/admin/loading";
+import { SectionCard } from "@/components/admin/section-card";
+import { SettingsTabs } from "@/components/admin/tabs";
+import {
+  toastApiError,
+  toastSuccess,
+  toastWarningCode,
+} from "@/components/admin/toast";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Field, Input, NativeSelect } from "@/components/ui/form-controls";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { useQueryParams } from "@/hooks/use-query-params";
+import { formatDateTime } from "@/lib/format";
+import { enumLabel } from "@/lib/labels";
+
+const emptyForm = {
+  name: "",
+  base_url: "",
+  model_name: "",
+  context_window: 200000,
+  thinking_type: "",
+  reasoning_effort: "",
+  api_key: "",
+};
+
+export default function ModelsPage() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const { params, update } = useQueryParams();
+  const editID = Number(params.get("edit") || "0");
+  const query = useQuery({ queryKey: ["models"], queryFn: modelApi.list });
+  const [form, setForm] = useState({ ...emptyForm });
+  const loadedKey = useRef("");
+  const editingRef = useRef<ModelProfile | undefined>(undefined);
+  const [deleting, setDeleting] = useState<ModelProfile | null>(null);
+  const [testing, setTesting] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const editing = query.data?.items.find((item) => item.id === editID);
+  editingRef.current = editing;
+  const editingID = editing?.id ?? 0;
+
+  useLayoutEffect(() => {
+    if (!editID) {
+      loadedKey.current = "";
+      setForm({ ...emptyForm });
+      return;
+    }
+    const current = editingRef.current;
+    if (!current || current.id !== editID) return;
+    const key = `id:${editID}`;
+    if (loadedKey.current === key) return;
+    loadedKey.current = key;
+    setForm({
+      name: current.name,
+      base_url: current.base_url,
+      model_name: current.model_name,
+      context_window: current.context_window,
+      thinking_type: current.thinking_type,
+      reasoning_effort: current.reasoning_effort,
+      api_key: "",
+    });
+  }, [editID, editingID]);
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["models"] });
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    try {
+      if (editing) {
+        const result = await modelApi.update(editing.id, {
+          ...form,
+          version: editing.version,
+        });
+        await invalidate();
+        toastSuccess(t("models.saved"));
+        if (result.warning) toastWarningCode(result.warning.code);
+      } else {
+        await modelApi.create(form);
+        await invalidate();
+        toastSuccess(t("models.saved"));
+      }
+      update({ edit: undefined });
+    } catch (error) {
+      toastApiError(error);
+      if (error instanceof ApiError && error.code === "version_conflict") {
+        update({ edit: undefined });
+      }
+      await invalidate();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const activate = useMutation({
+    mutationFn: (id: number) => modelApi.activate(id),
+    onSuccess: async () => {
+      await invalidate();
+      toastSuccess(t("models.activated"));
+    },
+    onError: (error) => toastApiError(error),
+  });
+
+  const test = async (id: number) => {
+    setTesting(id);
+    try {
+      await modelApi.test(id);
+      toastSuccess(t("models.testSuccess"));
+    } catch (error) {
+      toastApiError(error);
+    } finally {
+      setTesting(0);
+    }
+  };
+
+  const remove = useMutation({
+    mutationFn: (profile: ModelProfile) =>
+      modelApi.remove(profile.id, profile.version),
+    onSuccess: async () => {
+      setDeleting(null);
+      await invalidate();
+      toastSuccess(t("models.deleted"));
+    },
+    onError: (error) => {
+      setDeleting(null);
+      toastApiError(error);
+    },
+  });
+
+  if (query.isPending) return <PageSkeleton />;
+  if (query.isError || !query.data) {
+    return (
+      <p className="text-sm text-muted-foreground">{t("common.loadFailed")}</p>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-end justify-between gap-6">
+        <PageHeader
+          title={t("models.title")}
+          subtitle={t("models.subtitle")}
+        />
+        <SettingsTabs />
+      </div>
+
+      {!query.data.secret_configured ? (
+        <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+          {t("models.secretUnavailable")}
+        </div>
+      ) : null}
+
+      <SectionCard title={t("models.list")}>
+        {query.data.items.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            {t("models.empty")}
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("models.fields.name")}</TableHead>
+                <TableHead>{t("models.fields.modelName")}</TableHead>
+                <TableHead>{t("models.fields.contextWindow")}</TableHead>
+                <TableHead>{t("common.status")}</TableHead>
+                <TableHead className="text-right">
+                  {t("common.actions")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {query.data.items.map((profile) => (
+                <TableRow key={profile.id}>
+                  <TableCell>
+                    <p className="font-medium">{profile.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {formatDateTime(profile.updated_at)}
+                    </p>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <p>{profile.model_name}</p>
+                    <p className="mt-0.5 break-all text-muted-foreground">
+                      {profile.base_url}
+                    </p>
+                  </TableCell>
+                  <TableCell className="admin-number text-xs">
+                    {profile.context_window}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {profile.active ? (
+                        <Badge>{t("models.active")}</Badge>
+                      ) : null}
+                      <Badge variant="ghost">
+                        {t("models.version", { version: profile.version })}
+                      </Badge>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="inline-flex flex-wrap justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => update({ edit: profile.id })}
+                      >
+                        {t("models.edit")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={profile.active || activate.isPending}
+                        onClick={() => activate.mutate(profile.id)}
+                      >
+                        {t("models.activate")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={testing === profile.id}
+                        onClick={() => test(profile.id)}
+                      >
+                        {testing === profile.id ? <Spinner /> : null}
+                        {testing === profile.id
+                          ? t("models.testing")
+                          : t("models.test")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-destructive hover:bg-destructive/10"
+                        disabled={profile.active}
+                        onClick={() => setDeleting(profile)}
+                      >
+                        {t("models.delete")}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title={editing ? t("models.edit") : t("models.create")}
+        actions={
+          editing ? (
+            <Button variant="ghost" size="sm" onClick={() => update({ edit: undefined })}>
+              {t("models.cancelEdit")}
+            </Button>
+          ) : null
+        }
+      >
+        <form className="space-y-3" onSubmit={save}>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("models.fields.name")}>
+              <Input
+                required
+                value={form.name}
+                onChange={(event) =>
+                  setForm((value) => ({ ...value, name: event.target.value }))
+                }
+              />
+            </Field>
+            <Field label={t("models.fields.baseUrl")}>
+              <Input
+                required
+                placeholder={t("models.fields.baseUrlPlaceholder")}
+                value={form.base_url}
+                onChange={(event) =>
+                  setForm((value) => ({
+                    ...value,
+                    base_url: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+            <Field label={t("models.fields.modelName")}>
+              <Input
+                required
+                value={form.model_name}
+                onChange={(event) =>
+                  setForm((value) => ({
+                    ...value,
+                    model_name: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+            <Field label={t("models.fields.contextWindow")}>
+              <Input
+                type="number"
+                min={1}
+                required
+                value={form.context_window}
+                onChange={(event) =>
+                  setForm((value) => ({
+                    ...value,
+                    context_window: Number(event.target.value) || 0,
+                  }))
+                }
+              />
+            </Field>
+            <Field
+              label={t("models.fields.apiKey")}
+              hint={
+                editing?.api_key_hint
+                  ? t("models.fields.apiKeyKeep", {
+                      hint: editing.api_key_hint,
+                    })
+                  : editing
+                    ? t("models.fields.apiKeyHint")
+                    : undefined
+              }
+            >
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={form.api_key}
+                onChange={(event) =>
+                  setForm((value) => ({
+                    ...value,
+                    api_key: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+            <Field label={t("models.fields.thinkingType")}>
+              <NativeSelect
+                value={form.thinking_type}
+                onChange={(event) =>
+                  setForm((value) => ({
+                    ...value,
+                    thinking_type: event.target.value,
+                  }))
+                }
+              >
+                <option value="">{t("models.fields.thinkingNone")}</option>
+                <option value="enabled">
+                  {t("models.fields.thinkingEnabled")}
+                </option>
+                <option value="disabled">
+                  {t("models.fields.thinkingDisabled")}
+                </option>
+              </NativeSelect>
+            </Field>
+            <Field label={t("models.fields.reasoningEffort")}>
+              <NativeSelect
+                value={form.reasoning_effort}
+                onChange={(event) =>
+                  setForm((value) => ({
+                    ...value,
+                    reasoning_effort: event.target.value,
+                  }))
+                }
+              >
+                <option value="">{t("models.fields.effortNone")}</option>
+                {["low", "medium", "high", "xhigh", "max"].map((value) => (
+                  <option key={value} value={value}>
+                    {enumLabel(t, "reasoningEffort", value)}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          </div>
+          <div className="flex items-center gap-2 border-t border-border pt-4">
+            <Button type="submit" disabled={saving}>
+              {saving ? <Spinner /> : null}
+              {t("models.save")}
+            </Button>
+          </div>
+        </form>
+      </SectionCard>
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={t("models.deleteTitle")}
+        description={t("models.deleteBody", { name: deleting?.name || "" })}
+        confirmLabel={t("common.delete")}
+        loading={remove.isPending}
+        onConfirm={() => deleting && remove.mutate(deleting)}
+      />
+    </div>
+  );
+}

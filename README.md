@@ -96,7 +96,7 @@
 | 依赖 | 说明 |
 |------|------|
 | Go 1.26.5+ | 编译运行 |
-| Bun 1.3.14+ | 构建前端资源（仅从源码构建时需要） |
+| Bun 1.4.4+ | 构建前端资源（仅从源码构建时需要） |
 | PostgreSQL 18 | 存储消息、记忆、话题、检查点和情感状态（使用 `pg_trgm`） |
 | SnowLuma | OneBot 11 协议实现 |
 | 大语言模型 API | 兼容 OpenAI Responses 格式（`/responses`），需支持工具调用 |
@@ -122,7 +122,7 @@ GitHub Release 提供 Linux、Windows、macOS 的打包产物。归档内包含�
 - 可执行文件
 - `README.md` 和 `LICENSE`
 
-运行发布包时不需要额外部署前端静态文件，管理后台所需资源已经内嵌进二进制。
+运行发布包时不需要额外部署前端静态文件，管理后台所需资源已经内嵌进二进制。管理后台支持浅色/深色两种主题与中文/英文两种语言，偏好保存在当前浏览器。
 
 ### 从源码构建
 
@@ -131,19 +131,17 @@ GitHub Release 提供 Linux、Windows、macOS 的打包产物。归档内包含�
 git clone https://github.com/SugarMGP/MumuBot.git
 cd MumuBot
 
-# 2. 安装前端依赖、生成后台图标并构建后台资源
+# 2. 安装前端依赖并构建管理后台
+cd web
 bun install --frozen-lockfile
-bun run gen:icons
 bun run build
+cd ..
 
-# 3. 生成 templ 视图代码
-go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate ./internal/web/views
-
-# 4. 安装图片转码依赖
+# 3. 安装图片转码依赖
 #   Debian/Ubuntu: sudo apt-get install -y libwebp-dev
 #   macOS:         brew install webp pkgconf
 
-# 5. 编译
+# 4. 编译
 go build -o mumu-bot .
 ```
 

@@ -1,203 +1,130 @@
 package app
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/secrets"
-	"mumu-bot/internal/web/views"
+
+	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
-func (a *App) settingsPageData(r *http.Request, errorText string) views.SettingsPageData {
-	return views.SettingsPageData{
-		Current:          *config.Snapshot(),
+func (a *App) settingsPayload() settingsResponse {
+	cfg := config.Snapshot()
+	return settingsResponse{
+		Config:           cfg,
 		Versions:         config.SectionVersions(),
-		AgentReady:       a.mumuAgent != nil && a.mumuAgent.Ready(),
+		AgentReady:       a.agentReady(),
 		SecretConfigured: secrets.Configured(),
-		Error:            errorText,
-		Flash:            a.flashFromRequest(r),
 	}
 }
 
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
-	data := a.settingsPageData(r, "")
-	a.renderPageResponse(w, r, views.SettingsPage(data, r.URL.Path), views.PageContent(views.SettingsBody(data)))
+	respondData(w, http.StatusOK, a.settingsPayload(), nil)
 }
 
 func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		a.renderSettingsError(w, r, "请求格式不正确。")
+	section := strings.TrimSpace(chi.URLParam(r, "section"))
+	if !validSettingsSection(section) {
+		a.failBadRequest(w, "未识别的设置分类。")
 		return
 	}
-	section := strings.TrimSpace(r.FormValue("section"))
-	version := parseInt64Query(r.FormValue("version"))
-	if r.FormValue("action") == "reset" {
-		if err := config.ResetSection(r.Context(), section, version); err != nil {
-			a.renderSettingsError(w, r, err.Error())
-			return
-		}
-		if a.mumuAgent != nil {
-			next := config.Snapshot()
-			a.mumuAgent.SetConcurrencyLimits(next.Agent.MaxGroupConcurrency, next.Agent.MaxPrivateConcurrency)
-			if a.mumuAgent.Ready() {
-				if err := a.mumuAgent.Reload(); err != nil {
-					a.renderSettingsError(w, r, "已恢复默认值，但运行态应用失败："+err.Error())
-					return
-				}
-			}
-		}
-		a.redirectFlash(w, r, "/admin/settings", "success", "已恢复默认值", "")
+	var body struct {
+		Version int64           `json:"version"`
+		Values  json.RawMessage `json:"values"`
+	}
+	if err := decodeJSON(r, &body); err != nil || len(body.Values) == 0 {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
+	}
+	value, err := settingsSectionValue(section, body.Values)
+	if err != nil {
+		a.failBadRequest(w, "设置内容不完整。")
 		return
 	}
 	old := *config.Snapshot()
-	var value any
-	var err error
+	if err := config.SaveSection(r.Context(), section, value, body.Version); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	warning := a.applySettingsRuntime(section, old)
+	respondData(w, http.StatusOK, a.settingsPayload(), warning)
+}
+
+func (a *App) handleSettingsReset(w http.ResponseWriter, r *http.Request) {
+	section := strings.TrimSpace(chi.URLParam(r, "section"))
+	if !validSettingsSection(section) {
+		a.failBadRequest(w, "未识别的设置分类。")
+		return
+	}
+	var body struct {
+		Version int64 `json:"version"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
+	}
+	old := *config.Snapshot()
+	if err := config.ResetSection(r.Context(), section, body.Version); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	warning := a.applySettingsRuntime(section, old)
+	respondData(w, http.StatusOK, a.settingsPayload(), warning)
+}
+
+func validSettingsSection(section string) bool {
+	switch section {
+	case config.SectionAgent, config.SectionChat, config.SectionCompactor,
+		config.SectionMaintenance, config.SectionMedia, config.SectionDebug:
+		return true
+	default:
+		return false
+	}
+}
+
+func settingsSectionValue(section string, raw json.RawMessage) (any, error) {
+	var target any
 	switch section {
 	case config.SectionAgent:
-		value = config.AgentConfig{
-			ThinkInterval:         parseIntValue(r.FormValue("think_interval")),
-			ThinkDebounceMS:       parseIntValue(r.FormValue("think_debounce_ms")),
-			MaxStep:               parseIntValue(r.FormValue("max_step")),
-			MaxGroupConcurrency:   parseIntValue(r.FormValue("max_group_concurrency")),
-			MaxPrivateConcurrency: parseIntValue(r.FormValue("max_private_concurrency")),
-		}
+		target = &config.AgentConfig{}
 	case config.SectionChat:
-		rules, parseErr := parseTimeRules(r.FormValue("time_rules"))
-		if parseErr != nil {
-			a.renderSettingsError(w, r, parseErr.Error())
-			return
-		}
-		value = config.ChatConfig{
-			TalkFrequency:    parseFloatValue(r.FormValue("talk_frequency")),
-			TypingSimulation: r.FormValue("typing_simulation") != "",
-			TypingSpeed:      parseIntValue(r.FormValue("typing_speed")),
-			EnableTimeRules:  r.FormValue("enable_time_rules") != "",
-			TimeRules:        rules,
-			RateLimit: config.RateLimitConfig{
-				Enabled:     r.FormValue("rate_enabled") != "",
-				PeriodSec:   parseIntValue(r.FormValue("period_sec")),
-				MaxMessages: parseIntValue(r.FormValue("max_messages")),
-				MinProb:     parseFloatValue(r.FormValue("min_prob")),
-			},
-		}
+		target = &config.ChatConfig{}
 	case config.SectionCompactor:
-		value = config.CompactorConfig{
-			TriggerRatio:      parseFloatValue(r.FormValue("trigger_ratio")) / 100,
-			DigestBudgetRatio: parseFloatValue(r.FormValue("digest_budget_ratio")) / 100,
-			RecentTailRatio:   parseFloatValue(r.FormValue("recent_tail_ratio")) / 100,
-			MaxSteps:          parseIntValue(r.FormValue("max_steps")),
-			IdleMinutes:       parseIntValue(r.FormValue("idle_minutes")),
-			IdleMinRatio:      parseFloatValue(r.FormValue("idle_min_ratio")) / 100,
-		}
+		target = &config.CompactorConfig{}
 	case config.SectionMaintenance:
-		value = config.MaintenanceConfig{
-			MemoryTurns: parseIntValue(r.FormValue("memory_turns")),
-			TopicTurns:  parseIntValue(r.FormValue("topic_turns")),
-		}
+		target = &config.MaintenanceConfig{}
 	case config.SectionMedia:
-		value = config.MediaConfig{
-			MaxBytesMB:   parseIntValue(r.FormValue("max_bytes_mb")),
-			ImageQuality: parseIntValue(r.FormValue("image_quality")),
-			NarrowEdge:   parseIntValue(r.FormValue("narrow_edge")),
-		}
+		target = &config.MediaConfig{}
 	case config.SectionDebug:
-		value = config.DebugConfig{ShowToolCalls: r.FormValue("show_tool_calls") != ""}
+		target = &config.DebugConfig{}
 	default:
-		a.renderSettingsError(w, r, "未识别的设置分类。")
-		return
+		return nil, nil
 	}
-	if err == nil {
-		err = config.SaveSection(r.Context(), section, value, version)
+	if err := json.Unmarshal(raw, target); err != nil {
+		return nil, err
 	}
-	if err != nil {
-		a.renderSettingsError(w, r, err.Error())
-		return
-	}
-	if a.mumuAgent != nil {
-		next := config.Snapshot()
-		a.mumuAgent.SetConcurrencyLimits(next.Agent.MaxGroupConcurrency, next.Agent.MaxPrivateConcurrency)
-		needGeneration := section == config.SectionMedia ||
-			(section == config.SectionAgent && old.Agent.MaxStep != next.Agent.MaxStep)
-		if needGeneration && a.mumuAgent.Ready() {
-			if err := a.mumuAgent.Reload(); err != nil {
-				a.renderSettingsError(w, r, "设置已保存，但运行态应用失败："+err.Error())
-				return
-			}
-		}
-	}
-	a.redirectFlash(w, r, "/admin/settings", "success", "设置已保存", "")
+	return target, nil
 }
 
-func (a *App) renderSettingsError(w http.ResponseWriter, r *http.Request, message string) {
-	data := a.settingsPageData(r, message)
-	a.renderPageStatusResponse(w, r, http.StatusBadRequest, views.SettingsPage(data, r.URL.Path), views.PageContent(views.SettingsBody(data)))
-}
-
-func (a *App) redirectFlash(w http.ResponseWriter, r *http.Request, target, kind, title, body string) {
-	parsed, err := url.Parse(target)
-	if err != nil {
-		http.Redirect(w, r, target, http.StatusSeeOther)
-		return
+// applySettingsRuntime 把已保存的配置同步到运行态；失败返回警告而不是回滚
+func (a *App) applySettingsRuntime(section string, old config.RuntimeConfig) *warningPayload {
+	if a.mumuAgent == nil {
+		return nil
 	}
-	values := parsed.Query()
-	if kind != "" {
-		values.Set("flash_kind", kind)
+	next := config.Snapshot()
+	a.mumuAgent.SetConcurrencyLimits(next.Agent.MaxGroupConcurrency, next.Agent.MaxPrivateConcurrency)
+	needGeneration := section == config.SectionMedia ||
+		(section == config.SectionAgent && old.Agent.MaxStep != next.Agent.MaxStep)
+	if !needGeneration || !a.agentReady() {
+		return nil
 	}
-	if title != "" {
-		values.Set("flash_title", title)
+	if err := a.mumuAgent.Reload(); err != nil {
+		zap.L().Warn("设置已保存但运行态应用失败", zap.String("section", section), zap.Error(err))
+		return &warningPayload{Code: "runtime_reload_failed"}
 	}
-	if body != "" {
-		values.Set("flash_body", body)
-	}
-	parsed.RawQuery = values.Encode()
-	http.Redirect(w, r, parsed.String(), http.StatusSeeOther)
-}
-
-func splitLines(raw string) []string {
-	var result []string
-	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			result = append(result, line)
-		}
-	}
-	return result
-}
-
-func parseIntValue(raw string) int {
-	value, _ := strconv.Atoi(strings.TrimSpace(raw))
-	return value
-}
-
-func parseFloatValue(raw string) float64 {
-	value, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	return value
-}
-
-func parseTimeRules(raw string) ([]config.TimeRuleConfig, error) {
-	result := make([]config.TimeRuleConfig, 0)
-	for index, line := range splitLines(raw) {
-		parts := strings.Split(line, ",")
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("时段规则第 %d 行格式应为 开始-结束,群号,频率", index+1)
-		}
-		groupID, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("时段规则第 %d 行群号无效", index+1)
-		}
-		talk, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
-		if err != nil {
-			return nil, fmt.Errorf("时段规则第 %d 行频率无效", index+1)
-		}
-		result = append(result, config.TimeRuleConfig{
-			TimeRange: strings.TrimSpace(parts[0]),
-			GroupID:   groupID,
-			TalkValue: talk,
-		})
-	}
-	return result, nil
+	return nil
 }

@@ -1,23 +1,12 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM oven/bun:1.3.14-alpine AS assets
-WORKDIR /src
-COPY package.json bun.lock ./
+# 前端产物与架构无关，在构建机架构上完成
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4-alpine AS assets
+WORKDIR /src/web
+COPY web/package.json web/bun.lock web/bunfig.toml ./
 RUN bun install --frozen-lockfile
-COPY internal/web/assets/src/ internal/web/assets/src/
-COPY internal/web/views/ internal/web/views/
-COPY scripts/ scripts/
-RUN bun run gen:icons
+COPY web/ ./
 RUN bun run build
-
-# 模板生成与架构无关，留在构建机执行，避免目标架构下重复生成
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS gen
-WORKDIR /src
-RUN go install github.com/a-h/templ/cmd/templ@v0.3.1020
-COPY . .
-COPY --from=assets /src/internal/web/assets/dist/ internal/web/assets/dist/
-COPY --from=assets /src/internal/web/views/icons.templ internal/web/views/icons.templ
-RUN templ generate ./internal/web/views
 
 # go-webp 依赖 libwebp，cgo 必须按目标架构构建
 FROM --platform=$TARGETPLATFORM golang:1.26.5-alpine AS build
@@ -26,7 +15,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=gen /src/internal/web/views/ internal/web/views/
+COPY --from=assets /src/internal/web/assets/dist/ internal/web/assets/dist/
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev

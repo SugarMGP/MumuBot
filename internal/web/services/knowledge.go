@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -61,6 +62,9 @@ func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
 	return q
 }
 
+// ErrDuplicateActiveMemory 表示已有同内容的启用记忆
+var ErrDuplicateActiveMemory = errors.New("已有一条相同内容处于启用状态")
+
 type KnowledgeDetail struct {
 	Item      memory.KnowledgeRecord
 	Revisions []memory.KnowledgeRevision
@@ -107,7 +111,7 @@ func (s *AdminService) UpdateKnowledgeStatus(ctx context.Context, id uint, statu
 			return err
 		}
 		if duplicate > 0 {
-			return fmt.Errorf("已有一条相同内容处于启用状态")
+			return ErrDuplicateActiveMemory
 		}
 	}
 	_, err = s.memory.ManageMemories(ctx, []memory.MemoryChange{{

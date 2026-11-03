@@ -1,308 +1,116 @@
 package app
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	neturl "net/url"
-	"strconv"
+	"net/http"
 	"strings"
+	"time"
 
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/logger"
 	"mumu-bot/internal/migration"
-	"mumu-bot/internal/utils"
-	"mumu-bot/internal/web/views"
-
-	"gorm.io/gorm"
+	"mumu-bot/internal/modelstats"
 )
 
-func (a *App) systemSections() []views.SystemSection {
+func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Snapshot()
 	snapshot := a.runtimeSnapshot()
-
 	groupIDs := a.enabledGroups()
-	groupCount := len(groupIDs)
-	groupSummary := "暂未启用群聊"
-	if groupCount > 0 {
-		summary := make([]string, 0, groupCount)
-		for _, id := range groupIDs {
-			summary = append(summary, fmt.Sprintf("%d", id))
+	if groupIDs == nil {
+		groupIDs = []int64{}
+	}
+
+	schemaVersion := 0
+	if a.memMgr != nil {
+		if value, err := a.memMgr.SchemaVersion(r.Context()); err == nil {
+			schemaVersion = value
 		}
-		groupSummary = strings.Join(summary, "、")
 	}
 
-	appendField := func(fields []views.SystemField, label string, value string) []views.SystemField {
-		value = strings.TrimSpace(value)
-		if value == "" || value == "-" {
-			return fields
-		}
-		return append(fields, views.SystemField{Label: label, Value: value})
-	}
-
-	personaFields := make([]views.SystemField, 0, 4)
-	personaFields = appendField(personaFields, "当前预设", views.EmptyDash(cfg.Persona.PresetName))
-	personaFields = appendField(personaFields, "人格卡", fmt.Sprintf("%d 字", len([]rune(cfg.Persona.PersonaCard))))
-	personaFields = appendField(personaFields, "仿真提示词", fmt.Sprintf("%d 字", len([]rune(cfg.Persona.Simulation))))
-
-	groupFields := []views.SystemField{
-		{Label: "启用群数", Value: fmt.Sprintf("%d", groupCount)},
-		{Label: "已启用群聊", Value: groupSummary},
-		{Label: "思考间隔", Value: fmt.Sprintf("%d 秒", cfg.Agent.ThinkInterval)},
-		{Label: "单轮最大步数", Value: fmt.Sprintf("%d 步", cfg.Agent.MaxStep)},
-	}
-	if cfg.Agent.ThinkDebounceMS > 0 {
-		groupFields = append(groupFields, views.SystemField{Label: "聚合窗口", Value: fmt.Sprintf("%d 毫秒", cfg.Agent.ThinkDebounceMS)})
-	}
-	groupFields = append(groupFields,
-		views.SystemField{Label: "上下文压缩", Value: fmt.Sprintf("达到 %d%% 后一次性整理", int(cfg.Compactor.TriggerRatio*100))},
-		views.SystemField{Label: "摘要注入预算", Value: fmt.Sprintf("约 %d%%（含置顶记忆与话题）", int(cfg.Compactor.DigestBudgetRatio*100))},
-		views.SystemField{Label: "最近原文", Value: fmt.Sprintf("保留约 %d%%", int(cfg.Compactor.RecentTailRatio*100))},
-		views.SystemField{Label: "压缩器步数", Value: fmt.Sprintf("%d 步", cfg.Compactor.MaxSteps)},
-		views.SystemField{Label: "空闲压缩", Value: idleCompactionText(cfg.Compactor)},
-	)
-
-	modelFields := make([]views.SystemField, 0, 8)
+	var activeModel *modelProfileDTO
 	contextWindow := 0
-	if profile, err := a.modelStore.Active(context.Background()); err == nil {
-		modelFields = appendField(modelFields, "主模型", profile.ModelName)
-		modelFields = appendField(modelFields, "接口地址", profile.BaseURL)
+	if profile, err := a.modelStore.Active(r.Context()); err == nil {
+		activeModel = &modelProfileDTO{
+			Name:            profile.Name,
+			BaseURL:         profile.BaseURL,
+			ModelName:       profile.ModelName,
+			ThinkingType:    profile.ThinkingType,
+			ReasoningEffort: profile.ReasoningEffort,
+		}
 		contextWindow = profile.ContextWindow
-		if profile.ThinkingType != "" {
-			modelFields = appendField(modelFields, "思考模式", profile.ThinkingType)
-		}
-		if profile.ReasoningEffort != "" {
-			modelFields = appendField(modelFields, "推理强度", profile.ReasoningEffort)
-		}
-	} else {
-		modelFields = append(modelFields, views.SystemField{Label: "主模型", Value: "尚未配置"})
-	}
-	modelFields = appendField(modelFields, "记忆与话题检索", "关键词与模糊匹配")
-	if snapshot.MCPToolCount > 0 {
-		modelFields = append(modelFields, views.SystemField{Label: "扩展工具", Value: fmt.Sprintf("%d 个", snapshot.MCPToolCount)})
 	}
 
-	runtimeFields := []views.SystemField{
-		{Label: "当前连接", Value: views.ConnectionText(snapshot.Connected)},
-		{Label: "重连间隔", Value: fmt.Sprintf("%d 秒", a.boot.OneBotReconnect)},
-	}
-	if currentVersion, err := a.memMgr.SchemaVersion(context.Background()); err == nil {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "数据结构版本", Value: fmt.Sprintf("v%d / v%d", currentVersion, migration.LatestSchemaVersion())})
-	}
-	if snapshot.SelfID > 0 {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "机器人 QQ", Value: fmt.Sprintf("%d", snapshot.SelfID)})
-	}
-	if cfg.Media.MaxBytesMB > 0 {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "媒体大小上限", Value: fmt.Sprintf("%d MB", cfg.Media.MaxBytesMB)})
-	}
-	if contextWindow > 0 {
-		runtimeFields = append(runtimeFields, views.SystemField{Label: "上下文窗口", Value: fmt.Sprintf("%d token", contextWindow)})
-	}
-
-	sections := make([]views.SystemSection, 0, 4)
-	if len(personaFields) > 0 {
-		sections = append(sections, views.SystemSection{Title: "人格设定", Fields: personaFields})
-	}
-	if len(groupFields) > 0 {
-		sections = append(sections, views.SystemSection{Title: "群聊与上下文", Fields: groupFields})
-	}
-	if len(modelFields) > 0 {
-		sections = append(sections, views.SystemSection{Title: "模型能力", Fields: modelFields})
-	}
-	if len(runtimeFields) > 0 {
-		sections = append(sections, views.SystemSection{Title: "连接与数据", Fields: runtimeFields})
-	}
-	return sections
+	respondData(w, http.StatusOK, systemResponse{
+		Persona: systemPersonaDTO{
+			PresetName: cfg.Persona.PresetName,
+			CardChars:  len([]rune(cfg.Persona.PersonaCard)),
+			SimChars:   len([]rune(cfg.Persona.Simulation)),
+		},
+		Context: systemContextDTO{
+			EnabledGroupCount: len(groupIDs),
+			EnabledGroupIDs:   groupIDs,
+			ThinkIntervalSec:  cfg.Agent.ThinkInterval,
+			ThinkDebounceMS:   cfg.Agent.ThinkDebounceMS,
+			MaxStep:           cfg.Agent.MaxStep,
+			Compactor: compactorDTO{
+				TriggerRatio:      cfg.Compactor.TriggerRatio,
+				DigestBudgetRatio: cfg.Compactor.DigestBudgetRatio,
+				RecentTailRatio:   cfg.Compactor.RecentTailRatio,
+				MaxSteps:          cfg.Compactor.MaxSteps,
+				IdleMinutes:       cfg.Compactor.IdleMinutes,
+				IdleMinRatio:      cfg.Compactor.IdleMinRatio,
+			},
+		},
+		Model: systemModelDTO{
+			Active:        activeModel,
+			MCPToolCount:  snapshot.MCPToolCount,
+			ContextWindow: contextWindow,
+		},
+		Runtime: systemRuntimeDTO{
+			Connected:           snapshot.Connected,
+			ReconnectSec:        a.boot.OneBotReconnect,
+			SchemaVersion:       schemaVersion,
+			LatestSchemaVersion: migration.LatestSchemaVersion(),
+			SelfID:              snapshot.SelfID,
+			MediaMaxBytesMB:     cfg.Media.MaxBytesMB,
+		},
+	}, nil)
 }
 
-func idleCompactionText(cfg config.CompactorConfig) string {
-	if cfg.IdleMinutes <= 0 {
-		return "已关闭"
+func (a *App) handleModelStats(w http.ResponseWriter, r *http.Request) {
+	rangeName := queryString(r, "range")
+	var since time.Time
+	switch rangeName {
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	case "30d":
+		since = time.Now().Add(-30 * 24 * time.Hour)
+	case "all":
+	default:
+		rangeName = "24h"
+		since = time.Now().Add(-24 * time.Hour)
 	}
-	return fmt.Sprintf("%d 分钟无消息且占用达到 %d%% 后整理", cfg.IdleMinutes, int(cfg.IdleMinRatio*100))
-}
-
-func isSafeAdminTarget(target *neturl.URL) bool {
-	if target == nil {
-		return false
-	}
-	if target.IsAbs() || strings.TrimSpace(target.Host) != "" {
-		return false
-	}
-	cleanPath := strings.TrimSpace(target.Path)
-	if cleanPath == "" {
-		return false
-	}
-	return strings.HasPrefix(cleanPath, "/admin")
-}
-
-func normalizeAdminTarget(raw string, requestHost string) (*neturl.URL, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, false
-	}
-
-	target, err := neturl.Parse(raw)
-	if err != nil || target.Path == "" {
-		return nil, false
-	}
-
-	if target.IsAbs() || strings.TrimSpace(target.Host) != "" {
-		if !strings.EqualFold(strings.TrimSpace(target.Host), strings.TrimSpace(requestHost)) {
-			return nil, false
-		}
-		if target.Scheme != "" && target.Scheme != "http" && target.Scheme != "https" {
-			return nil, false
-		}
-	}
-
-	normalized := &neturl.URL{Path: target.Path, RawQuery: target.RawQuery}
-	if !isSafeAdminTarget(normalized) {
-		return nil, false
-	}
-	return normalized, true
-}
-
-func withPage(current *neturl.URL, page int) string {
-	return withQueryValues(current, false, map[string]string{"page": strconv.Itoa(page)})
-}
-
-func withFlash(target string, kind string, title string, body string) string {
-	parsed, err := neturl.Parse(target)
+	stats, err := modelstats.Query(r.Context(), a.memMgr.GetDB(), since)
 	if err != nil {
-		return target
+		a.failFromError(w, r, err)
+		return
 	}
-	query := parsed.Query()
-	query.Set("flash_kind", kind)
-	query.Set("flash_title", title)
-	if strings.TrimSpace(body) != "" {
-		query.Set("flash_body", body)
-	}
-	parsed.RawQuery = query.Encode()
-	return parsed.String()
+	respondData(w, http.StatusOK, modelStatsResponse{
+		Range:   rangeName,
+		Totals:  stats.Totals,
+		ByTask:  stats.ByTask,
+		ByModel: stats.ByModel,
+		Series:  stats.Series,
+	}, nil)
 }
 
-func actionTriggerHeader(flash *views.FlashMessage, closeDialog bool) (string, error) {
-	if flash == nil && !closeDialog {
-		return "", nil
+func (a *App) handleLogDownload(w http.ResponseWriter, r *http.Request) {
+	result := logger.Query(queryString(r, "keyword"), queryString(r, "level"))
+	lines := make([]string, len(result.Lines))
+	for index := range result.Lines {
+		lines[index] = result.Lines[index].Text
 	}
-
-	payload := make(map[string]any)
-	if flash != nil {
-		payload["admin:toast"] = map[string]string{
-			"kind":  strings.TrimSpace(flash.Kind),
-			"title": strings.TrimSpace(flash.Title),
-			"body":  strings.TrimSpace(flash.Body),
-		}
-	}
-	if closeDialog {
-		payload["admin:action-dialog-close"] = true
-	}
-
-	return utils.MarshalJSONHeader(payload)
-}
-
-func parsePositiveInt(raw string, fallback int) int {
-	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
-}
-
-func listPageSize(raw string) int {
-	return listPageSizeWithDefault(raw, defaultListPageSize)
-}
-
-func listPageSizeWithDefault(raw string, fallback int) int {
-	return parsePositiveInt(raw, fallback)
-}
-
-func parseInt64Query(raw string) int64 {
-	value, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	return value
-}
-
-func parseUintParam(raw string) (uint, error) {
-	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
-	return uint(value), err
-}
-
-func deleteActionErrorText(err error) string {
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "这条记录不存在或已经被删除。"
-	}
-	return "删除失败，请稍后再试。"
-}
-
-func buildSortToolbar(current *neturl.URL, currentSort string, currentOrder string, options []sortOption) views.SortToolbarData {
-	data := views.SortToolbarData{
-		CurrentSort:  currentSort,
-		CurrentOrder: currentOrder,
-		Options:      make([]views.SortToolbarLink, 0, len(options)),
-		OrderOptions: make([]views.SortToolbarLink, 0, 2),
-	}
-
-	activeSortLabel := ""
-	for _, option := range options {
-		active := option.Key == currentSort
-		if active {
-			activeSortLabel = option.Label
-		}
-		data.Options = append(data.Options, views.SortToolbarLink{
-			Label:  option.Label,
-			Href:   withQueryValues(current, true, map[string]string{"sort": option.Key}),
-			Active: active,
-		})
-	}
-	if activeSortLabel == "" && len(options) > 0 {
-		activeSortLabel = options[0].Label
-	}
-
-	orderLabel := "倒序"
-	for _, option := range []struct {
-		value string
-		label string
-	}{
-		{value: "desc", label: "倒序"},
-		{value: "asc", label: "正序"},
-	} {
-		active := option.value == currentOrder
-		if active {
-			orderLabel = option.label
-		}
-		data.OrderOptions = append(data.OrderOptions, views.SortToolbarLink{
-			Label:  option.label,
-			Href:   withQueryValues(current, true, map[string]string{"order": option.value}),
-			Active: active,
-		})
-	}
-
-	data.Summary = fmt.Sprintf("当前按%s%s查看", activeSortLabel, orderLabel)
-	return data
-}
-
-func withQueryValues(current *neturl.URL, resetPage bool, updates map[string]string) string {
-	cloned := *current
-	query := cloned.Query()
-	if resetPage {
-		query.Set("page", "1")
-	}
-	for key, value := range updates {
-		if strings.TrimSpace(value) == "" {
-			query.Del(key)
-			continue
-		}
-		query.Set(key, value)
-	}
-	cloned.RawQuery = query.Encode()
-	if cloned.RawPath != "" {
-		if cloned.RawQuery == "" {
-			return cloned.RawPath
-		}
-		return cloned.RawPath + "?" + cloned.RawQuery
-	}
-	if cloned.RawQuery == "" {
-		return cloned.Path
-	}
-	return cloned.Path + "?" + cloned.RawQuery
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="mumubot-logs-`+time.Now().Format("20060102-150405")+`.txt"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(strings.Join(lines, "\n") + "\n"))
 }

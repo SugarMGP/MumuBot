@@ -10,11 +10,6 @@ amu.exe
 # 测试
 *.test
 *_test.go
-*_templ.go
-
-# 由 scripts/generate-icons.mjs 生成的图标资源
-/internal/web/views/icons.templ
-/internal/web/assets/src/icons.generated.js
 
 # 输出
 *.out
@@ -52,8 +47,11 @@ napcat_onebot_11_http_api.json
 onebot-11-master/
 
 /.codex-temp
-/node_modules
+/web/node_modules
 /internal/web/assets/dist/
 /.superpowers
 /docs
 /.archify
+
+# TypeScript 增量构建信息
+*.tsbuildinfo

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>MumuBot</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("mumu.theme") || "system";
+          var dark =
+            theme === "dark" ||
+            (theme === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          var locale = localStorage.getItem("mumu.locale");
+          if (!locale) {
+            var lang =
+              (navigator.languages && navigator.languages[0]) ||
+              navigator.language ||
+              "zh-CN";
+            locale = lang.slice(0, 2) === "zh" ? "zh-CN" : "en-US";
+          }
+          document.documentElement.lang = locale;
+        } catch (error) {
+          /* 首屏主题脚本失败时保持默认浅色 */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

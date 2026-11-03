@@ -35,11 +35,12 @@ type Profile struct {
 func (Profile) TableName() string { return "model_profiles" }
 
 var (
-	ErrNotFound      = errors.New("模型不存在")
-	ErrActiveModel   = errors.New("当前模型不能删除")
-	ErrInvalidModel  = errors.New("模型配置无效")
-	thinkingTypes    = map[string]bool{"": true, "enabled": true, "disabled": true}
-	reasoningEfforts = map[string]bool{"": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+	ErrNotFound        = errors.New("模型不存在")
+	ErrActiveModel     = errors.New("当前模型不能删除")
+	ErrInvalidModel    = errors.New("模型配置无效")
+	ErrVersionConflict = errors.New("模型已被其他页面修改，请刷新后重试")
+	thinkingTypes      = map[string]bool{"": true, "enabled": true, "disabled": true}
+	reasoningEfforts   = map[string]bool{"": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 )
 
 // Store 管理模型档案
@@ -144,7 +145,7 @@ func (s *Store) Update(ctx context.Context, row Profile, apiKey string) (Profile
 		return row, fmt.Errorf("更新模型失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return row, fmt.Errorf("模型已被其他页面修改，请刷新后重试")
+		return row, ErrVersionConflict
 	}
 	return s.Get(ctx, row.ID)
 }
@@ -190,7 +191,7 @@ func (s *Store) Delete(ctx context.Context, id uint, expectedVersion int64) erro
 		return fmt.Errorf("删除模型失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("模型已被其他页面修改，请刷新后重试")
+		return ErrVersionConflict
 	}
 	return nil
 }

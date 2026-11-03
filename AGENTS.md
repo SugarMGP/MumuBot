@@ -15,7 +15,8 @@
 - `internal/memory/`：PostgreSQL 数据模型、pg_trgm 检索、transcript、checkpoint、长期记忆、情感、消息日志和成员画像。
 - `internal/migration/`：数据库 schema 版本与一次性数据迁移，只依赖 GORM 和 memory 的模型。
 - `internal/tools/`：暴露给主 Agent 和压缩 Agent 的受限工具集。
-- `internal/web/`：管理后台 HTTP 服务、页面模板、前端资源和后台业务服务（含会话管理）。
+- `internal/web/`：管理后台 JSON API、内嵌前端产物和后台业务服务（含会话管理）。
+- `web/`：管理后台 React 前端工程（Vite + TypeScript + Tailwind 4 + shadcn/ui）。
 - `internal/config/`：env 启动配置、代码内置默认值、PostgreSQL 动态配置快照和加密配置。
 - 管理后台“人格预设”页维护人格卡与仿真提示词；“设置”页只管对话、压缩、并发、媒体、模型和 MCP 服务器。
 
@@ -32,22 +33,23 @@
 | 看数据库启动迁移 | `internal/migration/`、`main.go` |
 | 看私聊收发 | `internal/agent/private.go` |
 | 看会话与黑名单 | `internal/memory/conversation_targets.go`、`internal/agent/commit.go` |
-| 看后台页面 | `internal/web/views/*.templ`、`internal/web/app/app.go` |
+| 看后台页面 | `web/src/pages/`、`web/src/app/router.tsx` |
+| 看后台接口 | `internal/web/app/app.go`、`internal/web/app/dto.go` |
 
 ## 运行与验证命令
 
 ```bash
-bun install --frozen-lockfile
-bun run gen:icons
-bun run build
-templ generate ./internal/web/views
+cd web && bun install --frozen-lockfile
+cd web && bun run typecheck
+cd web && bun run lint
+cd web && bun run lint:i18n
+cd web && bun run build
 go build ./...
 go vet ./...
 ```
 
 - 只改 Go 逻辑时，至少运行 `go build ./...`；涉及语法或逻辑变更时再运行 `go vet ./...`。
-- 修改 `.templ` 后运行 `templ generate ./internal/web/views`。
-- 修改 `internal/web/assets/src/` 后运行 `bun run build`。
+- 修改 `web/` 后运行 `bun run typecheck`、`bun run lint`、`bun run lint:i18n` 和 `bun run build`。
 - 修改 `Dockerfile`、`docker-compose.yml` 或 `.env.example` 后运行 `docker-compose config --quiet`（或等价的 `docker compose config --quiet`）。
 - 文档类改动不需要为了形式重跑前端构建，但如果同时已有代码改动，交付时要说明本轮实际验证了什么。
 
@@ -61,46 +63,51 @@ go vet ./...
 
 ## 前端实现
 
-- 管理后台使用 Go/templ、Tailwind CSS 4、daisyUI、HTMX、Toastify 和 ECharts；少量通用行为使用集中式原生 JavaScript。不要重新引入 Preline、Alpine 或 React/Vue SPA。
+- 管理后台使用 React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui（Radix）+ TanStack Query + ECharts + sonner + i18next；不要重新引入 templ、HTMX、daisyUI、Toastify 或服务端渲染页面。
+- 前端工程位于 `web/`，产物输出到 `internal/web/assets/dist/` 并由 Go 内嵌；发布仍是单二进制。
 - 后台面向 1000px 及以上的横屏窗口，通过流式字号、间距和栅格自适应；不为手机竖屏增加抽屉或独立布局。
-- 新增或大改后台页面前必须先用 Stitch 完成设计，再按确认稿实现。允许 daisyUI 控件细节与设计稿略有不同，但页面内容、排版、风格、配色和圆角层级不能明显偏离。
-- 页面以纯白或微粉近白为底，暖白侧栏、樱粉主色和青绿状态色为主要视觉语言；整体年轻、Anime Friendly、多圆角但不幼稚，避免大面积粉色背景和板正的传统企业后台风格。
-- 优先复用 daisyUI 组件和浏览器原生控件，不重复手搓按钮、输入框、下拉菜单、弹窗、提示、加载态和分页；图表统一使用 ECharts。
-- 后台所有图标必须使用 Lucide 官方线性图标：`internal/web/views/icons.templ` 与 `internal/web/assets/src/icons.generated.js` 由 `scripts/generate-icons.mjs` 从 npm 包 `lucide-static` 生成（`bun run gen:icons && templ generate ./internal/web/views`），禁止手工修改这两个文件、手绘路径或引入其他图标库；新增图标先在生成脚本的 mapping 中登记，语义要直观且互不混淆。
+- 新增或大改后台页面前必须先用 Stitch 完成设计，再按确认稿实现；允许组件在 hover、focus、过渡等细节上采用组件库默认表现，但页面内容、排版、风格、配色和圆角层级不能明显偏离。
+- 视觉基线：浅色为纯白或微粉近白工作区、暖白侧栏、樱粉主色、青绿状态色；深色为深炭底、同一品牌色与圆角层级。两套主题共用同一套语义令牌。
+- 优先复用 `web/src/components/ui` 与 `web/src/components/admin` 的组件和浏览器原生控件；图表统一使用 ECharts。
+- 图标统一使用 `lucide-react`，在 `web/src/components/admin/icons.tsx` 登记语义名，禁止手绘路径或引入其他图标库。
+- 所有界面文案只能写在 `web/src/locales/zh-CN.ts` 与 `web/src/locales/en-US.ts`；组件里通过 `t()` 使用，禁止硬编码中文（`bun run lint:i18n` 会检查）。用户数据、日志内容和存量正文不翻译。
+- Go 侧只返回错误码与结构化数据，不在服务端拼用户可见中文句子；文案由前端目录提供，未知错误码才回退服务端 message。
+- 两种主题与两种语言都必须可用：`mumu.theme` 与 `mumu.locale` 存浏览器本地，默认跟随系统和浏览器语言；首屏由 `web/index.html` 的内联脚本应用，避免主题闪烁。
+- 保留组件库自带的 hover、focus、active、过渡、阴影、骨架屏和弹层动画；不要为了复刻旧界面关闭或改丑。
 - 保持所有页面的间距、字重、圆角、颜色和交互动效统一。
 - 所有重要交互都要有明确反馈；动效应控制在轻量范围内，并尊重 `prefers-reduced-motion`。
 
 ## 后台设计规范
 
-后台统一设计令牌写入 `internal/web/assets/src/admin.css` 的 `:root`，页面不得再硬编码这些值的近似替代。字号与间距通过 `clamp()` 随横屏窗口宽度平滑缩放：1000px 附近取下限，1600px 及以上取表中数值：
+后台统一设计令牌写入 `web/src/styles.css` 的 `:root` 与 `.dark`，页面不得再硬编码这些值的近似替代。字号与间距通过 `clamp()` 随横屏窗口宽度平滑缩放：1000px 附近取下限，1600px 及以上取表中数值：
 
 | 类别 | 统一值 | 用法 |
 |------|--------|------|
 | 页面区块间距 | 24px（`--admin-page-gap`、`space-y-6`） | 页面根节点 |
-| 卡片内边距 | 20px（`--admin-card-pad`、`p-5`） | `card-body` |
+| 卡片内边距 | 20px（`--admin-card-pad`、`p-5`） | 卡片内容区 |
 | 紧凑内边距 | 16px（`--admin-card-pad-compact`、`p-4`） | 筛选、提示等紧凑区块 |
-| 卡片圆角 | 18px（`--admin-card-radius`、`rounded-box`） | 所有卡片 |
+| 卡片圆角 | 18px（`--admin-card-radius`、`rounded-xl`） | 所有卡片 |
 | 子块/控件圆角 | 12px（`--admin-inner-radius`、`--admin-control-radius`） | 卡片内子块、输入框、按钮 |
 | 页面标题 | 28px（`--admin-title-size`） | `PageHeader` |
 | 卡片标题 | 18px（`--admin-section-title-size`、`text-lg`） | 卡片与区块标题 |
 | 正文/辅助文字 | 14px / 12px（`text-sm` / `text-xs`） | 正文与说明 |
 | 次要文字透明度 | 仅 `/75`、`/60`、`/45` 三档 | 正文、说明、弱提示 |
-| 边框色 | `var(--color-base-300)` | 卡片统一 1px 实线边框、表格、分隔线 |
-| 主色/成功色 | `var(--color-primary)` / `var(--color-secondary)` | 不写颜色字面量 |
-| 卡片阴影 | `0 1px 2px rgb(32 33 45 / 0.05), 0 8px 24px rgb(32 33 45 / 0.055)` | 唯一卡片阴影；登录页卡片可在此基础上叠一层品牌色投影 |
+| 边框色 | `var(--border)` | 卡片统一 1px 实线边框、表格、分隔线 |
+| 主色/成功色 | `var(--primary)` / `var(--secondary)` | 不写颜色字面量 |
+| 卡片阴影 | `var(--card-shadow)` | 唯一卡片阴影；登录页卡片可在此基础上叠一层品牌色投影 |
 
-- 全局页面底色统一：单层樱粉径向柔光叠加纵向近白渐变（body 级、固定不随滚动），登录页与后台页面共用同一套背景，不允许单页重写底色。
+- 全局页面底色统一：浅色为单层樱粉径向柔光叠加纵向近白渐变，深色为暗樱粉柔光叠加深炭纵向渐变；body 级固定不随滚动，登录页与后台共用，不允许单页重写底色。
+- 浅色与深色共用同一套语义令牌；新增颜色、圆角或阴影先加令牌，不在页面写近似值。
 - 表情包列表按当前栅格列数保持整三行：默认每页 12 个，窗口宽度变化导致列数变化时按实际列数调整每页数量。
 - 表格行密度统一使用默认 `table`，不再混用紧凑密度变体。
-- 弹层标题统一使用 `DialogHeader`，分页统一使用 `ListFooter`，筛选面板统一使用 `FilterPanel`，排序使用 `SortToolbar`，不允许再手写等价结构。
-- 图标只能通过 `AdminIcon` 或生成脚本的 JS 图标映射使用，新增图标先登记 mapping。
-- 所有 HTMX 导航控件必须保留 `aria-busy`/指针反馈；请求失败必须有可见提示，表单提交必须有 loading 状态。
-## 模板与资源
+- 弹层标题统一使用 `DialogHeader`，分页统一使用 `Pagination`，筛选面板统一使用 `FilterPanel`，排序使用 `SortToolbar`，不允许再手写等价结构。
+- 图标只能通过 `AdminIcon` 使用，新增图标先在 `icons.tsx` 登记语义名。
+- 所有写操作必须有 loading 与可见错误提示；键盘可达、焦点管理、`aria-label` 与 `prefers-reduced-motion` 不可省略。
+## 前端工程与资源
 
-- 后台页面模板位于 `internal/web/views/*.templ`。
-- 修改 `.templ` 文件后，必须运行 `templ generate ./internal/web/views`。
-- 前端资源源码位于 `internal/web/assets/src/`。
-- 修改前端资源后，必须运行 `bun run build`。
+- 前端源码位于 `web/src/`，页面在 `web/src/pages/`，通用组件在 `web/src/components/`，文案目录在 `web/src/locales/`。
+- 修改前端后运行 `cd web && bun run typecheck && bun run lint && bun run lint:i18n && bun run build`。
+- 本地开发：`go run .` 配合 `cd web && bun run dev`；纯前端联调使用 `bun run dev:mock`（MSW 内存数据）。
 - `internal/web/assets/dist/` 是构建产物，不手工修改，不纳入版本控制。
 
 ## 更新日志与发布
@@ -117,10 +124,11 @@ go vet ./...
 
 ## 验证
 
-- 涉及后台 UI 的改动，交付前使用 Codex 内置浏览器逐页检查布局、交互、控制台和网络请求；不要使用 Chrome DevTools MCP。
+- 涉及后台 UI 的改动，交付前使用 Codex 内置浏览器或等价的真实浏览器（如 Playwright + 本机 Chrome）逐页检查布局、交互、控制台和网络请求；不要使用 Chrome DevTools MCP。
 - 页面验证必须包含真实截图，并以截图作为布局与视觉结果的主要验收依据；仅查看 DOM 树、可访问性树、脚本返回值或静态 HTML，不算完成验收。
+- 后台验收必须覆盖浅色/深色两种主题与中文/英文两种语言，至少逐页检查浅色中文，并对登录、首页、设置、日志、图表和详情页做深色与英文抽查。
 - 发现页面问题时，优先依据真实截图修正，不靠主观猜测收尾。
-- 完整项目因 PostgreSQL、NapCat 或 QQ 环境无法启动时，可以使用真实模板和前端资源配合 mock 数据验收后台；仍需检查页面布局、关键交互、图表、控制台和网络请求，并在结束后清理临时进程与目录。
+- 完整项目因 PostgreSQL、NapCat 或 QQ 环境无法启动时，可以使用真实前端资源配合 MSW mock 数据验收后台；仍需检查页面布局、关键交互、图表、控制台和网络请求，并在结束后清理临时进程与目录。
 - 本机缺少 PostgreSQL、NapCat 或 QQ 等真实集成环境时，不把这一既知条件重复当作代码审查阻断；改用构建、静态检查和调用链复核，并在交付时说明未覆盖的真实集成测试。
 - 构建、静态检查和浏览器验收串行执行；结束后清理本轮启动的进程和临时目录。
 
@@ -141,7 +149,7 @@ go vet ./...
 - 人工维护的说明性注释统一使用中文，末尾不加句号；保留标识符、协议名、工具指令和许可证声明的原文，不手改生成文件。
 - 注释优先解释用途、约束和原因，不重复显而易见的代码；导出符号注释以符号名开头，保留工具之间现有的长分隔注释。
 - Go 代码统一使用 gofmt；import 按标准库、项目内包、第三方依赖分组，组内排序。仅整理风格时不修改业务逻辑、接口或提示词。
-- 人工维护的 `.go` 文件不超过 600 行；templ 等生成文件不受此限制。超过时按职责拆分，每个拆出的文件应有内聚的职责域，不要零散地把函数分到很多小文件。
+- 人工维护的 `.go` 文件不超过 600 行；生成文件不受此限制。超过时按职责拆分，每个拆出的文件应有内聚的职责域，不要零散地把函数分到很多小文件。
 - 同一函数内不要重复调用 `config.Snapshot()`，提取为局部变量复用。
 - 同一函数内不要重复调用 `strings.TrimSpace` 处理同一个值；如果上层已经 Trim 过，下层不应再 Trim。
 - 不要在同一表达式或相邻行中对同一值重复调用（如 `a.bot.GetSelfID()` 在同一条件中出现两次），提取为局部变量。
@@ -156,9 +164,8 @@ go vet ./...
 
 ## 生成文件
 
-- `internal/web/views/*_templ.go` 由 templ 生成，禁止手动修改；需要改页面结构时修改对应的 `.templ` 文件并运行 `templ generate`。
 - `internal/web/assets/dist/` 是前端构建产物，不手工修改，不纳入版本控制。
-- `internal/web/views/icons.templ` 与 `internal/web/assets/src/icons.generated.js` 由 `scripts/generate-icons.mjs` 生成，同样不纳入版本控制；首次构建前先运行 `bun run gen:icons`。
+- `web/public/mockServiceWorker.js` 是 MSW 的静态 worker，随依赖版本一起提交；升级 `msw` 后运行 `bun run msw:init` 更新。
 
 ## 核心架构约束
 

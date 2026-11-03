@@ -64,7 +64,7 @@ Core capabilities of this project:
 | Dependency | Purpose |
 |------|------|
 | Go 1.26.5+ | Build and run |
-| Bun 1.3.14+ | Build frontend assets (only needed for source builds) |
+| Bun 1.4.4+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL 18 | Stores messages, memory, topics, checkpoints, and emotions using `pg_trgm` |
 | SnowLuma | OneBot 11 protocol implementation |
 | LLM API | OpenAI Responses compatible (`/responses`), must support tool calling |
@@ -90,7 +90,7 @@ GitHub Releases provide pre-built packages for Linux, Windows, and macOS. Each a
 - Executable binary
 - `README.md` and `LICENSE`
 
-No separate frontend deployment is needed — admin dashboard assets are embedded in the binary.
+No separate frontend deployment is needed — admin dashboard assets are embedded in the binary. The dashboard supports light/dark themes and Chinese/English, with preferences stored per browser.
 
 ### Building from Source
 
@@ -99,15 +99,13 @@ No separate frontend deployment is needed — admin dashboard assets are embedde
 git clone https://github.com/SugarMGP/MumuBot.git
 cd MumuBot
 
-# 2. Install frontend dependencies, generate admin icons, and build dashboard assets
+# 2. Install frontend dependencies and build the admin dashboard
+cd web
 bun install --frozen-lockfile
-bun run gen:icons
 bun run build
+cd ..
 
-# 3. Generate templ view code
-go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate ./internal/web/views
-
-# 4. Build
+# 3. Build
 go build -o mumu-bot .
 ```
 

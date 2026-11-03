@@ -22,6 +22,12 @@ var (
 	ErrPersonaPresetActive = errors.New("正在使用的预设不能删除")
 	// ErrPersonaPresetVersion 表示版本冲突
 	ErrPersonaPresetVersion = errors.New("预设已被其他人修改，请刷新后重试")
+	// ErrPersonaPresetNotFound 表示预设不存在
+	ErrPersonaPresetNotFound = errors.New("预设不存在")
+	// ErrPersonaPresetInvalid 表示预设内容不合法
+	ErrPersonaPresetInvalid = errors.New("人格预设内容无效")
+	// ErrPersonaPresetDuplicateName 表示预设名称重复
+	ErrPersonaPresetDuplicateName = errors.New("已经有同名预设了")
 )
 
 // PersonaPreset 是一套人格预设：人格卡与仿真提示词一起切换
@@ -84,17 +90,17 @@ func (m *Manager) CreatePersonaPreset(ctx context.Context, preset PersonaPreset)
 	preset.Name = strings.TrimSpace(preset.Name)
 	preset.Description = strings.TrimSpace(preset.Description)
 	if preset.Name == "" {
-		return nil, fmt.Errorf("预设名称不能为空")
+		return nil, fmt.Errorf("%w: 预设名称不能为空", ErrPersonaPresetInvalid)
 	}
 	if strings.TrimSpace(preset.PersonaCard) == "" || strings.TrimSpace(preset.Simulation) == "" {
-		return nil, fmt.Errorf("人格卡与仿真提示词都不能为空")
+		return nil, fmt.Errorf("%w: 人格卡与仿真提示词都不能为空", ErrPersonaPresetInvalid)
 	}
 	var exists int64
 	if err := m.db.WithContext(ctx).Model(&PersonaPreset{}).Where("name = ?", preset.Name).Count(&exists).Error; err != nil {
 		return nil, fmt.Errorf("检查预设名称失败: %w", err)
 	}
 	if exists > 0 {
-		return nil, fmt.Errorf("已经有同名预设了")
+		return nil, ErrPersonaPresetDuplicateName
 	}
 	preset.Builtin = false
 	preset.Active = false
@@ -109,21 +115,21 @@ func (m *Manager) CreatePersonaPreset(ctx context.Context, preset PersonaPreset)
 func (m *Manager) UpdatePersonaPreset(ctx context.Context, id uint, name, description, card, simulation string, expectedVersion int64) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("预设名称不能为空")
+		return fmt.Errorf("%w: 预设名称不能为空", ErrPersonaPresetInvalid)
 	}
 	if strings.TrimSpace(card) == "" || strings.TrimSpace(simulation) == "" {
-		return fmt.Errorf("人格卡与仿真提示词都不能为空")
+		return fmt.Errorf("%w: 人格卡与仿真提示词都不能为空", ErrPersonaPresetInvalid)
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row PersonaPreset
 		if err := tx.Where("id = ?", id).Take(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("预设不存在")
+				return ErrPersonaPresetNotFound
 			}
 			return fmt.Errorf("读取人格预设失败: %w", err)
 		}
 		if row.Builtin {
-			return fmt.Errorf("内置预设不能编辑，请先克隆一份")
+			return fmt.Errorf("%w: 内置预设不能编辑，请先克隆一份", ErrPersonaPresetInvalid)
 		}
 		if expectedVersion > 0 && row.Version != expectedVersion {
 			return ErrPersonaPresetVersion
@@ -134,7 +140,7 @@ func (m *Manager) UpdatePersonaPreset(ctx context.Context, id uint, name, descri
 				return fmt.Errorf("检查预设名称失败: %w", err)
 			}
 			if exists > 0 {
-				return fmt.Errorf("已经有同名预设了")
+				return ErrPersonaPresetDuplicateName
 			}
 		}
 		result := tx.Model(&PersonaPreset{}).
@@ -163,7 +169,7 @@ func (m *Manager) ActivatePersonaPreset(ctx context.Context, id uint) error {
 		var row PersonaPreset
 		if err := tx.Where("id = ?", id).Take(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("预设不存在")
+				return ErrPersonaPresetNotFound
 			}
 			return fmt.Errorf("读取人格预设失败: %w", err)
 		}
@@ -182,7 +188,7 @@ func (m *Manager) DeletePersonaPreset(ctx context.Context, id uint) error {
 	var row PersonaPreset
 	if err := m.db.WithContext(ctx).Where("id = ?", id).Take(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("预设不存在")
+			return ErrPersonaPresetNotFound
 		}
 		return fmt.Errorf("读取人格预设失败: %w", err)
 	}
@@ -205,7 +211,7 @@ func (m *Manager) ClonePersonaPreset(ctx context.Context, id uint) (*PersonaPres
 		return nil, err
 	}
 	if source == nil {
-		return nil, fmt.Errorf("预设不存在")
+		return nil, ErrPersonaPresetNotFound
 	}
 	names, err := m.personaPresetNames(ctx)
 	if err != nil {

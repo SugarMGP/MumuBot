@@ -30,7 +30,11 @@ type StoredServer struct {
 
 func (StoredServer) TableName() string { return "mcp_servers" }
 
-var ErrNotFound = errors.New("MCP 服务器不存在")
+var (
+	ErrNotFound        = errors.New("MCP 服务器不存在")
+	ErrVersionConflict = errors.New("MCP 服务器已被其他页面修改，请刷新后重试")
+	ErrInvalidConfig   = errors.New("MCP 服务器配置无效")
+)
 
 // Store 管理 MCP 服务器
 type Store struct {
@@ -65,7 +69,7 @@ func (s *Store) Get(ctx context.Context, id uint) (ServerConfig, StoredServer, e
 	return cfg, row, nil
 }
 
-// Save 创建或更新服务器；version 为 0 表示新建
+// Save 创建或更新服务器；id 为 0 表示新建
 func (s *Store) Save(ctx context.Context, id uint, cfg ServerConfig, version int64, position int) (StoredServer, error) {
 	if err := validateServerConfig(cfg); err != nil {
 		return StoredServer{}, err
@@ -78,7 +82,7 @@ func (s *Store) Save(ctx context.Context, id uint, cfg ServerConfig, version int
 	if err != nil {
 		return StoredServer{}, err
 	}
-	if id == 0 || version == 0 {
+	if id == 0 {
 		row := StoredServer{
 			Name: cfg.Name, Enabled: cfg.Enabled, Transport: cfg.Type,
 			ConfigCipher: ciphertext, ConfigNonce: nonce, KeyVersion: keyVersion,
@@ -107,7 +111,7 @@ func (s *Store) Save(ctx context.Context, id uint, cfg ServerConfig, version int
 		return StoredServer{}, fmt.Errorf("更新 MCP 服务器失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return StoredServer{}, fmt.Errorf("MCP 服务器已被其他页面修改，请刷新后重试")
+		return StoredServer{}, ErrVersionConflict
 	}
 	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&row).Error; err != nil {
 		return StoredServer{}, fmt.Errorf("读取 MCP 服务器失败: %w", err)
@@ -122,7 +126,7 @@ func (s *Store) Delete(ctx context.Context, id uint, version int64) error {
 		return fmt.Errorf("删除 MCP 服务器失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("MCP 服务器已被其他页面修改，请刷新后重试")
+		return ErrVersionConflict
 	}
 	return nil
 }
@@ -165,20 +169,20 @@ func decryptServer(row StoredServer) (ServerConfig, error) {
 func validateServerConfig(cfg ServerConfig) error {
 	cfg.Name = strings.TrimSpace(cfg.Name)
 	if cfg.Name == "" {
-		return fmt.Errorf("MCP 服务器名称不能为空")
+		return fmt.Errorf("%w: MCP 服务器名称不能为空", ErrInvalidConfig)
 	}
 	cfg.Type = strings.TrimSpace(cfg.Type)
 	switch cfg.Type {
 	case "sse":
 		if strings.TrimSpace(cfg.URL) == "" {
-			return fmt.Errorf("SSE 服务器 URL 不能为空")
+			return fmt.Errorf("%w: SSE 服务器 URL 不能为空", ErrInvalidConfig)
 		}
 	case "stdio":
 		if strings.TrimSpace(cfg.Command) == "" {
-			return fmt.Errorf("stdio 服务器命令不能为空")
+			return fmt.Errorf("%w: stdio 服务器命令不能为空", ErrInvalidConfig)
 		}
 	default:
-		return fmt.Errorf("不支持的 MCP 传输类型 %q", cfg.Type)
+		return fmt.Errorf("%w: 不支持的 MCP 传输类型 %q", ErrInvalidConfig, cfg.Type)
 	}
 	return nil
 }

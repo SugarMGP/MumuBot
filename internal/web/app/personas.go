@@ -1,13 +1,13 @@
 package app
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
-	"mumu-bot/internal/web/views"
+
+	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -15,172 +15,190 @@ const (
 	personaSimLimit  = 5000
 )
 
-// personasPageData 组装人格预设页；submitted 非空时用用户刚提交的内容回填表单
-func (a *App) personasPageData(r *http.Request, errorText string, submitted *views.PersonaPresetView) (views.PersonasPageData, error) {
-	data := views.PersonasPageData{
-		CardLimit: personaCardLimit,
-		SimLimit:  personaSimLimit,
-		Error:     errorText,
-		Flash:     a.flashFromRequest(r),
-	}
-	if a.memMgr == nil {
-		return data, nil
-	}
-	presets, err := a.memMgr.ListPersonaPresets(r.Context())
-	if err != nil {
-		return views.PersonasPageData{}, err
-	}
-	for _, preset := range presets {
-		data.Presets = append(data.Presets, personaPresetView(preset))
-	}
-	if submitted != nil {
-		submitted.CardChars = len([]rune(submitted.PersonaCard))
-		submitted.SimChars = len([]rune(submitted.Simulation))
-		data.Selected = *submitted
-		data.Creating = submitted.ID == 0
-		return data, nil
-	}
-	if r.URL.Query().Get("new") == "1" {
-		card, simulation := config.BuiltinPersonaTexts()
-		data.Creating = true
-		data.Selected = views.PersonaPresetView{
-			PersonaCard: card,
-			Simulation:  simulation,
-			CardChars:   len([]rune(card)),
-			SimChars:    len([]rune(simulation)),
-		}
-		return data, nil
-	}
-	wanted := uint(parseInt64Query(r.URL.Query().Get("id")))
-	for _, preset := range data.Presets {
-		if preset.ID == wanted || (wanted == 0 && preset.Active) {
-			data.Selected = preset
-			break
-		}
-	}
-	if data.Selected.ID == 0 && len(data.Presets) > 0 {
-		data.Selected = data.Presets[0]
-	}
-	return data, nil
-}
-
-func personaPresetView(preset memory.PersonaPreset) views.PersonaPresetView {
-	return views.PersonaPresetView{
+func personaSummary(preset memory.PersonaPreset) personaSummaryDTO {
+	return personaSummaryDTO{
 		ID:          preset.ID,
 		Name:        preset.Name,
 		Description: preset.Description,
-		PersonaCard: preset.PersonaCard,
-		Simulation:  preset.Simulation,
 		Builtin:     preset.Builtin,
 		Active:      preset.Active,
 		Version:     preset.Version,
-		UpdatedAt:   preset.UpdatedAt,
 		CardChars:   len([]rune(preset.PersonaCard)),
 		SimChars:    len([]rune(preset.Simulation)),
+		UpdatedAt:   preset.UpdatedAt,
+	}
+}
+
+func personaDetail(preset memory.PersonaPreset) personaDetailDTO {
+	return personaDetailDTO{
+		personaSummaryDTO: personaSummary(preset),
+		PersonaCard:       preset.PersonaCard,
+		SimulationPrompt:  preset.Simulation,
 	}
 }
 
 func (a *App) handlePersonas(w http.ResponseWriter, r *http.Request) {
-	data, err := a.personasPageData(r, "", nil)
+	presets, err := a.memMgr.ListPersonaPresets(r.Context())
 	if err != nil {
-		http.Error(w, "人格预设加载失败，请稍后再试。", http.StatusInternalServerError)
+		a.failFromError(w, r, err)
 		return
 	}
-	a.renderPageResponse(w, r, views.PersonasPage(data, r.URL.Path), views.PageContent(views.PersonasBody(data)))
+	response := personasResponse{Items: make([]personaSummaryDTO, 0, len(presets))}
+	for _, preset := range presets {
+		if preset.Active {
+			response.ActiveID = preset.ID
+		}
+		response.Items = append(response.Items, personaSummary(preset))
+	}
+	respondData(w, http.StatusOK, response, nil)
 }
 
-func (a *App) handlePersonasAction(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		a.renderPersonaError(w, r, "请求格式不正确。", nil)
-		return
-	}
-	action := strings.TrimSpace(r.FormValue("action"))
-	id := uint(parseInt64Query(r.FormValue("id")))
-	name := strings.TrimSpace(r.FormValue("name"))
-	description := strings.TrimSpace(r.FormValue("description"))
-	card := r.FormValue("persona_card")
-	simulation := r.FormValue("simulation_prompt")
-	submitted := &views.PersonaPresetView{
-		ID:          id,
-		Name:        name,
-		Description: description,
-		PersonaCard: card,
-		Simulation:  simulation,
-		Version:     parseInt64Query(r.FormValue("version")),
-	}
-	redirect := "/admin/personas"
-	var err error
-	switch action {
-	case "activate":
-		err = a.memMgr.ActivatePersonaPreset(r.Context(), id)
-	case "delete":
-		err = a.memMgr.DeletePersonaPreset(r.Context(), id)
-	case "clone":
-		var created *memory.PersonaPreset
-		created, err = a.memMgr.ClonePersonaPreset(r.Context(), id)
-		if created != nil {
-			redirect = fmt.Sprintf("/admin/personas?id=%d", created.ID)
-		}
-	case "create":
-		var created *memory.PersonaPreset
-		created, err = a.memMgr.CreatePersonaPreset(r.Context(), memory.PersonaPreset{
-			Name:        name,
-			Description: description,
-			PersonaCard: card,
-			Simulation:  simulation,
-		})
-		if created != nil {
-			redirect = fmt.Sprintf("/admin/personas?id=%d", created.ID)
-		}
-	case "save":
-		err = a.memMgr.UpdatePersonaPreset(r.Context(), id, name, description, card, simulation, submitted.Version)
-		if err == nil {
-			redirect = fmt.Sprintf("/admin/personas?id=%d", id)
-		}
-	default:
-		err = fmt.Errorf("未知操作")
-	}
-	if err != nil {
-		a.renderPersonaError(w, r, err.Error(), submitted)
-		return
-	}
-	if err := a.reloadPersona(); err != nil {
-		a.renderPersonaError(w, r, "已保存，但运行态应用失败："+err.Error(), submitted)
-		return
-	}
-	a.redirectFlash(w, r, redirect, "success", personaActionText(action), "")
+func (a *App) handlePersonaTemplate(w http.ResponseWriter, r *http.Request) {
+	card, simulation := config.BuiltinPersonaTexts()
+	respondData(w, http.StatusOK, personaTemplateResponse{
+		PersonaCard:      card,
+		SimulationPrompt: simulation,
+	}, nil)
 }
 
-func (a *App) reloadPersona() error {
+func (a *App) handlePersonaDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	preset, err := a.memMgr.GetPersonaPreset(r.Context(), id)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	if preset == nil {
+		a.failFromError(w, r, memory.ErrPersonaPresetNotFound)
+		return
+	}
+	respondData(w, http.StatusOK, personaDetail(*preset), nil)
+}
+
+type personaInput struct {
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	PersonaCard      string `json:"persona_card"`
+	SimulationPrompt string `json:"simulation_prompt"`
+	Version          int64  `json:"version"`
+}
+
+func (a *App) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
+	var body personaInput
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		a.failBadRequest(w, "预设名称不能为空。")
+		return
+	}
+	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" {
+		a.failBadRequest(w, "人格卡与仿真提示词都不能为空。")
+		return
+	}
+	created, err := a.memMgr.CreatePersonaPreset(r.Context(), memory.PersonaPreset{
+		Name:        strings.TrimSpace(body.Name),
+		Description: strings.TrimSpace(body.Description),
+		PersonaCard: body.PersonaCard,
+		Simulation:  body.SimulationPrompt,
+	})
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusCreated, personaDetail(*created), a.reloadPersonaWarning())
+}
+
+func (a *App) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	var body personaInput
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		a.failBadRequest(w, "预设名称不能为空。")
+		return
+	}
+	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" {
+		a.failBadRequest(w, "人格卡与仿真提示词都不能为空。")
+		return
+	}
+	if err := a.memMgr.UpdatePersonaPreset(r.Context(), id, strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), body.PersonaCard, body.SimulationPrompt, body.Version); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	preset, err := a.memMgr.GetPersonaPreset(r.Context(), id)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	if preset == nil {
+		a.failFromError(w, r, memory.ErrPersonaPresetNotFound)
+		return
+	}
+	respondData(w, http.StatusOK, personaDetail(*preset), a.reloadPersonaWarning())
+}
+
+func (a *App) handlePersonaDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	if err := a.memMgr.DeletePersonaPreset(r.Context(), id); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	_ = a.reloadPersonaWarning()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) handlePersonaActivate(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	if err := a.memMgr.ActivatePersonaPreset(r.Context(), id); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusOK, map[string]bool{"ok": true}, a.reloadPersonaWarning())
+}
+
+func (a *App) handlePersonaClone(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
+		return
+	}
+	created, err := a.memMgr.ClonePersonaPreset(r.Context(), id)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusCreated, personaDetail(*created), a.reloadPersonaWarning())
+}
+
+// reloadPersona 在写入后同步运行态；失败只返回警告，不否定已经落库的结果
+func (a *App) reloadPersonaWarning() *warningPayload {
 	if err := config.Reload(); err != nil {
-		return err
+		return &warningPayload{Code: "runtime_reload_failed"}
 	}
-	if a.mumuAgent != nil && a.mumuAgent.Ready() {
-		return a.mumuAgent.Reload()
+	if a.agentReady() {
+		if err := a.mumuAgent.Reload(); err != nil {
+			return &warningPayload{Code: "runtime_reload_failed"}
+		}
 	}
 	return nil
-}
-
-func (a *App) renderPersonaError(w http.ResponseWriter, r *http.Request, text string, submitted *views.PersonaPresetView) {
-	data, err := a.personasPageData(r, text, submitted)
-	if err != nil {
-		http.Error(w, "人格预设加载失败，请稍后再试。", http.StatusInternalServerError)
-		return
-	}
-	a.renderPageResponse(w, r, views.PersonasPage(data, "/admin/personas"), views.PageContent(views.PersonasBody(data)))
-}
-
-func personaActionText(action string) string {
-	switch action {
-	case "activate":
-		return "已切换人格预设，下一段对话总结后生效"
-	case "delete":
-		return "已删除这份预设"
-	case "clone":
-		return "已克隆一份预设"
-	case "create":
-		return "已新建预设"
-	default:
-		return "已保存预设"
-	}
 }

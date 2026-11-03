@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,18 +16,16 @@ import (
 	"mumu-bot/internal/web/assets"
 	"mumu-bot/internal/web/auth"
 	"mumu-bot/internal/web/services"
-	"mumu-bot/internal/web/views"
 
-	"github.com/bytedance/sonic"
 	"github.com/go-chi/chi/v5"
 )
 
-type RuntimeSnapshot struct {
-	Connected       bool
-	SelfID          int64
-	MCPToolCount    int
-	CurrentMood     *memory.MoodState
-	CurrentEmotions []memory.CurrentEmotion
+type runtimeSnapshot struct {
+	Connected    bool
+	SelfID       int64
+	MCPToolCount int
+	Mood         *memory.MoodState
+	Emotions     []memory.CurrentEmotion
 }
 
 type App struct {
@@ -40,13 +39,10 @@ type App struct {
 	router     http.Handler
 }
 
-type sortOption struct {
-	Key   string
-	Label string
-}
-
-const defaultListPageSize = 15
-const compactListPageSize = 12
+const (
+	defaultListPageSize = 15
+	compactListPageSize = 12
+)
 
 func New(boot config.Bootstrap, admin *services.AdminService, memMgr *memory.Manager, mumuAgent *agent.Agent, models *modelprofiles.Store, mcpServers *mcp.Store) *App {
 	app := &App{
@@ -75,47 +71,67 @@ func (a *App) Server() *http.Server {
 
 func (a *App) routes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(a.sameOriginPostOnly)
+	r.Use(a.sameOriginWrite)
 
-	r.Get("/", a.handleRoot)
 	r.Get("/health", a.handleHealth)
-	r.Get("/favicon.ico", a.handleFavicon)
+	r.Get("/favicon.svg", a.handleFavicon)
 	r.Handle("/assets/*", http.StripPrefix("/assets/", assets.Handler()))
-	r.Get("/login", a.handleLoginPage)
-	r.Post("/login", a.handleLoginSubmit)
-	r.Post("/logout", a.handleLogout)
 
-	r.Group(func(protected chi.Router) {
-		protected.Use(a.requireAdminEnabled)
-		protected.Use(a.requireSession)
+	r.Route("/api/v1", func(api chi.Router) {
+		api.Get("/session", a.handleSessionInfo)
+		api.Post("/session", a.handleLogin)
+		api.Delete("/session", a.handleLogout)
 
-		protected.Get("/admin", a.handleDashboard)
-		protected.Get("/admin/stickers", a.handleStickers)
-		protected.Get("/admin/stickers/files/*", a.handleStickerFile)
-		protected.Get("/admin/topics", a.handleTopics)
-		protected.Get("/admin/topics/{id}", a.handleTopicDetail)
-		protected.Get("/admin/knowledge", a.handleKnowledge)
-		protected.Get("/admin/knowledge/{id}", a.handleKnowledgeDetail)
-		protected.Post("/admin/knowledge/actions", a.handleKnowledgeAction)
-		protected.Get("/admin/members", a.handleMembers)
-		protected.Get("/admin/contacts", a.handleContacts)
-		protected.Post("/admin/contacts/actions", a.handleContactAction)
-		protected.Get("/admin/personas", a.handlePersonas)
-		protected.Post("/admin/personas", a.handlePersonasAction)
-		protected.Get("/admin/settings", a.handleSettings)
-		protected.Post("/admin/settings", a.handleSettingsSave)
-		protected.Get("/admin/settings/models", a.handleModels)
-		protected.Post("/admin/settings/models", a.handleModelAction)
-		protected.Get("/admin/settings/mcp", a.handleMCP)
-		protected.Post("/admin/settings/mcp", a.handleMCPAction)
-		protected.Get("/admin/system", a.handleSystem)
-		protected.Get("/admin/system/logs/download", a.handleLogDownload)
-		protected.Get("/admin/dialogs/actions", a.handleActionDialogFragment)
-		protected.Get("/admin/dialogs/stickers/{id}", a.handleStickerPreviewDialogFragment)
+		api.Group(func(protected chi.Router) {
+			protected.Use(a.requireAdminEnabled, a.requireSession)
 
-		protected.Post("/admin/actions", a.handleAdminAction)
+			protected.Get("/dashboard", a.handleDashboard)
+			protected.Get("/stickers", a.handleStickers)
+			protected.Delete("/stickers/{id}", a.handleStickerDelete)
+			protected.Get("/stickers/files/*", a.handleStickerFile)
+			protected.Get("/topics", a.handleTopics)
+			protected.Get("/topics/conversations", a.handleTopicConversations)
+			protected.Get("/topics/{id}", a.handleTopicDetail)
+			protected.Get("/memories", a.handleMemories)
+			protected.Get("/memories/{id}", a.handleMemoryDetail)
+			protected.Patch("/memories/{id}", a.handleMemoryUpdate)
+			protected.Get("/members", a.handleMembers)
+			protected.Get("/conversations", a.handleConversations)
+			protected.Patch("/conversations/{kind}/{targetID}", a.handleConversationUpdate)
+			protected.Get("/personas", a.handlePersonas)
+			protected.Get("/personas/template", a.handlePersonaTemplate)
+			protected.Get("/personas/{id}", a.handlePersonaDetail)
+			protected.Post("/personas", a.handlePersonaCreate)
+			protected.Patch("/personas/{id}", a.handlePersonaUpdate)
+			protected.Delete("/personas/{id}", a.handlePersonaDelete)
+			protected.Post("/personas/{id}/activate", a.handlePersonaActivate)
+			protected.Post("/personas/{id}/clone", a.handlePersonaClone)
+			protected.Get("/settings", a.handleSettings)
+			protected.Put("/settings/{section}", a.handleSettingsSave)
+			protected.Post("/settings/{section}/reset", a.handleSettingsReset)
+			protected.Get("/models", a.handleModels)
+			protected.Post("/models", a.handleModelCreate)
+			protected.Patch("/models/{id}", a.handleModelUpdate)
+			protected.Delete("/models/{id}", a.handleModelDelete)
+			protected.Post("/models/{id}/activate", a.handleModelActivate)
+			protected.Post("/models/{id}/test", a.handleModelTest)
+			protected.Get("/mcp-servers", a.handleMCPServers)
+			protected.Get("/mcp-servers/{id}", a.handleMCPServerDetail)
+			protected.Post("/mcp-servers", a.handleMCPServerCreate)
+			protected.Patch("/mcp-servers/{id}", a.handleMCPServerUpdate)
+			protected.Delete("/mcp-servers/{id}", a.handleMCPServerDelete)
+			protected.Get("/system", a.handleSystem)
+			protected.Get("/system/model-stats", a.handleModelStats)
+			protected.Get("/system/logs/stream", a.handleLogStream)
+			protected.Get("/system/logs/download", a.handleLogDownload)
+		})
 	})
 
+	r.Get("/", a.handleRoot)
+	r.Get("/login", a.handleSPA)
+	r.Get("/admin", a.handleSPA)
+	r.Get("/admin/*", a.handleSPA)
+	r.NotFound(a.handleNotFound)
 	return r
 }
 
@@ -125,17 +141,42 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = sonic.ConfigDefault.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"name":   "mumu-bot",
-		"time":   time.Now().Format(time.RFC3339),
-	})
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"ok","name":"mumu-bot","time":%q}`, time.Now().Format(time.RFC3339))))
 }
 
 func (a *App) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	favicon, err := assets.Open("favicon.svg")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(favicon)
+}
+
+func (a *App) handleSPA(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.NotFound(w, r)
+		return
+	}
+	index, err := assets.Open("index.html")
+	if err != nil {
+		http.Error(w, "管理后台资源缺失，请重新构建。", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(views.FaviconSVG()))
+	_, _ = w.Write(index)
+}
+
+func (a *App) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		respondError(w, http.StatusNotFound, "not_found", messageNotFound, nil)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (a *App) handleStickerFile(w http.ResponseWriter, r *http.Request) {
@@ -143,14 +184,12 @@ func (a *App) handleStickerFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-
 	baseDir := strings.TrimSpace(a.admin.StickerDir())
 	rawPath := strings.TrimSpace(chi.URLParam(r, "*"))
 	if baseDir == "" || rawPath == "" {
 		http.NotFound(w, r)
 		return
 	}
-
 	root, err := os.OpenRoot(baseDir)
 	if err != nil {
 		http.NotFound(w, r)
@@ -168,79 +207,45 @@ func (a *App) handleStickerFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-func (a *App) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	if !a.auth.Enabled() {
-		a.renderStatus(w, http.StatusServiceUnavailable, views.DisabledPage())
-		return
+func (a *App) enabledGroups() []int64 {
+	if a.memMgr == nil {
+		return nil
 	}
-
-	a.render(w, views.LoginPage(views.LoginPageData{
-		Enabled: true,
-		Error:   "",
-	}))
-}
-
-func (a *App) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
-	if !a.auth.Enabled() {
-		a.renderStatus(w, http.StatusServiceUnavailable, views.DisabledPage())
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		a.renderStatus(w, http.StatusBadRequest, views.LoginPage(views.LoginPageData{
-			Enabled: true,
-			Error:   "请求格式错误",
-		}))
-		return
-	}
-
-	adminKey := strings.TrimSpace(r.FormValue("admin_key"))
-	if !a.auth.CheckKey(adminKey) {
-		a.renderStatus(w, http.StatusUnauthorized, views.LoginPage(views.LoginPageData{
-			Enabled: true,
-			Error:   "密钥错误",
-		}))
-		return
-	}
-
-	token, expiresAt, err := a.auth.CreateSession()
+	rows, err := a.memMgr.ListConversationTargets(context.Background(), memory.ConversationKindGroup, true)
 	if err != nil {
-		http.Error(w, "登录失败，请稍后再试。", http.StatusInternalServerError)
-		return
+		return nil
 	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  expiresAt,
-	})
-
-	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if !row.Blocked {
+			ids = append(ids, row.TargetID)
+		}
+	}
+	return ids
 }
 
-func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
-		a.auth.DeleteSession(cookie.Value)
+func (a *App) runtimeSnapshot() runtimeSnapshot {
+	snapshot := runtimeSnapshot{}
+	if a.mumuAgent != nil {
+		snapshot.Connected = a.mumuAgent.OneBotConnected()
+		snapshot.SelfID = a.mumuAgent.BotSelfID()
+		snapshot.MCPToolCount = a.mumuAgent.MCPToolCount()
 	}
+	if a.memMgr != nil {
+		if mood, err := a.memMgr.GetMoodState(); err == nil {
+			snapshot.Mood = mood
+		}
+		if emotions, err := a.memMgr.CurrentEmotions(context.Background(), -1, 3); err == nil {
+			snapshot.Emotions = emotions
+		}
+	}
+	return snapshot
+}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
-
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+func (a *App) agentReady() bool {
+	return a.mumuAgent != nil && a.mumuAgent.Ready()
 }

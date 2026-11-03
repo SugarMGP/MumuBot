@@ -5,8 +5,9 @@
 !go.mod
 !go.sum
 !main.go
-!package.json
-!bun.lock
-!scripts/
+!web/
+!web/**
 !internal/
 !internal/**
+web/node_modules
+internal/web/assets/dist

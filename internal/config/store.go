@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,9 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// ErrVersionConflict 表示配置已被并发修改
+var ErrVersionConflict = errors.New("配置已被其他页面修改，请刷新后重试")
 
 const (
 	SectionPersona     = "persona"
@@ -153,7 +157,7 @@ func SaveSection(ctx context.Context, key string, value any, expectedVersion int
 		changed = result.RowsAffected
 	}
 	if changed == 0 {
-		return fmt.Errorf("配置已被其他页面修改，请刷新后重试")
+		return ErrVersionConflict
 	}
 	store.mu.Lock()
 	store.current.Store(&validated)
@@ -179,7 +183,7 @@ func ResetSection(ctx context.Context, key string, expectedVersion int64) error 
 		return fmt.Errorf("恢复默认配置失败: %w", result.Error)
 	}
 	if expectedVersion > 0 && result.RowsAffected == 0 {
-		return fmt.Errorf("配置已被其他页面修改，请刷新后重试")
+		return ErrVersionConflict
 	}
 	return Reload()
 }
