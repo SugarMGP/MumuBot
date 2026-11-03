@@ -34,6 +34,7 @@ type sessionUser struct {
 	Order             uint64
 	MessageID         int64
 	Msg               *schema.AgenticMessage
+	IsObservation     bool
 	IsAgentMessage    bool
 	IsMaintenanceHint bool
 }
@@ -63,7 +64,6 @@ type Session struct {
 	notes                []string
 	nextOrder            uint64
 	fullScale            float64
-	fullSamples          int
 	tokenBase            *tokenBase
 	compactionRetryAfter time.Time
 	turnSeq              uint64
@@ -104,13 +104,19 @@ func (s *sessionStore) snapshot() []*Session {
 	return list
 }
 
+func (s *sessionStore) resetCalibration() {
+	for _, session := range s.snapshot() {
+		session.ResetCalibration()
+	}
+}
+
 func (s *sessionStore) get(kind string, targetID int64) *Session {
 	key := sessionKey(kind, targetID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[key]
 	if !ok {
-		session = &Session{kind: kind, targetID: targetID, memory: s.memory, media: newMediaIndex(), fullScale: 1}
+		session = &Session{kind: kind, targetID: targetID, memory: s.memory, media: newMediaIndex()}
 		s.sessions[key] = session
 	}
 	return session
@@ -128,13 +134,15 @@ func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaR
 	defer s.mu.Unlock()
 	user := s.newUserLocked(msg, logID, mediaRefs)
 	s.pending = append(s.pending, user)
-	if msg.ReceivedAt.After(s.lastActivityAt) {
-		s.lastActivityAt = msg.ReceivedAt
-	}
-	s.idleDoneForActivity = false
-	if s.idleCancel != nil {
-		s.idleCancel()
-		s.idleCancel = nil
+	if !user.IsObservation {
+		if msg.ReceivedAt.After(s.lastActivityAt) {
+			s.lastActivityAt = msg.ReceivedAt
+		}
+		s.idleDoneForActivity = false
+		if s.idleCancel != nil {
+			s.idleCancel()
+			s.idleCancel = nil
+		}
 	}
 	return user
 }
@@ -194,7 +202,7 @@ func (s *Session) RestorePendingObservation(payload *schema.AgenticMessage, tran
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pending = append(s.pending, &sessionUser{Msg: payload, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
+	s.pending = append(s.pending, &sessionUser{Msg: payload, TranscriptID: transcriptID, IsObservation: true, Order: s.nextOrderLocked()})
 }
 
 func (s *Session) RestorePendingAgentMessage(payload *schema.AgenticMessage, transcriptID uint) {
@@ -236,6 +244,17 @@ func (s *Session) AppendSeenMessage(msg *schema.AgenticMessage, transcriptID uin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seen = append(s.seen, sessionEntry{msg: msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
+}
+
+// AppendSeenObservation 恢复已进入模型的观察事件，保留 user 标记供分段和窗口统计
+func (s *Session) AppendSeenObservation(msg *schema.AgenticMessage, transcriptID uint, visibleSeq uint64) {
+	if msg == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := &sessionUser{Msg: msg, TranscriptID: transcriptID, IsObservation: true}
+	s.seen = append(s.seen, sessionEntry{user: user, msg: msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
 }
 
 func (s *Session) ApplyVisibleSeqs(seqs map[uint]uint64) {
@@ -282,7 +301,7 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		LogID: logID, Ref: ref, Content: strings.TrimSpace(msg.Content), At: msg.Time,
 		ReceivedAt: msg.ReceivedAt, Mentioned: msg.IsMentioned, SenderID: msg.UserID,
 		Nickname: msg.Nickname, ReferencedIDs: referenced, ArrivalSeq: msg.ArrivalSeq,
-		MessageID: msg.MessageID, Order: s.nextOrderLocked(),
+		MessageID: msg.MessageID, IsObservation: msg.MessageID == 0, Order: s.nextOrderLocked(),
 	}
 	user.Text = s.renderUserText(msg, ref, mediaRefs)
 	user.Msg = schema.UserAgenticMessage(user.Text)
@@ -349,11 +368,11 @@ func (s *Session) PendingMessages() []*sessionUser {
 	return list
 }
 
-// AllPendingMessages 返回包含维护提醒在内的待处理项
-func (s *Session) AllPendingMessages() []*sessionUser {
+// HasActionablePending 判断是否有能触发 ReAct 的输入；观察和维护提醒不算
+func (s *Session) HasActionablePending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]*sessionUser(nil), s.pending...)
+	return hasActionableMessage(s.pending)
 }
 
 func (s *Session) MarkInjected(seq uint64) {
@@ -410,7 +429,14 @@ func (s *Session) MarkRecalledByMessageID(messageID int64) {
 func (s *Session) NoteSelfSpoke(at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.selfAt = append(s.selfAt, at)
+	cutoff := at.Add(-gateWindowSize)
+	kept := s.selfAt[:0]
+	for _, existing := range s.selfAt {
+		if existing.After(cutoff) {
+			kept = append(kept, existing)
+		}
+	}
+	s.selfAt = append(kept, at)
 }
 
 func (s *Session) RegisterMediaRefs(refs []media.Ref) {
@@ -453,12 +479,12 @@ func (s *Session) RecentWindow(now time.Time, window time.Duration) (total int, 
 	defer s.mu.Unlock()
 	since := now.Add(-window)
 	for _, entry := range s.seen {
-		if entry.user != nil && !entry.user.IsAgentMessage && !entry.user.At.Before(since) {
+		if entry.user != nil && !entry.user.IsAgentMessage && !entry.user.IsObservation && !entry.user.At.Before(since) {
 			total++
 		}
 	}
 	for _, user := range s.pending {
-		if !user.IsAgentMessage && !user.At.Before(since) {
+		if !user.IsAgentMessage && !user.IsObservation && !user.At.Before(since) {
 			total++
 		}
 	}

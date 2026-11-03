@@ -65,7 +65,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 			if getErr != nil {
 				return getErr
 			}
-			a.restoreSession(kind, targetID, trimRestoreMessages(logs, a.bot.GetSelfID(), a.contextWindow()))
+			a.restoreSession(kind, targetID, trimRestoreMessages(logs, a.bot.GetSelfID(), a.contextWindow(), session.textScale()))
 		}
 		return nil
 	}
@@ -153,6 +153,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 		}
 		session.RestoreUser(msg, log.ID, log.MediaRefs, entry.ID, 0, false, &payload)
 	}
+	session.RestoreTokenBaseFromSeen()
 	return nil
 }
 
@@ -211,6 +212,8 @@ func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry
 	if sonic.Unmarshal(entry.Payload, &message) == nil {
 		if entry.EntryKind == "system_note" && messageKind(&message) == "maintenance_hint" && entry.VisibleSeq == nil {
 			session.RestorePendingMaintenanceHint(&message, entry.ID)
+		} else if entry.EntryKind == "observation" {
+			session.AppendSeenObservation(&message, entry.ID, valueOrZero(entry.VisibleSeq))
 		} else {
 			session.AppendSeenMessage(&message, entry.ID, valueOrZero(entry.VisibleSeq))
 		}
@@ -302,7 +305,7 @@ func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.Messag
 }
 
 // trimRestoreMessages 首次升级时只接续预算内的近期原文，优先保留最新消息
-func trimRestoreMessages(logs []memory.MessageLog, selfID int64, window int) []memory.MessageLog {
+func trimRestoreMessages(logs []memory.MessageLog, selfID int64, window int, scale float64) []memory.MessageLog {
 	if len(logs) == 0 {
 		return logs
 	}
@@ -323,7 +326,7 @@ func trimRestoreMessages(logs []memory.MessageLog, selfID int64, window int) []m
 		} else {
 			payload = msgToPayload(messageLogToSessionMessage(logs[i]))
 		}
-		cost := messageTokens(payload)
+		cost := messageTokensScaled(payload, scale)
 		if keepFrom < len(logs) && total+cost > budget {
 			break
 		}

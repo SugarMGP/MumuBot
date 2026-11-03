@@ -19,13 +19,15 @@ type queuedCommit[T any] struct {
 // commitQueueSet 按会话维护到达序号提交队列；空闲后回收协程并记住下一条序号，
 // 既保证落库、入缓冲和调度按到达顺序执行，也不为长期静默会话保留常驻协程
 type commitQueueSet[T any] struct {
-	mu       sync.Mutex
-	queues   map[int64]chan queuedCommit[T]
-	inflight map[int64]int
-	next     map[int64]uint64
-	wg       sync.WaitGroup
-	handle   func(T)
-	logField func(int64) zap.Field
+	mu        sync.Mutex
+	closed    bool
+	queues    map[int64]chan queuedCommit[T]
+	inflight  map[int64]int
+	next      map[int64]uint64
+	wg        sync.WaitGroup
+	enqueueWG sync.WaitGroup
+	handle    func(T)
+	logField  func(int64) zap.Field
 }
 
 func newCommitQueueSet[T any](handle func(T), logField func(int64) zap.Field) *commitQueueSet[T] {
@@ -41,6 +43,10 @@ func newCommitQueueSet[T any](handle func(T), logField func(int64) zap.Field) *c
 // enqueue 投递一个事件；队列不存在时按记录的水位重建，在途发送者会阻止队列被回收
 func (s *commitQueueSet[T]) enqueue(targetID int64, seq uint64, item T) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	queue := s.queues[targetID]
 	if queue == nil {
 		queue = make(chan queuedCommit[T], commitQueueSize)
@@ -51,6 +57,7 @@ func (s *commitQueueSet[T]) enqueue(targetID int64, seq uint64, item T) {
 		go s.worker(targetID, queue, next)
 	}
 	s.inflight[targetID]++
+	s.enqueueWG.Add(1)
 	s.mu.Unlock()
 
 	queue <- queuedCommit[T]{seq: seq, item: item}
@@ -61,6 +68,7 @@ func (s *commitQueueSet[T]) enqueue(targetID int64, seq uint64, item T) {
 		delete(s.inflight, targetID)
 	}
 	s.mu.Unlock()
+	s.enqueueWG.Done()
 }
 
 func (s *commitQueueSet[T]) worker(targetID int64, queue chan queuedCommit[T], next uint64) {
@@ -110,13 +118,25 @@ func (s *commitQueueSet[T]) reap(targetID int64, queue chan queuedCommit[T], reo
 	return true
 }
 
-// close 关闭全部队列并等待提交协程退出
+// close 关闭全部队列并等待提交协程退出；先阻止新入队，再等待在途发送结束
 func (s *commitQueueSet[T]) close() {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.wg.Wait()
+		return
+	}
+	s.closed = true
+	queues := make([]chan queuedCommit[T], 0, len(s.queues))
 	for targetID, queue := range s.queues {
-		close(queue)
+		queues = append(queues, queue)
 		delete(s.queues, targetID)
 	}
 	s.mu.Unlock()
+
+	s.enqueueWG.Wait()
+	for _, queue := range queues {
+		close(queue)
+	}
 	s.wg.Wait()
 }

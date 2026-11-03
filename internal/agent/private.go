@@ -83,6 +83,9 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	}
 	if runErr := a.runAgent(ctx, generation.privateAgent, messages); runErr != nil {
 		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
+			if tc != nil {
+				tc.TopicMaintained = true
+			}
 			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateAgent, session); retryErr == nil {
 				a.finishSuccessfulThink(ctx, session, tc)
 				return

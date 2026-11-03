@@ -227,8 +227,8 @@ go vet ./...
 - `ConversationMessage.Content`、`MessageLog.TextContent` 保存原始文本；`FinalContent`、`MessageLog.DisplayContent` 只用于展示给 bot 的聊天上下文，历史工具可同时返回两者以保留媒体占位。
 - 禁止用展示文本替代原始文本做知识主体判断；原始文本为空时，语义记忆提取跳过，但话题压缩仍可整理当时可见的展示动作与工具结果。
 - 摘要和记忆涉及机器人自己时用第一人称，涉及他人时用第三人称；人称不改变主体与来源校验。
-- 话题检索先做标题、概况、关键词的精确子串召回，再用单一 similarity/更新时间/内部 ID 稳定排序；不做中文分词、向量检索或多层命中权重。
-- 长期记忆检索使用 `content/label/subject_target` 的精确子串召回，`pg_trgm` 只用于排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
+- 话题检索先做标题、概况、关键词的精确子串匹配；未命中时用字符二元组相似度（阈值 0.30）补召回，排序使用单一 similarity/更新时间/内部 ID；不做中文分词、向量检索或多层命中权重。
+- 长期记忆检索支持 `mode=exact|fuzzy`：exact 用 `content/label/subject_target` 精确子串，fuzzy 用 `pg_trgm` 召回并按 similarity 排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
 - Agent 历史查询使用不透明 cursor 和全局 OneBot message ID；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。
 - 持久化使用 PostgreSQL 18；先打开数据库并完成 schema 迁移和动态配置加载，再连接 OneBot 取得 `self_id`；首次配置模型前事件门保持关闭。
 - schema 由 `schema_migrations` 记录并为 v17；只接受空库初始化，旧 schema 明确拒绝，不自动迁移或 DROP。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。

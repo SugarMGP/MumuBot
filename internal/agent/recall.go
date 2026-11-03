@@ -26,6 +26,7 @@ func (a *Agent) refreshReplyRecall(ctx context.Context, msg *onebot.Conversation
 	}
 	key := recallCommit{kind: msg.ConversationKind, targetID: msg.TargetID, messageID: msg.Reply.MessageID}
 	a.recallMu.Lock()
+	a.prunePendingRecallsLocked(time.Now())
 	_, recalled := a.pendingRecalls[key]
 	a.recallMu.Unlock()
 	var err error
@@ -68,6 +69,7 @@ func (a *Agent) commitRecall(recall *recallCommit) {
 func (a *Agent) applyPendingRecall(ctx context.Context, msg *onebot.ConversationMessage) *onebot.ConversationMessage {
 	key := recallCommit{kind: msg.ConversationKind, targetID: msg.TargetID, messageID: msg.MessageID}
 	a.recallMu.Lock()
+	a.prunePendingRecallsLocked(time.Now())
 	_, ok := a.pendingRecalls[key]
 	a.recallMu.Unlock()
 	if !ok {

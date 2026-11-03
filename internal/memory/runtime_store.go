@@ -60,6 +60,29 @@ func (m *Manager) AppendTranscript(ctx context.Context, entry *TranscriptEntry) 
 	return m.db.WithContext(ctx).Create(entry).Error
 }
 
+// AppendTranscripts 在一个事务内写入多条工作集记录，保证代头不会只写一半
+func (m *Manager) AppendTranscripts(ctx context.Context, entries []*TranscriptEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry == nil || entry.ConversationKind == "" || entry.TargetID <= 0 || entry.EntryKind == "" {
+			return fmt.Errorf("transcript 参数无效")
+		}
+		if len(entry.Payload) == 0 {
+			entry.Payload = json.RawMessage(`{}`)
+		}
+	}
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, entry := range entries {
+			if err := tx.Create(entry).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // AppendUserTranscript 将已落库的真人消息加入工作集
 func (m *Manager) AppendUserTranscript(ctx context.Context, kind string, targetID int64, logID uint, payload json.RawMessage, runID string) (*TranscriptEntry, error) {
 	entryKind := "user"

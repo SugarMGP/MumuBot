@@ -103,7 +103,12 @@ func systemNote(label, text string) string {
 	return line
 }
 
-// ensureGenerationHead 在本代第一条消息前写入人格、群说明与上下文摘要
+type headEntrySpec struct {
+	kind string
+	msg  *schema.AgenticMessage
+}
+
+// ensureGenerationHead 在本代第一条消息前原子写入人格、群说明、摘要和置顶记忆
 func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager, instruction, groupExtra string) error {
 	if mem == nil {
 		return fmt.Errorf("记忆系统未初始化")
@@ -116,17 +121,14 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 	if instruction == "" {
 		return fmt.Errorf("人格预设为空")
 	}
+	specs := make([]headEntrySpec, 0, 4)
 	systemMsg := schema.SystemAgenticMessage(instruction)
 	systemMsg.Extra = map[string]any{"kind": kindSystemPrompt}
-	if err := s.appendHeadEntry(ctx, mem, kindSystemPrompt, systemMsg); err != nil {
-		return err
-	}
+	specs = append(specs, headEntrySpec{kind: kindSystemPrompt, msg: systemMsg})
 	if text := strings.TrimSpace(groupExtra); text != "" {
 		noteMsg := schema.UserAgenticMessage(systemNote("群说明", text))
 		noteMsg.Extra = map[string]any{"kind": kindGroupNote, "hash": noteHash(text)}
-		if err := s.appendHeadEntry(ctx, mem, kindGroupNote, noteMsg); err != nil {
-			return err
-		}
+		specs = append(specs, headEntrySpec{kind: kindGroupNote, msg: noteMsg})
 	}
 	digest, err := mem.LoadContextDigest(ctx, s.kind, s.targetID)
 	if err != nil {
@@ -144,18 +146,14 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 	if digestText = strings.TrimSpace(digestText); digestText != "" {
 		digestMsg := schema.UserAgenticMessage(systemNote("上下文摘要", digestText))
 		digestMsg.Extra = map[string]any{"kind": kindContextDigest}
-		if err := s.appendHeadEntry(ctx, mem, kindContextDigest, digestMsg); err != nil {
-			return err
-		}
+		specs = append(specs, headEntrySpec{kind: kindContextDigest, msg: digestMsg})
 	}
 	if pinnedText = strings.TrimSpace(pinnedText); pinnedText != "" {
 		pinnedMsg := schema.UserAgenticMessage(systemNote("长期记忆", pinnedText))
 		pinnedMsg.Extra = map[string]any{"kind": kindPinnedMemory}
-		if err := s.appendHeadEntry(ctx, mem, kindPinnedMemory, pinnedMsg); err != nil {
-			return err
-		}
+		specs = append(specs, headEntrySpec{kind: kindPinnedMemory, msg: pinnedMsg})
 	}
-	return nil
+	return s.appendHeadEntries(ctx, mem, specs)
 }
 
 // renderPinnedMemories 渲染当前会话主体和自己的全部 active 置顶记忆
@@ -250,25 +248,35 @@ func (s *Session) generationHead() (system *sessionEntry, note *sessionEntry) {
 	return system, note
 }
 
-// appendHeadEntry 把头部行写入 transcript 并挂到工作集
-func (s *Session) appendHeadEntry(ctx context.Context, mem *memory.Manager, kind string, msg *schema.AgenticMessage) error {
-	payload, err := sonic.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("编码%s失败: %w", kind, err)
+// appendHeadEntries 批量写入代头，事务成功后才挂到内存，避免半代头
+func (s *Session) appendHeadEntries(ctx context.Context, mem *memory.Manager, specs []headEntrySpec) error {
+	if len(specs) == 0 {
+		return nil
 	}
-	entry := &memory.TranscriptEntry{
-		ConversationKind: s.kind,
-		TargetID:         s.targetID,
-		EntryKind:        kind,
-		Payload:          payload,
+	entries := make([]*memory.TranscriptEntry, 0, len(specs))
+	for _, spec := range specs {
+		payload, err := sonic.Marshal(spec.msg)
+		if err != nil {
+			return fmt.Errorf("编码%s失败: %w", spec.kind, err)
+		}
+		entries = append(entries, &memory.TranscriptEntry{
+			ConversationKind: s.kind, TargetID: s.targetID, EntryKind: spec.kind, Payload: payload,
+		})
 	}
-	if err := mem.AppendTranscript(ctx, entry); err != nil {
+	if err := mem.AppendTranscripts(ctx, entries); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.seen = append(s.seen, sessionEntry{msg: msg, transcriptID: entry.ID})
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	for i, spec := range specs {
+		s.seen = append(s.seen, sessionEntry{msg: spec.msg, transcriptID: entries[i].ID})
+	}
 	return nil
+}
+
+// appendHeadEntry 追加单条非人格代头，例如群说明变更
+func (s *Session) appendHeadEntry(ctx context.Context, mem *memory.Manager, kind string, msg *schema.AgenticMessage) error {
+	return s.appendHeadEntries(ctx, mem, []headEntrySpec{{kind: kind, msg: msg}})
 }
 
 // noteHash 用来判断群说明是否变化

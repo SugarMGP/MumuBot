@@ -8,7 +8,7 @@
 - `topic_digest.go` 的概览、active topic 顺序必须稳定；dormant 话题可搜索但不进入当前摘要块；置顶记忆由 `pinned_memory` 代头单独渲染。
 - active topic 退出时若仍有 open loop，程序必须把未完成事项补进 overview，不能只依赖模型自觉。
 - 话题摘要不可变，按 topic/version 保存；`is_anchor` 标记关键消息，`message_log_id` 是消息内部 ID，撤回不清空、不失效。
-- `topics_v2.go` 的关键词检索只做精确子串召回，单一 similarity 只用于排序；不做中文分词、向量或多层重排模型；跨会话结果必须保留来源。话题检索仍先在 Go 中过滤，但摘要、anchor 和时间范围必须批量读取，不能逐话题查询。
+- `topics_v2.go` 的关键词检索先做精确子串匹配，再用字符二元组相似度（阈值 0.30）补召回，排序使用单一 similarity/更新时间/内部 ID；不做中文分词、向量或多层重排模型；跨会话结果必须保留来源。话题检索仍先在 Go 中过滤，但摘要、anchor 和时间范围必须批量读取，不能逐话题查询。
 - `memory_v2.go` 和 `sticker.go` 的分页使用数据库排序、keyset 条件和 LIMIT，不把匹配集全部取回 Go 再排序；检索表达式必须与 trigram 索引一致。
 - `memory_v2.go` 只用 `subject_type + subject_target + memory_type`；subject 允许 group/user/self/object，memory_type 允许 profile/experience；旧 kind 和来源字段已删除。
 - 同一主体、同类型、同内容哈希精确去重；归档条目重复创建不得复活；更新、归档、恢复必须基于读取过的当前版本。

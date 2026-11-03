@@ -29,7 +29,7 @@ func (a *Agent) scanIdleCompactions() {
 		if last.IsZero() || time.Since(last) < time.Duration(cfg.Compactor.IdleMinutes)*time.Minute {
 			continue
 		}
-		if !session.IdleAvailable() || len(session.AllPendingMessages()) > 0 {
+		if !session.IdleAvailable() || session.HasActionablePending() {
 			continue
 		}
 		if session.CompactionCoolingDown(time.Now()) {
@@ -77,11 +77,14 @@ func (a *Agent) runIdleCompaction(session *Session) {
 	if last.IsZero() || time.Since(last) < time.Duration(cfg.Compactor.IdleMinutes)*time.Minute {
 		return
 	}
-	if !session.IdleAvailable() || len(session.AllPendingMessages()) > 0 {
+	if !session.IdleAvailable() || session.HasActionablePending() {
 		return
 	}
 	generation := a.acquireGeneration()
 	if generation == nil || generation.contextWindow <= 0 {
+		if !session.LastActivityAt().After(last) {
+			session.MarkIdleDone()
+		}
 		return
 	}
 	defer generation.wg.Done()
@@ -89,7 +92,7 @@ func (a *Agent) runIdleCompaction(session *Session) {
 	defer cancel()
 	session.MarkIdleStart(cancel)
 	defer session.ClearIdleStart()
-	if len(session.AllPendingMessages()) > 0 || session.LastActivityAt().After(last) {
+	if session.HasActionablePending() || session.LastActivityAt().After(last) {
 		return
 	}
 	ctx = withGeneration(ctx, generation)
@@ -106,6 +109,7 @@ func (a *Agent) runIdleCompaction(session *Session) {
 	}
 	candidate, err := session.BuildCompactionCandidate(generation.contextWindow, cfg.Compactor.RecentTailRatio)
 	if err != nil {
+		zap.L().Warn("空闲压缩没有可用候选", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
 		if !session.LastActivityAt().After(last) {
 			session.MarkIdleDone()
 		}
@@ -115,7 +119,8 @@ func (a *Agent) runIdleCompaction(session *Session) {
 	if remaining <= 0 {
 		remaining = 12
 	}
-	if err := a.runCompaction(ctx, session, candidate, 1, &remaining, ""); err != nil {
+	attempts := 0
+	if err := a.runCompactionWithRepair(ctx, session, candidate, &attempts, &remaining); err != nil {
 		zap.L().Warn("空闲压缩失败", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
 		if !session.LastActivityAt().After(last) {
 			session.MarkIdleDone()

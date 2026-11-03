@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -136,39 +135,23 @@ func (h *sessionInjector) compactNow(ctx context.Context, session *Session, stat
 	if remainingSteps <= 0 {
 		remainingSteps = 12
 	}
-	var lastErr error
-	feedback := ""
-	for tc.CompactionAttempts < 2 {
-		tc.CompactionAttempts++
-		lastErr = h.agent.runCompaction(compactionCtx, session, candidate, tc.CompactionAttempts, &remainingSteps, feedback)
-		if lastErr == nil {
-			rebuilt, buildErr := h.agent.assembleMessages(compactionCtx, session)
-			if buildErr != nil {
-				lastErr = buildErr
-				break
-			}
-			state.Messages = rebuilt
-			return nil
-		}
-		var inputErr *compactionInputError
-		if errors.As(lastErr, &inputErr) {
-			feedback = "上一次压缩提交参数无效，请修正后重新提交：" + inputErr.Error()
-			if remainingSteps <= 0 {
-				break
-			}
-			continue
-		}
-
+	if err := h.agent.runCompactionWithRepair(compactionCtx, session, candidate, &tc.CompactionAttempts, &remainingSteps); err != nil {
+		session.MarkCompactionFailure(time.Now())
+		return err
 	}
-	session.MarkCompactionFailure(time.Now())
-	return lastErr
+	rebuilt, buildErr := h.agent.assembleMessages(compactionCtx, session)
+	if buildErr != nil {
+		session.MarkCompactionFailure(time.Now())
+		return buildErr
+	}
+	state.Messages = rebuilt
+	return nil
 }
 
 // compactAfterOverflow 在 provider 明确报告上下文溢出时强制尝试一次安全压缩
 func (a *Agent) compactAfterOverflow(ctx context.Context, kind string, targetID int64, toolsList []tool.BaseTool, genInput adk.TypedGenModelInput[*schema.AgenticMessage], session *Session) bool {
-	tc := &tools.ToolContext{}
 	retryCtx := a.buildConversationToolContext(ctx, kind, targetID, session)
-	tc = tools.GetToolContext(retryCtx)
+	tc := tools.GetToolContext(retryCtx)
 	pending := session.PendingMessages()
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 	assembled, err := a.assembleMessages(retryCtx, session)

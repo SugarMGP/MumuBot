@@ -23,6 +23,7 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 	s.mu.Lock()
 	entries := append([]sessionEntry(nil), s.seen...)
 	s.mu.Unlock()
+	scale := s.textScale()
 	heads := make([]sessionEntry, 0)
 	work := make([]sessionEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -43,7 +44,7 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 	cut := len(segments)
 	tailCost := 0
 	for i := len(segments) - 1; i >= 0; i-- {
-		cost := segmentTokens(segments[i])
+		cost := segmentTokens(segments[i], scale)
 		if cut < len(segments) && tailCost+cost > tailBudget {
 			break
 		}
@@ -138,9 +139,9 @@ func (s *Session) SetTokenBase(message *schema.AgenticMessage, usage *schema.Tok
 	if message == nil || usage == nil {
 		return
 	}
-	total := usage.TotalTokens
+	total := usage.PromptTokens + usage.CompletionTokens
 	if total <= 0 {
-		total = usage.PromptTokens + usage.CompletionTokens
+		total = usage.TotalTokens
 	}
 	if total <= 0 {
 		return
@@ -174,13 +175,7 @@ func (s *Session) estimateTextTokens(text string) int {
 	if strings.TrimSpace(text) == "" {
 		return 0
 	}
-	s.mu.Lock()
-	scale := s.fullScale
-	s.mu.Unlock()
-	if scale <= 0 {
-		scale = 1
-	}
-	return int(float64(estimateTokens(text)) * scale)
+	return int(float64(estimateTokens(text)) * s.textScale())
 }
 
 // ObserveResponseUsage 用 provider 的真实 prompt 用量校准文本估算比例
@@ -195,7 +190,7 @@ func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage,
 	s.mu.Lock()
 	base := s.tokenBase
 	s.mu.Unlock()
-	if base != nil {
+	if base != nil && base.prompt+base.completion > 0 {
 		for i, message := range requestMessages {
 			if message != base.message {
 				continue
@@ -216,17 +211,69 @@ func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage,
 	}
 }
 
+// textScale 返回当前会话校准后的文本估算比例
+func (s *Session) textScale() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fullScale <= 0 {
+		return 1
+	}
+	return s.fullScale
+}
+
+// ResetCalibration 在模型切换后清空旧模型的实际用量和文本比例
+func (s *Session) ResetCalibration() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokenBase = nil
+	s.fullScale = 0
+	s.compactionRetryAfter = time.Time{}
+	s.idleDoneForActivity = false
+	if s.idleCancel != nil {
+		s.idleCancel()
+		s.idleCancel = nil
+	}
+}
+
+// RestoreTokenBaseFromSeen 从最近一条 assistant payload 恢复实际用量，供重启后的空闲压缩使用
+func (s *Session) RestoreTokenBaseFromSeen() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var message *schema.AgenticMessage
+	var usage *schema.TokenUsage
+	for i := range s.seen {
+		item := s.seen[i].msg
+		if item == nil || item.Role != schema.AgenticRoleTypeAssistant || item.ResponseMeta == nil || item.ResponseMeta.TokenUsage == nil {
+			continue
+		}
+		itemUsage := item.ResponseMeta.TokenUsage
+		total := itemUsage.PromptTokens + itemUsage.CompletionTokens
+		if total <= 0 {
+			total = itemUsage.TotalTokens
+		}
+		if total <= 0 {
+			continue
+		}
+		message = item
+		usage = itemUsage
+	}
+	if message == nil || usage == nil {
+		return
+	}
+	total := usage.PromptTokens + usage.CompletionTokens
+	if total <= 0 {
+		total = usage.TotalTokens
+	}
+	s.tokenBase = &tokenBase{message: message, prompt: usage.PromptTokens, completion: usage.CompletionTokens, total: total}
+}
+
 func (s *Session) updateFullScale(ratio float64) {
 	ratio = min(max(ratio, 0.5), 2.0)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fullScale <= 0 {
-		s.fullScale = 1
-	}
-	if s.fullSamples == 0 {
 		s.fullScale = ratio
-	} else {
-		s.fullScale = s.fullScale*0.7 + ratio*0.3
+		return
 	}
-	s.fullSamples++
+	s.fullScale = s.fullScale*0.7 + ratio*0.3
 }

@@ -6,19 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"path"
-	"path/filepath"
-	"strings"
-
-	"github.com/google/uuid"
 )
 
 // DownloadResult 下载结果
 type DownloadResult struct {
-	FilePath string // 本地文件完整路径
-	FileName string // 文件名（uuid.ext）
+	FilePath string // 下载临时文件完整路径；最终媒体由 media 按内容哈希落盘
 	FileHash string // 文件MD5哈希
 }
 
@@ -47,39 +40,18 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 		return nil, fmt.Errorf("文件大小超过限制: %d MB > %d MB", resp.ContentLength/1024/1024, maxSizeMB)
 	}
 
-	// 获取文件扩展名
-	ext := getExtensionFromURL(resp.Request.URL.String())
-	if ext == "" {
-		switch ct := resp.Header.Get("Content-Type"); {
-		case strings.Contains(ct, "jpeg"):
-			ext = ".jpg"
-		case strings.Contains(ct, "png"):
-			ext = ".png"
-		case strings.Contains(ct, "gif"):
-			ext = ".gif"
-		case strings.Contains(ct, "webp"):
-			ext = ".webp"
-		case strings.Contains(ct, "bmp"):
-			ext = ".bmp"
-		}
-	}
-	if ext == "" {
-		ext = ".jpg" // 默认扩展名
-	}
-
-	// 生成唯一文件名
-	fileName := uuid.New().String() + ext
-	filePath := filepath.Join(storageDir, fileName)
-
-	// 创建临时文件
+	// 下载先落唯一临时文件；最终媒体文件由 media 按内容哈希存放
 	tmpFile, err := os.CreateTemp(storageDir, "download_*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("创建临时文件失败: %w", err)
 	}
 	tmpPath := tmpFile.Name()
+	success := false
 	defer func() {
 		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath) // 清理临时文件
+		if !success {
+			_ = os.Remove(tmpPath)
+		}
 	}()
 
 	// 同时计算MD5和写入文件
@@ -105,36 +77,16 @@ func DownloadImage(ctx context.Context, url string, storageDir string, maxSizeMB
 		return nil, fmt.Errorf("下载内容为空")
 	}
 
-	// 关闭临时文件后再移动，确保内容已刷新
+	// 关闭临时文件后再计算哈希
 	if err := tmpFile.Close(); err != nil {
 		return nil, fmt.Errorf("关闭临时文件失败: %w", err)
 	}
 
-	// 计算MD5哈希
+	// 计算 MD5；临时文件由调用方消费或删除，最终媒体目录使用该哈希命名
 	fileHash := hex.EncodeToString(hash.Sum(nil))
-
-	// 移动临时文件到目标位置
-	if err := os.Rename(tmpPath, filePath); err != nil {
-		return nil, fmt.Errorf("保存文件失败: %w", err)
-	}
-
+	success = true
 	return &DownloadResult{
-		FilePath: filePath,
-		FileName: fileName,
+		FilePath: tmpPath,
 		FileHash: fileHash,
 	}, nil
-}
-
-// getExtensionFromURL 从URL获取文件扩展名
-func getExtensionFromURL(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	ext := strings.ToLower(path.Ext(parsed.Path))
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
-		return ext
-	}
-	return ""
 }

@@ -210,6 +210,7 @@ func (a *Agent) Activate() error {
 	if err != nil {
 		return err
 	}
+	a.sessions.resetCalibration()
 	a.setGeneration(generation)
 	if err := a.restoreSessions(); err != nil {
 		a.setGeneration(nil)
@@ -229,8 +230,12 @@ func (a *Agent) Reload() error {
 	if err != nil {
 		return err
 	}
-	first := a.currentGeneration() == nil
+	old := a.currentGeneration()
+	first := old == nil
 	a.setGeneration(generation)
+	if old != nil && (old.modelName != generation.modelName || old.contextWindow != generation.contextWindow) {
+		a.sessions.resetCalibration()
+	}
 	if first {
 		if err := a.restoreSessions(); err != nil {
 			a.setGeneration(nil)

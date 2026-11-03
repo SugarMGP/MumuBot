@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -148,6 +149,44 @@ func coverageNeedsRepair(total, unassigned int) bool {
 		return false
 	}
 	return unassigned > 16 || float64(unassigned)/float64(total) > 0.20
+}
+
+// runCompactionWithRepair 对可修正的压缩提交最多重试一次，正常/空闲/溢出共用同一套修正预算
+func (a *Agent) runCompactionWithRepair(ctx context.Context, session *Session, candidate *compactionCandidate, attempts, remaining *int) error {
+	if session == nil || candidate == nil {
+		return fmt.Errorf("缺少压缩候选")
+	}
+	feedback := ""
+	var lastErr error
+	localAttempts := 0
+	for {
+		var attempt int
+		if attempts != nil {
+			attempt = *attempts
+		} else {
+			attempt = localAttempts
+		}
+		if attempt >= 2 {
+			if lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("压缩修正次数已用尽")
+		}
+		if attempts != nil {
+			*attempts = attempt + 1
+		} else {
+			localAttempts = attempt + 1
+		}
+		lastErr = a.runCompaction(ctx, session, candidate, attempt+1, remaining, feedback)
+		if lastErr == nil {
+			return nil
+		}
+		var inputErr *compactionInputError
+		if !errors.As(lastErr, &inputErr) || remaining == nil || *remaining <= 0 {
+			return lastErr
+		}
+		feedback = "上一次压缩提交参数无效，请修正后重新提交：" + inputErr.Error()
+	}
 }
 
 func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *compactionCandidate, attempt int, remainingSteps *int, feedback string) error {
@@ -298,7 +337,6 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		return err
 	}
 	session.ApplyCompaction(checkpoint)
-	session.MarkTopicMaintained()
 	go func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
