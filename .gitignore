@@ -47,6 +47,7 @@ napcat_onebot_11_http_api.json
 onebot-11-master/
 
 /.codex-temp
+/worker-home/
 /web/node_modules
 /internal/web/assets/dist/
 /.superpowers

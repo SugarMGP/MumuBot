@@ -330,12 +330,13 @@ const zhCN = {
     saved: "设置已保存",
     agent: {
       title: "思考与并发",
-      hint: "步数和并发保存后会热重建运行态，不重启进程。",
+      hint: "步数和并发保存后会热重建运行态；worker 数量保存后立即同步 worker 池，不重启进程。",
       thinkInterval: "思考间隔（秒）",
       debounce: "聚合窗口（毫秒）",
       maxStep: "单轮最大步数",
       groupConcurrency: "群聊并发（0 不限制）",
       privateConcurrency: "私聊并发（0 不限制）",
+      workerCount: "worker 数量（0-5）",
     },
     chat: {
       title: "对话与限流",
@@ -588,6 +589,7 @@ const zhCN = {
     unknown: "操作未完成，请稍后再试。",
     warning: {
       runtime_reload_failed: "已保存，但运行态应用失败；旧连接继续可用，详情见运行日志。",
+      runtime_worker_sync_failed: "已保存，但 worker 数量应用失败；详情见运行日志。",
     },
   },
   enums: {

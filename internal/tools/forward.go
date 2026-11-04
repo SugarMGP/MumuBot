@@ -35,7 +35,6 @@ type ReadForwardOutput struct {
 	Sender   string                  `json:"sender,omitempty"`
 	Content  string                  `json:"content,omitempty"`
 	Nested   []string                `json:"nested_forward,omitempty"`
-	Message  string                  `json:"message,omitempty"`
 }
 
 func readForwardFunc(ctx context.Context, input *ReadForwardInput) (any, error) {

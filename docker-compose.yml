@@ -45,6 +45,36 @@ services:
       - snowluma-client-config:/app/.config
       - snowluma-client-data:/app/.local/share
 
+  worker:
+    image: ghcr.io/sugarmgp/mumubot-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    user: "0:0"
+    shm_size: 1gb
+    pids_limit: 1024
+    working_dir: /home/worker
+    environment:
+      HOME: /home/worker
+      TZ: Asia/Shanghai
+    volumes:
+      - ./worker-home/1:/home/worker
+      - ./worker-home/2:/home/worker2
+      - ./worker-home/3:/home/worker3
+      - ./worker-home/4:/home/worker4
+      - ./worker-home/5:/home/worker5
+      - nix-store:/nix
+    networks:
+      - worker
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7469/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   mumu-bot:
     image: ghcr.io/sugarmgp/mumubot:latest
     pull_policy: always
@@ -56,6 +86,8 @@ services:
         condition: service_healthy
       snowluma:
         condition: service_started
+      worker:
+        condition: service_healthy
     environment:
       MUMU_DATABASE_DSN: postgres://${POSTGRES_USER:-mumu}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@database:5432/${POSTGRES_DB:-mumu_bot}?sslmode=disable
       MUMU_ONEBOT_WS_URL: ${MUMU_ONEBOT_WS_URL:-ws://snowluma:3001}
@@ -68,6 +100,7 @@ services:
       MUMU_STICKER_DIR: /app/stickers
       MUMU_LOG_LEVEL: ${MUMU_LOG_LEVEL:-info}
       MUMU_DEBUG: ${MUMU_DEBUG:-false}
+      MUMU_WORKER_EXECUTOR_URL: http://worker:7469
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
@@ -75,6 +108,9 @@ services:
     volumes:
       - stickers:/app/stickers
       - media:/app/media
+    networks:
+      - default
+      - worker
     tmpfs:
       - /tmp
     healthcheck:
@@ -84,6 +120,9 @@ services:
       retries: 5
       start_period: 20s
 
+networks:
+  worker:
+
 volumes:
   postgres-data:
   snowluma-gateway-data:
@@ -91,3 +130,4 @@ volumes:
   snowluma-client-data:
   stickers:
   media:
+  nix-store:

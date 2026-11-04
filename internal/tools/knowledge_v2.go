@@ -32,7 +32,7 @@ type ReadMemoryInputV2 struct {
 }
 
 type ManageMemoryInputV2 struct {
-	Changes []MemoryChangeInput `json:"changes" jsonschema:"description=1到8项，全部成功或全部回滚"`
+	Changes []MemoryChangeInput `json:"changes" jsonschema:"description=至少1项，全部成功或全部回滚"`
 }
 
 type MemoryChangeInput struct {
@@ -66,7 +66,7 @@ type SearchHistoryInputV2 struct {
 	Keywords         []string `json:"keywords,omitempty"`
 	Match            string   `json:"match,omitempty" jsonschema:"description=or 或 and，默认 or"`
 	ExcludeKeywords  []string `json:"exclude_keywords,omitempty"`
-	PersonID         int64    `json:"person_id,omitempty"`
+	UserID           int64    `json:"user_id,omitempty"`
 	ConversationKind string   `json:"conversation_kind,omitempty"`
 	TargetID         int64    `json:"target_id,omitempty"`
 	From             string   `json:"from,omitempty"`
@@ -78,10 +78,10 @@ type SearchHistoryInputV2 struct {
 type ReadHistoryInputV2 struct {
 	ConversationKind string `json:"conversation_kind,omitempty"`
 	TargetID         int64  `json:"target_id,omitempty"`
-	AroundMessageID  int64  `json:"around_message_id,omitempty" jsonschema:"description=OneBot 消息 ID"`
-	TopicID          uint   `json:"topic_id,omitempty"`
-	Before           int    `json:"before,omitempty"`
-	After            int    `json:"after,omitempty"`
+	AroundMessageID  int64  `json:"around_message_id,omitempty" jsonschema:"description=OneBot 消息 ID；与 topic_id 二选一"`
+	TopicID          uint   `json:"topic_id,omitempty" jsonschema:"description=话题编号；与 around_message_id 二选一"`
+	Before           int    `json:"before,omitempty" jsonschema:"description=向前读取条数，默认5，最大15"`
+	After            int    `json:"after,omitempty" jsonschema:"description=向后读取条数，默认5，最大15"`
 }
 
 type HistoryMessageView struct {
@@ -134,12 +134,12 @@ func readMemoryV2(ctx context.Context, input *ReadMemoryInputV2) (any, error) {
 	if input == nil || input.ItemID == 0 {
 		return nil, fmt.Errorf("请提供 item_id")
 	}
-	detail, err := tc.MemoryMgr.ReadMemory(ctx, input.ItemID)
+	item, err := tc.MemoryMgr.ReadMemory(ctx, input.ItemID)
 	if err != nil {
 		return nil, err
 	}
-	tc.MarkMemoryRead(detail.Item.ID, detail.Item.Version)
-	return map[string]any{"success": true, "item": detail.Item}, nil
+	tc.MarkMemoryRead(item.ID, item.Version)
+	return map[string]any{"success": true, "item": item}, nil
 }
 
 func manageMemoryV2(ctx context.Context, input *ManageMemoryInputV2) (any, error) {
@@ -147,8 +147,8 @@ func manageMemoryV2(ctx context.Context, input *ManageMemoryInputV2) (any, error
 	if tc == nil || tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("记忆维护能力未初始化"))
 	}
-	if input == nil || len(input.Changes) == 0 || len(input.Changes) > 8 {
-		return nil, fmt.Errorf("一次记忆变更必须为 1 到 8 项")
+	if input == nil || len(input.Changes) == 0 {
+		return nil, fmt.Errorf("一次记忆变更至少需要 1 项")
 	}
 	changes := make([]memory.MemoryChange, 0, len(input.Changes))
 	for _, raw := range input.Changes {
@@ -246,7 +246,7 @@ func searchHistoryV2(ctx context.Context, input *SearchHistoryInputV2) (any, err
 		return nil, err
 	}
 	page, err := tc.MemoryMgr.SearchHistoryV2(ctx, memory.HistoryQueryV2{
-		ConversationKind: kind, TargetID: target, UserID: input.PersonID,
+		ConversationKind: kind, TargetID: target, UserID: input.UserID,
 		Keywords: input.Keywords, Match: input.Match, ExcludeKeywords: input.ExcludeKeywords,
 		From: from, To: to, MaxMessageLogID: historyMaxMessageLogID(tc, kind, target),
 		Cursor: input.Cursor, Limit: input.Limit,
@@ -271,6 +271,9 @@ func readHistoryV2(ctx context.Context, input *ReadHistoryInputV2) (any, error) 
 	}
 	if input == nil {
 		return nil, fmt.Errorf("历史读取参数不能为空")
+	}
+	if input.AroundMessageID == 0 && input.TopicID == 0 {
+		return nil, fmt.Errorf("必须提供 around_message_id 或 topic_id")
 	}
 	if input.AroundMessageID != 0 && input.TopicID != 0 {
 		return nil, fmt.Errorf("按消息和按话题读取只能选择一个")
@@ -339,7 +342,7 @@ func NewReadMemoryToolV2() (tool.InvokableTool, error) {
 }
 
 func NewManageMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("manageMemory", "批量创建、更新、归档或恢复长期记忆；1到8项全成功或全回滚。", manageMemoryV2)
+	return utils.InferTool("manageMemory", "批量创建、更新、归档或恢复长期记忆；至少1项，全部成功或全部回滚。", manageMemoryV2)
 }
 
 func NewSearchTopicsTool() (tool.InvokableTool, error) {
@@ -355,7 +358,7 @@ func NewSearchHistoryToolV2() (tool.InvokableTool, error) {
 }
 
 func NewReadHistoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("readHistory", "按话题或 OneBot 消息 ID 读取前后原文。", readHistoryV2)
+	return utils.InferTool("readHistory", "按话题或 OneBot 消息 ID 二选一读取前后原文。", readHistoryV2)
 }
 
 func parseHistoryTime(raw string) (*time.Time, error) {

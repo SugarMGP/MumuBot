@@ -28,10 +28,13 @@ func (a *Agent) deliverSessionMessage(ctx context.Context, fromKind string, from
 	}
 	target := a.sessions.get(toKind, toTargetID)
 	target.AppendAgentMessage(message, entry.ID, row.CreatedAt)
-	if toKind == memory.ConversationKindPrivate {
+	switch toKind {
+	case memory.ConversationKindPrivate:
 		a.schedulePrivateThink(toTargetID, row.CreatedAt)
-	} else {
+	case memory.ConversationKindGroup:
 		a.scheduleGroupThink(toTargetID, row.CreatedAt)
+	case memory.ConversationKindWorker:
+		a.scheduleWorkerThink(toTargetID)
 	}
 	return row, nil
 }

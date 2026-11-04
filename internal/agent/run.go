@@ -34,7 +34,11 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 	if generation != nil {
 		modelName = generation.modelName
 	}
-	ctx = llm.WithTask(ctx, "react", modelName, extra...)
+	task := "react"
+	if tc := tools.GetToolContext(ctx); tc != nil && tc.ConversationKind == memory.ConversationKindWorker {
+		task = "worker"
+	}
+	ctx = llm.WithTask(ctx, task, modelName, extra...)
 	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent})
 	iter := runner.Run(ctx, messages)
 	for {

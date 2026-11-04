@@ -252,6 +252,7 @@ const defaultConfig = {
     max_step: 20,
     max_group_concurrency: 2,
     max_private_concurrency: 2,
+    worker_count: 1,
   },
   chat: {
     talk_frequency: 0.6,

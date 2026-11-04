@@ -61,11 +61,6 @@ type MemoryPage struct {
 	HasMore    bool        `json:"has_more"`
 }
 
-type MemoryDetail struct {
-	Item      KnowledgeRecord     `json:"item"`
-	Revisions []KnowledgeRevision `json:"revisions"`
-}
-
 type MemoryChange struct {
 	Action          string
 	ItemID          uint
@@ -348,7 +343,7 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 	return page, nil
 }
 
-func (m *Manager) ReadMemory(ctx context.Context, id uint) (*MemoryDetail, error) {
+func (m *Manager) ReadMemory(ctx context.Context, id uint) (*KnowledgeRecord, error) {
 	if id == 0 {
 		return nil, fmt.Errorf("记忆编号不能为空")
 	}
@@ -356,16 +351,12 @@ func (m *Manager) ReadMemory(ctx context.Context, id uint) (*MemoryDetail, error
 	if err := m.db.WithContext(ctx).Where("id=?", id).Take(&item).Error; err != nil {
 		return nil, err
 	}
-	var revisions []KnowledgeRevision
-	if err := m.db.WithContext(ctx).Where("item_id=?", id).Order("version DESC,id DESC").Limit(20).Find(&revisions).Error; err != nil {
-		return nil, err
-	}
-	return &MemoryDetail{Item: item, Revisions: revisions}, nil
+	return &item, nil
 }
 
 func (m *Manager) ManageMemories(ctx context.Context, changes []MemoryChange) ([]MemoryChangeResult, error) {
-	if len(changes) == 0 || len(changes) > 8 {
-		return nil, fmt.Errorf("一次记忆变更必须为 1 到 8 项")
+	if len(changes) == 0 {
+		return nil, fmt.Errorf("一次记忆变更至少需要 1 项")
 	}
 	results := make([]MemoryChangeResult, 0, len(changes))
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

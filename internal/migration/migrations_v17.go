@@ -41,7 +41,7 @@ func initializeV17Schema(db *gorm.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
 		`CREATE TABLE conversation_targets (
-			conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('group','private')),
+			conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('group','private','worker')),
 			target_id BIGINT NOT NULL CHECK(target_id>0),
 			name TEXT NOT NULL DEFAULT '',
 			remote_remark TEXT NOT NULL DEFAULT '',
@@ -53,16 +53,30 @@ func initializeV17Schema(db *gorm.DB) error {
 		)`,
 		`CREATE INDEX idx_conversation_targets_list ON conversation_targets(conversation_kind,active DESC,target_id)`,
 		`CREATE TABLE conversation_sessions (
-			conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('group','private')),
+			conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('group','private','worker')),
 			target_id BIGINT NOT NULL CHECK(target_id>0),
 			next_input_seq BIGINT NOT NULL DEFAULT 0,
 			next_visible_seq BIGINT NOT NULL DEFAULT 0,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			PRIMARY KEY(conversation_kind,target_id)
 		)`,
+		`CREATE TABLE worker_sessions (
+			id BIGSERIAL PRIMARY KEY,
+			title TEXT NOT NULL CHECK(btrim(title)<>'' AND char_length(title) <= 30),
+			status TEXT NOT NULL CHECK(status IN ('idle','running','failed','cancelled')),
+			user_name TEXT NOT NULL UNIQUE CHECK(btrim(user_name)<>''),
+			home_dir TEXT NOT NULL CHECK(btrim(home_dir)<>''),
+			model_name TEXT NOT NULL DEFAULT '',
+			last_error TEXT NOT NULL DEFAULT '',
+			context_summary JSONB NOT NULL DEFAULT '[]',
+			context_through_id BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE INDEX idx_worker_sessions_updated ON worker_sessions(updated_at DESC, id DESC)`,
 		`CREATE TABLE conversation_transcript (
 			id BIGSERIAL PRIMARY KEY,
-			conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('group','private')),
+			conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('group','private','worker')),
 			target_id BIGINT NOT NULL CHECK(target_id>0),
 			input_seq BIGINT,
 			visible_seq BIGINT,
@@ -231,9 +245,9 @@ func initializeV17Schema(db *gorm.DB) error {
 		)`,
 		`CREATE TABLE session_messages (
 			id BIGSERIAL PRIMARY KEY,
-			from_session_kind TEXT NOT NULL CHECK(from_session_kind IN ('group','private')),
+			from_session_kind TEXT NOT NULL CHECK(from_session_kind IN ('group','private','worker')),
 			from_target_id BIGINT NOT NULL CHECK(from_target_id>0),
-			to_session_kind TEXT NOT NULL CHECK(to_session_kind IN ('group','private')),
+			to_session_kind TEXT NOT NULL CHECK(to_session_kind IN ('group','private','worker')),
 			to_target_id BIGINT NOT NULL CHECK(to_target_id>0),
 			text TEXT NOT NULL CHECK(btrim(text)<>''),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()

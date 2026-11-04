@@ -14,6 +14,7 @@ func DefaultRuntime() RuntimeConfig {
 			MaxStep:               50,
 			MaxGroupConcurrency:   3,
 			MaxPrivateConcurrency: 0,
+			WorkerCount:           1,
 		},
 		Chat: ChatConfig{
 			TalkFrequency:    0.7,

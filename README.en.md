@@ -55,6 +55,7 @@ Core capabilities of this project:
 - 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
 - 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
 - 💬 **Friend DMs** — One-on-one chats with a dedicated prompt, conversation queue, and the same topic compaction model used for groups
+- 🧰 **Worker Session** — Configure a worker pool in Settings; workers appear in the session list, execute commands, install tools, and run browsers in one worker container, then send results back to the originating session
 - 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 
 ## 🚀 Quick Start
@@ -79,7 +80,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls the `latest` image directly from GHCR. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
+Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with separate homes and Nix; up to 5 workers use `./worker-home/1` through `./worker-home/5` as workspaces. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
 
 Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
 

@@ -18,13 +18,11 @@ var EmotionKinds = map[string]bool{
 }
 
 type EmotionChange struct {
-	EmotionID       uint
-	Kind            string
-	AboutUserID     int64
-	Intensity       string
-	DecayClass      string
-	Reason          string
-	ExpectedVersion uint64
+	Kind        string
+	AboutUserID int64
+	Intensity   string
+	DecayClass  string
+	Reason      string
 }
 
 type CurrentEmotion struct {
@@ -102,12 +100,7 @@ func (m *Manager) UpdateEmotions(ctx context.Context, changes []EmotionChange) (
 				return fmt.Errorf("情感变化必须说明原因")
 			}
 			var state EmotionState
-			var err error
-			if change.EmotionID > 0 {
-				err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", change.EmotionID).Take(&state).Error
-			} else {
-				err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("about_user_id=? AND kind=?", change.AboutUserID, kind).Take(&state).Error
-			}
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("about_user_id=? AND kind=?", change.AboutUserID, kind).Take(&state).Error
 			if err == gorm.ErrRecordNotFound {
 				state = EmotionState{AboutUserID: change.AboutUserID, Kind: kind, Strength: strength, OccurredAt: now, AnchorAt: now, DecayClass: decayClass, Reason: strings.TrimSpace(change.Reason), Version: 1}
 				if state.DecayClass == "" {
@@ -132,9 +125,6 @@ func (m *Manager) UpdateEmotions(ctx context.Context, changes []EmotionChange) (
 			} else if err != nil {
 				return err
 			} else {
-				if change.ExpectedVersion != 0 && change.ExpectedVersion != state.Version {
-					return fmt.Errorf("情感 %d 已被其他请求修改，请重新读取后再试", state.ID)
-				}
 				before := currentStrength(state, now)
 				state.Version++
 				state.OccurredAt = now

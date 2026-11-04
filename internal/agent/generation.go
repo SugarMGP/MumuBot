@@ -29,8 +29,10 @@ type Generation struct {
 	contextWindow int
 	groupAgent    *adk.TypedChatModelAgent[*schema.AgenticMessage]
 	privateAgent  *adk.TypedChatModelAgent[*schema.AgenticMessage]
+	workerAgent   *adk.TypedChatModelAgent[*schema.AgenticMessage]
 	groupTools    []tool.BaseTool
 	privateTools  []tool.BaseTool
+	workerTools   []tool.BaseTool
 	mcp           *mcp.Manager
 	media         *media.Manager
 	toolNames     []string
@@ -97,22 +99,33 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 		mcpManager.Close()
 		return nil, err
 	}
+	workerTools, err := buildTools(nil, workerToolBuilders())
+	if err != nil {
+		mcpManager.Close()
+		return nil, err
+	}
 	generation := &Generation{
 		model:         chatModel,
 		modelName:     profile.ModelName,
 		contextWindow: profile.ContextWindow,
 		groupTools:    groupTools,
 		privateTools:  privateTools,
+		workerTools:   workerTools,
 		mcp:           mcpManager,
 		media:         mediaManager,
 		toolNames:     toolNames,
 	}
-	generation.groupAgent, err = a.newChatAgent(generation, groupTools, a.passthroughModelInput)
+	generation.groupAgent, err = a.newChatAgent(generation, groupTools)
 	if err != nil {
 		mcpManager.Close()
 		return nil, err
 	}
-	generation.privateAgent, err = a.newChatAgent(generation, privateTools, a.passthroughModelInput)
+	generation.privateAgent, err = a.newChatAgent(generation, privateTools)
+	if err != nil {
+		mcpManager.Close()
+		return nil, err
+	}
+	generation.workerAgent, err = a.newWorkerAgent(generation, workerTools)
 	if err != nil {
 		mcpManager.Close()
 		return nil, err
@@ -121,18 +134,46 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 }
 
 // newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立
-func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool, genModelInput adk.TypedGenModelInput[*schema.AgenticMessage]) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
+func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	maxStep := config.Snapshot().Agent.MaxStep
 	if maxStep <= 0 {
 		maxStep = 50
 	}
+	handlers := []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
+		&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
+		&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
+	}
+	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, map[string]bool{"stayQuiet": true})
+}
+
+// newWorkerAgent 只挂 worker 工具和 eino 摘要，不接 QQ 会话的人设/压缩器
+func (a *Agent) newWorkerAgent(generation *Generation, chatTools []tool.BaseTool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
+	const maxStep = 30
+	summarizer, err := a.newWorkerSummarizer(generation)
+	if err != nil {
+		return nil, err
+	}
+	handlers := make([]adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], 0, 3)
+	handlers = append(handlers,
+		&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
+	)
+	if summarizer != nil {
+		handlers = append(handlers, summarizer)
+	}
+	handlers = append(handlers,
+		&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
+	)
+	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, nil)
+}
+
+func (a *Agent) newTypedChatAgent(generation *Generation, chatTools []tool.BaseTool, maxStep int, handlers []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], returnDirectly map[string]bool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	argumentsHandler, err := tools.NewToolArgumentsHandler(a.ctx, chatTools)
 	if err != nil {
 		return nil, err
 	}
 	return adk.NewTypedChatModelAgent[*schema.AgenticMessage](a.ctx, &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
 		Model:         generation.model,
-		GenModelInput: genModelInput,
+		GenModelInput: a.passthroughModelInput,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools:                chatTools,
@@ -144,14 +185,21 @@ func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool, 
 					tools.ToolTranscriptMiddleware(),
 				},
 			},
-			ReturnDirectly: map[string]bool{"stayQuiet": true},
+			ReturnDirectly: returnDirectly,
 		},
 		MaxIterations: maxStep,
-		Handlers: []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
-			&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
-			&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
-		},
+		Handlers:      handlers,
 	})
+}
+
+func workerToolBuilders() []func() (tool.BaseTool, error) {
+	return []func() (tool.BaseTool, error){
+		func() (tool.BaseTool, error) { return tools.NewBashTool() },
+		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadSessionHistoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewUpdateWorkerTitleTool() },
+		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
+	}
 }
 
 func (a *Agent) buildToolLists(mcpManager *mcp.Manager) ([]tool.BaseTool, []tool.BaseTool, []string, error) {
@@ -197,7 +245,13 @@ func buildTools(mcpManager *mcp.Manager, builders []func() (tool.BaseTool, error
 	return list, nil
 }
 
-func groupToolBuilders() []func() (tool.BaseTool, error) {
+func sharedToolBuilders(private bool) []func() (tool.BaseTool, error) {
+	speak := func() (tool.BaseTool, error) { return tools.NewSpeakTool() }
+	poke := func() (tool.BaseTool, error) { return tools.NewPokeTool() }
+	if private {
+		speak = func() (tool.BaseTool, error) { return tools.NewPrivateSpeakTool() }
+		poke = func() (tool.BaseTool, error) { return tools.NewPrivatePokeTool() }
+	}
 	return []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
@@ -210,19 +264,15 @@ func groupToolBuilders() []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadSessionHistoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
-		func() (tool.BaseTool, error) { return tools.NewSpeakTool() },
+		speak,
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetUserProfileTool() },
-		func() (tool.BaseTool, error) { return tools.NewPokeTool() },
-		func() (tool.BaseTool, error) { return tools.NewReactToMessageTool() },
+		poke,
 		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchStickersTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendStickerTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveStickerTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetGroupNoticesTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemeTool() },
@@ -235,37 +285,18 @@ func groupToolBuilders() []func() (tool.BaseTool, error) {
 	}
 }
 
+func groupToolBuilders() []func() (tool.BaseTool, error) {
+	return append(sharedToolBuilders(false),
+		func() (tool.BaseTool, error) { return tools.NewGetUserProfileTool() },
+		func() (tool.BaseTool, error) { return tools.NewReactToMessageTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetGroupNoticesTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetEssenceMessagesTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetMessageReactionsTool() },
+	)
+}
+
 func privateToolBuilders() []func() (tool.BaseTool, error) {
-	return []func() (tool.BaseTool, error){
-		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
-		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
-		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
-		func() (tool.BaseTool, error) { return tools.NewSearchTopicsTool() },
-		func() (tool.BaseTool, error) { return tools.NewReadTopicTool() },
-		func() (tool.BaseTool, error) { return tools.NewUpdateTopicTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchHistoryToolV2() },
-		func() (tool.BaseTool, error) { return tools.NewReadHistoryToolV2() },
-		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
-		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
-		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
-		func() (tool.BaseTool, error) { return tools.NewPrivateSpeakTool() },
-		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
-		func() (tool.BaseTool, error) { return tools.NewPrivatePokeTool() },
-		func() (tool.BaseTool, error) { return tools.NewRecallMessageTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchStickersTool() },
-		func() (tool.BaseTool, error) { return tools.NewSendStickerTool() },
-		func() (tool.BaseTool, error) { return tools.NewSaveStickerTool() },
-		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchMemeTool() },
-		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
-		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
-		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
-		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchFacesTool() },
-		func() (tool.BaseTool, error) { return tools.NewReadForwardTool() },
-	}
+	return sharedToolBuilders(true)
 }
 
 func generationFrom(ctx context.Context) *Generation {

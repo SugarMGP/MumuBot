@@ -10,6 +10,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const MaxSessionMessageRunes = 2000
+
 type SessionMessage struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	FromSessionKind string    `gorm:"type:text;not null" json:"from_session_kind"`
@@ -24,10 +26,10 @@ func (SessionMessage) TableName() string { return "session_messages" }
 
 func normalizeSessionMessage(fromKind string, fromTarget int64, toKind string, toTarget int64, text string) (string, error) {
 	text = strings.TrimSpace(text)
-	if fromKind != ConversationKindGroup && fromKind != ConversationKindPrivate {
+	if fromKind != ConversationKindGroup && fromKind != ConversationKindPrivate && fromKind != ConversationKindWorker {
 		return "", fmt.Errorf("来源会话类型无效")
 	}
-	if toKind != ConversationKindGroup && toKind != ConversationKindPrivate {
+	if toKind != ConversationKindGroup && toKind != ConversationKindPrivate && toKind != ConversationKindWorker {
 		return "", fmt.Errorf("目标会话类型无效")
 	}
 	if fromTarget <= 0 || toTarget <= 0 {
@@ -36,8 +38,8 @@ func normalizeSessionMessage(fromKind string, fromTarget int64, toKind string, t
 	if text == "" {
 		return "", fmt.Errorf("消息正文不能为空")
 	}
-	if len([]rune(text)) > 2000 {
-		return "", fmt.Errorf("消息正文不能超过 2000 字符")
+	if len([]rune(text)) > MaxSessionMessageRunes {
+		return "", fmt.Errorf("消息正文不能超过 %d 字符", MaxSessionMessageRunes)
 	}
 	return text, nil
 }

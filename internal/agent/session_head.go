@@ -125,6 +125,9 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 	systemMsg := schema.SystemAgenticMessage(instruction)
 	systemMsg.Extra = map[string]any{"kind": kindSystemPrompt}
 	specs = append(specs, headEntrySpec{kind: kindSystemPrompt, msg: systemMsg})
+	if s.kind == memory.ConversationKindWorker {
+		return s.appendHeadEntries(ctx, mem, specs)
+	}
 	if text := strings.TrimSpace(groupExtra); text != "" {
 		noteMsg := schema.UserAgenticMessage(systemNote("群说明", text))
 		noteMsg.Extra = map[string]any{"kind": kindGroupNote, "hash": noteHash(text)}

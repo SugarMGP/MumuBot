@@ -3,6 +3,7 @@
 本目录负责 PostgreSQL 持久化、transcript/checkpoint、话题分层检索、长期记忆与具体情感。
 
 - `runtime_store.go` 分配 input/visible 序号；`visible_seq` 在模型请求成功后写入，待处理输入保持 NULL。
+- worker transcript 只追加、不删除；`worker_sessions.context_summary` 只保存 Eino 摘要检查点，`context_through_id` 之后的 transcript 才进入下一次模型上下文，完整记录仍可通过历史工具回读。
 - `conversation_transcript` 是工作集，不是永久记录；只允许压缩事务删除 checkpoint 覆盖的可见行，原文在 `message_logs` 永久保留。
 - `topic_compaction.go` 必须在一个事务内校验消息归属和摘要、写入话题摘要/归属/is_anchor 来源/概览/检查点并删除覆盖行；未分配消息超过软阈值时拒绝提交，候选里未分配消息的旧归属会清空，任一步失败全部回滚。
 - `topic_digest.go` 的概览、active topic 顺序必须稳定；dormant 话题可搜索但不进入当前摘要块；置顶记忆由 `pinned_memory` 代头单独渲染。
@@ -12,7 +13,7 @@
 - `memory_v2.go` 和 `sticker.go` 的分页使用数据库排序、keyset 条件和 LIMIT，不把匹配集全部取回 Go 再排序；检索表达式必须与 trigram 索引一致。
 - `memory_v2.go` 只用 `subject_type + subject_target + memory_type`；subject 允许 group/user/self/object，memory_type 允许 profile/experience；旧 kind 和来源字段已删除。
 - 同一主体、同类型、同内容哈希精确去重；归档条目重复创建不得复活；更新、归档、恢复必须基于读取过的当前版本。
-- `manageMemory` 的 1–8 项变更必须在一个事务内全成功或全回滚；主 Agent 不物理删除，后台只启用或归档。
+- `manageMemory` 的批量变更必须在一个事务内全成功或全回滚，不设条数上限；主 Agent 不物理删除，后台只启用或归档。
 - 普通正文最多 8000 字。
 - `emotion_v2.go` 固定 12 类情感，同一对象同一情感仅一份当前状态；变化写 revisions，读取时惰性衰减，不跑定时衰减写库。
 - `pinned.go` 只返回 active pinned，置顶记忆不按 token 裁剪；情感与状态交给 `getCurrentStatus` 查询。

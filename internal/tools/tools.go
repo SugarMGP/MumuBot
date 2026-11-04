@@ -25,32 +25,50 @@ type SendStickerCallback func(ctx context.Context, targetID int64, fileName stri
 type SendImageURLCallback func(ctx context.Context, imageURL string) error
 type SessionMessageCallback func(ctx context.Context, fromKind string, fromTargetID int64, toKind string, toTargetID int64, text string) (*memory.SessionMessage, error)
 
+// BashResult 是 worker executor 一次命令执行的结果
+type BashResult struct {
+	Success   bool   `json:"success"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exit_code"`
+	TimedOut  bool   `json:"timed_out"`
+	Truncated bool   `json:"truncated"`
+}
+
+// BashCallback 在 worker 沙箱里执行命令
+type BashCallback func(ctx context.Context, command string, timeoutSeconds int) (*BashResult, error)
+
+// UpdateWorkerTitleCallback 更新 worker 当前任务标题
+type UpdateWorkerTitleCallback func(ctx context.Context, title string) error
+
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	ConversationKind        string
-	TargetID                int64
-	MemoryMgr               *memory.Manager
-	Bot                     *onebot.Client
-	SnapshotLogID           uint
-	RunID                   string
-	VisibleTranscriptIDs    []uint
-	InjectedArrivalSeq      uint64
-	CompactionAttempts      int
-	CurrentConversationOnly bool
-	MemoryReadVersions      map[uint]uint64
-	MemoryMaintained        bool
-	TopicMaintained         bool
-	SpeakCallback           SpeakCallback       // 发言回调
-	SendStickerCallback     SendStickerCallback // 发送表情包回调
-	SendImageURLCallback    SendImageURLCallback
-	SessionMessageCallback  SessionMessageCallback
-	ReadForwardCallback     func(ctx context.Context, id string, index int) (any, error)
-	GroupInfoCallback       func(ctx context.Context) string
-	StickerDir              string
-	Session                 SessionContext
-	ThinkStartArrivalSeq    uint64
-	ObservedThroughSeq      uint64
-	RecallCallback          func(messageID int64, arrivalSeq uint64)
+	ConversationKind          string
+	TargetID                  int64
+	MemoryMgr                 *memory.Manager
+	Bot                       *onebot.Client
+	SnapshotLogID             uint
+	RunID                     string
+	VisibleTranscriptIDs      []uint
+	InjectedArrivalSeq        uint64
+	CompactionAttempts        int
+	CurrentConversationOnly   bool
+	MemoryReadVersions        map[uint]uint64
+	MemoryMaintained          bool
+	TopicMaintained           bool
+	SpeakCallback             SpeakCallback       // 发言回调
+	SendStickerCallback       SendStickerCallback // 发送表情包回调
+	SendImageURLCallback      SendImageURLCallback
+	SessionMessageCallback    SessionMessageCallback
+	BashCallback              BashCallback
+	UpdateWorkerTitleCallback UpdateWorkerTitleCallback
+	ReadForwardCallback       func(ctx context.Context, id string, index int) (any, error)
+	GroupInfoCallback         func(ctx context.Context) string
+	StickerDir                string
+	Session                   SessionContext
+	ThinkStartArrivalSeq      uint64
+	ObservedThroughSeq        uint64
+	RecallCallback            func(messageID int64, arrivalSeq uint64)
 
 	memoryMu sync.Mutex
 }
@@ -165,7 +183,6 @@ type GroupNoticeSummary struct {
 type GetGroupNoticesOutput struct {
 	Success bool                 `json:"success"`
 	Notices []GroupNoticeSummary `json:"notices,omitempty"`
-	Message string               `json:"message,omitempty"`
 }
 
 func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*GetGroupNoticesOutput, error) {
@@ -234,7 +251,6 @@ type EssenceMessageSummary struct {
 type GetEssenceMessagesOutput struct {
 	Success  bool                    `json:"success"`
 	Messages []EssenceMessageSummary `json:"messages,omitempty"`
-	Message  string                  `json:"message,omitempty"`
 }
 
 func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput) (*GetEssenceMessagesOutput, error) {

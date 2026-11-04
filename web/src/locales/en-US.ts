@@ -340,12 +340,13 @@ const enUS: typeof zhCN = {
     agent: {
       title: "Thinking & concurrency",
       hint:
-        "Step and concurrency changes rebuild the runtime without restarting the process.",
+        "Step and concurrency changes rebuild the runtime; worker count changes sync the worker pool immediately, without restarting the process.",
       thinkInterval: "Think interval (sec)",
       debounce: "Debounce window (ms)",
       maxStep: "Max steps per turn",
       groupConcurrency: "Group concurrency (0 = unlimited)",
       privateConcurrency: "Private concurrency (0 = unlimited)",
+      workerCount: "Worker count (0-5)",
     },
     chat: {
       title: "Chat & rate limits",
@@ -609,6 +610,8 @@ const enUS: typeof zhCN = {
     warning: {
       runtime_reload_failed:
         "Saved, but the runtime failed to apply it. The previous connection is still active; see the runtime logs for details.",
+      runtime_worker_sync_failed:
+        "Saved, but the worker count could not be applied; see the runtime logs for details.",
     },
   },
   enums: {

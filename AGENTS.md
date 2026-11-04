@@ -211,7 +211,7 @@ go vet ./...
 - 长期记忆由主 Agent 通过 `searchMemory`、`readMemory`、`manageMemory` 维护；只使用 `profile/experience` 两种 memory type，更新和归档必须基于已读取版本。
 - `knowledge_items` 使用 `subject_type + subject_target` 表示主体，`subject_target` 为字符串；主体类型只允许 group/user/self/object，self 由后端固定为 `self`；记忆类型只允许 profile/experience，来源字段不保存。
 - 知识正文语义变化新增条目；同主体、同类型、同内容哈希精确去重，重复创建不复活归档条目。
-- `manageMemory` 一批 1–8 项全成功或全回滚；主 Agent 不物理删除，后台只提供启用、归档和查看修订。
+- `manageMemory` 批量变更在一个事务内全成功或全回滚，不设条数上限；主 Agent 不物理删除，后台只提供启用、归档和查看修订。
 - 具体情感固定 12 类；同一对象同一情感只保留一份当前状态，变化写入 `emotion_revisions`。强度只接收轻微/明显/强烈/已平复，按真实时间惰性衰减，不做定时写库或独立情感判断模型。
 - 精力与交流意愿保留辅助状态；不再保留 intimacy、成员发言量或最近活跃统计，关系由 profile/experience 记忆表达。
 - 置顶记忆按当前群聊/私聊主体和自己的 active pinned 全量注入，不按 token 裁剪；通过 `pinned_memory` 代头展示，不再维护自动参考账本。

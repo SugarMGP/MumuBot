@@ -110,10 +110,7 @@ func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 // ==================== 保持沉默工具 ====================
 
 // StayQuietInput 保持沉默的输入参数
-type StayQuietInput struct {
-	// Reason 不说话的原因
-	Reason string `json:"reason,omitempty" jsonschema:"description=不说话的原因（给自己看的笔记）"`
-}
+type StayQuietInput struct{}
 
 // StayQuietOutput 保持沉默的输出
 type StayQuietOutput struct {
@@ -122,7 +119,7 @@ type StayQuietOutput struct {
 }
 
 // stayQuietFunc 保持沉默的实际实现
-func stayQuietFunc(ctx context.Context, input *StayQuietInput) (*StayQuietOutput, error) {
+func stayQuietFunc(_ context.Context, _ *StayQuietInput) (*StayQuietOutput, error) {
 	return &StayQuietOutput{
 		Success: true,
 		Message: "保持沉默",
@@ -164,8 +161,8 @@ func pokeFunc(ctx context.Context, input *PokeInput) (*PokeOutput, error) {
 	if tc.Bot == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("机器人未连接"))
 	}
-	if input == nil || input.UserID == 0 {
-		return nil, fmt.Errorf("用户 ID 不能为空")
+	if input == nil || input.UserID <= 0 {
+		return nil, fmt.Errorf("用户 ID 必须大于 0")
 	}
 	if err := tc.Bot.GroupPoke(ctx, tc.TargetID, input.UserID); err != nil {
 		return nil, err

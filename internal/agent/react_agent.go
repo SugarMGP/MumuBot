@@ -39,6 +39,12 @@ type Agent struct {
 
 	groupConcurrency   *ThinkConcurrency
 	privateConcurrency *ThinkConcurrency
+	workerConcurrency  *ThinkConcurrency
+	workerExec         *workerExecutor
+	workerCancelMu     sync.Mutex
+	workerRuns         map[uint]workerRun
+	workerEpochs       map[uint]uint64
+	workerPoolMu       sync.Mutex
 
 	generationMu sync.RWMutex
 	generation   *Generation
@@ -70,7 +76,7 @@ type pendingThink struct {
 }
 
 // New 创建稳定 Agent；模型/MCP 在 generation 中延迟构建
-func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.Store, mcpServers *mcp.Store) (*Agent, error) {
+func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.Store, mcpServers *mcp.Store, workerExecutorURL string) (*Agent, error) {
 	if mem == nil || botClient == nil || botClient.GetSelfID() <= 0 {
 		return nil, fmt.Errorf("OneBot 或记忆系统未就绪")
 	}
@@ -92,12 +98,22 @@ func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.St
 		pendingRecalls:       make(map[recallCommit]pendingRecall),
 		replyCache:           newAgentTTLCache[string, onebot.ReplyInfo](replyCacheCapacity, replyCacheTTL),
 		idleSlots:            make(chan struct{}, 2),
+		workerExec:           newWorkerExecutor(workerExecutorURL),
+		workerRuns:           make(map[uint]workerRun),
+		workerEpochs:         make(map[uint]uint64),
 	}
 	cfg := config.Snapshot()
 	a.groupConcurrency = NewThinkConcurrency(a.ctx, cfg.Agent.MaxGroupConcurrency, a.thinkGroup)
 	a.privateConcurrency = NewThinkConcurrency(a.ctx, cfg.Agent.MaxPrivateConcurrency, a.thinkPrivate)
+	a.workerConcurrency = NewThinkConcurrency(a.ctx, 2, a.thinkWorker)
 	a.groupCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("group_id", targetID) })
 	a.privateCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("target_id", targetID) })
+	if err := mem.FailRunningWorkerSessions(context.Background()); err != nil {
+		return nil, fmt.Errorf("恢复 worker 状态失败: %w", err)
+	}
+	if err := a.SyncWorkers(cfg.Agent.WorkerCount); err != nil {
+		return nil, fmt.Errorf("同步 worker 池失败: %w", err)
+	}
 	go a.replyCache.Start()
 	return a, nil
 }
@@ -134,6 +150,10 @@ func (a *Agent) shutdown() {
 	}
 	if a.privateConcurrency != nil {
 		a.privateConcurrency.Close()
+	}
+	a.cancelWorkerRuns()
+	if a.workerConcurrency != nil {
+		a.workerConcurrency.Close()
 	}
 	a.groupCommits.close()
 	a.privateCommits.close()

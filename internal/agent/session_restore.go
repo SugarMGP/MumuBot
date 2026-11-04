@@ -33,6 +33,15 @@ func (a *Agent) restoreSessions() error {
 			return fmt.Errorf("恢复好友 %d 工作集失败: %w", target.TargetID, err)
 		}
 	}
+	workers, err := a.memory.ListWorkerSessions(a.ctx)
+	if err != nil {
+		return fmt.Errorf("读取可恢复 worker 失败: %w", err)
+	}
+	for _, worker := range workers {
+		if err := a.restoreTranscriptSession(memory.ConversationKindWorker, int64(worker.ID)); err != nil {
+			return fmt.Errorf("恢复 worker %d 工作集失败: %w", worker.ID, err)
+		}
+	}
 	return nil
 }
 

@@ -65,6 +65,7 @@ func (a *Agent) thinkCycle() {
 		}
 		a.schedulePrivateThink(target.TargetID, latestReceivedAt(pending))
 	}
+	a.scanWorkerThinks()
 	a.scanIdleCompactions()
 }
 

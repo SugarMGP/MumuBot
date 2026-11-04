@@ -9,17 +9,18 @@ import (
 
 // Bootstrap 是进程启动期不可变的连接与密钥配置
 type Bootstrap struct {
-	DatabaseDSN     string
-	WebAdminKey     string
-	ServerPort      int
-	OneBotWSURL     string
-	OneBotToken     string
-	OneBotReconnect int
-	MediaDir        string
-	StickerDir      string
-	LogLevel        string
-	Debug           bool
-	SecretKey       string
+	DatabaseDSN       string
+	WebAdminKey       string
+	ServerPort        int
+	OneBotWSURL       string
+	OneBotToken       string
+	OneBotReconnect   int
+	MediaDir          string
+	StickerDir        string
+	LogLevel          string
+	Debug             bool
+	SecretKey         string
+	WorkerExecutorURL string
 }
 
 var boot Bootstrap
@@ -27,17 +28,18 @@ var boot Bootstrap
 // LoadBootstrap 从环境变量读取启动配置
 func LoadBootstrap() (Bootstrap, error) {
 	b := Bootstrap{
-		DatabaseDSN:     strings.TrimSpace(os.Getenv("MUMU_DATABASE_DSN")),
-		WebAdminKey:     os.Getenv("MUMU_WEB_ADMIN_KEY"),
-		ServerPort:      intEnv("MUMU_SERVER_PORT", 7468),
-		OneBotWSURL:     strings.TrimSpace(os.Getenv("MUMU_ONEBOT_WS_URL")),
-		OneBotToken:     os.Getenv("MUMU_ONEBOT_TOKEN"),
-		OneBotReconnect: intEnv("MUMU_ONEBOT_RECONNECT_SECONDS", 5),
-		MediaDir:        strings.TrimSpace(os.Getenv("MUMU_MEDIA_DIR")),
-		StickerDir:      strings.TrimSpace(os.Getenv("MUMU_STICKER_DIR")),
-		LogLevel:        strings.TrimSpace(os.Getenv("MUMU_LOG_LEVEL")),
-		Debug:           boolEnv("MUMU_DEBUG"),
-		SecretKey:       strings.TrimSpace(os.Getenv("MUMU_SECRET_KEY")),
+		DatabaseDSN:       strings.TrimSpace(os.Getenv("MUMU_DATABASE_DSN")),
+		WebAdminKey:       os.Getenv("MUMU_WEB_ADMIN_KEY"),
+		ServerPort:        intEnv("MUMU_SERVER_PORT", 7468),
+		OneBotWSURL:       strings.TrimSpace(os.Getenv("MUMU_ONEBOT_WS_URL")),
+		OneBotToken:       os.Getenv("MUMU_ONEBOT_TOKEN"),
+		OneBotReconnect:   intEnv("MUMU_ONEBOT_RECONNECT_SECONDS", 5),
+		MediaDir:          strings.TrimSpace(os.Getenv("MUMU_MEDIA_DIR")),
+		StickerDir:        strings.TrimSpace(os.Getenv("MUMU_STICKER_DIR")),
+		LogLevel:          strings.TrimSpace(os.Getenv("MUMU_LOG_LEVEL")),
+		Debug:             boolEnv("MUMU_DEBUG"),
+		SecretKey:         strings.TrimSpace(os.Getenv("MUMU_SECRET_KEY")),
+		WorkerExecutorURL: strings.TrimSpace(os.Getenv("MUMU_WORKER_EXECUTOR_URL")),
 	}
 	if b.MediaDir == "" {
 		b.MediaDir = "./media"
@@ -47,6 +49,9 @@ func LoadBootstrap() (Bootstrap, error) {
 	}
 	if b.LogLevel == "" {
 		b.LogLevel = "info"
+	}
+	if b.WorkerExecutorURL == "" {
+		b.WorkerExecutorURL = "http://127.0.0.1:7469"
 	}
 	if b.DatabaseDSN == "" {
 		return b, fmt.Errorf("MUMU_DATABASE_DSN 不能为空")

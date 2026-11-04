@@ -135,7 +135,7 @@ func main() {
 		}
 	})
 
-	mumuAgent, err := agent.New(memoryMgr, botClient, modelStore, mcpStore)
+	mumuAgent, err := agent.New(memoryMgr, botClient, modelStore, mcpStore, config.Boot().WorkerExecutorURL)
 	if err != nil {
 		_ = botClient.Close()
 		zap.L().Fatal("Agent 创建失败", zap.Error(err))

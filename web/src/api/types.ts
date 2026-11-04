@@ -236,6 +236,7 @@ export interface RuntimeConfig {
     max_step: number;
     max_group_concurrency: number;
     max_private_concurrency: number;
+    worker_count: number;
   };
   chat: {
     talk_frequency: number;

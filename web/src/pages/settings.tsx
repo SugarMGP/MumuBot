@@ -276,6 +276,19 @@ export default function SettingsPage() {
               }
             />
           </Field>
+          <Field label={t("settings.agent.workerCount")}>
+            <Input
+              type="number"
+              min={0}
+              max={5}
+              value={config.agent.worker_count}
+              onChange={(event) =>
+                update("agent", {
+                  worker_count: numberValue(event.target.value),
+                })
+              }
+            />
+          </Field>
         </div>
         <SaveButtons
           busy={busy === "agent"}

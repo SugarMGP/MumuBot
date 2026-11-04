@@ -11,7 +11,6 @@ import (
 )
 
 type EmotionChangeInput struct {
-	EmotionID   uint   `json:"emotion_id,omitempty"`
 	Kind        string `json:"kind" jsonschema:"description=喜悦/好奇/亲近/感动/思念/吃醋/担忧/安心/委屈/失落/不满/愧疚"`
 	AboutUserID int64  `json:"about_user_id,omitempty" jsonschema:"description=0 表示无特定对象，正数表示人物 QQ"`
 	Intensity   string `json:"intensity" jsonschema:"description=轻微/明显/强烈/已平复"`
@@ -41,7 +40,7 @@ func updateMoodFunc(ctx context.Context, input *UpdateMoodInput) (any, error) {
 			about = tc.TargetID
 		}
 		changes = append(changes, memory.EmotionChange{
-			EmotionID: raw.EmotionID, Kind: raw.Kind, AboutUserID: about,
+			Kind: raw.Kind, AboutUserID: about,
 			Intensity: raw.Intensity, DecayClass: raw.DecayClass, Reason: raw.Reason,
 		})
 	}

@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+
+FROM --platform=$BUILDPLATFORM golang:1.26.5 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/worker-exec ./cmd/worker-exec
+COPY internal/workerproto ./internal/workerproto
+COPY internal/workerexec ./internal/workerexec
+RUN CGO_ENABLED=0 go build -trimpath -o /out/worker-exec ./cmd/worker-exec
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash ca-certificates curl wget git jq ripgrep tmux sudo \
+    build-essential xz-utils unzip zip procps htop vim-tiny \
+    python3 python3-venv python3-pip python3-dev \
+    nodejs npm xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# 多用户 Nix；容器没有 systemd，由 entrypoint 启动 nix-daemon
+RUN curl -L https://nixos.org/nix/install | sh -s -- --daemon
+RUN mkdir -p /etc/nix && \
+    printf 'experimental-features = nix-command flakes\nsandbox = false\ntrusted-users = root worker worker2 worker3 worker4 worker5\n' >> /etc/nix/nix.conf
+
+RUN groupadd -f nix-users \
+    && groupadd -g 1000 worker \
+    && for i in 1 2 3 4 5; do \
+         if [ "$i" = "1" ]; then u=worker; uid=1000; else u="worker$i"; uid=$((999 + i)); fi; \
+         useradd -m -u "$uid" -g worker -s /bin/bash "$u"; \
+         usermod -aG nix-users "$u"; \
+       done \
+    && echo '%worker ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/worker \
+    && chmod 440 /etc/sudoers.d/worker \
+    && mkdir -p /home/worker /home/worker2 /home/worker3 /home/worker4 /home/worker5 \
+    && for home in /home/worker /home/worker2 /home/worker3 /home/worker4 /home/worker5; do \
+         chown -R "$(basename "$home")":worker "$home"; \
+       done
+
+COPY --from=build /out/worker-exec /usr/local/bin/worker-exec
+COPY --chmod=755 docker-entrypoint.worker.sh /usr/local/bin/docker-entrypoint.worker.sh
+
+ENV HOME=/home/worker
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/worker/.cache/ms-playwright
+ENV NIX_REMOTE=daemon
+ENV PATH=/home/worker/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV TZ=Asia/Shanghai
+WORKDIR /home/worker
+EXPOSE 7469
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.worker.sh"]

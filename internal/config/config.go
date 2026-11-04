@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"strings"
 )
 
@@ -30,6 +31,27 @@ type AgentConfig struct {
 	MaxStep               int `json:"max_step"`
 	MaxGroupConcurrency   int `json:"max_group_concurrency"`
 	MaxPrivateConcurrency int `json:"max_private_concurrency"`
+	WorkerCount           int `json:"worker_count"`
+}
+
+const MaxWorkerCount = 5
+
+// UnmarshalJSON 把旧配置里缺省的 worker_count 归一为 1，显式 0 仍表示关闭
+func (a *AgentConfig) UnmarshalJSON(data []byte) error {
+	type plain AgentConfig
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["worker_count"]; !ok {
+		decoded.WorkerCount = 1
+	}
+	*a = AgentConfig(decoded)
+	return nil
 }
 
 // CompactorConfig 控制主模型同步话题压缩
@@ -119,6 +141,9 @@ func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 	}
 	if cfg.Agent.MaxGroupConcurrency < 0 || cfg.Agent.MaxPrivateConcurrency < 0 {
 		return cfg, validationError("并发数不能小于 0")
+	}
+	if cfg.Agent.WorkerCount < 0 || cfg.Agent.WorkerCount > MaxWorkerCount {
+		return cfg, validationError("worker 数量必须在 0 到 5 之间")
 	}
 	if cfg.Chat.TalkFrequency < 0 || cfg.Chat.TalkFrequency > 1 {
 		return cfg, validationError("聊天频率必须在 0 到 1 之间")

@@ -117,6 +117,12 @@ func (a *App) applySettingsRuntime(section string, old config.RuntimeConfig) *wa
 	}
 	next := config.Snapshot()
 	a.mumuAgent.SetConcurrencyLimits(next.Agent.MaxGroupConcurrency, next.Agent.MaxPrivateConcurrency)
+	if section == config.SectionAgent && old.Agent.WorkerCount != next.Agent.WorkerCount {
+		if err := a.mumuAgent.SyncWorkers(next.Agent.WorkerCount); err != nil {
+			zap.L().Warn("设置已保存但 worker 数量应用失败", zap.Error(err))
+			return &warningPayload{Code: "runtime_worker_sync_failed"}
+		}
+	}
 	needGeneration := section == config.SectionMedia ||
 		(section == config.SectionAgent && old.Agent.MaxStep != next.Agent.MaxStep)
 	if !needGeneration || !a.agentReady() {
