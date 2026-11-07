@@ -11,7 +11,15 @@ var builtinPersonaCard string
 //go:embed persona_builtin_simulation.md
 var builtinSimulationPrompt string
 
-// BuiltinPersonaTexts 返回代码内置的人格预设内容，供启动时写入数据库
-func BuiltinPersonaTexts() (string, string) {
-	return builtinPersonaCard, builtinSimulationPrompt
+//go:embed persona_builtin_life.md
+var builtinLifePrompt string
+
+// BuiltinPersonaTexts 返回代码内置的人格卡、仿真提示词与生活职责
+func BuiltinPersonaTexts() (string, string, string) {
+	return builtinPersonaCard, builtinSimulationPrompt, builtinLifePrompt
+}
+
+// BuiltinLifePrompt 返回代码内置的生活职责，供旧预设缺字段时兜底
+func BuiltinLifePrompt() string {
+	return builtinLifePrompt
 }

@@ -155,9 +155,6 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 					return nil, beginErr
 				}
 				if resumed {
-					if id != 0 {
-						tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
-					}
 					return &compose.ToolOutput{Result: existing}, nil
 				}
 				output, err := next(ctx, input)
@@ -176,11 +173,12 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				if finishErr != nil {
 					return nil, finishErr
 				}
-				if id != 0 {
-					tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
-				}
 				if output != nil {
 					output.Result = display
+				}
+				// 睡眠只在工具成功且回执真正落库后才允许正常收尾；落库失败保持真实失败
+				if input.Name == "sleepUntil" && err == nil && status == "succeeded" {
+					tc.EndAfterSleep = true
 				}
 				return output, err
 			}
@@ -196,9 +194,6 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 					return nil, beginErr
 				}
 				if resumed {
-					if id != 0 {
-						tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
-					}
 					return &compose.EnhancedInvokableToolOutput{Result: &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: existing}}}}, nil
 				}
 				output, err := next(ctx, input)
@@ -218,9 +213,6 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				displayText, displayEnhanced, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, enhanced, "")
 				if finishErr != nil {
 					return nil, finishErr
-				}
-				if id != 0 {
-					tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, id)
 				}
 				if output != nil {
 					if displayEnhanced != nil {

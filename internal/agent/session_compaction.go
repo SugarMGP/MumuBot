@@ -24,11 +24,9 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 	entries := append([]sessionEntry(nil), s.seen...)
 	s.mu.Unlock()
 	scale := s.textScale()
-	heads := make([]sessionEntry, 0)
 	work := make([]sessionEntry, 0, len(entries))
 	for _, entry := range entries {
 		if isHeadEntry(entry.msg) {
-			heads = append(heads, entry)
 			continue
 		}
 		work = append(work, entry)
@@ -68,11 +66,6 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 		return nil, fmt.Errorf("最近工作集尚未进入模型上下文，不能压缩")
 	}
 	candidate := &compactionCandidate{}
-	for _, entry := range heads {
-		if entry.visibleSeq > candidate.ThroughVisibleSeq {
-			candidate.ThroughVisibleSeq = entry.visibleSeq
-		}
-	}
 	for _, segment := range segments[:cut] {
 		for _, entry := range segment.items {
 			if entry.msg != nil {
@@ -118,6 +111,26 @@ func (s *Session) ApplyCompaction(checkpoint *memory.CompactionCheckpoint) {
 	s.seen = kept
 	s.tokenBase = nil
 	s.compactionRetryAfter = time.Time{}
+	s.compactionBeforeModel = false
+}
+
+// ApplyCheckpoint 丢弃摘要检查点覆盖的工作集行和旧代头，代头随后按本代重建
+func (s *Session) ApplyCheckpoint(throughID uint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.seen[:0]
+	for _, entry := range s.seen {
+		if isHeadEntry(entry.msg) {
+			continue
+		}
+		if entry.transcriptID != 0 && entry.transcriptID <= throughID {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	s.seen = kept
+	s.tokenBase = nil
+	s.compactionBeforeModel = false
 }
 
 // CompactionCoolingDown 判断会话是否仍在压缩失败退避期
@@ -132,6 +145,7 @@ func (s *Session) MarkCompactionFailure(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.compactionRetryAfter = now.Add(60 * time.Second)
+	s.compactionBeforeModel = true
 }
 
 // SetTokenBase 记录最后一条 assistant 的完整 usage，供压缩和空闲判断使用

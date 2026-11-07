@@ -18,17 +18,21 @@ type TopicSearchQuery struct {
 	ConversationKind string
 	TargetID         int64
 	Status           string
+	From             *time.Time
+	To               *time.Time
 	Cursor           string
 	Limit            int
 }
 
 type TopicSearchFilter struct {
-	Keywords         []string `json:"keywords"`
-	Match            string   `json:"match"`
-	ExcludeKeywords  []string `json:"exclude_keywords"`
-	ConversationKind string   `json:"conversation_kind"`
-	TargetID         int64    `json:"target_id"`
-	Status           string   `json:"status"`
+	Keywords         []string   `json:"keywords"`
+	Match            string     `json:"match"`
+	ExcludeKeywords  []string   `json:"exclude_keywords"`
+	ConversationKind string     `json:"conversation_kind"`
+	TargetID         int64      `json:"target_id"`
+	Status           string     `json:"status"`
+	From             *time.Time `json:"from,omitempty"`
+	To               *time.Time `json:"to,omitempty"`
 }
 
 type TopicHit struct {
@@ -61,13 +65,16 @@ type TopicSummaryVersion struct {
 }
 
 type TopicDetail struct {
-	Topic            TopicThreadRow        `json:"topic"`
-	Summary          TopicSummary          `json:"summary"`
-	SummaryID        uint                  `json:"summary_id"`
-	SummaryVersion   uint64                `json:"summary_version"`
-	SourceMessageIDs []int64               `json:"source_message_ids,omitempty"`
-	AnchorMessageIDs []int64               `json:"anchor_message_ids,omitempty"`
-	SummaryHistory   []TopicSummaryVersion `json:"summary_history,omitempty"`
+	Topic             TopicThreadRow        `json:"topic"`
+	Summary           TopicSummary          `json:"summary"`
+	SummaryID         uint                  `json:"summary_id"`
+	SummaryVersion    uint64                `json:"summary_version"`
+	SourceMessageIDs  []int64               `json:"source_message_ids,omitempty"`
+	AnchorMessageIDs  []int64               `json:"anchor_message_ids,omitempty"`
+	SourceTotal       int                   `json:"source_total"`
+	SourceAvailable   int                   `json:"source_available"`
+	SourceUnavailable int                   `json:"source_unavailable"`
+	SummaryHistory    []TopicSummaryVersion `json:"summary_history,omitempty"`
 }
 
 type TopicMessageRef struct {
@@ -169,7 +176,7 @@ func topicFilter(query TopicSearchQuery, match string) TopicSearchFilter {
 		Keywords: NormalizeKeywords(query.Keywords), Match: match,
 		ExcludeKeywords:  NormalizeKeywords(query.ExcludeKeywords),
 		ConversationKind: strings.TrimSpace(query.ConversationKind), TargetID: query.TargetID,
-		Status: strings.TrimSpace(query.Status),
+		Status: strings.TrimSpace(query.Status), From: query.From, To: query.To,
 	}
 }
 
@@ -198,9 +205,9 @@ func latestTopicSummaries(db *gorm.DB, topicIDs []uint) (map[uint]TopicSummaryRo
 	return result, nil
 }
 
-// topicAnchorIDs 批量读取最新摘要的关键消息来源
-func (m *Manager) topicAnchorIDs(ctx context.Context, summaryIDs []uint) (map[uint][]uint, error) {
-	result := make(map[uint][]uint, len(summaryIDs))
+// topicAnchorOneBotIDs 直接从来源行读取关键消息的 OneBot ID，原文删除后仍然可用
+func (m *Manager) topicAnchorOneBotIDs(ctx context.Context, summaryIDs []uint) (map[uint][]int64, error) {
+	result := make(map[uint][]int64, len(summaryIDs))
 	if len(summaryIDs) == 0 {
 		return result, nil
 	}
@@ -211,32 +218,14 @@ func (m *Manager) topicAnchorIDs(ctx context.Context, summaryIDs []uint) (map[ui
 		return nil, err
 	}
 	for _, row := range rows {
-		result[row.SummaryID] = append(result[row.SummaryID], row.MessageLogID)
+		if row.OneBotMessageID == 0 {
+			continue
+		}
+		result[row.SummaryID] = append(result[row.SummaryID], row.OneBotMessageID)
 	}
 	return result, nil
 }
 
-// messageOneBotIDMap 批量读取内部消息 ID 对应的 OneBot 消息 ID
-func (m *Manager) messageOneBotIDMap(ctx context.Context, ids []uint) (map[uint]int64, error) {
-	result := make(map[uint]int64, len(ids))
-	if len(ids) == 0 {
-		return result, nil
-	}
-	var rows []struct {
-		ID              uint
-		OneBotMessageID int64
-	}
-	if err := m.db.WithContext(ctx).Model(&MessageLog{}).Select("id,one_bot_message_id").
-		Where("id IN ?", ids).Order("id").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		result[row.ID] = row.OneBotMessageID
-	}
-	return result, nil
-}
-
-// topicPeriods 批量计算话题消息时间范围
 func (m *Manager) topicPeriods(ctx context.Context, topicIDs []uint) (map[uint]topicPeriod, error) {
 	result := make(map[uint]topicPeriod, len(topicIDs))
 	if len(topicIDs) == 0 {
@@ -259,9 +248,8 @@ func (m *Manager) topicPeriods(ctx context.Context, topicIDs []uint) (map[uint]t
 		To      *time.Time
 	}
 	if err := m.db.WithContext(ctx).Table("topic_summary_sources src").
-		Select("ts.topic_id,MIN(ml.message_time) AS \"from\",MAX(ml.message_time) AS \"to\"").
+		Select("ts.topic_id,MIN(src.message_time) AS \"from\",MAX(src.message_time) AS \"to\"").
 		Joins("JOIN topic_summaries ts ON ts.id=src.summary_id").
-		Joins("JOIN message_logs ml ON ml.id=src.message_log_id").
 		Where("ts.topic_id IN ?", topicIDs).Group("ts.topic_id").Scan(&sourced).Error; err != nil {
 		return nil, err
 	}
@@ -309,7 +297,8 @@ func (m *Manager) SearchTopics(ctx context.Context, query TopicSearchQuery) (Top
 	if status == "all" {
 		status = ""
 	}
-	q := m.db.WithContext(ctx).Where("updated_at<=?", snapshot)
+	now := time.Now()
+	q := m.db.WithContext(ctx).Where("updated_at<=? AND forgotten_at IS NULL AND forget_at>?", snapshot, now)
 	if filter.ConversationKind != "" {
 		q = q.Where("conversation_kind=?", filter.ConversationKind)
 	}
@@ -318,6 +307,32 @@ func (m *Manager) SearchTopics(ctx context.Context, query TopicSearchQuery) (Top
 	}
 	if status != "" {
 		q = q.Where("status=?", status)
+	}
+	// 时间范围按来源消息判断：话题归属或摘要来源任一命中即可，不复制话题
+	if filter.From != nil || filter.To != nil {
+		condition := "(EXISTS (SELECT 1 FROM topic_assignments ta JOIN message_logs ml ON ml.id=ta.message_log_id" +
+			" WHERE ta.topic_id=topic_threads.id"
+		args := make([]any, 0, 2)
+		if filter.From != nil {
+			condition += " AND ml.message_time>=?"
+			args = append(args, *filter.From)
+		}
+		if filter.To != nil {
+			condition += " AND ml.message_time<?"
+			args = append(args, *filter.To)
+		}
+		condition += ") OR EXISTS (SELECT 1 FROM topic_summary_sources src JOIN topic_summaries ts ON ts.id=src.summary_id" +
+			" WHERE ts.topic_id=topic_threads.id"
+		if filter.From != nil {
+			condition += " AND src.message_time>=?"
+			args = append(args, *filter.From)
+		}
+		if filter.To != nil {
+			condition += " AND src.message_time<?"
+			args = append(args, *filter.To)
+		}
+		condition += "))"
+		q = q.Where(condition, args...)
 	}
 	var topics []TopicThreadRow
 	if err := q.Order("updated_at DESC,id DESC").Find(&topics).Error; err != nil {
@@ -337,15 +352,7 @@ func (m *Manager) SearchTopics(ctx context.Context, query TopicSearchQuery) (Top
 	for _, row := range latest {
 		summaryIDs = append(summaryIDs, row.ID)
 	}
-	anchors, err := m.topicAnchorIDs(ctx, summaryIDs)
-	if err != nil {
-		return TopicPage{}, err
-	}
-	allAnchorIDs := make([]uint, 0)
-	for _, ids := range anchors {
-		allAnchorIDs = append(allAnchorIDs, ids...)
-	}
-	oneBotIDs, err := m.messageOneBotIDMap(ctx, allAnchorIDs)
+	anchors, err := m.topicAnchorOneBotIDs(ctx, summaryIDs)
 	if err != nil {
 		return TopicPage{}, err
 	}
@@ -376,13 +383,7 @@ func (m *Manager) SearchTopics(ctx context.Context, query TopicSearchQuery) (Top
 		if excluded {
 			continue
 		}
-		anchorIDs := anchors[row.ID]
-		anchorMessageIDs := make([]int64, 0, len(anchorIDs))
-		for _, id := range anchorIDs {
-			if oneBotID, ok := oneBotIDs[id]; ok {
-				anchorMessageIDs = append(anchorMessageIDs, oneBotID)
-			}
-		}
+		anchorMessageIDs := append([]int64(nil), anchors[row.ID]...)
 		period := periods[topic.ID]
 		hit := TopicHit{
 			TopicID: topic.ID, ConversationKind: topic.ConversationKind, TargetID: topic.TargetID,
@@ -434,8 +435,13 @@ func (m *Manager) ReadTopic(ctx context.Context, topicID uint) (*TopicDetail, er
 	if topicID == 0 {
 		return nil, fmt.Errorf("话题编号不能为空")
 	}
+	now := time.Now()
 	var topic TopicThreadRow
-	if err := m.db.WithContext(ctx).Where("id=?", topicID).Take(&topic).Error; err != nil {
+	err := m.db.WithContext(ctx).Where("id=? AND forgotten_at IS NULL AND forget_at>?", topicID, now).Take(&topic).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, fmt.Errorf("话题不存在或已遗忘")
+	}
+	if err != nil {
 		return nil, err
 	}
 	var history []TopicSummaryRow
@@ -458,48 +464,37 @@ func (m *Manager) ReadTopic(ctx context.Context, topicID uint) (*TopicDetail, er
 	for _, version := range history {
 		detail.SummaryHistory = append(detail.SummaryHistory, TopicSummaryVersion{ID: version.ID, Version: version.Version, CreatedAt: version.CreatedAt})
 	}
-	sourceIDs := make([]uint, 0)
-	anchorIDs := make([]uint, 0)
+	detail.SourceTotal = len(sources)
+	sourceIDs := make([]int64, 0)
+	anchorIDs := make([]int64, 0)
+	availableIDs := make([]uint, 0)
 	for _, source := range sources {
-		if source.IsAnchor {
-			anchorIDs = append(anchorIDs, source.MessageLogID)
-		} else {
-			sourceIDs = append(sourceIDs, source.MessageLogID)
+		if source.OneBotMessageID != 0 {
+			if source.IsAnchor {
+				anchorIDs = append(anchorIDs, source.OneBotMessageID)
+			} else {
+				sourceIDs = append(sourceIDs, source.OneBotMessageID)
+			}
+		}
+		availableIDs = append(availableIDs, source.MessageLogID)
+	}
+	if len(availableIDs) > 0 {
+		var existing []uint
+		if err := m.db.WithContext(ctx).Model(&MessageLog{}).Where("id IN ?", availableIDs).Pluck("id", &existing).Error; err != nil {
+			return nil, err
+		}
+		exists := make(map[uint]bool, len(existing))
+		for _, id := range existing {
+			exists[id] = true
+		}
+		for _, source := range sources {
+			if exists[source.MessageLogID] {
+				detail.SourceAvailable++
+			}
 		}
 	}
-	var err error
-	detail.SourceMessageIDs, err = m.messageOneBotIDs(ctx, sourceIDs)
-	if err != nil {
-		return nil, err
-	}
-	detail.AnchorMessageIDs, err = m.messageOneBotIDs(ctx, anchorIDs)
-	if err != nil {
-		return nil, err
-	}
+	detail.SourceUnavailable = detail.SourceTotal - detail.SourceAvailable
+	detail.SourceMessageIDs = sourceIDs
+	detail.AnchorMessageIDs = anchorIDs
 	return detail, nil
-}
-
-func (m *Manager) messageOneBotIDs(ctx context.Context, ids []uint) ([]int64, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	unique := make([]uint, 0, len(ids))
-	seen := map[uint]bool{}
-	for _, id := range ids {
-		if id != 0 && !seen[id] {
-			seen[id] = true
-			unique = append(unique, id)
-		}
-	}
-	values, err := m.messageOneBotIDMap(ctx, unique)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]int64, 0, len(ids))
-	for _, id := range unique {
-		if value, ok := values[id]; ok {
-			result = append(result, value)
-		}
-	}
-	return result, nil
 }

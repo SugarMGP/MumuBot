@@ -2,10 +2,10 @@ package mcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
 	"github.com/cloudwego/eino/components/tool"
@@ -28,11 +28,21 @@ type ServerConfig struct {
 	CustomHeaders map[string]string `json:"custom_headers"` // 可选，自定义 HTTP 头
 }
 
+// ServerStatus 是单个 MCP 服务的真实加载状态
+type ServerStatus struct {
+	Name      string `json:"name"`
+	Enabled   bool   `json:"enabled"`
+	Connected bool   `json:"connected"`
+	ToolCount int    `json:"tool_count"`
+	Error     string `json:"error,omitempty"`
+}
+
 // Manager MCP 客户端管理器
 type Manager struct {
-	clients []*client.Client
-	tools   []tool.BaseTool
-	mu      sync.RWMutex
+	clients  []*client.Client
+	tools    []tool.BaseTool
+	statuses []ServerStatus
+	mu       sync.RWMutex
 }
 
 // NewMCPManager 创建 MCP 管理器
@@ -40,7 +50,7 @@ func NewMCPManager() *Manager {
 	return &Manager{}
 }
 
-// Load 连接指定的 MCP 服务器；单个失败会返回汇总错误
+// Load 连接指定的 MCP 服务器；单个失败只让该服务不可用，不阻断其它能力
 func (m *Manager) Load(ctx context.Context, servers []ServerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -49,51 +59,49 @@ func (m *Manager) Load(ctx context.Context, servers []ServerConfig) error {
 		ctx = context.Background()
 	}
 
-	var loadErrors []error
 	for _, serverCfg := range servers {
 		if !serverCfg.Enabled {
 			zap.L().Debug("MCP 服务器已禁用，跳过", zap.String("name", serverCfg.Name))
 			continue
 		}
-
-		if err := m.connectServer(ctx, &serverCfg); err != nil {
-			loadErrors = append(loadErrors, fmt.Errorf("加载 MCP 服务器 %q 失败: %w", serverCfg.Name, err))
-			zap.L().Warn("连接 MCP 服务器失败",
-				zap.String("name", serverCfg.Name),
-				zap.Error(err))
+		toolCount, err := m.connectServer(ctx, &serverCfg)
+		if err != nil {
+			m.statuses = append(m.statuses, ServerStatus{Name: serverCfg.Name, Enabled: true, Error: err.Error()})
+			zap.L().Warn("连接 MCP 服务器失败", zap.String("name", serverCfg.Name), zap.Error(err))
 			continue
 		}
-
+		m.statuses = append(m.statuses, ServerStatus{Name: serverCfg.Name, Enabled: true, Connected: true, ToolCount: toolCount})
 		zap.L().Info("已连接 MCP 服务器", zap.String("name", serverCfg.Name))
 	}
 
-	return errors.Join(loadErrors...)
+	return nil
 }
 
 // connectServer 连接单个 MCP 服务器
-func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
+func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, error) {
 	var cli *client.Client
 	var err error
+	const initTimeout = 30 * time.Second
 
 	switch cfg.Type {
 	case "sse":
 		cli, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.CustomHeaders))
 		if err != nil {
-			return fmt.Errorf("创建 SSE 客户端失败: %w", err)
+			return 0, fmt.Errorf("创建 SSE 客户端失败: %w", err)
 		}
 	case "stdio":
 		cli, err = client.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 		if err != nil {
-			return fmt.Errorf("创建 Stdio 客户端失败: %w", err)
+			return 0, fmt.Errorf("创建 Stdio 客户端失败: %w", err)
 		}
 	default:
-		return fmt.Errorf("不支持的 MCP 服务器类型: %s", cfg.Type)
+		return 0, fmt.Errorf("不支持的 MCP 服务器类型: %s", cfg.Type)
 	}
 
 	// 启动客户端
 	if err := cli.Start(ctx); err != nil {
 		_ = cli.Close()
-		return fmt.Errorf("启动 MCP 客户端失败: %w", err)
+		return 0, fmt.Errorf("启动 MCP 客户端失败: %w", err)
 	}
 
 	// 初始化连接
@@ -104,9 +112,11 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 		Version: "2.0.0",
 	}
 
-	if _, err := cli.Initialize(ctx, initRequest); err != nil {
+	initCtx, cancelInit := context.WithTimeout(ctx, initTimeout)
+	defer cancelInit()
+	if _, err := cli.Initialize(initCtx, initRequest); err != nil {
 		_ = cli.Close()
-		return fmt.Errorf("初始化 MCP 连接失败: %w", err)
+		return 0, fmt.Errorf("初始化 MCP 连接失败: %w", err)
 	}
 
 	// 获取工具 - 使用 MCPClient 接口
@@ -115,16 +125,16 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 		ToolNameList: cfg.ToolNameList,
 	}
 
-	baseTools, err := mcptool.GetTools(ctx, mcpToolCfg)
+	baseTools, err := mcptool.GetTools(initCtx, mcpToolCfg)
 	if err != nil {
 		_ = cli.Close()
-		return fmt.Errorf("获取 MCP 工具失败: %w", err)
+		return 0, fmt.Errorf("获取 MCP 工具失败: %w", err)
 	}
 
 	renamed, err := renameMCPTools(ctx, baseTools, cfg.Name, m.tools)
 	if err != nil {
 		_ = cli.Close()
-		return err
+		return 0, err
 	}
 	m.clients = append(m.clients, cli)
 	m.tools = append(m.tools, renamed...)
@@ -133,7 +143,7 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) error {
 		zap.String("server", cfg.Name),
 		zap.Int("tool_count", len(baseTools)))
 
-	return nil
+	return len(renamed), nil
 }
 
 // renamedTool 把 MCP 工具改名成 mcp-服务名-工具名，调用能力原样透传
@@ -217,6 +227,13 @@ func sanitizeMCPName(raw string) string {
 	return trimmed
 }
 
+// Statuses 返回本次加载的逐个服务实际状态
+func (m *Manager) Statuses() []ServerStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]ServerStatus(nil), m.statuses...)
+}
+
 // GetTools 获取所有MCP工具
 func (m *Manager) GetTools() []tool.BaseTool {
 	m.mu.RLock()
@@ -237,4 +254,5 @@ func (m *Manager) Close() {
 
 	m.clients = nil
 	m.tools = nil
+	m.statuses = nil
 }

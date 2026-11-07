@@ -1,45 +1,77 @@
 # syntax=docker/dockerfile:1
 
 FROM --platform=$BUILDPLATFORM golang:1.26.5 AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/worker-exec ./cmd/worker-exec
 COPY internal/workerproto ./internal/workerproto
 COPY internal/workerexec ./internal/workerexec
-RUN CGO_ENABLED=0 go build -trimpath -o /out/worker-exec ./cmd/worker-exec
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/worker-exec ./cmd/worker-exec
+RUN set -eux; \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go install github.com/mikefarah/yq/v4@v4.54.2; \
+    bin="$(go env GOPATH)/bin"; \
+    mkdir -p /out; \
+    if [ -x "${bin}/linux_${TARGETARCH}/yq" ]; then \
+      cp "${bin}/linux_${TARGETARCH}/yq" /out/yq; \
+    else \
+      cp "${bin}/yq" /out/yq; \
+    fi
 
 FROM ubuntu:24.04
 
+ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash ca-certificates curl wget git jq ripgrep tmux sudo \
     build-essential xz-utils unzip zip procps htop vim-tiny \
     python3 python3-venv python3-pip python3-dev \
-    nodejs npm xvfb \
+    fd-find bat file tree p7zip-full poppler-utils xvfb \
     && rm -rf /var/lib/apt/lists/*
+
+# 固定 Node 24.22.2 与 Bun 1.4.4；Bun 优先，Node 继续兼容现有项目
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) NODE_ARCH=x64; BUN_ARCH=x64; SD_ARCH=x86_64; SD_LIBC=musl ;; \
+      arm64) NODE_ARCH=arm64; BUN_ARCH=aarch64; SD_ARCH=aarch64; SD_LIBC=musl ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    NODE_FILE="node-v24.22.2-linux-${NODE_ARCH}.tar.xz"; \
+    curl -fsSLo "/tmp/${NODE_FILE}" "https://nodejs.org/dist/v24.22.2/${NODE_FILE}"; \
+    curl -fsSLo /tmp/SHASUMS256.txt "https://nodejs.org/dist/v24.22.2/SHASUMS256.txt"; \
+    (cd /tmp && grep " ${NODE_FILE}\$" SHASUMS256.txt | sha256sum -c -); \
+    tar -xJf "/tmp/${NODE_FILE}" -C /usr/local --strip-components=1; \
+    rm -f "/tmp/${NODE_FILE}" /tmp/SHASUMS256.txt; \
+    curl -fsSLo /tmp/bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-${BUN_ARCH}.zip"; \
+    unzip -q /tmp/bun.zip -d /tmp/bun; \
+    install -m 0755 "/tmp/bun/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun; \
+    rm -rf /tmp/bun /tmp/bun.zip; \
+    curl -LsSf https://astral.sh/uv/0.13.7/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh; \
+    mkdir -p /tmp/sd; \
+    curl -fsSL "https://github.com/chmln/sd/releases/download/v1.0.0/sd-v1.0.0-${SD_ARCH}-unknown-linux-${SD_LIBC}.tar.gz" | tar -xz -C /tmp/sd --strip-components=1; \
+    install -m 0755 /tmp/sd/sd /usr/local/bin/sd; \
+    rm -rf /tmp/sd; \
+    node --version; npm --version; bun --version; bun --revision; uv --version; sd --version; fdfind --version; batcat --version; command -v 7z pdftotext
 
 # 多用户 Nix；容器没有 systemd，由 entrypoint 启动 nix-daemon
 RUN curl -L https://nixos.org/nix/install | sh -s -- --daemon
 RUN mkdir -p /etc/nix && \
-    printf 'experimental-features = nix-command flakes\nsandbox = false\ntrusted-users = root worker worker2 worker3 worker4 worker5\n' >> /etc/nix/nix.conf
+    printf 'experimental-features = nix-command flakes\nsandbox = false\ntrusted-users = root worker\n' >> /etc/nix/nix.conf
 
 RUN groupadd -f nix-users \
     && groupadd -g 1000 worker \
-    && for i in 1 2 3 4 5; do \
-         if [ "$i" = "1" ]; then u=worker; uid=1000; else u="worker$i"; uid=$((999 + i)); fi; \
-         useradd -m -u "$uid" -g worker -s /bin/bash "$u"; \
-         usermod -aG nix-users "$u"; \
-       done \
+    && useradd -m -u 1000 -g worker -s /bin/bash worker \
+    && usermod -aG nix-users worker \
     && echo '%worker ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/worker \
     && chmod 440 /etc/sudoers.d/worker \
-    && mkdir -p /home/worker /home/worker2 /home/worker3 /home/worker4 /home/worker5 \
-    && for home in /home/worker /home/worker2 /home/worker3 /home/worker4 /home/worker5; do \
-         chown -R "$(basename "$home")":worker "$home"; \
-       done
+    && chown -R worker:worker /home/worker
 
 COPY --from=build /out/worker-exec /usr/local/bin/worker-exec
+COPY --from=build /out/yq /usr/local/bin/yq
 COPY --chmod=755 docker-entrypoint.worker.sh /usr/local/bin/docker-entrypoint.worker.sh
+RUN yq --version
 
 ENV HOME=/home/worker
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/worker/.cache/ms-playwright

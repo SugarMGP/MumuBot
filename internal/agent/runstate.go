@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/persona"
@@ -14,6 +16,35 @@ import (
 type runState struct {
 	config  *config.RuntimeConfig
 	persona *persona.Persona
+	steps   *stepBudget
+}
+
+// stepBudget 是一次 think 的共享模型步数预算，换 runner 不补充
+type stepBudget struct {
+	mu        sync.Mutex
+	remaining int
+}
+
+func (b *stepBudget) Remaining() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.remaining
+}
+
+func (b *stepBudget) Consume() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.remaining <= 0 {
+		return false
+	}
+	b.remaining--
+	return true
 }
 
 type runStateKey struct{}
@@ -27,13 +58,23 @@ func runStateFrom(ctx context.Context) *runState {
 	return state
 }
 
-func newRunState() (*runState, error) {
+func newRunState(role string) (*runState, error) {
 	cfg := config.Snapshot()
-	p, err := persona.NewPersona(&cfg.Persona)
+	maxStep := cfg.Agent.MaxStep
+	switch role {
+	case "life":
+		maxStep = cfg.Agent.LifeMaxStep
+	case "worker":
+		maxStep = cfg.Agent.WorkerMaxStep
+	}
+	if maxStep <= 0 {
+		return nil, fmt.Errorf("单轮步数配置无效")
+	}
+	p, err := persona.NewPersona(&cfg.Persona, cfg.Identity)
 	if err != nil {
 		return nil, fmt.Errorf("加载人格失败: %w", err)
 	}
-	return &runState{config: cfg, persona: p}, nil
+	return &runState{config: cfg, persona: p, steps: &stepBudget{remaining: maxStep}}, nil
 }
 
 // personaFor 优先使用本轮快照，其次使用当前配置
@@ -44,21 +85,22 @@ func (a *Agent) personaFor(ctx context.Context) *persona.Persona {
 	return a.currentPersona()
 }
 
-// fallbackBotName 是取不到 QQ 昵称时的自称
-const fallbackBotName = "沐沐"
-
-// botName 返回机器人账号昵称，用于自身消息与 @ 渲染
+// botName 返回机器人账号昵称，用于自身消息与 @ 渲染；取不到 QQ 昵称时用全局角色名
 func (a *Agent) botName() string {
 	if a.bot != nil {
 		if name := a.bot.GetSelfName(); name != "" {
 			return name
 		}
 	}
-	return fallbackBotName
+	if name := strings.TrimSpace(config.Snapshot().Identity.Name); name != "" {
+		return name
+	}
+	return "沐沐"
 }
 
 func (a *Agent) currentPersona() *persona.Persona {
-	p, err := persona.NewPersona(&config.Snapshot().Persona)
+	snapshot := config.Snapshot()
+	p, err := persona.NewPersona(&snapshot.Persona, snapshot.Identity)
 	if err != nil {
 		zap.L().Warn("加载当前人格失败", zap.Error(err))
 		return nil

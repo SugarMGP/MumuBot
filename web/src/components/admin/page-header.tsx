@@ -20,7 +20,7 @@ export function PageHeader({
           {tag ? <Badge>{tag}</Badge> : null}
         </div>
         {subtitle ? (
-          <p className="mt-1.5 max-w-3xl text-sm leading-6 text-muted-foreground">
+          <p className="admin-body-text mt-1.5 max-w-3xl text-muted-foreground">
             {subtitle}
           </p>
         ) : null}

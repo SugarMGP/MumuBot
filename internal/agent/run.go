@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -22,6 +23,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// errCompactionPending 表示压缩失败或仍在退避，本轮不能继续请求主模型
+var errCompactionPending = errors.New("压缩失败或仍在退避")
+
 // runAgent 跑一轮主模型，模型产生的消息由会话收集器统一写回
 func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*schema.AgenticMessage], messages []*schema.AgenticMessage) error {
 	cfg := configFor(ctx)
@@ -35,8 +39,13 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 		modelName = generation.modelName
 	}
 	task := "react"
-	if tc := tools.GetToolContext(ctx); tc != nil && tc.ConversationKind == memory.ConversationKindWorker {
-		task = "worker"
+	if tc := tools.GetToolContext(ctx); tc != nil {
+		switch tc.ConversationKind {
+		case memory.ConversationKindWorker:
+			task = "worker"
+		case memory.ConversationKindLife:
+			task = "life"
+		}
 	}
 	ctx = llm.WithTask(ctx, task, modelName, extra...)
 	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent})
@@ -47,6 +56,17 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 			return nil
 		}
 		if event.Err != nil {
+			if task == "life" && errors.Is(event.Err, errLifeSleepComplete) {
+				return nil
+			}
+			if errors.Is(event.Err, adk.ErrExceedMaxIterations) {
+				if tc := tools.GetToolContext(ctx); tc != nil && tc.EndAfterSleep && task == "life" {
+					return nil
+				}
+			}
+			if errors.Is(event.Err, adk.ErrExceedMaxIterations) {
+				return fmt.Errorf("本轮步数用完: %w", event.Err)
+			}
 			return event.Err
 		}
 	}
@@ -64,12 +84,18 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	if tc == nil || tc.Session == nil {
 		return ctx, state, nil
 	}
+	if session, ok := tc.Session.(*Session); ok && session != nil && session.NeedsCompactionBeforeModel() {
+		if session.CompactionCoolingDown(time.Now()) {
+			return ctx, state, errCompactionPending
+		}
+		if err := h.compactNow(ctx, session, state, tc); err != nil {
+			return ctx, state, fmt.Errorf("%w: %v", errCompactionPending, err)
+		}
+	}
 	pending := tc.Session.PendingAfter(max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq))
 	visible := map[uint]bool{}
-	for _, id := range tc.VisibleTranscriptIDs {
-		if id != 0 {
-			visible[id] = true
-		}
+	for _, id := range transcriptIDs(state.Messages) {
+		visible[id] = true
 	}
 	for _, item := range pending {
 		if item.TranscriptID != 0 {
@@ -85,22 +111,30 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 		}
 	}
 	sort.SliceStable(pending, func(i, j int) bool { return pending[i].Order < pending[j].Order })
-	captured, captureErr := h.captureToolResults(ctx, state, tc)
-	if captureErr != nil {
-		return ctx, state, captureErr
+	if err := h.captureToolResults(ctx, state, tc); err != nil {
+		return ctx, state, err
 	}
-	tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, captured...)
+	// 睡眠工具已经成功落库：工具回执已绑定行号，正常结束这一轮，不再请求模型
+	if tc.EndAfterSleep {
+		return ctx, state, errLifeSleepComplete
+	}
+	if budget := runStateFrom(ctx); budget != nil && budget.steps != nil && !budget.steps.Consume() {
+		return ctx, state, adk.ErrExceedMaxIterations
+	}
+	tc.ModelRequested = true
 	if len(pending) == 0 {
 		return ctx, state, nil
+	}
+	if session, ok := tc.Session.(*Session); ok && session != nil {
+		if order := maxActionablePendingOrder(pending); order > 0 {
+			session.RecordRequestBoundary(order)
+		}
 	}
 	messages := make([]*schema.AgenticMessage, 0, len(pending))
 	observed := tc.ThinkStartArrivalSeq
 	for _, item := range pending {
 		// 直接复用会话里渲染好的消息，内容进入上下文后不再变化
 		messages = append(messages, item.Msg)
-		if item.TranscriptID != 0 {
-			tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, item.TranscriptID)
-		}
 		observed = max(observed, item.ArrivalSeq)
 	}
 	state.Messages = append(state.Messages, messages...)
@@ -111,10 +145,10 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	return ctx, state, nil
 }
 
-func (h *sessionInjector) captureToolResults(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) ([]uint, error) {
+func (h *sessionInjector) captureToolResults(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) error {
 	session, ok := tc.Session.(*Session)
 	if !ok || session == nil || state == nil {
-		return nil, nil
+		return nil
 	}
 	return session.CaptureStateToolResults(ctx, tc.RunID, state.Messages)
 }
@@ -154,7 +188,11 @@ func (h *sessionInjector) compactNow(ctx context.Context, session *Session, stat
 
 // compactAfterOverflow 在 provider 明确报告上下文溢出时强制尝试一次安全压缩
 func (a *Agent) compactAfterOverflow(ctx context.Context, kind string, targetID int64, toolsList []tool.BaseTool, genInput adk.TypedGenModelInput[*schema.AgenticMessage], session *Session) bool {
-	retryCtx := a.buildConversationToolContext(ctx, kind, targetID, session)
+	retryCtx, err := a.buildConversationToolContext(ctx, kind, targetID, session)
+	if err != nil {
+		zap.L().Warn("构建压缩后工具上下文失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
+		return false
+	}
 	tc := tools.GetToolContext(retryCtx)
 	pending := session.PendingMessages()
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
@@ -220,28 +258,24 @@ func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *ad
 	if last == nil || last.Role != schema.AgenticRoleTypeAssistant {
 		return ctx, state, nil
 	}
+	requestMessages := state.Messages[:len(state.Messages)-1]
 	if last.ResponseMeta != nil && last.ResponseMeta.TokenUsage != nil && last.ResponseMeta.TokenUsage.TotalTokens > 0 {
-		requestMessages := state.Messages[:len(state.Messages)-1]
 		session.ObserveResponseUsage(requestMessages, state.ToolInfos, last.ResponseMeta.TokenUsage)
 		session.SetTokenBase(last, last.ResponseMeta.TokenUsage)
 	} else {
 		session.ClearTokenBase()
 	}
-	entry, err := session.AppendAssistant(ctx, tc.RunID, last)
-	if err != nil {
+	if _, err := session.AppendAssistant(ctx, tc.RunID, last); err != nil {
 		return ctx, state, err
 	}
-	ids := append([]uint(nil), tc.VisibleTranscriptIDs...)
-	if entry != nil {
-		ids = append(ids, entry.ID)
-	}
+	// 新生成的 assistant 轨迹尚未进入任何成功请求，不能在同一事务里标 visible
+	ids := transcriptIDs(requestMessages)
 	seqs, err := session.memory.MarkVisible(ctx, session.kind, session.targetID, ids)
 	if err != nil {
 		return ctx, state, err
 	}
 	session.ApplyVisibleSeqs(seqs)
 	session.MarkInjected(tc.InjectedArrivalSeq)
-	tc.VisibleTranscriptIDs = nil
 	tc.InjectedArrivalSeq = 0
 	return ctx, state, nil
 }
@@ -303,8 +337,23 @@ func (a *Agent) passthroughModelInput(ctx context.Context, _ string, input *adk.
 	return input.Messages, nil
 }
 
-func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID int64, chatAgent *adk.TypedChatModelAgent[*schema.AgenticMessage], session *Session) error {
-	retryCtx := a.buildConversationToolContext(context.WithoutCancel(ctx), kind, targetID, session)
+func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID int64, state *runState, chatTools []tool.BaseTool, session *Session) error {
+	if state == nil || state.steps.Remaining() <= 0 {
+		return fmt.Errorf("本轮步数用完")
+	}
+	retryCtx, err := a.buildConversationToolContext(context.WithoutCancel(ctx), kind, targetID, session)
+	if err != nil {
+		return err
+	}
+	retryCtx = withRunState(retryCtx, state)
+	generation := generationFrom(retryCtx)
+	if generation == nil {
+		return fmt.Errorf("模型运行态未初始化")
+	}
+	chatAgent, err := a.newChatAgent(generation, chatTools, state.steps.Remaining())
+	if err != nil {
+		return err
+	}
 	tc := tools.GetToolContext(retryCtx)
 	pending := session.PendingMessages()
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)

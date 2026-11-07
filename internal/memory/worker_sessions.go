@@ -23,11 +23,10 @@ type WorkerSession struct {
 	ID               uint            `gorm:"column:id;primaryKey" json:"id"`
 	Title            string          `gorm:"column:title;type:text;not null" json:"title"`
 	Status           string          `gorm:"column:status;type:text;not null" json:"status"`
-	UserName         string          `gorm:"column:user_name;type:text;not null" json:"user_name"`
-	HomeDir          string          `gorm:"column:home_dir;type:text;not null" json:"home_dir"`
 	ModelName        string          `gorm:"column:model_name;type:text;not null;default:''" json:"model_name"`
 	LastError        string          `gorm:"column:last_error;type:text;not null;default:''" json:"last_error"`
 	ContextSummary   json.RawMessage `gorm:"column:context_summary;type:jsonb;not null;default:'[]'" json:"-"`
+	ContextStartID   uint            `gorm:"column:context_start_id;not null;default:0" json:"context_start_id"`
 	ContextThroughID uint            `gorm:"column:context_through_id;not null;default:0" json:"context_through_id"`
 	CreatedAt        time.Time       `gorm:"column:created_at;not null;default:now()" json:"created_at"`
 	UpdatedAt        time.Time       `gorm:"column:updated_at;not null;default:now()" json:"updated_at"`
@@ -45,7 +44,7 @@ func (m *Manager) GetWorkerSessionByID(ctx context.Context, id uint) (*WorkerSes
 }
 
 // CreateWorkerSession 创建一个 worker 并同步 conversation_targets
-func (m *Manager) CreateWorkerSession(ctx context.Context, title, userName, homeDir string) (*WorkerSession, error) {
+func (m *Manager) CreateWorkerSession(ctx context.Context, title string) (*WorkerSession, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return nil, fmt.Errorf("worker 标题不能为空")
@@ -53,11 +52,8 @@ func (m *Manager) CreateWorkerSession(ctx context.Context, title, userName, home
 	if len([]rune(title)) > MaxWorkerTitleRunes {
 		return nil, fmt.Errorf("worker 标题不能超过 %d 个字", MaxWorkerTitleRunes)
 	}
-	if userName == "" || homeDir == "" {
-		return nil, fmt.Errorf("worker 参数无效")
-	}
 	row := &WorkerSession{
-		Title: title, Status: WorkerStatusIdle, UserName: userName, HomeDir: homeDir,
+		Title: title, Status: WorkerStatusIdle,
 		ContextSummary: json.RawMessage(`[]`),
 	}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -83,6 +79,24 @@ func (m *Manager) ListWorkerSessions(ctx context.Context) ([]WorkerSession, erro
 		return nil, err
 	}
 	return rows, nil
+}
+
+// StartWorkerContextTx 在派工事务内为新上下文设置持久化起点并清掉旧摘要
+func (m *Manager) StartWorkerContextTx(tx *gorm.DB, id uint, startID uint) error {
+	if id == 0 || startID == 0 {
+		return fmt.Errorf("worker 或上下文起点无效")
+	}
+	result := tx.Model(&WorkerSession{}).Where("id=? AND status=?", id, WorkerStatusIdle).Updates(map[string]any{
+		"context_start_id": startID, "context_summary": json.RawMessage(`[]`),
+		"context_through_id": 0, "updated_at": time.Now(),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("worker 不在空闲状态，不能重置上下文")
+	}
+	return nil
 }
 
 // SetWorkerStatus 更新运行状态和错误信息
@@ -125,18 +139,25 @@ func (m *Manager) UpdateWorkerTitle(ctx context.Context, id uint, title string) 
 	})
 }
 
-// SaveWorkerContext 保存 eino 摘要结果和覆盖边界
-func (m *Manager) SaveWorkerContext(ctx context.Context, id uint, summary json.RawMessage, throughID uint) error {
+// CommitWorkerCheckpoint 在同一事务里给真实输入分配可见序号并保存检查点
+func (m *Manager) CommitWorkerCheckpoint(ctx context.Context, id uint, summary json.RawMessage, throughID uint, visibleIDs []uint) (map[uint]uint64, error) {
 	if len(summary) == 0 {
 		summary = json.RawMessage(`[]`)
 	}
-	now := time.Now()
-	return m.db.WithContext(ctx).Model(&WorkerSession{}).Where("id=?", id).
-		Updates(map[string]any{
+	seqs := map[uint]uint64{}
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		seqs, err = markVisibleTx(tx, ConversationKindWorker, int64(id), visibleIDs)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&WorkerSession{}).Where("id=?", id).Updates(map[string]any{
 			"context_summary":    summary,
 			"context_through_id": throughID,
-			"updated_at":         now,
+			"updated_at":         time.Now(),
 		}).Error
+	})
+	return seqs, err
 }
 
 // FailRunningWorkerSessions 在进程重启时把中断的 worker 标成失败

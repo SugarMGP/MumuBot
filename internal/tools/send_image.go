@@ -12,7 +12,8 @@ import (
 )
 
 type SendImageInput struct {
-	URL string `json:"url" jsonschema:"description=要发送的图片 HTTP/HTTPS 地址"`
+	URL      string `json:"url,omitempty" jsonschema:"description=图片 HTTP/HTTPS 地址，与 image_ref 二选一"`
+	ImageRef string `json:"image_ref,omitempty" jsonschema:"description=消息里的 image_ref，与 url 二选一"`
 }
 
 func sendImage(ctx context.Context, input *SendImageInput) (map[string]any, error) {
@@ -20,22 +21,40 @@ func sendImage(ctx context.Context, input *SendImageInput) (map[string]any, erro
 	if tc == nil || tc.SendImageURLCallback == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("图片发送能力未初始化"))
 	}
-	imageURL := ""
+	url := ""
+	imageRef := ""
 	if input != nil {
-		imageURL = strings.TrimSpace(input.URL)
+		url = strings.TrimSpace(input.URL)
+		imageRef = strings.TrimSpace(input.ImageRef)
 	}
-	if imageURL == "" {
-		return nil, fmt.Errorf("图片 URL 不能为空")
+	if (url == "") == (imageRef == "") {
+		return nil, fmt.Errorf("url 与 image_ref 必须且只能提供一个")
 	}
-	if _, err := projectutils.ParseHTTPURL(imageURL); err != nil {
+	if imageRef != "" {
+		data, _, name, err := refImageBytes(ctx, tc, imageRef)
+		if err != nil {
+			return nil, err
+		}
+		if tc.SendImageBytesCallback == nil {
+			return nil, NewTerminalToolError(fmt.Errorf("图片发送能力未初始化"))
+		}
+		if err := tc.SendImageBytesCallback(ctx, imageRef, name, data); err != nil {
+			return nil, NewTerminalToolError(err)
+		}
+		return map[string]any{"success": true, "message": "图片已发送", "image_ref": imageRef}, nil
+	}
+	if tc.SendImageURLCallback == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("图片发送能力未初始化"))
+	}
+	if _, err := projectutils.ParseHTTPURL(url); err != nil {
 		return nil, fmt.Errorf("图片 URL 无效，仅支持不带凭据的 HTTP/HTTPS 地址；本地表情包请使用 sendSticker")
 	}
-	if err := tc.SendImageURLCallback(ctx, imageURL); err != nil {
+	if err := tc.SendImageURLCallback(ctx, url); err != nil {
 		return nil, NewTerminalToolError(err)
 	}
 	return map[string]any{"success": true, "message": "图片已发送"}, nil
 }
 
 func NewSendImageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendImage", "将普通图片 HTTP/HTTPS URL 发送到当前会话；本地表情包请使用 sendSticker。", sendImage)
+	return utils.InferTool("sendImage", "把 HTTP/HTTPS 图片 URL 或消息里的 image_ref 发到当前会话；两者恰选一个，本地表情包请使用 sendSticker。", sendImage)
 }

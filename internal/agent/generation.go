@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"mumu-bot/internal/config"
@@ -22,20 +21,17 @@ import (
 
 var ErrNoModel = fmt.Errorf("尚未配置模型")
 
-// Generation 是一次可替换的模型、工具、MCP 和 ADK Agent 快照
+// Generation 是一次可替换的模型、工具和 MCP 快照；ADK Agent 在每次 think 按当前步数构造
 type Generation struct {
 	model         model.AgenticModel
 	modelName     string
 	contextWindow int
-	groupAgent    *adk.TypedChatModelAgent[*schema.AgenticMessage]
-	privateAgent  *adk.TypedChatModelAgent[*schema.AgenticMessage]
-	workerAgent   *adk.TypedChatModelAgent[*schema.AgenticMessage]
 	groupTools    []tool.BaseTool
 	privateTools  []tool.BaseTool
 	workerTools   []tool.BaseTool
+	lifeTools     []tool.BaseTool
 	mcp           *mcp.Manager
 	media         *media.Manager
-	toolNames     []string
 
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -94,12 +90,12 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 		Quality:    float32(cfg.Media.ImageQuality),
 		NarrowEdge: cfg.Media.NarrowEdge,
 	})
-	groupTools, privateTools, toolNames, err := a.buildToolLists(mcpManager)
+	groupTools, privateTools, lifeTools, err := buildToolLists(mcpManager)
 	if err != nil {
 		mcpManager.Close()
 		return nil, err
 	}
-	workerTools, err := buildTools(nil, workerToolBuilders())
+	workerTools, err := buildTools(workerToolBuilders())
 	if err != nil {
 		mcpManager.Close()
 		return nil, err
@@ -111,33 +107,17 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 		groupTools:    groupTools,
 		privateTools:  privateTools,
 		workerTools:   workerTools,
+		lifeTools:     lifeTools,
 		mcp:           mcpManager,
 		media:         mediaManager,
-		toolNames:     toolNames,
-	}
-	generation.groupAgent, err = a.newChatAgent(generation, groupTools)
-	if err != nil {
-		mcpManager.Close()
-		return nil, err
-	}
-	generation.privateAgent, err = a.newChatAgent(generation, privateTools)
-	if err != nil {
-		mcpManager.Close()
-		return nil, err
-	}
-	generation.workerAgent, err = a.newWorkerAgent(generation, workerTools)
-	if err != nil {
-		mcpManager.Close()
-		return nil, err
 	}
 	return generation, nil
 }
 
 // newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立
-func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
-	maxStep := config.Snapshot().Agent.MaxStep
+func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool, maxStep int) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	if maxStep <= 0 {
-		maxStep = 50
+		return nil, fmt.Errorf("聊天单轮步数无效")
 	}
 	handlers := []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
 		&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
@@ -147,9 +127,33 @@ func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool) 
 }
 
 // newWorkerAgent 只挂 worker 工具和 eino 摘要，不接 QQ 会话的人设/压缩器
-func (a *Agent) newWorkerAgent(generation *Generation, chatTools []tool.BaseTool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
-	const maxStep = 30
-	summarizer, err := a.newWorkerSummarizer(generation)
+func (a *Agent) newWorkerAgent(ctx context.Context, generation *Generation, chatTools []tool.BaseTool, maxStep int) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
+	if maxStep <= 0 {
+		return nil, fmt.Errorf("工作单轮步数无效")
+	}
+	summarizer, err := a.newWorkerSummarizer(ctx, generation)
+	if err != nil {
+		return nil, err
+	}
+	handlers := make([]adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], 0, 3)
+	handlers = append(handlers,
+		&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
+	)
+	if summarizer != nil {
+		handlers = append(handlers, summarizer)
+	}
+	handlers = append(handlers,
+		&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
+	)
+	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, nil)
+}
+
+// newLifeAgent 复用主模型和摘要中间件；睡眠工具是收尾动作，直接结束本轮
+func (a *Agent) newLifeAgent(ctx context.Context, generation *Generation, chatTools []tool.BaseTool, maxStep int) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
+	if maxStep <= 0 {
+		return nil, fmt.Errorf("生活单轮步数无效")
+	}
+	summarizer, err := a.newLifeSummarizer(ctx, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -197,47 +201,94 @@ func workerToolBuilders() []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewBashTool() },
 		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadSessionHistoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadSessionEntryTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateWorkerTitleTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
+		func() (tool.BaseTool, error) { return tools.NewCreateFileRefTool() },
+		func() (tool.BaseTool, error) { return tools.NewWorkerSaveFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewLifeViewImageTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadFileTool() },
 	}
 }
 
-func (a *Agent) buildToolLists(mcpManager *mcp.Manager) ([]tool.BaseTool, []tool.BaseTool, []string, error) {
-	groupTools, err := buildTools(mcpManager, groupToolBuilders())
-	if err != nil {
-		return nil, nil, nil, err
+// lifeToolBuilders 是生活主线自己的工具表：没有 QQ 场合的表达工具，扩展 MCP 只挂在这里
+func lifeToolBuilders() []func() (tool.BaseTool, error) {
+	return []func() (tool.BaseTool, error){
+		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchTopicsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadTopicTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchHistoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadHistoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
+		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadSessionHistoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadSessionEntryTool() },
+		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
+		func() (tool.BaseTool, error) { return tools.NewLifeUpdateMoodTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
+		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
+		func() (tool.BaseTool, error) { return tools.NewLifeViewImageTool() },
+		func() (tool.BaseTool, error) { return tools.NewListFilesTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewWriteFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewSaveFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewCreateFileRefTool() },
+		func() (tool.BaseTool, error) { return tools.NewCancelWorkerTool() },
+		func() (tool.BaseTool, error) { return tools.NewGetUserProfileTool() },
+		func() (tool.BaseTool, error) { return tools.NewSetSelfProfileTool() },
+		func() (tool.BaseTool, error) { return tools.NewListQzonePostsTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadQzonePostTool() },
+		func() (tool.BaseTool, error) { return tools.NewPublishQzoneTool() },
+		func() (tool.BaseTool, error) { return tools.NewLikeQzoneTool() },
+		func() (tool.BaseTool, error) { return tools.NewCommentQzoneTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadForwardTool() },
+		func() (tool.BaseTool, error) { return tools.NewPlanNextTool() },
+		func() (tool.BaseTool, error) { return tools.NewManageScheduleTool() },
+		func() (tool.BaseTool, error) { return tools.NewSleepUntilTool() },
+		func() (tool.BaseTool, error) { return tools.NewWakeUpTool() },
+		func() (tool.BaseTool, error) { return tools.NewWriteDiaryTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadDiaryTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchDiaryTool() },
 	}
-	privateTools, err := buildTools(mcpManager, privateToolBuilders())
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	seen := map[string]bool{}
-	var names []string
-	for _, list := range [][]tool.BaseTool{groupTools, privateTools} {
-		for _, item := range list {
-			info, err := item.Info(a.ctx)
-			if err != nil || info == nil {
-				continue
-			}
-			name := strings.TrimSpace(info.Name)
-			if name == "" || seen[name] {
-				continue
-			}
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	return groupTools, privateTools, names, nil
 }
 
-func buildTools(mcpManager *mcp.Manager, builders []func() (tool.BaseTool, error)) ([]tool.BaseTool, error) {
-	list := make([]tool.BaseTool, 0, len(builders)+8)
+func buildToolLists(mcpManager *mcp.Manager) ([]tool.BaseTool, []tool.BaseTool, []tool.BaseTool, error) {
+	groupTools, err := buildTools(groupToolBuilders())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	privateTools, err := buildTools(privateToolBuilders())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lifeTools, err := buildToolsWithMCP(mcpManager, lifeToolBuilders())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return groupTools, privateTools, lifeTools, nil
+}
+
+func buildTools(builders []func() (tool.BaseTool, error)) ([]tool.BaseTool, error) {
+	list := make([]tool.BaseTool, 0, len(builders))
 	for _, build := range builders {
 		item, err := build()
 		if err != nil {
 			return nil, err
 		}
 		list = append(list, item)
+	}
+	return list, nil
+}
+
+// buildToolsWithMCP 只给生活主线装配扩展 MCP 工具
+func buildToolsWithMCP(mcpManager *mcp.Manager, builders []func() (tool.BaseTool, error)) ([]tool.BaseTool, error) {
+	list, err := buildTools(builders)
+	if err != nil {
+		return nil, err
 	}
 	if mcpManager != nil {
 		list = append(list, mcpManager.GetTools()...)
@@ -265,6 +316,7 @@ func sharedToolBuilders(private bool) []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewGetNewMessagesTool() },
 		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadSessionHistoryTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadSessionEntryTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
 		speak,
 		func() (tool.BaseTool, error) { return tools.NewStayQuietTool() },
@@ -279,6 +331,10 @@ func sharedToolBuilders(private bool) []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
+		func() (tool.BaseTool, error) { return tools.NewChatReadFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewChatSendFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadDiaryTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchDiaryTool() },
 		func() (tool.BaseTool, error) { return tools.NewGetCurrentStatusTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchFacesTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadForwardTool() },
@@ -296,7 +352,9 @@ func groupToolBuilders() []func() (tool.BaseTool, error) {
 }
 
 func privateToolBuilders() []func() (tool.BaseTool, error) {
-	return sharedToolBuilders(true)
+	return append(sharedToolBuilders(true),
+		func() (tool.BaseTool, error) { return tools.NewGetUserProfileTool() },
+	)
 }
 
 func generationFrom(ctx context.Context) *Generation {
@@ -308,11 +366,4 @@ type generationKey struct{}
 
 func withGeneration(ctx context.Context, generation *Generation) context.Context {
 	return context.WithValue(ctx, generationKey{}, generation)
-}
-
-func (a *Agent) contextWindow() int {
-	if generation := a.currentGeneration(); generation != nil {
-		return generation.contextWindow
-	}
-	return 0
 }

@@ -11,6 +11,7 @@ import (
 const (
 	ModeGroup   = "group"
 	ModePrivate = "private"
+	ModeLife    = "life"
 )
 
 const (
@@ -19,16 +20,17 @@ const (
 	markerCommon  = "通用"
 )
 
-// Persona 是当前生效的人格预设，按模式预先裁好两段静态文本
+// Persona 是当前生效的人格预设，按模式预先裁好静态文本
 type Persona struct {
 	id          uint
 	name        string
 	groupText   string
 	privateText string
+	lifeText    string
 }
 
 // NewPersona 用配置里的两份文本构造人格，构造时完成按模式切块
-func NewPersona(cfg *config.PersonaConfig) (*Persona, error) {
+func NewPersona(cfg *config.PersonaConfig, identity config.IdentityConfig) (*Persona, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("人格预设未初始化")
 	}
@@ -37,11 +39,18 @@ func NewPersona(cfg *config.PersonaConfig) (*Persona, error) {
 	if card == "" || simulation == "" {
 		return nil, fmt.Errorf("人格卡与仿真提示词不能为空")
 	}
+	lifePrompt := strings.TrimSpace(cfg.LifePrompt)
+	if lifePrompt == "" {
+		lifePrompt = config.BuiltinLifePrompt()
+	}
+	life := assembleCommon(card, simulation) + "\n\n" + lifePrompt
+	values := IdentityFromConfig(identity)
 	return &Persona{
 		id:          cfg.PresetID,
 		name:        cfg.PresetName,
-		groupText:   assemble(card, simulation, markerGroup),
-		privateText: assemble(card, simulation, markerPrivate),
+		groupText:   Render(assemble(card, simulation, markerGroup), values),
+		privateText: Render(assemble(card, simulation, markerPrivate), values),
+		lifeText:    Render(life, values),
 	}, nil
 }
 
@@ -50,10 +59,14 @@ func (p *Persona) Instruction(mode string) string {
 	if p == nil {
 		return ""
 	}
-	if mode == ModePrivate {
+	switch mode {
+	case ModePrivate:
 		return p.privateText
+	case ModeLife:
+		return p.lifeText
+	default:
+		return p.groupText
 	}
-	return p.groupText
 }
 
 // assemble 把人格卡与仿真提示词按模式裁好并拼接
@@ -61,32 +74,22 @@ func assemble(card, simulation, mode string) string {
 	return strings.TrimSpace(sliceDoc(card, mode)) + "\n\n" + strings.TrimSpace(sliceDoc(simulation, mode))
 }
 
-// sliceDoc 裁剪出目标模式的段落；目标模式为空时依次退回另一模式、整份去标记文本
-func sliceDoc(text, mode string) string {
-	if sliced := sliceByMode(text, mode); strings.TrimSpace(sliced) != "" {
-		return sliced
-	}
-	other := markerPrivate
-	if mode == markerPrivate {
-		other = markerGroup
-	}
-	if sliced := sliceByMode(text, other); strings.TrimSpace(sliced) != "" {
-		return sliced
-	}
-	return stripMarkers(text)
+// assembleCommon 只取通用段落，供生活主线复用身份和说话风格；
+// 不新增 [生活] 标记，群/私聊专属段落不会混进来
+func assembleCommon(card, simulation string) string {
+	return strings.TrimSpace(sliceCommon(card)) + "\n\n" + strings.TrimSpace(sliceCommon(simulation))
 }
 
-// stripMarkers 去掉所有标记行，保留其余正文
-func stripMarkers(text string) string {
-	lines := strings.Split(text, "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if _, _, ok := parseMarker(strings.TrimSpace(line)); ok {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.Join(kept, "\n")
+// modeNone 永远不匹配任何标记，只保留通用段落
+const modeNone = "\x00"
+
+func sliceCommon(text string) string {
+	return sliceByMode(text, modeNone)
+}
+
+// sliceDoc 只保留通用段和目标模式段；目标范围没有正文时保持为空
+func sliceDoc(text, mode string) string {
+	return sliceByMode(text, mode)
 }
 
 // sliceByMode 按行首标记切出通用段与目标模式的段落

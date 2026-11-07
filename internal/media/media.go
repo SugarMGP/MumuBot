@@ -30,6 +30,7 @@ type Ref struct {
 	Sticker   bool   `json:"sticker"`
 	Collected bool   `json:"collected"`       // 表情包是否已在收藏库
 	Short     string `json:"short,omitempty"` // 会话内短哈希，落库后重启仍能对上
+	ImageRef  string `json:"image_ref,omitempty"`
 }
 
 // Refs 有序媒体引用列表，落库为 jsonb
@@ -197,10 +198,15 @@ func (m *Manager) storeImage(hash, tempPath string) (Ref, error) {
 	if err != nil {
 		return Ref{}, fmt.Errorf("创建 webp 编码器失败: %w", err)
 	}
-	tempTarget := target + ".tmp"
-	file, err := os.Create(tempTarget)
+	file, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.tmp")
 	if err != nil {
 		return Ref{}, fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	tempTarget := file.Name()
+	if err := file.Chmod(0o644); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tempTarget)
+		return Ref{}, fmt.Errorf("设置临时文件权限失败: %w", err)
 	}
 	if err := enc.Encode(file); err != nil {
 		_ = file.Close()
@@ -285,18 +291,22 @@ func sniffMime(path string) string {
 	defer file.Close()
 	buf := make([]byte, 512)
 	n, _ := io.ReadFull(file, buf)
-	switch http.DetectContentType(buf[:n]) {
-	case "image/jpeg":
-		return "image/jpeg"
-	case "image/png":
-		return "image/png"
-	case "image/gif":
-		return "image/gif"
-	case "image/webp":
-		return "image/webp"
-	case "image/bmp":
-		return "image/bmp"
+	if mimeType := ImageMIME(buf[:n]); mimeType != "" {
+		return mimeType
+	}
+	return "application/octet-stream"
+}
+
+// ImageMIME 只按实际字节判断可查看位图，不把扩展名当成图片资格
+func ImageMIME(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	mimeType := http.DetectContentType(data)
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp":
+		return mimeType
 	default:
-		return "application/octet-stream"
+		return ""
 	}
 }

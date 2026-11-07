@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"mumu-bot/internal/config"
@@ -36,37 +37,40 @@ func (a *Agent) conversationThinkLoop() {
 }
 
 func (a *Agent) thinkCycle() {
-	groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx)
-	if err != nil {
-		zap.L().Warn("读取可思考群聊失败", zap.Error(err))
-		return
-	}
-	for _, groupID := range groupIDs {
-		session := a.sessions.get(memory.ConversationKindGroup, groupID)
-		pending := session.PendingMessages()
-		if !hasActionableMessage(pending) {
-			continue
+	// 单个查询失败不能拦住 worker 扫描和生活时钟的独立推进
+	if !a.qqSleeping() {
+		if groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx); err != nil {
+			zap.L().Warn("读取可思考群聊失败", zap.Error(err))
+		} else {
+			for _, groupID := range groupIDs {
+				session := a.sessions.get(memory.ConversationKindGroup, groupID)
+				pending := session.PendingMessages()
+				if !hasActionableMessage(pending) || !session.FailedBatchAllowsRetry(pending) {
+					continue
+				}
+				a.scheduleGroupThink(groupID, latestReceivedAt(pending))
+			}
 		}
-		a.scheduleGroupThink(groupID, latestReceivedAt(pending))
-	}
-	targets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true)
-	if err != nil {
-		zap.L().Warn("读取可思考私聊失败", zap.Error(err))
-		return
-	}
-	for _, target := range targets {
-		if target.Blocked {
-			continue
+		if targets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true); err != nil {
+			zap.L().Warn("读取可思考私聊失败", zap.Error(err))
+		} else {
+			for _, target := range targets {
+				if target.Blocked {
+					continue
+				}
+				session := a.sessions.get(memory.ConversationKindPrivate, target.TargetID)
+				pending := session.PendingMessages()
+				if !hasActionableMessage(pending) || !session.FailedBatchAllowsRetry(pending) {
+					continue
+				}
+				a.schedulePrivateThink(target.TargetID, latestReceivedAt(pending))
+			}
 		}
-		session := a.sessions.get(memory.ConversationKindPrivate, target.TargetID)
-		pending := session.PendingMessages()
-		if !hasActionableMessage(pending) {
-			continue
-		}
-		a.schedulePrivateThink(target.TargetID, latestReceivedAt(pending))
 	}
 	a.scanWorkerThinks()
-	a.scanIdleCompactions()
+	if !a.qqSleeping() {
+		a.scanIdleCompactions()
+	}
 }
 
 // latestReceivedAt 取待处理消息里最新的一条进入时间，防抖从消息进来到达开始算
@@ -84,6 +88,9 @@ func latestReceivedAt(pending []*sessionUser) time.Time {
 }
 
 func (a *Agent) scheduleGroupThink(groupID int64, receivedAt time.Time) {
+	if a.qqSleeping() {
+		return
+	}
 	debounce := time.Duration(config.Snapshot().Agent.ThinkDebounceMS) * time.Millisecond
 	delay := remainingDebounce(receivedAt, time.Now(), debounce)
 
@@ -126,7 +133,7 @@ func remainingDebounce(receivedAt, now time.Time, debounce time.Duration) time.D
 func (a *Agent) flushPendingThink(groupID int64, expected *pendingThink, generation uint64) {
 	a.pendingGroupMu.Lock()
 	pending, ok := a.pendingGroupThinks[groupID]
-	if !ok || pending != expected || pending.generation != generation || a.stopping.Load() || a.ctx.Err() != nil {
+	if !ok || pending != expected || pending.generation != generation || a.stopping.Load() || a.ctx.Err() != nil || a.qqSleeping() {
 		a.pendingGroupMu.Unlock()
 		return
 	}
@@ -155,12 +162,12 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 	defer generation.wg.Done()
-	state, err := newRunState()
+	state, err := newRunState("chat")
 	if err != nil {
 		zap.L().Warn("加载本轮配置失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
-	if !a.conversationAllowed(memory.ConversationKindGroup, groupID) {
+	if a.qqSleeping() || !a.conversationAllowed(memory.ConversationKindGroup, groupID) {
 		return
 	}
 	if a.bot.IsSelfMuted(groupID) {
@@ -180,26 +187,54 @@ func (a *Agent) thinkGroup(groupID int64) {
 
 	ctx := withRunState(a.ctx, state)
 	ctx = withGeneration(ctx, generation)
-	ctx = a.buildConversationToolContext(ctx, memory.ConversationKindGroup, groupID, session)
+	ctx, err = a.buildConversationToolContext(ctx, memory.ConversationKindGroup, groupID, session)
+	if err != nil {
+		zap.L().Warn("构建群聊工具上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
+		return
+	}
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 	a.injectMaintenanceHint(ctx, session)
 
+	if state.steps.Remaining() <= 0 {
+		zap.L().Warn("群聊本轮步数已用完", zap.Int64("group_id", groupID))
+		return
+	}
+	chatAgent, err := a.newChatAgent(generation, generation.groupTools, state.steps.Remaining())
+	if err != nil {
+		zap.L().Warn("构建群聊运行态失败", zap.Int64("group_id", groupID), zap.Error(err))
+		return
+	}
 	messages, err := a.assembleMessages(ctx, session)
 	if err != nil {
 		zap.L().Warn("装配群聊上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
-	if runErr := a.runAgent(ctx, generation.groupAgent, messages); runErr != nil {
-		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.passthroughModelInput, session) {
-			if tc != nil {
-				tc.TopicMaintained = true
+	if runErr := a.runAgent(ctx, chatAgent, messages); runErr != nil {
+		if isContextOverflowError(runErr) {
+			if a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.passthroughModelInput, session) {
+				if tc != nil {
+					tc.TopicMaintained = true
+				}
+				if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, state, generation.groupTools, session); retryErr == nil {
+					a.finishSuccessfulThink(ctx, session, tc)
+					return
+				} else {
+					session.MarkFailedAfterRun(pending, tc != nil && tc.ModelRequested)
+					zap.L().Error("群聊溢出重试失败", zap.Int64("group_id", groupID), zap.Error(retryErr))
+					return
+				}
 			}
-			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupAgent, session); retryErr == nil {
-				a.finishSuccessfulThink(ctx, session, tc)
-				return
+			if !session.NeedsCompactionBeforeModel() {
+				session.MarkFailedAfterRun(pending, tc != nil && tc.ModelRequested)
 			}
+			return
 		}
+		if errors.Is(runErr, errCompactionPending) || session.NeedsCompactionBeforeModel() {
+			zap.L().Warn("群聊等待压缩重试", zap.Int64("group_id", groupID), zap.Error(runErr))
+			return
+		}
+		session.MarkFailedAfterRun(pending, tc != nil && tc.ModelRequested)
 		zap.L().Error("群聊思考失败", zap.Int64("group_id", groupID), zap.Error(runErr))
 		return
 	}
@@ -208,6 +243,7 @@ func (a *Agent) thinkGroup(groupID int64) {
 
 // finishSuccessfulThink 在一轮 think 完整结束后再判断压缩并推进维护计数
 func (a *Agent) finishSuccessfulThink(ctx context.Context, session *Session, tc *tools.ToolContext) {
+	session.ClearFailedBatch()
 	compacted := a.compactAfterThink(ctx, session)
 	if tc != nil {
 		session.CompleteTurn(tc.MemoryMaintained, tc.TopicMaintained || compacted)
@@ -282,7 +318,16 @@ func (a *Agent) conversationAllowed(kind string, targetID int64) bool {
 // hasActionableMessage 观察事件只能进入后续上下文，不能单独触发回应
 func hasActionableMessage(pending []*sessionUser) bool {
 	for _, user := range pending {
-		if user != nil && (user.MessageID != 0 || user.IsAgentMessage) {
+		if user == nil {
+			continue
+		}
+		if user.MessageID != 0 {
+			return true
+		}
+		if user.IsSelfCheck {
+			return true
+		}
+		if user.IsAgentMessage && user.Wake {
 			return true
 		}
 	}
@@ -291,8 +336,15 @@ func hasActionableMessage(pending []*sessionUser) bool {
 
 func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 	for _, user := range pending {
+		if user == nil {
+			continue
+		}
+		// 静默信只保存，不能借“强交互”绕过群发言门控
 		if user.IsAgentMessage {
-			return true
+			if user.Wake {
+				return true
+			}
+			continue
 		}
 		if user.Mentioned {
 			return true

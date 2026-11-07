@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useParams } from "react-router";
 import { memoryApi } from "@/api/client-endpoints";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
 import { toastApiError, toastSuccess } from "@/components/admin/toast";
+import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { NativeSelect } from "@/components/ui/form-controls";
 import { Card } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
 import { enumLabel, subjectText } from "@/lib/labels";
@@ -25,20 +25,17 @@ export default function MemoryDetailPage() {
     queryFn: () => memoryApi.get(memoryId),
     enabled: validMemoryId,
   });
-  const [status, setStatus] = useState("active");
-
-  useEffect(() => {
-    if (query.data) setStatus(query.data.item.status);
-  }, [query.data]);
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const mutation = useMutation({
-    mutationFn: (next: string) => memoryApi.updateStatus(memoryId, next),
+    mutationFn: () => memoryApi.updateStatus(memoryId, "archived"),
     onSuccess: async () => {
+      setArchiveOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["memory", memoryId] }),
         queryClient.invalidateQueries({ queryKey: ["memories"] }),
       ]);
-      toastSuccess(t("memories.statusUpdated"));
+      toastSuccess(t("memories.archived"));
     },
     onError: (error) => toastApiError(error),
   });
@@ -56,7 +53,7 @@ export default function MemoryDetailPage() {
   const { item, revisions } = query.data;
 
   return (
-    <div className="admin-memory-page space-y-6">
+    <div className="space-y-6">
       <Link
         to={backTo}
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-primary"
@@ -64,7 +61,7 @@ export default function MemoryDetailPage() {
         ← {t("memories.back")}
       </Link>
 
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <PageHeader
           title={item.label || item.content.slice(0, 40)}
           subtitle={`${enumLabel(t, "memoryType", item.memory_type)} · ${subjectText(t, item.subject_type, item.subject_target)}`}
@@ -78,41 +75,51 @@ export default function MemoryDetailPage() {
           }
         />
         <div className="flex shrink-0 items-center gap-2">
-          <NativeSelect
-            className="h-8 w-32"
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-            aria-label={t("memories.columns.status")}
-          >
-            {["active", "archived"].map((value) => (
-              <option key={value} value={value}>
-                {enumLabel(t, "memoryStatus", value)}
-              </option>
-            ))}
-          </NativeSelect>
-          <Button
-            size="sm"
-            onClick={() => mutation.mutate(status)}
-            disabled={mutation.isPending || status === item.status}
-          >
-            {mutation.isPending
-              ? t("memories.updating")
-              : t("memories.updateStatus")}
-          </Button>
+          {item.status === "active" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setArchiveOpen(true)}
+              disabled={mutation.isPending}
+            >
+              {t("memories.archive")}
+            </Button>
+          ) : null}
         </div>
       </div>
 
       <Card>
-        <div className="p-5">
-          <p className="whitespace-pre-wrap break-words text-base leading-8">
+        <div className="admin-card-pad">
+          <p className="admin-prose whitespace-pre-wrap break-words">
             {item.content}
           </p>
         </div>
       </Card>
 
       <Card>
-        <div className="space-y-4 p-5">
-          <h2 className="text-lg font-semibold text-foreground">
+        <div className="admin-card-pad">
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            <span className="text-muted-foreground">
+              {item.status === "archived"
+                ? t("memories.archivedHint")
+                : item.pinned
+                  ? t("memories.pinnedForever")
+                  : t("memories.forgetAt", {
+                      time: item.forget_at
+                        ? formatDateTime(item.forget_at)
+                        : t("memories.noDeadline"),
+                    })}
+            </span>
+            <span className="text-muted-foreground">
+              {t("memories.halfLife", { days: item.stability_days })}
+            </span>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="admin-card-stack admin-card-pad">
+          <h2 className="admin-card-title text-foreground">
             {t("memories.revisions")}
           </h2>
           {revisions.length === 0 ? (
@@ -152,6 +159,16 @@ export default function MemoryDetailPage() {
           )}
         </div>
       </Card>
+      <ConfirmDialog
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
+        title={t("memories.archiveTitle")}
+        description={t("memories.archiveBody")}
+        confirmLabel={t("memories.archive")}
+        loading={mutation.isPending}
+        destructive
+        onConfirm={() => mutation.mutate()}
+      />
     </div>
   );
 }

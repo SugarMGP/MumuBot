@@ -10,8 +10,11 @@ export const DialogTrigger = DialogPrimitive.Trigger;
 export function DialogContent({
   className,
   children,
+  variant = "center",
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) {
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  variant?: "center" | "sheet";
+}) {
   const { t } = useTranslation();
   return (
     <DialogPrimitive.Portal>
@@ -21,6 +24,7 @@ export function DialogContent({
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-variant={variant}
         className={cn(
           "fixed left-1/2 top-1/2 z-50 w-full max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 text-card-foreground shadow-xl outline-none",
           className,
@@ -57,7 +61,7 @@ export function DialogTitle({
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
   return (
     <DialogPrimitive.Title
-      className={cn("text-lg font-semibold text-foreground", className)}
+      className={cn("admin-card-title text-foreground", className)}
       {...props}
     />
   );
@@ -69,7 +73,7 @@ export function DialogDescription({
 }: React.ComponentProps<typeof DialogPrimitive.Description>) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-sm leading-6 text-muted-foreground", className)}
+      className={cn("admin-body-text text-muted-foreground", className)}
       {...props}
     />
   );

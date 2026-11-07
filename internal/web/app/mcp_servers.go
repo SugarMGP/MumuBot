@@ -1,10 +1,13 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"mumu-bot/internal/mcp"
+	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/secrets"
 
 	"github.com/go-chi/chi/v5"
@@ -86,7 +89,7 @@ func (a *App) handleMCPServerCreate(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, err)
 		return
 	}
-	respondData(w, http.StatusCreated, mcpServerDetail(storedCfg, storedRow), a.reloadMCPWarning())
+	respondData(w, http.StatusCreated, mcpServerDetail(storedCfg, storedRow), a.reloadMCPWarning(r.Context()))
 }
 
 func (a *App) handleMCPServerUpdate(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +122,7 @@ func (a *App) handleMCPServerUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, err)
 		return
 	}
-	respondData(w, http.StatusOK, mcpServerDetail(storedCfg, storedRow), a.reloadMCPWarning())
+	respondData(w, http.StatusOK, mcpServerDetail(storedCfg, storedRow), a.reloadMCPWarning(r.Context()))
 }
 
 func (a *App) handleMCPServerDelete(w http.ResponseWriter, r *http.Request) {
@@ -133,8 +136,7 @@ func (a *App) handleMCPServerDelete(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, err)
 		return
 	}
-	_ = a.reloadMCPWarning()
-	w.WriteHeader(http.StatusNoContent)
+	respondData(w, http.StatusOK, map[string]bool{"deleted": true}, a.reloadMCPWarning(r.Context()))
 }
 
 func mcpServerSummary(row mcp.StoredServer) mcpServerSummaryDTO {
@@ -192,13 +194,26 @@ func mcpConfigFromInput(body mcpInput) mcp.ServerConfig {
 	}
 }
 
-func (a *App) reloadMCPWarning() *warningPayload {
-	if a.mumuAgent == nil || !a.agentReady() {
+func (a *App) reloadMCPWarning(ctx context.Context) *warningPayload {
+	agent := a.currentAgent()
+	if agent == nil {
 		return nil
 	}
-	if err := a.mumuAgent.Reload(); err != nil {
+	if _, err := a.modelStore.Active(ctx); err != nil {
+		if errors.Is(err, modelprofiles.ErrNotFound) {
+			return nil
+		}
+		zap.L().Warn("读取当前模型失败，暂不应用 MCP 配置", zap.Error(err))
+		return &warningPayload{Code: "runtime_reload_failed"}
+	}
+	if err := agent.Reload(); err != nil {
 		zap.L().Warn("MCP 配置已保存但运行态应用失败", zap.Error(err))
 		return &warningPayload{Code: "runtime_reload_failed"}
+	}
+	for _, status := range agent.MCPStatuses() {
+		if !status.Connected {
+			return &warningPayload{Code: "mcp_partial_failure"}
+		}
 	}
 	return nil
 }

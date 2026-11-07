@@ -6,7 +6,7 @@ import * as React from "react";
 import { cn } from "@/lib/cn";
 
 export const inputClass =
-  "h-9 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground shadow-none transition-colors placeholder:text-muted-foreground/70 hover:border-primary/40 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50";
+  "h-9 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground shadow-none transition-colors placeholder:text-muted-foreground/60 hover:border-primary/40 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50";
 
 export function Input({
   className,
@@ -37,7 +37,7 @@ export function Label({
 }: React.ComponentProps<typeof LabelPrimitive.Root>) {
   return (
     <LabelPrimitive.Root
-      className={cn("text-sm font-medium text-foreground/75", className)}
+      className={cn("admin-label-text text-foreground/75", className)}
       {...props}
     />
   );
@@ -117,11 +117,15 @@ export function Field({
   return (
     <div className={cn("space-y-1.5", className)}>
       <label className="block space-y-1.5">
-        <span className="text-sm font-medium text-foreground/75">{label}</span>
+        <span className="admin-label-text text-foreground/75">{label}</span>
         {children}
       </label>
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {hint ? (
+        <p className="admin-caption-text text-muted-foreground/75">{hint}</p>
+      ) : null}
+      {error ? (
+        <p className="admin-caption-text text-destructive">{error}</p>
+      ) : null}
     </div>
   );
 }
@@ -138,7 +142,7 @@ export function CheckboxRow({
   disabled?: boolean;
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-3 text-sm text-foreground/80">
+    <label className="admin-label-text flex cursor-pointer items-center gap-3 text-foreground/75">
       <Checkbox
         checked={checked}
         onCheckedChange={(value) => onCheckedChange(value === true)}
@@ -161,7 +165,7 @@ export function SwitchRow({
   disabled?: boolean;
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-3 text-sm text-foreground/80">
+    <label className="admin-label-text flex cursor-pointer items-center gap-3 text-foreground/75">
       <Switch
         checked={checked}
         onCheckedChange={onCheckedChange}

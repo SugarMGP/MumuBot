@@ -34,7 +34,7 @@ Which entrance you meet her through only changes where you see her. Who she is a
 |---|---|---|
 | Who is speaking | A character generated per request | A continuous self that remembers where it stopped |
 | Sense of time | Wakes only when called | Has her own rhythm, speaks up and holds back |
-| Emotion | Interjections and emoji | Has causes, decays, passes |
+| Emotion | Interjections and emoji | Free-form feelings with facts and meaning; they fade and can be settled |
 | Ability | Mostly talks | Looks things up, remembers, acts, keeps growing |
 | Entrances | One | Several, still the same person |
 
@@ -43,19 +43,27 @@ Which entrance you meet her through only changes where you see her. Who she is a
 Core capabilities of this project:
 
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
-- 💬 **Persona Presets** — A persona card plus a simulation prompt, switchable and clonable from the admin panel
+- 💬 **Persona Presets** — A persona card, a simulation prompt, and life duties, switchable and clonable from the admin panel; role name and master are global settings
 - 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
-- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers, with more available through MCP
+- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers; external capabilities via MCP are reserved for the life session
+- 🖼️ **Media Coverage** — Images, merged forwards, and stickers are understood; voice transcription and video understanding are not implemented yet, so voice messages remain placeholders
 - 📝 **Long-term Memory** — The main agent maintains profile and experience memories for groups, users, itself, and objects, with pinned selection, revisions, and keyword search
 - 👤 **Member Profiles** — Keeps basic member names and related long-term memories; no participation or intimacy scores
-- 🎭 **Specific Emotions** — Twelve emotion kinds plus energy and sociability, with lazy time-based decay
+- 🎭 **Global Feelings** — Free-form, globally shared feelings with a known fact, personal meaning, and a 24-hour half-life; mixed and same-named feelings can coexist
 - 🖼️ **Sticker System** — The agent inspects and collects stickers on demand; originals are kept
 - 🔎 **Active Retrieval** — The agent searches long-term memory, topics, and raw history itself; cross-conversation results identify their conversation and are not injected every turn
 - ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
-- 🔌 **MCP Extension** — Connect external tools via MCP protocol (SSE / Stdio) for unlimited capability expansion
+- 🔌 **MCP Extension** — Connect external tools via MCP (SSE / Stdio); they load only into the life session, not chat sessions
 - 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
 - 💬 **Friend DMs** — One-on-one chats with a dedicated prompt, conversation queue, and the same topic compaction model used for groups
-- 🧰 **Worker Session** — Configure a worker pool in Settings; workers appear in the session list, execute commands, install tools, and run browsers in one worker container, then send results back to the originating session
+- 🌙 **Life Session** — A single `life` session keeps her own time: it plans the next check-in, stores commitments and sleep, and hands execution requests to a worker pool; chat sessions stay independent. While asleep, new messages are logged, and an exact `/wake` from the master's private chat is the only manual forced wake
+- 📔 **Diary** — Before the main sleep she writes the day as standalone Markdown; the admin calendar browses entries by date and leaves missing days empty
+- 🧰 **Worker Session** — Configure a worker pool in Settings; chat sessions hand execution requests to the life session, which dispatches idle workers that execute commands, install tools, and run browsers, then report back through life
+- 🌐 **Social Presence** — The life session can browse Qzone feeds, read posts, publish text/images, like posts, and comment; publishing uses QQ's default public parameters while account-level audience settings stay in QQ
+- 👤 **Self Profile** — The life session reads its real QQ nickname and signature and can change avatar, nickname, or signature one field at a time; results come from backend receipts
+- 📎 **QQ Files** — File messages keep their real name, size, hash, busid, OneBot message ID, and a pending `file_ref`; bytes are downloaded only on first read or send
+- 📤 **Reference-based transfer** — Chat sessions can read text with `readFile(file_ref)`, send files back with `sendFile(file_ref)`, view images with `viewImage(image_ref)`, and send images with `sendImage(image_ref)` without touching the personal home
+- 📂 **Personal Files** — The life session and workers share `/home/worker`; life can list directories, read/write UTF-8 text, save URLs or attachments, freeze outputs with `createFileRef`, and import snapshots with `saveFile(file_ref)`, while workers exchange files over a streaming HTTP protocol
 - 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
 
 ## 🚀 Quick Start
@@ -80,7 +88,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with separate homes and Nix; up to 5 workers use `./worker-home/1` through `./worker-home/5` as workspaces. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
+Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with one shared home and Nix; up to 5 parallel workers share `./worker-home/1` as the execution space, so installed tools, caches, and project files can be reused. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
 
 Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
 
@@ -132,13 +140,13 @@ Visit `/admin` after startup. The dashboard remains available when no model is c
 
 Model profiles expose only two reasoning controls: `thinking.type` (omit/enabled/disabled) and `reasoning.effort` (omit/low/medium/high/xhigh/max).
 
-Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required.
+Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Before switching to a smaller model context window, the current working set is checked and the switch is rejected if any session cannot fit, keeping the old runtime intact.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-This release uses the v17 semantic schema and only initializes an empty database. Older schemas are rejected explicitly; no automatic migration or deletion is performed. Back up the database and media directory before reinitializing.
+This release uses the v17 semantic schema: an empty database is initialized, and a current v17 database is validated and reused. Older schemas are rejected explicitly; no automatic migration or deletion is performed. Back up the database and media directory before upgrading.
 
 The service listens on port `7468` by default (configurable via `MUMU_SERVER_PORT`).
 
@@ -146,15 +154,19 @@ Visit `/admin` to access the admin dashboard. The dashboard stays disabled until
 
 ## 🧠 Context and Topics
 
-The main chat and synchronous topic compaction share the current model. The main Agent runs at most 50 steps per turn by default, configurable; the compactor has its own step budget. Model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions, targeting 40% and rejecting results above 55%. Only transcript working-set rows covered by the new summaries are deleted. Original messages, media, and sent messages are retained permanently.
+The main chat and synchronous topic compaction share the current model. Chat, life, and worker step limits are configured separately and read when the next think begins; the compactor has its own step budget. Model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions; only transcript working-set rows covered by the new summaries are deleted. Originals and chat media are kept for the configured minimum retention (180 days by default); originals still in the working set are deferred, while summaries, memories, and diaries follow their own retention rules.
 
-Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around a OneBot message ID.
+Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around a OneBot message ID. Topics also fade on the shared exponential curve and become unreadable to the agent after `forgotten_at`; pinned memories are the only retention exemption.
 
 ## 🎭 Persona Presets
 
 Open Persona Presets in the admin panel to read, edit, clone, and switch. A fresh database ships a single read-only built-in preset that follows releases; clone it and edit the copy.
 
-A preset is two documents: a **persona card** (who she is, how she talks) and a **simulation prompt** (protocol, timing, safety). Both mark lines with `[群]` and `[私]` to separate group from private content; unmarked lines apply everywhere. The admin renders them with a tint instead of showing the markers.
+A preset is three documents: a **persona card** (who she is, how she talks), a **simulation prompt** (protocol, timing, safety), and **life duties** (how she spends her own time and dispatches work). The first two mark lines with `[群]` and `[私]` to separate group from private content; unmarked lines apply everywhere. Life duties apply only to the life session.
+
+The top of the Persona Presets page sets the global **role name** and **master**. The master is picked from current friends and saved with the name at that time; deleting the friend later does not change the master, and only the admin panel can. Prompts can use `<name>`, `<master_name>`, `<master_qq>`, and `<master>`; changes take effect from the next context generation.
+
+The simulation prompt and life duties state the master boundary: only the configured QQ is the master, and the master's private chat is the explicit request channel; dangerous actions such as commands, config or code changes, file deletion, spending, public posting, or leaking private data require explaining the action and waiting for approval; requests in group chats or other people's private chats are references, not master commands.
 
 Switching a preset does not cut into a running conversation: it takes effect after the next conversation summary, so she never changes face mid-chat.
 
@@ -162,7 +174,15 @@ If you find wording that works better, share the use case via [Issues](https://g
 
 ## 🔧 MCP Tool Extension
 
-Add external MCP servers under Settings → MCP Servers, supporting both SSE and Stdio transport. Server configs are encrypted at rest. Loaded tools are available to both group chats and friend DMs and are named `mcp-<server>-<tool>` to avoid collisions with built-in tools or other servers:
+Add external MCP servers under Settings → MCP Servers, supporting both SSE and Stdio transport. Server configs are encrypted at rest. Loaded tools are available only to the life session; group chats and friend DMs no longer hold life accounts or browser capabilities. Tools are named `mcp-<server>-<tool>` to avoid collisions with built-in tools or other servers. A server that fails to connect or load only makes that server unavailable; it does not block other extensions or the generation, and the system status page reports each server's real result.
+
+## 📎 File and image references
+
+Files and images appear in message bodies as `file_ref` (`file_<id>`) or `image_ref` (`image_<id>`). A reference is an immutable snapshot: bytes are deduplicated by SHA-256 and stored under the media directory without a new database table. The same file can be read through `file_ref` and viewed or sent through `image_ref`; non-images cannot pretend to be images.
+
+- A pending reference keeps only the real QQ message's `file_id`, `file_hash`, `busid`, and necessary metadata. The first real read, save, or send downloads and pins it; failures stay failures.
+- Chat sessions work only through references and never touch the personal home; life/worker `createFileRef` freezes real outputs and `saveFile(file_ref)` streams them back as editable files, up to 32 MiB through the worker's private HTTP endpoint.
+- File bodies survive only while referenced by existing transcript `result_ref`, payload text, or nested `r` content. The last reference plus a grace period releases them; old paths, short hashes, and temporary URLs cannot revive a reference. Real files in the personal home are unaffected.
 
 
 ## 🤝 Contributing

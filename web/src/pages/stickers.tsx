@@ -124,7 +124,7 @@ export default function StickersPage() {
     <div className="space-y-6">
       <PageHeader title={t("stickers.title")} subtitle={t("stickers.subtitle")} />
 
-      <FilterPanel title={t("common.filter")}>
+      <FilterPanel>
         <form className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3" onSubmit={submit}>
           <Field label={t("common.search")}>
             <Input
@@ -179,9 +179,9 @@ export default function StickersPage() {
                     alt={alt}
                   />
                 </figure>
-                <div className="space-y-2 p-3">
+                <div className="admin-card-pad-tile space-y-2">
                   <h2
-                    className="truncate text-sm font-medium"
+                    className="admin-card-title-compact truncate"
                     title={title}
                   >
                     {title}

@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"slices"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"mumu-bot/internal/refstore"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -17,6 +20,7 @@ import (
 type Manager struct {
 	db       *gorm.DB
 	mediaDir string
+	refs     *refstore.Store
 }
 
 func OpenDB(dsn string) (*gorm.DB, error) {
@@ -37,24 +41,15 @@ func NewManager(db *gorm.DB, mediaDir string) (*Manager, error) {
 	if db == nil {
 		return nil, fmt.Errorf("PostgreSQL 未初始化")
 	}
-	return &Manager{db: db, mediaDir: mediaDir}, nil
+	return &Manager{db: db, mediaDir: mediaDir, refs: refstore.New(mediaDir)}, nil
 }
 
-func (m *Manager) GetRecentMessagesScope(ctx context.Context, kind string, targetID, throughOneBotMessageID int64, limit, offset int) ([]MessageLog, error) {
-	var items []MessageLog
-	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID).Order("id DESC").Limit(limit)
-	if throughOneBotMessageID != 0 {
-		upperBound := m.db.Model(&MessageLog{}).Select("id").Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", kind, targetID, throughOneBotMessageID)
-		q = q.Where("message_logs.id<=(?)", upperBound)
-	}
-	if offset > 0 {
-		q = q.Offset(offset)
-	}
-	if err := q.Find(&items).Error; err != nil {
-		return nil, err
-	}
-	slices.Reverse(items)
-	return items, nil
+// LatestMessageLogID 返回当前数据库全部原文的最大内部编号，作为本轮工具读取快照；
+// 空库返回 0，调用方必须把它当成真实的空快照而不是“未设上限”
+func (m *Manager) LatestMessageLogID(ctx context.Context) (uint, error) {
+	var id uint
+	err := m.db.WithContext(ctx).Model(&MessageLog{}).Select("COALESCE(MAX(id),0)").Scan(&id).Error
+	return id, err
 }
 
 func (m *Manager) GetMessageCountByTime(groupID, userID int64, start time.Time) (int64, error) {
@@ -172,5 +167,81 @@ func (m *Manager) GetMessageLogByInternalID(id uint) (*MessageLog, error) {
 
 // WithContext 返回绑定请求上下文的轻量管理器
 func (m *Manager) WithContext(ctx context.Context) *Manager {
-	return &Manager{db: m.db.WithContext(ctx)}
+	if m == nil {
+		return nil
+	}
+	// 媒体目录要跟着轻量 Manager 一起走，否则工具回读大结果会落到相对路径
+	return &Manager{db: m.db.WithContext(ctx), mediaDir: m.mediaDir, refs: m.refs}
+}
+
+// RefStore 返回 MediaDir 下的文件/图片快照仓库
+func (m *Manager) RefStore() *refstore.Store {
+	if m == nil {
+		return nil
+	}
+	return m.refs
+}
+
+// TranscriptSnapshotRoots 返回现存 transcript 中所有 file_ref/image_ref 及 r 文本闭包内的引用
+func (m *Manager) TranscriptSnapshotRoots(ctx context.Context) (map[string]bool, error) {
+	roots := map[string]bool{}
+	// 摘要、代头、系统提醒、记忆和日记不是快照生命周期根；只有当前对话输入和执行轨迹可以保活 ref
+	rows, err := m.db.WithContext(ctx).Raw(`
+		SELECT payload::text AS content FROM conversation_transcript
+			WHERE entry_kind IN ('user','observation','agent_message','assistant','tool')
+		UNION ALL SELECT result_ref FROM conversation_transcript
+			WHERE result_ref<>'' AND entry_kind IN ('assistant','tool','user','observation','agent_message')`).Rows()
+	if err != nil {
+		return nil, err
+	}
+	toolRoots := make([]string, 0)
+	seenTool := map[string]bool{}
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		for _, token := range refstore.ExtractRefs(text) {
+			roots[token] = true
+		}
+		for _, ref := range toolResultRefPattern.FindAllString(text, -1) {
+			if !seenTool[ref] {
+				seenTool[ref] = true
+				toolRoots = append(toolRoots, ref)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	dir := filepath.Join(m.mediaDir, "tool-results")
+	reachable, err := expandToolResultRefs(dir, toolRoots)
+	if err != nil {
+		return nil, err
+	}
+	for ref := range reachable {
+		data, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(ref, "r")+".txt"))
+		if err != nil {
+			continue
+		}
+		for _, token := range refstore.ExtractRefs(string(data)) {
+			roots[token] = true
+		}
+	}
+	return roots, nil
+}
+
+// CleanupSnapshotRefs 回收没有现存 transcript 根且超过宽限期的快照
+func (m *Manager) CleanupSnapshotRefs(ctx context.Context, minAge time.Duration) (int, int, error) {
+	if m == nil || m.refs == nil {
+		return 0, 0, nil
+	}
+	roots, err := m.TranscriptSnapshotRoots(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return m.refs.Cleanup(roots, minAge)
 }

@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ApiError } from "@/api/client";
 import { mcpApi } from "@/api/client-endpoints";
 import type { MCPServerSummary } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
+import { EditPanel } from "@/components/admin/edit-panel";
+import { AdminIcon } from "@/components/admin/icons";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
 import { SectionCard } from "@/components/admin/section-card";
@@ -32,7 +33,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
 import { useQueryParams } from "@/hooks/use-query-params";
+import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/format";
 import { enumLabel } from "@/lib/labels";
 
@@ -88,43 +91,87 @@ export default function McpPage() {
   const queryClient = useQueryClient();
   const { params, update } = useQueryParams();
   const editID = Number(params.get("edit") || "0");
+  const panelOpen = params.has("edit");
+  const editMode = editID > 0;
   const list = useQuery({ queryKey: ["mcp-servers"], queryFn: mcpApi.list });
   const detail = useQuery({
     queryKey: ["mcp-server", editID],
     queryFn: () => mcpApi.get(editID),
-    enabled: editID > 0,
+    enabled: editMode,
   });
   const [form, setForm] = useState<FormState>({ ...emptyForm });
+  const [baseline, setBaseline] = useState<FormState>({ ...emptyForm });
+  const [draftVersion, setDraftVersion] = useState(0);
+  const [leaveAfter, setLeaveAfter] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<MCPServerSummary | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const parsedHeaders = parseKeyValues(form.headers);
+  const headerError = form.type === "sse" ? parsedHeaders.error : "";
+  const loadedKey = useRef("");
+  const dirty = useMemo(
+    () => JSON.stringify(form) !== JSON.stringify(baseline),
+    [form, baseline],
+  );
+  const versionConflict = Boolean(
+    editMode && detail.data && draftVersion > 0 && detail.data.version !== draftVersion,
+  );
+  const guard = useDirtyGuard(dirty && !leaveAfter);
 
   useEffect(() => {
-    if (detail.data) {
-      setForm({
-        name: detail.data.name,
-        enabled: detail.data.enabled,
-        type: detail.data.type,
-        url: detail.data.url,
-        command: detail.data.command,
-        args: detail.data.args.join("\n"),
-        env: detail.data.env.join("\n"),
-        headers: Object.entries(detail.data.headers)
-          .map(([key, value]) => `${key}=${value}`)
-          .join("\n"),
-        toolNames: detail.data.tool_names.join(", "),
-      });
+    if (!leaveAfter) return;
+    update({ edit: undefined });
+    setLeaveAfter(false);
+  }, [leaveAfter, update]);
+
+  useEffect(() => {
+    if (!panelOpen) {
+      loadedKey.current = "";
+      setForm({ ...emptyForm });
+      setBaseline({ ...emptyForm });
+      setDraftVersion(0);
+      setLeaveAfter(false);
       return;
     }
-    setForm({ ...emptyForm });
-  }, [detail.data]);
+    if (!editMode) {
+      if (loadedKey.current === "new") return;
+      loadedKey.current = "new";
+      setForm({ ...emptyForm });
+      setBaseline({ ...emptyForm });
+      setDraftVersion(0);
+      setAdvancedOpen(false);
+      return;
+    }
+    if (!detail.data) return;
+    const key = `id:${detail.data.id}`;
+    if (loadedKey.current === key) return;
+    loadedKey.current = key;
+    const next = {
+      name: detail.data.name,
+      enabled: detail.data.enabled,
+      type: detail.data.type,
+      url: detail.data.url,
+      command: detail.data.command,
+      args: detail.data.args.join("\n"),
+      env: detail.data.env.join("\n"),
+      headers: Object.entries(detail.data.headers)
+        .map(([name, value]) => `${name}=${value}`)
+        .join("\n"),
+      toolNames: detail.data.tool_names.join(", "),
+    };
+    setForm(next);
+    setBaseline(next);
+    setDraftVersion(detail.data.version);
+    setAdvancedOpen(false);
+  }, [detail.data, editMode, panelOpen]);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (saving || parsedHeaders.error) return;
+    if (saving || versionConflict || headerError || (editMode && !detail.data)) return;
     setSaving(true);
     try {
       const payload = {
@@ -135,31 +182,32 @@ export default function McpPage() {
         command: form.command.trim(),
         args: parseLines(form.args),
         env: parseLines(form.env),
-        headers: parsedHeaders.values,
+        headers: form.type === "sse" ? parsedHeaders.values : {},
         tool_names: form.toolNames
           .split(",")
           .map((value) => value.trim())
           .filter(Boolean),
       };
-      if (editID > 0 && detail.data) {
+      if (editMode && detail.data) {
         const result = await mcpApi.update(editID, {
           ...payload,
-          version: detail.data.version,
+          version: draftVersion,
         });
         if (result.warning) toastWarningCode(result.warning.code);
         else toastSuccess(t("mcp.saved"));
-      } else {
-        await mcpApi.create(payload);
-        toastSuccess(t("mcp.saved"));
+        setDraftVersion(result.data.version);
+      } else if (!editMode) {
+        const result = await mcpApi.create(payload);
+        if (result.warning) toastWarningCode(result.warning.code);
+        else toastSuccess(t("mcp.saved"));
       }
       await invalidate();
-      update({ edit: undefined });
+      setBaseline({ ...form });
+      setLeaveAfter(true);
     } catch (error) {
       toastApiError(error);
-      if (error instanceof ApiError && error.code === "version_conflict") {
-        update({ edit: undefined });
-      }
       await invalidate();
+      await detail.refetch();
     } finally {
       setSaving(false);
     }
@@ -168,16 +216,34 @@ export default function McpPage() {
   const remove = useMutation({
     mutationFn: (server: MCPServerSummary) =>
       mcpApi.remove(server.id, server.version),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setDeleting(null);
       await invalidate();
-      toastSuccess(t("mcp.deleted"));
+      if (result.warning) toastWarningCode(result.warning.code);
+      else toastSuccess(t("mcp.deleted"));
     },
     onError: (error) => {
       setDeleting(null);
       toastApiError(error);
     },
   });
+
+  const requestClose = (next: boolean) => {
+    if (!next) {
+      if (dirty) {
+        setDiscardOpen(true);
+        return;
+      }
+      update({ edit: undefined });
+    }
+  };
+
+  const reloadLatest = async () => {
+    loadedKey.current = "";
+    setDraftVersion(0);
+    await detail.refetch();
+    await invalidate();
+  };
 
   if (list.isPending) return <PageSkeleton />;
   if (list.isError || !list.data) {
@@ -188,8 +254,16 @@ export default function McpPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-6">
-        <PageHeader title={t("mcp.title")} subtitle={t("mcp.subtitle")} />
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <PageHeader
+          title={t("mcp.title")}
+          subtitle={t("mcp.subtitle")}
+          actions={
+            <Button onClick={() => update({ edit: "new" })}>
+              {t("mcp.add")}
+            </Button>
+          }
+        />
         <SettingsTabs />
       </div>
 
@@ -199,10 +273,7 @@ export default function McpPage() {
         </div>
       ) : null}
 
-      <SectionCard
-        title={t("mcp.list")}
-        description={t("mcp.listHint")}
-      >
+      <SectionCard title={t("mcp.list")} description={t("mcp.listHint")}>
         {list.data.items.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
             {t("mcp.empty")}
@@ -215,9 +286,7 @@ export default function McpPage() {
                 <TableHead>{t("mcp.protocol")}</TableHead>
                 <TableHead>{t("common.status")}</TableHead>
                 <TableHead>{t("mcp.versionLabel")}</TableHead>
-                <TableHead className="text-right">
-                  {t("common.actions")}
-                </TableHead>
+                <TableHead className="text-right">{t("common.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -229,9 +298,7 @@ export default function McpPage() {
                       {formatDateTime(server.updated_at)}
                     </p>
                   </TableCell>
-                  <TableCell>
-                    {enumLabel(t, "mcpType", server.transport)}
-                  </TableCell>
+                  <TableCell>{enumLabel(t, "mcpType", server.transport)}</TableCell>
                   <TableCell>
                     <Badge variant={server.enabled ? "success" : "ghost"}>
                       {server.enabled ? t("mcp.enabled") : t("mcp.disabled")}
@@ -266,26 +333,66 @@ export default function McpPage() {
         )}
       </SectionCard>
 
-      <SectionCard
-        title={editID > 0 ? t("mcp.edit") : t("mcp.addOrEdit")}
-        description={t("mcp.addHint")}
-        actions={
-          editID > 0 ? (
+      <EditPanel
+        open={panelOpen}
+        onOpenChange={requestClose}
+        title={editMode ? t("mcp.edit") : t("mcp.create")}
+        description={t("mcp.panelHint")}
+        footer={
+          <>
             <Button
+              type="button"
               variant="ghost"
-              size="sm"
-              onClick={() => update({ edit: undefined })}
+              disabled={saving}
+              onClick={() => requestClose(false)}
             >
-              {t("mcp.cancelEdit")}
+              {t("common.cancel")}
             </Button>
-          ) : null
+            <Button
+              type="submit"
+              form="mcp-form"
+              disabled={
+                saving ||
+                versionConflict ||
+                Boolean(headerError) ||
+                (editMode && !detail.data)
+              }
+            >
+              {saving ? <Spinner /> : null}
+              {editMode ? t("mcp.save") : t("mcp.create")}
+            </Button>
+          </>
         }
       >
-        {editID > 0 && detail.isPending ? (
+        {editMode && detail.isPending ? (
           <PageSkeleton />
+        ) : editMode && detail.isError ? (
+          <div className="space-y-3 py-10 text-center">
+            <p className="text-sm text-muted-foreground">
+              {t("mcp.detailFailed")}
+            </p>
+            <Button variant="outline" onClick={() => detail.refetch()}>
+              {t("common.retry")}
+            </Button>
+          </div>
+        ) : editMode && !detail.data ? (
+          <p className="text-sm text-muted-foreground">
+            {t("mcp.detailFailed")}
+          </p>
         ) : (
-          <form className="space-y-3" onSubmit={save}>
-            <div className="grid grid-cols-2 gap-3">
+          <form id="mcp-form" className="space-y-5" onSubmit={save}>
+            {versionConflict ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                <div>
+                  <p className="font-medium">{t("common.versionChanged")}</p>
+                  <p className="mt-0.5">{t("common.versionChangedHint")}</p>
+                </div>
+                <Button type="button" variant="outline" size="xs" onClick={() => void reloadLatest()}>
+                  {t("common.reloadLatest")}
+                </Button>
+              </div>
+            ) : null}
+            <div className="admin-form-grid">
               <Field label={t("mcp.name")}>
                 <Input
                   required
@@ -307,6 +414,7 @@ export default function McpPage() {
                 </NativeSelect>
               </Field>
             </div>
+
             <SwitchRow
               checked={form.enabled}
               onCheckedChange={(checked) =>
@@ -314,84 +422,141 @@ export default function McpPage() {
               }
               label={t("mcp.enableServer")}
             />
-            <Field label={t("mcp.url")}>
-              <Input
-                value={form.url}
-                onChange={(event) =>
-                  setForm((value) => ({ ...value, url: event.target.value }))
-                }
-              />
-            </Field>
-            <Field label={t("mcp.command")}>
-              <Input
-                value={form.command}
-                onChange={(event) =>
-                  setForm((value) => ({ ...value, command: event.target.value }))
-                }
-              />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t("mcp.args")}>
-                <Textarea
-                  rows={4}
-                  className="font-mono text-xs"
-                  value={form.args}
-                  onChange={(event) =>
-                    setForm((value) => ({ ...value, args: event.target.value }))
+
+            {form.type === "sse" ? (
+              <>
+                <Field label={t("mcp.url")}>
+                  <Input
+                    value={form.url}
+                    onChange={(event) =>
+                      setForm((value) => ({ ...value, url: event.target.value }))
+                    }
+                  />
+                </Field>
+                <Field
+                  label={t("mcp.headers")}
+                  error={
+                    parsedHeaders.error
+                      ? t("mcp.invalidKeyValue", {
+                          line: parsedHeaders.error,
+                        })
+                      : undefined
                   }
-                />
-              </Field>
-              <Field label={t("mcp.env")}>
-                <Textarea
-                  rows={4}
-                  className="font-mono text-xs"
-                  value={form.env}
-                  onChange={(event) =>
-                    setForm((value) => ({ ...value, env: event.target.value }))
-                  }
-                />
-              </Field>
-            </div>
-            <Field
-              label={t("mcp.headers")}
-              error={
-                parsedHeaders.error
-                  ? t("mcp.invalidKeyValue", { line: parsedHeaders.error })
-                  : undefined
-              }
-            >
-              <Textarea
-                rows={4}
-                className="font-mono text-xs"
-                value={form.headers}
-                onChange={(event) =>
-                  setForm((value) => ({ ...value, headers: event.target.value }))
-                }
-              />
-            </Field>
-            <Field label={t("mcp.toolNames")}>
-              <Input
-                value={form.toolNames}
-                onChange={(event) =>
-                  setForm((value) => ({
-                    ...value,
-                    toolNames: event.target.value,
-                  }))
-                }
-              />
-            </Field>
-            <div className="flex items-center gap-2 border-t border-border pt-4">
-              <Button
-                type="submit"
-                disabled={saving || Boolean(parsedHeaders.error)}
+                >
+                  <Textarea
+                    rows={4}
+                    className="font-mono text-xs"
+                    value={form.headers}
+                    onChange={(event) =>
+                      setForm((value) => ({
+                        ...value,
+                        headers: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label={t("mcp.command")}>
+                  <Input
+                    value={form.command}
+                    onChange={(event) =>
+                      setForm((value) => ({
+                        ...value,
+                        command: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+                <div className="admin-form-grid">
+                  <Field label={t("mcp.args")}>
+                    <Textarea
+                      rows={4}
+                      className="font-mono text-xs"
+                      value={form.args}
+                      onChange={(event) =>
+                        setForm((value) => ({
+                          ...value,
+                          args: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field label={t("mcp.env")}>
+                    <Textarea
+                      rows={4}
+                      className="font-mono text-xs"
+                      value={form.env}
+                      onChange={(event) =>
+                        setForm((value) => ({
+                          ...value,
+                          env: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                </div>
+              </>
+            )}
+
+            <div className="rounded-xl border border-border bg-muted/20">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-foreground"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((value) => !value)}
               >
-                {saving ? <Spinner /> : null}
-                {editID > 0 ? t("mcp.save") : t("mcp.create")}
-              </Button>
+                <span>{t("mcp.advanced")}</span>
+                <AdminIcon
+                  name="chevron-down"
+                  className={cn(
+                    "size-4 text-muted-foreground transition-transform duration-150",
+                    advancedOpen && "rotate-180",
+                  )}
+                />
+              </button>
+              <div
+                className={cn(
+                  "grid transition-[grid-template-rows] duration-150 ease-out",
+                  advancedOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+                )}
+              >
+                <div className="overflow-hidden" inert={!advancedOpen}>
+                  <div className="px-4 pb-4">
+                    <Field label={t("mcp.toolNames")}>
+                      <Input
+                        value={form.toolNames}
+                        onChange={(event) =>
+                          setForm((value) => ({
+                            ...value,
+                            toolNames: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                  </div>
+                </div>
+              </div>
             </div>
           </form>
         )}
-      </SectionCard>
+      </EditPanel>
+
+      <DirtyGuardDialog blocker={guard} />
+
+      <ConfirmDialog
+        open={discardOpen}
+        onOpenChange={setDiscardOpen}
+        title={t("mcp.discardTitle")}
+        description={t("mcp.discardBody")}
+        confirmLabel={t("mcp.discard")}
+        onConfirm={() => {
+          setDiscardOpen(false);
+          setForm({ ...baseline });
+          setLeaveAfter(true);
+        }}
+      />
 
       <ConfirmDialog
         open={deleting !== null}

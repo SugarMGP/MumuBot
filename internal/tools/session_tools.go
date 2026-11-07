@@ -10,10 +10,8 @@ import (
 
 	"mumu-bot/internal/memory"
 
-	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/schema"
 )
 
 type ListSessionsInput struct {
@@ -22,13 +20,16 @@ type ListSessionsInput struct {
 }
 
 type SessionSummary struct {
-	SessionID string    `json:"session_id"`
-	Kind      string    `json:"kind"`
-	TargetID  int64     `json:"target_id"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	LastError string    `json:"last_error,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	SessionID     string     `json:"session_id"`
+	Kind          string     `json:"kind"`
+	TargetID      int64      `json:"target_id"`
+	Name          string     `json:"name"`
+	Status        string     `json:"status"`
+	LastError     string     `json:"last_error,omitempty"`
+	PendingCount  int        `json:"pending_count"`
+	Running       bool       `json:"running"`
+	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type ListSessionsOutput struct {
@@ -47,7 +48,13 @@ func listSessions(ctx context.Context, input *ListSessionsInput) (*ListSessionsO
 		input = &ListSessionsInput{}
 	}
 	limit := memory.NormalizeLimit(input.Limit)
-	filter := memory.SessionDirectoryFilter
+	viewerKind := tc.ConversationKind
+	if viewerKind == "" {
+		return nil, fmt.Errorf("当前会话类型未初始化")
+	}
+	filter := memory.SessionDirectoryFilterValue{
+		Scope: memory.SessionDirectoryFilter, ViewerKind: viewerKind, ViewerTargetID: tc.TargetID,
+	}
 	cursor, err := memory.DecodeCursor(input.Cursor)
 	if err != nil {
 		return nil, err
@@ -61,8 +68,16 @@ func listSessions(ctx context.Context, input *ListSessionsInput) (*ListSessionsO
 	if err := memory.ValidateCursorFilter(cursor, filter); err != nil {
 		return nil, err
 	}
+	selfID := int64(0)
+	if tc.Bot != nil {
+		selfID = tc.Bot.GetSelfID()
+	}
 	snapshot := memory.CursorTimeOrNow(cursor)
-	rows, err := tc.MemoryMgr.ListSessionDirectory(ctx, snapshot, cursor.LastTime, int(cursor.LastKey), cursor.LastID, limit+1)
+	rows, err := tc.MemoryMgr.ListSessionDirectory(ctx, memory.SessionDirectoryQuery{
+		ViewerKind: viewerKind, ViewerTargetID: tc.TargetID, SelfUserID: selfID,
+		Snapshot: snapshot, LastTime: cursor.LastTime, LastRank: int(cursor.LastKey),
+		LastID: cursor.LastID, Limit: limit + 1,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -87,10 +102,16 @@ func listSessions(ctx context.Context, input *ListSessionsInput) (*ListSessionsO
 				status = "active"
 			}
 		}
+		running := false
+		if tc.SessionRunningCallback != nil {
+			running = tc.SessionRunningCallback(row.Kind, row.TargetID)
+		}
 		sessions = append(sessions, SessionSummary{
 			SessionID: row.Kind + ":" + strconv.FormatInt(row.TargetID, 10),
 			Kind:      row.Kind, TargetID: row.TargetID, Name: name,
-			Status: status, LastError: row.WorkerLastError, UpdatedAt: row.UpdatedAt,
+			Status: status, LastError: row.WorkerLastError,
+			PendingCount: row.PendingCount, Running: running,
+			LastMessageAt: row.LastMessageAt, UpdatedAt: row.UpdatedAt,
 		})
 	}
 	out := &ListSessionsOutput{Success: true, Sessions: sessions, HasMore: hasMore}
@@ -107,30 +128,34 @@ func sessionKindRank(kind string) int {
 		return 0
 	case memory.ConversationKindPrivate:
 		return 1
-	default:
+	case memory.ConversationKindLife:
 		return 2
+	default:
+		return 3
 	}
 }
 
 func NewListSessionsTool() (tool.InvokableTool, error) {
-	return utils.InferTool("listSessions", "列出所有群聊、私聊和当前 worker 池的元数据，包括类型、名称、状态、失败原因和更新时间；不返回聊天正文。", listSessions)
+	return utils.InferTool("listSessions", "按当前会话角色列出可见会话的元数据：类型、名称、状态、失败原因、待处理数量、是否正在运行和最近真人消息时间；不返回聊天正文。", listSessions)
 }
 
 type SendSessionMessageInput struct {
-	TargetSessionID string `json:"target_session_id" jsonschema:"description=例如 group:123、private:456 或 worker:1"`
+	TargetSessionID string `json:"target_session_id" jsonschema:"description=例如 life:1、group:123、private:456 或 worker:1"`
 	Text            string `json:"text" jsonschema:"description=自然语言消息，最多2000字"`
+	Wake            *bool  `json:"wake,omitempty" jsonschema:"description=是否请求目标立即处理，默认 true；false 表示只保存，等目标下次正常运行时再读"`
+	ContextMode     string `json:"context_mode,omitempty" jsonschema:"description=仅 life 派 worker 时使用：continue（默认）或 new（从这条派工开始新上下文）"`
 }
 
 type SendSessionMessageOutput struct {
 	Success   bool `json:"success"`
-	MessageID uint `json:"message_id"`
+	MessageID uint `json:"message_id"` // 目标 transcript 条目编号，不是 QQ 消息 ID
 }
 
 func parseSessionID(raw string) (string, int64, error) {
 	kind, rawTarget, ok := strings.Cut(strings.TrimSpace(raw), ":")
 	kind = strings.TrimSpace(kind)
-	if !ok || (kind != memory.ConversationKindGroup && kind != memory.ConversationKindPrivate && kind != memory.ConversationKindWorker) {
-		return "", 0, fmt.Errorf("目标会话格式应为 group:ID、private:ID 或 worker:ID")
+	if !ok || (kind != memory.ConversationKindGroup && kind != memory.ConversationKindPrivate && kind != memory.ConversationKindWorker && kind != memory.ConversationKindLife) {
+		return "", 0, fmt.Errorf("目标会话格式应为 life:1、group:ID、private:ID 或 worker:ID")
 	}
 	targetID, err := strconv.ParseInt(strings.TrimSpace(rawTarget), 10, 64)
 	if err != nil || targetID <= 0 {
@@ -154,10 +179,34 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 	if err != nil {
 		return nil, err
 	}
+	wake := true
+	if input.Wake != nil {
+		wake = *input.Wake
+	}
+	mode := strings.ToLower(strings.TrimSpace(input.ContextMode))
+	if mode == "" {
+		mode = "continue"
+	}
+	if mode != "continue" && mode != "new" {
+		return nil, fmt.Errorf("context_mode 只能是 continue 或 new")
+	}
+	if mode == "new" {
+		if tc.ConversationKind != memory.ConversationKindLife || kind != memory.ConversationKindWorker {
+			return nil, fmt.Errorf("只有 life 向 worker 派工时可以选择新上下文")
+		}
+		if tc.SessionMessageContextCallback == nil {
+			return nil, NewTerminalToolError(fmt.Errorf("worker 新上下文能力未初始化"))
+		}
+		row, err := tc.SessionMessageContextCallback(ctx, tc.ConversationKind, tc.TargetID, kind, targetID, input.Text, wake, mode)
+		if err != nil {
+			return nil, err
+		}
+		return &SendSessionMessageOutput{Success: true, MessageID: row.ID}, nil
+	}
 	if tc.SessionMessageCallback == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("会话消息投递能力未初始化"))
 	}
-	row, err := tc.SessionMessageCallback(ctx, tc.ConversationKind, tc.TargetID, kind, targetID, input.Text)
+	row, err := tc.SessionMessageCallback(ctx, tc.ConversationKind, tc.TargetID, kind, targetID, input.Text, wake)
 	if err != nil {
 		return nil, err
 	}
@@ -165,163 +214,7 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 }
 
 func NewSendSessionMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendSessionMessage", "向另一个会话投递一条消息。", sendSessionMessage)
-}
-
-type ReadSessionHistoryInput struct {
-	SessionID string `json:"session_id" jsonschema:"description=例如 group:123、private:456 或 worker:1"`
-	BeforeID  uint   `json:"before_id,omitempty" jsonschema:"description=向前翻页的 transcript 条目 ID，0 表示最新"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"description=默认20，最大50"`
-}
-
-type SessionHistoryEntry struct {
-	ID         uint      `json:"id"`
-	At         time.Time `json:"at"`
-	Role       string    `json:"role"`
-	Text       string    `json:"text"`
-	ToolName   string    `json:"tool_name,omitempty"`
-	ToolStatus string    `json:"tool_status,omitempty"`
-}
-
-type SessionHistoryPendingEntry struct {
-	ID       uint      `json:"id"`
-	At       time.Time `json:"at"`
-	Role     string    `json:"role"`
-	Text     string    `json:"text"`
-	InputSeq *uint64   `json:"input_seq,omitempty"`
-}
-
-type ReadSessionHistoryOutput struct {
-	Success        bool                         `json:"success"`
-	SessionID      string                       `json:"session_id"`
-	Kind           string                       `json:"kind"`
-	Name           string                       `json:"name"`
-	Entries        []SessionHistoryEntry        `json:"entries"`
-	PendingEntries []SessionHistoryPendingEntry `json:"pending_entries"`
-	PendingCount   int                          `json:"pending_count"`
-	HasMore        bool                         `json:"has_more"`
-	NextBeforeID   uint                         `json:"next_before_id,omitempty"`
-}
-
-func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*ReadSessionHistoryOutput, error) {
-	tc := GetToolContext(ctx)
-	if tc == nil || tc.MemoryMgr == nil {
-		return nil, NewTerminalToolError(fmt.Errorf("会话历史能力未初始化"))
-	}
-	if input == nil {
-		return nil, fmt.Errorf("需要 session_id")
-	}
-	kind, targetID, err := parseSessionID(input.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	limit := input.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 50 {
-		limit = 50
-	}
-	target, err := tc.MemoryMgr.GetConversationTarget(ctx, kind, targetID)
-	if err != nil {
-		return nil, fmt.Errorf("读取会话失败: %w", err)
-	}
-	name := strings.TrimSpace(target.Name)
-	if name == "" {
-		name = fmt.Sprintf("%s:%d", kind, targetID)
-	}
-	pending, err := tc.MemoryMgr.PendingInputs(ctx, kind, targetID)
-	if err != nil {
-		return nil, err
-	}
-	pendingCount := len(pending)
-	pendingEntries := make([]SessionHistoryPendingEntry, 0, len(pending))
-	pendingIDs := make(map[uint]bool, len(pending))
-	for _, row := range pending {
-		pendingIDs[row.ID] = true
-		pendingEntries = append(pendingEntries, SessionHistoryPendingEntry{
-			ID: row.ID, At: row.CreatedAt, Role: historyRole(row.EntryKind),
-			Text: truncateHistoryText(decodeTranscriptText(row.Payload)), InputSeq: row.InputSeq,
-		})
-	}
-	recent, err := tc.MemoryMgr.RecentVisibleTranscript(ctx, kind, targetID, input.BeforeID, limit+1)
-	if err != nil {
-		return nil, err
-	}
-	hasMore := len(recent) > limit
-	if hasMore {
-		recent = recent[:limit]
-	}
-	entries := make([]SessionHistoryEntry, 0, len(recent))
-	for _, row := range recent {
-		if pendingIDs[row.ID] {
-			continue
-		}
-		entries = append(entries, SessionHistoryEntry{
-			ID: row.ID, At: row.CreatedAt, Role: historyRole(row.EntryKind),
-			Text:     truncateHistoryText(decodeTranscriptText(row.Payload)),
-			ToolName: row.ToolName, ToolStatus: row.ToolStatus,
-		})
-	}
-	out := &ReadSessionHistoryOutput{
-		Success: true, SessionID: input.SessionID, Kind: kind, Name: name,
-		Entries: entries, PendingEntries: pendingEntries, PendingCount: pendingCount, HasMore: hasMore,
-	}
-	if len(entries) > 0 {
-		out.NextBeforeID = entries[len(entries)-1].ID
-	}
-	return out, nil
-}
-
-func historyRole(entryKind string) string {
-	switch entryKind {
-	case "agent_message":
-		return "agent_message"
-	case "system_note":
-		return "system_note"
-	default:
-		return entryKind
-	}
-}
-
-func truncateHistoryText(text string) string {
-	text = strings.TrimSpace(text)
-	if utf8.RuneCountInString(text) <= 500 {
-		return text
-	}
-	runes := []rune(text)
-	return string(runes[:500]) + "…"
-}
-
-func decodeTranscriptText(payload []byte) string {
-	var msg schema.AgenticMessage
-	if err := sonic.Unmarshal(payload, &msg); err != nil {
-		return ""
-	}
-	var parts []string
-	for _, block := range msg.ContentBlocks {
-		if block == nil {
-			continue
-		}
-		if block.UserInputText != nil && block.UserInputText.Text != "" {
-			parts = append(parts, block.UserInputText.Text)
-		}
-		if block.AssistantGenText != nil && block.AssistantGenText.Text != "" {
-			parts = append(parts, block.AssistantGenText.Text)
-		}
-		if block.FunctionToolResult != nil {
-			for _, content := range block.FunctionToolResult.Content {
-				if content != nil && content.Text != nil && content.Text.Text != "" {
-					parts = append(parts, content.Text.Text)
-				}
-			}
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-func NewReadSessionHistoryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readSessionHistory", "读取指定会话最近的 transcript 记录；pending_entries 是全部已经入队但尚未处理的消息，失败记录也会返回。", readSessionHistory)
+	return utils.InferTool("sendSessionMessage", "向另一个会话投递一条消息；聊天会话可以把执行需求交给 life:1，worker 只能向 life 回报，life 可以投给任意会话。life 派 worker 时可用 context_mode=continue 或 new。成功返回目标 transcript 条目编号，不是 QQ 消息 ID。", sendSessionMessage)
 }
 
 type UpdateWorkerTitleInput struct {

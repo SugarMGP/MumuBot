@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bytedance/sonic"
 )
@@ -31,8 +32,18 @@ func (m *Manager) LoadContextDigest(ctx context.Context, kind string, targetID i
 	if err := sonic.Unmarshal(checkpoint.ActiveTopicVersions, &snapshots); err != nil {
 		return nil, err
 	}
+	now := time.Now()
 	topics := make([]ContextTopic, 0, len(snapshots))
 	for _, snapshot := range snapshots {
+		var available int64
+		if err := m.db.WithContext(ctx).Model(&TopicThreadRow{}).
+			Where("id=? AND forgotten_at IS NULL AND forget_at>?", snapshot.TopicID, now).
+			Count(&available).Error; err != nil {
+			return nil, err
+		}
+		if available == 0 {
+			continue
+		}
 		var row TopicSummaryRow
 		if err := m.db.WithContext(ctx).Where("id=? AND topic_id=?", snapshot.SummaryID, snapshot.TopicID).Take(&row).Error; err != nil {
 			return nil, fmt.Errorf("读取活跃话题摘要有误: %w", err)

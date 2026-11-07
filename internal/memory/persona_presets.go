@@ -37,6 +37,7 @@ type PersonaPreset struct {
 	Description string    `gorm:"type:text;not null" json:"description"`
 	PersonaCard string    `gorm:"column:persona_card;type:text;not null" json:"persona_card"`
 	Simulation  string    `gorm:"column:simulation_prompt;type:text;not null" json:"simulation_prompt"`
+	LifePrompt  string    `gorm:"column:life_prompt;type:text;not null;default:''" json:"life_prompt"`
 	Builtin     bool      `gorm:"not null" json:"builtin"`
 	Active      bool      `gorm:"not null" json:"active"`
 	Version     int64     `gorm:"not null" json:"version"`
@@ -92,8 +93,8 @@ func (m *Manager) CreatePersonaPreset(ctx context.Context, preset PersonaPreset)
 	if preset.Name == "" {
 		return nil, fmt.Errorf("%w: 预设名称不能为空", ErrPersonaPresetInvalid)
 	}
-	if strings.TrimSpace(preset.PersonaCard) == "" || strings.TrimSpace(preset.Simulation) == "" {
-		return nil, fmt.Errorf("%w: 人格卡与仿真提示词都不能为空", ErrPersonaPresetInvalid)
+	if strings.TrimSpace(preset.PersonaCard) == "" || strings.TrimSpace(preset.Simulation) == "" || strings.TrimSpace(preset.LifePrompt) == "" {
+		return nil, fmt.Errorf("%w: 人格卡、仿真提示词与生活职责都不能为空", ErrPersonaPresetInvalid)
 	}
 	var exists int64
 	if err := m.db.WithContext(ctx).Model(&PersonaPreset{}).Where("name = ?", preset.Name).Count(&exists).Error; err != nil {
@@ -112,13 +113,13 @@ func (m *Manager) CreatePersonaPreset(ctx context.Context, preset PersonaPreset)
 }
 
 // UpdatePersonaPreset 保存预设内容，内置预设只允许改说明以外的东西由后台拦截
-func (m *Manager) UpdatePersonaPreset(ctx context.Context, id uint, name, description, card, simulation string, expectedVersion int64) error {
+func (m *Manager) UpdatePersonaPreset(ctx context.Context, id uint, name, description, card, simulation, lifePrompt string, expectedVersion int64) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("%w: 预设名称不能为空", ErrPersonaPresetInvalid)
 	}
-	if strings.TrimSpace(card) == "" || strings.TrimSpace(simulation) == "" {
-		return fmt.Errorf("%w: 人格卡与仿真提示词都不能为空", ErrPersonaPresetInvalid)
+	if strings.TrimSpace(card) == "" || strings.TrimSpace(simulation) == "" || strings.TrimSpace(lifePrompt) == "" {
+		return fmt.Errorf("%w: 人格卡、仿真提示词与生活职责都不能为空", ErrPersonaPresetInvalid)
 	}
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row PersonaPreset
@@ -150,6 +151,7 @@ func (m *Manager) UpdatePersonaPreset(ctx context.Context, id uint, name, descri
 				"description":       strings.TrimSpace(description),
 				"persona_card":      card,
 				"simulation_prompt": simulation,
+				"life_prompt":       lifePrompt,
 				"version":           row.Version + 1,
 				"updated_at":        time.Now(),
 			})
@@ -230,6 +232,7 @@ func (m *Manager) ClonePersonaPreset(ctx context.Context, id uint) (*PersonaPres
 		Description: source.Description,
 		PersonaCard: source.PersonaCard,
 		Simulation:  source.Simulation,
+		LifePrompt:  source.LifePrompt,
 		Version:     1,
 	}
 	if err := m.db.WithContext(ctx).Create(&clone).Error; err != nil {
@@ -251,10 +254,11 @@ func (m *Manager) personaPresetNames(ctx context.Context) (map[string]struct{}, 
 }
 
 // EnsureBuiltinPersonaPreset 用代码里的文本维护内置预设：没有就建，有就同步
-func (m *Manager) EnsureBuiltinPersonaPreset(ctx context.Context, card, simulation string) (*PersonaPreset, error) {
+func (m *Manager) EnsureBuiltinPersonaPreset(ctx context.Context, card, simulation, lifePrompt string) (*PersonaPreset, error) {
 	card = strings.TrimSpace(card)
 	simulation = strings.TrimSpace(simulation)
-	if card == "" || simulation == "" {
+	lifePrompt = strings.TrimSpace(lifePrompt)
+	if card == "" || simulation == "" || lifePrompt == "" {
 		return nil, fmt.Errorf("内置预设内容为空")
 	}
 	var row PersonaPreset
@@ -269,6 +273,7 @@ func (m *Manager) EnsureBuiltinPersonaPreset(ctx context.Context, card, simulati
 			Description: "项目自带的人格预设，随版本更新，不可编辑；需要修改请克隆一份。",
 			PersonaCard: card,
 			Simulation:  simulation,
+			LifePrompt:  lifePrompt,
 			Builtin:     true,
 			Active:      activeCount == 0,
 			Version:     1,
@@ -281,13 +286,14 @@ func (m *Manager) EnsureBuiltinPersonaPreset(ctx context.Context, card, simulati
 	if err != nil {
 		return nil, fmt.Errorf("读取内置预设失败: %w", err)
 	}
-	if strings.TrimSpace(row.PersonaCard) == card && strings.TrimSpace(row.Simulation) == simulation {
+	if strings.TrimSpace(row.PersonaCard) == card && strings.TrimSpace(row.Simulation) == simulation && strings.TrimSpace(row.LifePrompt) == lifePrompt {
 		return &row, nil
 	}
 	if err := m.db.WithContext(ctx).Model(&PersonaPreset{}).Where("id = ?", row.ID).Updates(map[string]any{
 		"name":              PersonaPresetBuiltinName,
 		"persona_card":      card,
 		"simulation_prompt": simulation,
+		"life_prompt":       lifePrompt,
 		"version":           row.Version + 1,
 		"updated_at":        time.Now(),
 	}).Error; err != nil {
@@ -295,5 +301,6 @@ func (m *Manager) EnsureBuiltinPersonaPreset(ctx context.Context, card, simulati
 	}
 	row.PersonaCard = card
 	row.Simulation = simulation
+	row.LifePrompt = lifePrompt
 	return &row, nil
 }

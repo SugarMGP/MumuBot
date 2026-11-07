@@ -4,16 +4,18 @@ import { useTranslation } from "react-i18next";
 import { systemApi } from "@/api/client-endpoints";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
+import { SectionCard } from "@/components/admin/section-card";
 import { SystemTabs } from "@/components/admin/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { enumLabel } from "@/lib/labels";
 
 function FieldRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-2">
-      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-words text-right text-sm text-foreground/85">
+    <div className="flex items-start justify-between gap-4 py-2.5">
+      <span className="admin-label-text shrink-0 text-muted-foreground">
+        {label}
+      </span>
+      <span className="admin-body-text min-w-0 break-words text-right text-foreground">
         {value}
       </span>
     </div>
@@ -67,8 +69,16 @@ export default function SystemStatusPage() {
       }),
     },
     {
-      label: t("system.status.maxStep"),
+      label: t("system.status.chatMaxStep"),
       value: t("system.status.steps", { count: data.context.max_step }),
+    },
+    {
+      label: t("system.status.lifeMaxStep"),
+      value: t("system.status.steps", { count: data.context.life_max_step }),
+    },
+    {
+      label: t("system.status.workerMaxStep"),
+      value: t("system.status.steps", { count: data.context.worker_max_step }),
     },
     ...(data.context.think_debounce_ms > 0
       ? [
@@ -158,6 +168,16 @@ export default function SystemStatusPage() {
           },
         ]
       : []),
+    ...(data.model.mcp_statuses && data.model.mcp_statuses.length > 0
+      ? data.model.mcp_statuses.map((item) => ({
+          label: t("system.status.mcpStatus", { name: item.name }),
+          value: item.connected
+            ? t("system.status.mcpConnected", { count: item.tool_count })
+            : t("system.status.mcpFailure", {
+                reason: item.error || t("system.status.mcpUnknown"),
+              }),
+        }))
+      : []),
     ...(data.model.context_window > 0
       ? [
           {
@@ -176,6 +196,16 @@ export default function SystemStatusPage() {
       value: (
         <Badge variant={data.runtime.connected ? "success" : "destructive"}>
           {enumLabel(t, "connection", data.runtime.connected ? "connected" : "disconnected")}
+        </Badge>
+      ),
+    },
+    {
+      label: t("system.status.agentReady"),
+      value: (
+        <Badge variant={data.runtime.agent_ready ? "success" : "warning"}>
+          {data.runtime.agent_ready
+            ? t("system.status.agentReadyYes")
+            : t("system.status.agentReadyNo")}
         </Badge>
       ),
     },
@@ -212,7 +242,7 @@ export default function SystemStatusPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <PageHeader
           title={t("system.title")}
           subtitle={t("system.subtitle")}
@@ -220,29 +250,24 @@ export default function SystemStatusPage() {
         <SystemTabs />
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(430px,1fr))] items-start gap-5">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(430px,1fr))] items-start gap-4">
         {[
-          { title: t("system.status.sections.persona"), fields: personaFields },
-          { title: t("system.status.sections.context"), fields: contextFields },
           { title: t("system.status.sections.model"), fields: modelFields },
           { title: t("system.status.sections.runtime"), fields: runtimeFields },
+          { title: t("system.status.sections.persona"), fields: personaFields },
+          { title: t("system.status.sections.context"), fields: contextFields },
         ].map((section) => (
-          <Card key={section.title}>
-            <div className="p-5">
-              <h2 className="mb-2 text-lg font-semibold text-foreground">
-                {section.title}
-              </h2>
-              <div className="divide-y divide-border">
-                {section.fields.map((field) => (
-                  <FieldRow
-                    key={field.label}
-                    label={field.label}
-                    value={field.value}
-                  />
-                ))}
-              </div>
+          <SectionCard key={section.title} title={section.title}>
+            <div className="divide-y divide-border">
+              {section.fields.map((field) => (
+                <FieldRow
+                  key={field.label}
+                  label={field.label}
+                  value={field.value}
+                />
+              ))}
             </div>
-          </Card>
+          </SectionCard>
         ))}
       </div>
     </div>

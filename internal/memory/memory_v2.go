@@ -20,7 +20,6 @@ type MemorySearchQuery struct {
 	SubjectType     string
 	SubjectTarget   string
 	MemoryType      string
-	Status          string
 	UpdatedFrom     *time.Time
 	UpdatedTo       *time.Time
 	Cursor          string
@@ -35,7 +34,6 @@ type MemorySearchFilter struct {
 	SubjectType     string     `json:"subject_type"`
 	SubjectTarget   string     `json:"subject_target"`
 	MemoryType      string     `json:"memory_type"`
-	Status          string     `json:"status"`
 	UpdatedFrom     *time.Time `json:"updated_from,omitempty"`
 	UpdatedTo       *time.Time `json:"updated_to,omitempty"`
 }
@@ -129,7 +127,7 @@ func searchFilter(query MemorySearchQuery) MemorySearchFilter {
 		Mode:            strings.ToLower(strings.TrimSpace(query.Mode)),
 		ExcludeKeywords: NormalizeKeywords(query.ExcludeKeywords), SubjectType: strings.ToLower(strings.TrimSpace(query.SubjectType)),
 		SubjectTarget: strings.TrimSpace(query.SubjectTarget), MemoryType: strings.ToLower(strings.TrimSpace(query.MemoryType)),
-		Status: strings.ToLower(strings.TrimSpace(query.Status)), UpdatedFrom: query.UpdatedFrom, UpdatedTo: query.UpdatedTo,
+		UpdatedFrom: query.UpdatedFrom, UpdatedTo: query.UpdatedTo,
 	}
 }
 
@@ -150,7 +148,7 @@ func memorySearchTextExpr(alias string) string {
 }
 
 func memoryKeywordCondition(textExpr, keyword string) (string, []any) {
-	pattern := "%" + strings.ToLower(keyword) + "%"
+	pattern := LiteralContainsPattern(strings.ToLower(keyword))
 	return textExpr + " LIKE ?", []any{pattern}
 }
 
@@ -202,11 +200,6 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 		return MemoryPage{}, fmt.Errorf("updated_from 不能晚于 updated_to")
 	}
 	limit := NormalizeLimit(query.Limit)
-	status := filter.Status
-	if status == "" {
-		status = "active"
-	}
-	filter.Status = status
 	cursor, err := DecodeCursor(query.Cursor)
 	if err != nil {
 		return MemoryPage{}, err
@@ -242,10 +235,9 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 		db = tx
 	}
 
-	q := db.Table("knowledge_items ki").Where("ki.updated_at<=?", snapshot)
-	if status != "all" {
-		q = q.Where("ki.status=?", status)
-	}
+	lifecycleNow := time.Now()
+	q := db.Table("knowledge_items ki").Where("ki.updated_at<=?", snapshot).
+		Where("ki.status='active' AND (ki.pinned OR ki.forget_at IS NULL OR ki.forget_at>?)", lifecycleNow)
 	if filter.SubjectType != "" {
 		q = q.Where("ki.subject_type=?", filter.SubjectType)
 	}
@@ -259,7 +251,7 @@ func (m *Manager) SearchMemories(ctx context.Context, query MemorySearchQuery) (
 		q = q.Where("ki.updated_at>=?", *filter.UpdatedFrom)
 	}
 	if filter.UpdatedTo != nil {
-		q = q.Where("ki.updated_at<=?", *filter.UpdatedTo)
+		q = q.Where("ki.updated_at<?", *filter.UpdatedTo)
 	}
 
 	textExpr := memorySearchTextExpr("ki")
@@ -347,8 +339,15 @@ func (m *Manager) ReadMemory(ctx context.Context, id uint) (*KnowledgeRecord, er
 	if id == 0 {
 		return nil, fmt.Errorf("记忆编号不能为空")
 	}
+	now := time.Now()
 	var item KnowledgeRecord
-	if err := m.db.WithContext(ctx).Where("id=?", id).Take(&item).Error; err != nil {
+	err := m.db.WithContext(ctx).
+		Where("id=? AND status='active' AND (pinned OR forget_at IS NULL OR forget_at>?)", id, now).
+		Take(&item).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, fmt.Errorf("记忆不存在或已归档")
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &item, nil
@@ -379,7 +378,7 @@ func applyMemoryChange(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, er
 	switch change.Action {
 	case "create":
 		return createMemory(tx, change)
-	case "update", "archive", "restore":
+	case "update", "archive":
 		return mutateMemory(tx, change)
 	default:
 		return MemoryChangeResult{}, fmt.Errorf("未知记忆操作 %s", change.Action)
@@ -404,18 +403,27 @@ func createMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 		return MemoryChangeResult{}, fmt.Errorf("记忆正文不能超过 8000 字符")
 	}
 	hash := memoryContentHash(subjectType, subjectTarget, memoryType, content)
+	now := time.Now()
+	if _, err := settleExpiredMemoryHashTx(tx, subjectType, subjectTarget, memoryType, hash, now); err != nil {
+		return MemoryChangeResult{}, err
+	}
 	var existing KnowledgeRecord
-	err = tx.Where("subject_type=? AND subject_target=? AND memory_type=? AND content_hash=?", subjectType, subjectTarget, memoryType, hash).Order("id").Take(&existing).Error
+	err = tx.Where("subject_type=? AND subject_target=? AND memory_type=? AND content_hash=? AND status='active' AND (pinned OR forget_at IS NULL OR forget_at>?)",
+		subjectType, subjectTarget, memoryType, hash, now).Order("id").Take(&existing).Error
 	if err == nil {
 		return MemoryChangeResult{ItemID: existing.ID, Action: "create", Version: existing.Version, Status: existing.Status}, nil
 	}
 	if err != gorm.ErrRecordNotFound {
 		return MemoryChangeResult{}, err
 	}
+	pinned := change.Pinned != nil && *change.Pinned
+	policy := CurrentRetentionPolicy()
+	stability, anchor, forgetAt := policy.MemoryState(pinned, now)
 	item := KnowledgeRecord{
 		SubjectType: subjectType, SubjectTarget: subjectTarget, MemoryType: memoryType,
-		Label: strings.TrimSpace(change.Label), Content: content, Pinned: change.Pinned != nil && *change.Pinned,
+		Label: strings.TrimSpace(change.Label), Content: content, Pinned: pinned,
 		Status: "active", Version: 1, ContentHash: hash,
+		StabilityDays: stability, RecallAnchorAt: anchor, ForgetAt: forgetAt,
 	}
 	if err := tx.Create(&item).Error; err != nil {
 		return MemoryChangeResult{}, err
@@ -452,6 +460,12 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 	}
 	before := item
 	item.Version++
+	if item.Status != "active" {
+		return MemoryChangeResult{}, fmt.Errorf("记忆已归档，不能再修改")
+	}
+	if change.Action == "update" && !item.Pinned && item.ForgetAt != nil && !time.Now().Before(*item.ForgetAt) {
+		return MemoryChangeResult{}, fmt.Errorf("记忆已到期，不能再修改")
+	}
 	switch change.Action {
 	case "update":
 		if content := strings.TrimSpace(change.Content); content != "" {
@@ -460,11 +474,24 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 		if label := strings.TrimSpace(change.Label); label != "" {
 			item.Label = label
 		}
+		beforePinned := item.Pinned
 		item.Pinned = pinnedAfterUpdate(item.Pinned, change.Pinned)
+		if beforePinned && !item.Pinned {
+			policy := CurrentRetentionPolicy()
+			halfLife := item.StabilityDays
+			if halfLife <= 0 {
+				halfLife = policy.InitialHalfLifeDays
+			}
+			now := time.Now()
+			item.StabilityDays = halfLife
+			item.RecallAnchorAt = now
+			forgetAt := policy.ForgetAt(now, halfLife)
+			item.ForgetAt = &forgetAt
+		} else if !beforePinned && item.Pinned {
+			item.ForgetAt = nil
+		}
 	case "archive":
 		item.Status = "archived"
-	case "restore":
-		item.Status = "active"
 	}
 	content := strings.TrimSpace(item.Content)
 	if content == "" || len([]rune(content)) > 8000 {
@@ -472,7 +499,7 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 	}
 	item.Content = content
 	item.ContentHash = memoryContentHash(item.SubjectType, item.SubjectTarget, item.MemoryType, item.Content)
-	if change.Action == "update" || change.Action == "restore" {
+	if change.Action == "update" {
 		var duplicate int64
 		if err := tx.Model(&KnowledgeRecord{}).Where("subject_type=? AND subject_target=? AND memory_type=? AND content_hash=? AND status='active' AND id<>?", item.SubjectType, item.SubjectTarget, item.MemoryType, item.ContentHash, item.ID).Count(&duplicate).Error; err != nil {
 			return MemoryChangeResult{}, err

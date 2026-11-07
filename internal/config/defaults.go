@@ -7,11 +7,15 @@ func DefaultRuntime() RuntimeConfig {
 			PresetName:  PersonaPresetFallbackName,
 			PersonaCard: builtinPersonaCard,
 			Simulation:  builtinSimulationPrompt,
+			LifePrompt:  builtinLifePrompt,
 		},
+		Identity: IdentityConfig{Name: "沐沐"},
 		Agent: AgentConfig{
 			ThinkInterval:         15,
 			ThinkDebounceMS:       5000,
 			MaxStep:               50,
+			LifeMaxStep:           50,
+			WorkerMaxStep:         30,
 			MaxGroupConcurrency:   3,
 			MaxPrivateConcurrency: 0,
 			WorkerCount:           1,
@@ -35,6 +39,10 @@ func DefaultRuntime() RuntimeConfig {
 			IdleMinRatio:      0.60,
 		},
 		Maintenance: MaintenanceConfig{MemoryTurns: 8, TopicTurns: 6},
+		Retention: RetentionConfig{
+			InitialHalfLifeDays: 30, MaxHalfLifeDays: 180,
+			ReinforceFactor: 0.9, ForgetThreshold: 0.10, HistoryDays: 180,
+		},
 		Media: MediaConfig{
 			MaxBytesMB:   10,
 			ImageQuality: 75,

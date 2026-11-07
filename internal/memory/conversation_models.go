@@ -6,6 +6,7 @@ const (
 	ConversationKindGroup   = "group"
 	ConversationKindPrivate = "private"
 	ConversationKindWorker  = "worker"
+	ConversationKindLife    = "life"
 )
 
 // ConversationTarget 保存会话的后台管理状态和 OneBot 联系人镜像

@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/memory"
 	"mumu-bot/internal/secrets"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func (a *App) settingsPayload() settingsResponse {
@@ -46,7 +49,17 @@ func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	old := *config.Snapshot()
-	if err := config.SaveSection(r.Context(), section, value, body.Version); err != nil {
+	if section == config.SectionRetention {
+		now := time.Now()
+		err := config.SaveSectionWithApply(r.Context(), section, value, body.Version,
+			func(tx *gorm.DB, _, after config.RuntimeConfig) error {
+				return memory.ApplyRetentionPolicy(tx, memory.PolicyFromConfig(after.Retention), now)
+			})
+		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+	} else if err := config.SaveSection(r.Context(), section, value, body.Version); err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
@@ -68,7 +81,18 @@ func (a *App) handleSettingsReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	old := *config.Snapshot()
-	if err := config.ResetSection(r.Context(), section, body.Version); err != nil {
+	if section == config.SectionRetention {
+		now := time.Now()
+		defaults := config.DefaultRuntime()
+		err := config.SaveSectionWithApply(r.Context(), section, defaults.Retention, body.Version,
+			func(tx *gorm.DB, _, after config.RuntimeConfig) error {
+				return memory.ApplyRetentionPolicy(tx, memory.PolicyFromConfig(after.Retention), now)
+			})
+		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+	} else if err := config.ResetSection(r.Context(), section, body.Version); err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
@@ -79,7 +103,7 @@ func (a *App) handleSettingsReset(w http.ResponseWriter, r *http.Request) {
 func validSettingsSection(section string) bool {
 	switch section {
 	case config.SectionAgent, config.SectionChat, config.SectionCompactor,
-		config.SectionMaintenance, config.SectionMedia, config.SectionDebug:
+		config.SectionMaintenance, config.SectionMedia, config.SectionDebug, config.SectionRetention:
 		return true
 	default:
 		return false
@@ -101,6 +125,8 @@ func settingsSectionValue(section string, raw json.RawMessage) (any, error) {
 		target = &config.MediaConfig{}
 	case config.SectionDebug:
 		target = &config.DebugConfig{}
+	case config.SectionRetention:
+		target = &config.RetentionConfig{}
 	default:
 		return nil, nil
 	}
@@ -112,23 +138,24 @@ func settingsSectionValue(section string, raw json.RawMessage) (any, error) {
 
 // applySettingsRuntime 把已保存的配置同步到运行态；失败返回警告而不是回滚
 func (a *App) applySettingsRuntime(section string, old config.RuntimeConfig) *warningPayload {
-	if a.mumuAgent == nil {
+	agent := a.currentAgent()
+	if agent == nil {
 		return nil
 	}
 	next := config.Snapshot()
-	a.mumuAgent.SetConcurrencyLimits(next.Agent.MaxGroupConcurrency, next.Agent.MaxPrivateConcurrency)
+	agent.SetConcurrencyLimits(next.Agent.MaxGroupConcurrency, next.Agent.MaxPrivateConcurrency)
 	if section == config.SectionAgent && old.Agent.WorkerCount != next.Agent.WorkerCount {
-		if err := a.mumuAgent.SyncWorkers(next.Agent.WorkerCount); err != nil {
+		if err := agent.SyncWorkers(next.Agent.WorkerCount); err != nil {
 			zap.L().Warn("设置已保存但 worker 数量应用失败", zap.Error(err))
 			return &warningPayload{Code: "runtime_worker_sync_failed"}
 		}
 	}
-	needGeneration := section == config.SectionMedia ||
-		(section == config.SectionAgent && old.Agent.MaxStep != next.Agent.MaxStep)
+	// 压缩阈值、三种步数都在每次 think 读取，不因这些配置重建模型/MCP；媒体参数仍固定在 generation 内
+	needGeneration := section == config.SectionMedia
 	if !needGeneration || !a.agentReady() {
 		return nil
 	}
-	if err := a.mumuAgent.Reload(); err != nil {
+	if err := agent.Reload(); err != nil {
 		zap.L().Warn("设置已保存但运行态应用失败", zap.String("section", section), zap.Error(err))
 		return &warningPayload{Code: "runtime_reload_failed"}
 	}

@@ -52,10 +52,10 @@ export default function MembersPage() {
   };
 
   return (
-    <div className="admin-memory-page space-y-6">
+    <div className="space-y-6">
       <PageHeader title={t("members.title")} subtitle={t("members.subtitle")} />
 
-      <FilterPanel title={t("common.filter")}>
+      <FilterPanel>
         <form className="flex items-end gap-3" onSubmit={submit}>
           <Field label={t("members.filters.keyword")} className="flex-1">
             <Input
@@ -84,7 +84,7 @@ export default function MembersPage() {
       ) : query.data.items.length === 0 ? (
         <EmptyState message={t("members.empty")} />
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {query.data.items.map((member) => {
             const name = primaryName(member);
             const visibleNames = member.names.slice(0, 2);
@@ -97,7 +97,7 @@ export default function MembersPage() {
                       {initial(member)}
                     </div>
                     <div className="min-w-0">
-                      <h2 className="break-words text-lg font-semibold text-foreground">
+                      <h2 className="break-words admin-card-title text-foreground">
                         {name}
                       </h2>
                       <p className="admin-number mt-1 text-xs text-muted-foreground">

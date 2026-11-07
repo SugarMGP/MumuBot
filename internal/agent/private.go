@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"mumu-bot/internal/config"
@@ -20,7 +21,7 @@ func (a *Agent) onPrivateMessage(msg *onebot.ConversationMessage, mediaRefs []me
 func (a *Agent) schedulePrivateThink(targetID int64, receivedAt time.Time) {
 	a.privateMu.Lock()
 	defer a.privateMu.Unlock()
-	if a.privateStopped || a.stopping.Load() || a.ctx.Err() != nil || a.privateConcurrency.IsRunning(targetID) {
+	if a.privateStopped || a.stopping.Load() || a.ctx.Err() != nil || a.qqSleeping() || a.privateConcurrency.IsRunning(targetID) {
 		return
 	}
 	pending := a.pendingPrivateThinks[targetID]
@@ -39,7 +40,7 @@ func (a *Agent) flushPrivateThink(targetID int64, expected *pendingThink, genera
 	pending := a.pendingPrivateThinks[targetID]
 	// 挂起的思考只能由最新一代定时器触发；进入 running 前同样持有锁，
 	// schedulePrivateThink 会在 running 期间跳过创建挂起项，因此这里无需复查
-	if pending != expected || pending.generation != generation || a.privateStopped || a.stopping.Load() || a.ctx.Err() != nil {
+	if pending != expected || pending.generation != generation || a.privateStopped || a.stopping.Load() || a.ctx.Err() != nil || a.qqSleeping() {
 		a.privateMu.Unlock()
 		return
 	}
@@ -54,12 +55,12 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		return
 	}
 	defer generation.wg.Done()
-	state, err := newRunState()
+	state, err := newRunState("chat")
 	if err != nil {
 		zap.L().Warn("加载本轮配置失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
 	}
-	if !a.conversationAllowed(memory.ConversationKindPrivate, targetID) {
+	if a.qqSleeping() || !a.conversationAllowed(memory.ConversationKindPrivate, targetID) {
 		return
 	}
 	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
@@ -71,26 +72,54 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	}
 	ctx := withRunState(a.ctx, state)
 	ctx = withGeneration(ctx, generation)
-	ctx = a.buildConversationToolContext(ctx, memory.ConversationKindPrivate, targetID, session)
+	ctx, err = a.buildConversationToolContext(ctx, memory.ConversationKindPrivate, targetID, session)
+	if err != nil {
+		zap.L().Warn("构建私聊工具上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
+		return
+	}
 	tc := tools.GetToolContext(ctx)
 	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 	a.injectMaintenanceHint(ctx, session)
 
+	if state.steps.Remaining() <= 0 {
+		zap.L().Warn("私聊本轮步数已用完", zap.Int64("target_id", targetID))
+		return
+	}
+	chatAgent, err := a.newChatAgent(generation, generation.privateTools, state.steps.Remaining())
+	if err != nil {
+		zap.L().Warn("构建私聊运行态失败", zap.Int64("target_id", targetID), zap.Error(err))
+		return
+	}
 	messages, err := a.assembleMessages(ctx, session)
 	if err != nil {
 		zap.L().Warn("装配私聊上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
 	}
-	if runErr := a.runAgent(ctx, generation.privateAgent, messages); runErr != nil {
-		if isContextOverflowError(runErr) && a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
-			if tc != nil {
-				tc.TopicMaintained = true
+	if runErr := a.runAgent(ctx, chatAgent, messages); runErr != nil {
+		if isContextOverflowError(runErr) {
+			if a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
+				if tc != nil {
+					tc.TopicMaintained = true
+				}
+				if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, state, generation.privateTools, session); retryErr == nil {
+					a.finishSuccessfulThink(ctx, session, tc)
+					return
+				} else {
+					session.MarkFailedAfterRun(pending, tc != nil && tc.ModelRequested)
+					zap.L().Warn("私聊溢出重试失败", zap.Int64("target_id", targetID), zap.Error(retryErr))
+					return
+				}
 			}
-			if retryErr := a.retryAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateAgent, session); retryErr == nil {
-				a.finishSuccessfulThink(ctx, session, tc)
-				return
+			if !session.NeedsCompactionBeforeModel() {
+				session.MarkFailedAfterRun(pending, tc != nil && tc.ModelRequested)
 			}
+			return
 		}
+		if errors.Is(runErr, errCompactionPending) || session.NeedsCompactionBeforeModel() {
+			zap.L().Warn("私聊等待压缩重试", zap.Int64("target_id", targetID), zap.Error(runErr))
+			return
+		}
+		session.MarkFailedAfterRun(pending, tc != nil && tc.ModelRequested)
 		zap.L().Warn("私聊思考失败", zap.Int64("target_id", targetID), zap.Error(runErr))
 		return
 	}

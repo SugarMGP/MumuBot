@@ -139,11 +139,12 @@ jobs:
 
     - name: Build
       env:
+        VERSION: ${{ github.ref_name }}
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: 1
       run: |
-        go build -v -trimpath -ldflags "-s -w -X mumu-bot/internal/version.Build=${GITHUB_REF_NAME}" -o dist/${{ matrix.output_name }} .
+        go build -v -trimpath -ldflags "-s -w -X mumu-bot/internal/version.Build=${{ env.VERSION }}" -o dist/${{ matrix.output_name }} .
 
     - name: Archive (Unix)
       if: runner.os != 'Windows'
@@ -326,7 +327,7 @@ jobs:
 
   release:
     name: Release
-    needs: build
+    needs: [build, prepare-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write

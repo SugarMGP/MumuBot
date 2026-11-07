@@ -9,6 +9,7 @@ import { PageSkeleton } from "@/components/admin/loading";
 import { Pagination } from "@/components/admin/pagination";
 import { SortToolbar } from "@/components/admin/sort-toolbar";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -42,22 +43,26 @@ export default function MemoriesPage() {
   const userId = params.get("user_id") || "";
   const sort = params.get("sort") || "updated";
   const order = params.get("order") || "desc";
-  const [filters, setFilters] = useState<FilterState>({
+  const fromParams = (): FilterState => ({
     subjectType: params.get("subject_type") || "",
     subjectTarget: params.get("subject_target") || "",
     memoryType: params.get("memory_type") || "",
     keyword: params.get("keyword") || "",
     status: params.get("status") || "",
   });
+  const [filters, setFilters] = useState<FilterState>(fromParams);
+  const [drafts, setDrafts] = useState<FilterState>(fromParams);
 
   useEffect(() => {
-    setFilters({
+    const next = {
       subjectType: params.get("subject_type") || "",
       subjectTarget: params.get("subject_target") || "",
       memoryType: params.get("memory_type") || "",
       keyword: params.get("keyword") || "",
       status: params.get("status") || "",
-    });
+    };
+    setFilters(next);
+    setDrafts(next);
   }, [params]);
 
   const query = useQuery({
@@ -88,29 +93,30 @@ export default function MemoriesPage() {
 
   const submitFilters = (event: React.FormEvent) => {
     event.preventDefault();
+    setFilters(drafts);
     update(
       {
-        subject_type: filters.subjectType,
-        subject_target: filters.subjectTarget,
-        memory_type: filters.memoryType,
-        status: filters.status,
-        keyword: filters.keyword,
+        subject_type: drafts.subjectType,
+        subject_target: drafts.subjectTarget,
+        memory_type: drafts.memoryType,
+        status: drafts.status,
+        keyword: drafts.keyword,
       },
       { resetPage: true },
     );
   };
 
   return (
-    <div className="admin-memory-page space-y-6">
+    <div className="space-y-6">
       <PageHeader title={t("memories.title")} subtitle={t("memories.subtitle")} />
 
-      <FilterPanel title={t("common.filter")}>
-        <form className="flex flex-wrap items-center gap-3" onSubmit={submitFilters}>
+      <FilterPanel>
+        <form className="flex flex-wrap items-end gap-3" onSubmit={submitFilters}>
           <Field label={t("memories.filters.subjectType")} className="w-40">
             <NativeSelect
-              value={filters.subjectType}
+              value={drafts.subjectType}
               onChange={(event) =>
-                setFilters((value) => ({ ...value, subjectType: event.target.value }))
+                setDrafts((value) => ({ ...value, subjectType: event.target.value }))
               }
               aria-label={t("memories.filters.subjectType")}
             >
@@ -124,10 +130,10 @@ export default function MemoriesPage() {
           </Field>
           <Field label={t("memories.filters.subjectTarget")} className="w-44">
             <Input
-              value={filters.subjectTarget}
+              value={drafts.subjectTarget}
               placeholder={t("memories.filters.subjectTargetPlaceholder")}
               onChange={(event) =>
-                setFilters((value) => ({
+                setDrafts((value) => ({
                   ...value,
                   subjectTarget: event.target.value,
                 }))
@@ -136,9 +142,9 @@ export default function MemoriesPage() {
           </Field>
           <Field label={t("memories.filters.memoryType")} className="w-40">
             <NativeSelect
-              value={filters.memoryType}
+              value={drafts.memoryType}
               onChange={(event) =>
-                setFilters((value) => ({ ...value, memoryType: event.target.value }))
+                setDrafts((value) => ({ ...value, memoryType: event.target.value }))
               }
               aria-label={t("memories.filters.memoryType")}
             >
@@ -152,9 +158,9 @@ export default function MemoriesPage() {
           </Field>
           <Field label={t("memories.filters.status")} className="w-36">
             <NativeSelect
-              value={filters.status}
+              value={drafts.status}
               onChange={(event) =>
-                setFilters((value) => ({ ...value, status: event.target.value }))
+                setDrafts((value) => ({ ...value, status: event.target.value }))
               }
               aria-label={t("memories.filters.status")}
             >
@@ -169,14 +175,14 @@ export default function MemoriesPage() {
           <Field label={t("memories.filters.keyword")} className="min-w-56 flex-1">
             <Input
               type="search"
-              value={filters.keyword}
+              value={drafts.keyword}
               placeholder={t("memories.filters.keywordPlaceholder")}
               onChange={(event) =>
-                setFilters((value) => ({ ...value, keyword: event.target.value }))
+                setDrafts((value) => ({ ...value, keyword: event.target.value }))
               }
             />
           </Field>
-          <Button type="submit" className="mt-5">
+          <Button type="submit">
             {t("common.filter")}
           </Button>
         </form>
@@ -216,11 +222,11 @@ export default function MemoriesPage() {
       ) : query.data.items.length === 0 ? (
         <EmptyState message={t("memories.empty")} />
       ) : (
-        <div className="rounded-xl border border-border bg-card shadow-card">
+        <Card className="admin-card-pad overflow-hidden">
           <Table className="table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[48%] px-5">
+                <TableHead className="w-[48%]">
                   {t("memories.columns.content")}
                 </TableHead>
                 <TableHead className="w-[22%]">
@@ -240,7 +246,7 @@ export default function MemoriesPage() {
             <TableBody>
               {query.data.items.map((item) => (
                 <TableRow key={item.id}>
-                  <TableCell className="px-5">
+                  <TableCell>
                     <Link
                       to={`/admin/memories/${item.id}`}
                       state={{ from: location.pathname + location.search }}
@@ -248,7 +254,7 @@ export default function MemoriesPage() {
                     >
                       {item.label ? (
                         <>
-                          <span className="font-semibold">{item.label}</span>
+                          <span className="font-medium">{item.label}</span>
                           <p className="mt-1 line-clamp-3 text-sm font-normal leading-6 text-foreground/75">
                             {item.content}
                           </p>
@@ -293,7 +299,7 @@ export default function MemoriesPage() {
               ))}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
 
       {query.data ? (

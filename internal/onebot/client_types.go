@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"mumu-bot/internal/filemeta"
+
 	"github.com/zjutjh/onebot-sdk/message"
 )
 
@@ -43,7 +45,7 @@ type ConversationMessage struct {
 	AtNames          map[int64]string      `json:"at_names,omitempty"`      // @ 目标在事件中的显示名
 	Reply            *ReplyInfo            `json:"reply,omitempty"`         // 回复信息
 	ForwardContent   []message.ForwardNode `json:"-"`                       // 合并转发节点，由 SDK 管线补拉，仅用于本轮总结
-	FileNames        []string              `json:"file_names,omitempty"`    // 文件消息名称
+	Files            filemeta.Refs         `json:"files,omitempty"`         // 文件消息定位信息
 	Cards            []CardMessage         `json:"cards,omitempty"`         // 卡片消息
 	FinalContent     string                `json:"final_content,omitempty"` // 处理后的最终内容
 }

@@ -10,6 +10,7 @@ import (
 
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/workerproto"
 
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
@@ -34,6 +35,7 @@ type PendingMessage struct {
 	Order        uint64
 	Msg          *schema.AgenticMessage
 	TranscriptID uint
+	Actionable   bool
 }
 
 // enhancedTool 返回多模态结果的工具
@@ -52,7 +54,8 @@ func (t *enhancedTool) InvokableRun(ctx context.Context, argument *schema.ToolAr
 
 // ViewImageInput 查看图片的参数
 type ViewImageInput struct {
-	Hash string `json:"hash" jsonschema:"description=图片或表情包的短哈希标识，取自消息里的方括号标记"`
+	Hash     string `json:"hash,omitempty" jsonschema:"description=旧消息里的图片/表情包短哈希标识"`
+	ImageRef string `json:"image_ref,omitempty" jsonschema:"description=消息里的 image_ref，与 hash 二选一"`
 }
 
 // ViewImageOutput 查看图片的结果，工具实际把图片本体交给模型
@@ -63,7 +66,7 @@ type ViewImageOutput struct {
 
 // NewViewImageTool 返回可以查看会话内图片的工具
 func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
-	plain, err := utils.InferTool("viewImage", "查看一张图片或表情包的内容。消息里的图片和表情包都带短哈希标记，用那个标记调用。", viewImageFunc)
+	plain, err := utils.InferTool("viewImage", "查看一张图片或表情包的内容。新消息用 image_ref，旧工作集仍可用短哈希；两者恰选一个。", viewImageFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +79,7 @@ func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
 
 // viewImageFunc 解析媒体引用
 func viewImageFunc(ctx context.Context, input *ViewImageInput) (*ViewImageOutput, error) {
-	if _, err := resolveMedia(ctx, input); err != nil {
+	if _, _, err := resolveViewImage(ctx, input); err != nil {
 		return nil, err
 	}
 	return &ViewImageOutput{Success: true, Message: "已取到图片内容"}, nil
@@ -90,16 +93,11 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 			return nil, fmt.Errorf("参数解析失败: %w", err)
 		}
 	}
-	item, err := resolveMedia(ctx, input)
+	data, mime, err := resolveViewImage(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(item.Path)
-	if err != nil {
-		return nil, fmt.Errorf("读取图片失败: %w", err)
-	}
 	encoded := base64.StdEncoding.EncodeToString(data)
-	mime := item.Mime
 	if mime == "" {
 		mime = "image/jpeg"
 	}
@@ -109,6 +107,42 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 			MIMEType:   mime,
 		}}},
 	}}, nil
+}
+
+// resolveViewImage 同时兼容新 image_ref 与旧会话短哈希
+func resolveViewImage(ctx context.Context, input *ViewImageInput) ([]byte, string, error) {
+	if input == nil {
+		return nil, "", fmt.Errorf("请提供图片标识")
+	}
+	hasHash := strings.TrimSpace(input.Hash) != ""
+	hasRef := strings.TrimSpace(input.ImageRef) != ""
+	if hasHash == hasRef {
+		return nil, "", fmt.Errorf("hash 与 image_ref 必须且只能提供一个")
+	}
+	if hasRef {
+		tc := GetToolContext(ctx)
+		data, mimeType, _, err := refImageBytes(ctx, tc, input.ImageRef)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(data) > workerproto.MaxImageBytes {
+			return nil, "", fmt.Errorf("图片超过 10 MiB")
+		}
+		return data, mimeType, nil
+	}
+	item, err := resolveMedia(ctx, input)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(item.Path)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取图片失败: %w", err)
+	}
+	mime := item.Mime
+	if mime == "" {
+		mime = "image/jpeg"
+	}
+	return data, mime, nil
 }
 
 // resolveMedia 从会话里按哈希取媒体
@@ -129,7 +163,8 @@ func resolveMedia(ctx context.Context, input *ViewImageInput) (media.Ref, error)
 
 // SaveStickerInput 收藏表情包的参数
 type SaveStickerInput struct {
-	Hash        string `json:"hash" jsonschema:"description=表情包的短哈希标识，取自消息里的方括号标记"`
+	Hash        string `json:"hash,omitempty" jsonschema:"description=旧消息里的表情包短哈希"`
+	ImageRef    string `json:"image_ref,omitempty" jsonschema:"description=来自表情包的新 image_ref，与 hash 二选一"`
 	Description string `json:"description" jsonschema:"description=表情含义的一句话备注"`
 }
 
@@ -141,7 +176,7 @@ type SaveStickerOutput struct {
 
 // NewSaveStickerTool 返回收藏表情包的工具，只接受消息里的表情
 func NewSaveStickerTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveSticker", "把一条表情包收藏进表情包库，只支持消息里标注为表情包的条目，普通图片不能收藏。", saveStickerFunc)
+	return utils.InferTool("saveSticker", "把一条表情包收藏进表情包库；hash 用于旧消息，image_ref 用于新消息，两者恰选一个且必须来自表情包。", saveStickerFunc)
 }
 
 // saveStickerFunc 收藏表情包
@@ -150,18 +185,58 @@ func saveStickerFunc(ctx context.Context, input *SaveStickerInput) (*SaveSticker
 	if tc == nil || tc.Session == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("表情包收藏能力未初始化"))
 	}
-	if input == nil || strings.TrimSpace(input.Hash) == "" {
-		return nil, fmt.Errorf("请提供表情哈希标识")
+	hashValue := ""
+	refValue := ""
+	if input != nil {
+		hashValue = strings.TrimSpace(input.Hash)
+		refValue = strings.TrimSpace(input.ImageRef)
 	}
-	item, ok := tc.Session.ResolveMediaByHash(input.Hash)
-	if !ok {
-		return nil, fmt.Errorf("没有找到标识为 %s 的表情", input.Hash)
-	}
-	if !item.Sticker {
-		return nil, fmt.Errorf("只能收藏表情，标识 %s 是普通图片", input.Hash)
+	if boolCount(hashValue != "", refValue != "") != 1 {
+		return nil, fmt.Errorf("hash 与 image_ref 必须且只能提供一个")
 	}
 	if tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("表情包收藏能力未初始化"))
+	}
+	var item media.Ref
+	var tempPath string
+	if refValue != "" {
+		ref, err := tc.MemoryMgr.RefStore().Get(refValue)
+		if err != nil {
+			return nil, err
+		}
+		if !ref.Sticker || !ref.Image {
+			return nil, fmt.Errorf("这个 image_ref 不是来自表情包")
+		}
+		data, _, _, err := refImageBytes(ctx, tc, refValue)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > workerproto.MaxImageBytes {
+			return nil, fmt.Errorf("表情包超过 10 MiB")
+		}
+		file, err := os.CreateTemp("", "mumu-sticker-*")
+		if err != nil {
+			return nil, err
+		}
+		tempPath = file.Name()
+		defer os.Remove(tempPath)
+		if _, err := file.Write(data); err != nil {
+			file.Close()
+			return nil, err
+		}
+		if err := file.Close(); err != nil {
+			return nil, err
+		}
+		item = media.Ref{Path: tempPath, Mime: ref.MIME, Hash: ref.SHA256, Sticker: true}
+	} else {
+		var ok bool
+		item, ok = tc.Session.ResolveMediaByHash(hashValue)
+		if !ok {
+			return nil, fmt.Errorf("没有找到标识为 %s 的表情", hashValue)
+		}
+		if !item.Sticker {
+			return nil, fmt.Errorf("只能收藏表情，标识 %s 是普通图片", hashValue)
+		}
 	}
 	stored, err := storeStickerFile(item, tc.StickerDir)
 	if err != nil {

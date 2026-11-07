@@ -5,6 +5,11 @@ import type {
   ListPayload,
   MCPServerDetail,
   MCPServersData,
+  DiaryDayData,
+  DiaryMonthData,
+  LifeData,
+  LifeScheduleInput,
+  LifeScheduleUpdate,
   MemoryDetail,
   MemoryItem,
   Member,
@@ -13,6 +18,9 @@ import type {
   ModelsData,
   PersonaDetail,
   PersonaTemplate,
+  IdentityData,
+  IdentityFriendsData,
+  IdentityInput,
   PersonasData,
   SessionInfo,
   SettingsData,
@@ -123,7 +131,15 @@ export interface PersonaInput {
   description: string;
   persona_card: string;
   simulation_prompt: string;
+  life_prompt: string;
 }
+
+export const identityApi = {
+  get: () => apiGet<IdentityData>("/api/v1/identity"),
+  friends: () => apiGet<IdentityFriendsData>("/api/v1/identity/friends"),
+  update: (body: IdentityInput & { master_name?: string }) =>
+    apiMutate<IdentityData>("PATCH", "/api/v1/identity", body),
+};
 
 export const settingsApi = {
   get: () => apiGet<SettingsData>("/api/v1/settings"),
@@ -181,7 +197,10 @@ export const mcpApi = {
   update: (id: number, body: MCPServerInput & { version: number }) =>
     apiMutate<MCPServerDetail>("PATCH", `/api/v1/mcp-servers/${id}`, body),
   remove: (id: number, version: number) =>
-    apiMutate<void>("DELETE", `/api/v1/mcp-servers/${id}?version=${version}`),
+    apiMutate<{ deleted: boolean }>(
+      "DELETE",
+      `/api/v1/mcp-servers/${id}?version=${version}`,
+    ),
 };
 
 export const systemApi = {
@@ -192,4 +211,24 @@ export const systemApi = {
     ),
   logDownloadUrl: (keyword: string, level: string) =>
     `/api/v1/system/logs/download${buildQuery({ keyword, level })}`,
+};
+
+export const diariesApi = {
+  month: (month: string) =>
+    apiGet<DiaryMonthData>(
+      `/api/v1/diaries?month=${encodeURIComponent(month)}`,
+    ),
+  day: (date: string) =>
+    apiGet<DiaryDayData>(`/api/v1/diaries/${encodeURIComponent(date)}`),
+};
+
+export const lifeApi = {
+  get: () => apiGet<LifeData>("/api/v1/life"),
+  createSchedule: (input: LifeScheduleInput) =>
+    apiMutate<LifeData>("POST", "/api/v1/life/schedules", input),
+  updateSchedule: (id: number, input: LifeScheduleUpdate) =>
+    apiMutate<LifeData>("PATCH", `/api/v1/life/schedules/${id}`, input),
+  wake: () => apiMutate<LifeData>("POST", "/api/v1/life/wake"),
+  run: (note?: string) =>
+    apiMutate<LifeData>("POST", "/api/v1/life/run", note ? { note } : {}),
 };

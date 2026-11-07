@@ -17,6 +17,13 @@ export function toastWarning(message: string) {
 
 export function toastApiError(error: unknown) {
   if (error instanceof ApiError) {
+    if (error.code === "model_context_too_small") {
+      const sessions = error.details?.sessions;
+      toast.error(i18n.t("errors.model_context_too_small"), {
+        description: Array.isArray(sessions) ? sessions.join(", ") : undefined,
+      });
+      return;
+    }
     if (error.code === "model_test_failed") {
       const reason = error.details?.reason;
       toast.error(i18n.t("errors.model_test_failed"), {

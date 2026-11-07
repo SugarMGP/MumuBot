@@ -8,6 +8,7 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { EChartsCoreOption } from "echarts/core";
+import { useReducedMotion } from "motion/react";
 import { useEffect, useRef } from "react";
 
 echarts.use([
@@ -28,6 +29,7 @@ export function Chart({
   option: EChartsCoreOption;
   className?: string;
 }) {
+  const reducedMotion = useReducedMotion();
   const container = useRef<HTMLDivElement>(null);
   const chart = useRef<ReturnType<typeof echarts.init> | null>(null);
 
@@ -46,8 +48,11 @@ export function Chart({
   }, []);
 
   useEffect(() => {
-    chart.current?.setOption(option, { notMerge: true, lazyUpdate: true });
-  }, [option]);
+    chart.current?.setOption(
+      { ...option, animation: !reducedMotion },
+      { notMerge: true, lazyUpdate: true },
+    );
+  }, [option, reducedMotion]);
 
   return <div ref={container} className={className} />;
 }

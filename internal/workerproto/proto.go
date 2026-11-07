@@ -8,18 +8,20 @@ const (
 
 type ExecRequest struct {
 	SessionID      uint   `json:"session_id"`
-	User           string `json:"user,omitempty"`
-	Home           string `json:"home,omitempty"`
 	Command        string `json:"command"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 type ExecResponse struct {
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	ExitCode  int    `json:"exit_code"`
-	TimedOut  bool   `json:"timed_out"`
-	Truncated bool   `json:"truncated"`
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	StdoutBytes int64  `json:"stdout_bytes"`
+	StderrBytes int64  `json:"stderr_bytes"`
+	StdoutLog   string `json:"stdout_log,omitempty"`
+	StderrLog   string `json:"stderr_log,omitempty"`
+	ExitCode    int    `json:"exit_code"`
+	TimedOut    bool   `json:"timed_out"`
+	Truncated   bool   `json:"truncated"`
 }
 
 type HealthResponse struct {

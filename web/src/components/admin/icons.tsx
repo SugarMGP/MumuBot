@@ -23,11 +23,13 @@ import {
   MessageSquareText,
   MessagesSquare,
   Network,
+  NotebookPen,
   Pencil,
   PlugZap,
   Settings,
   ShieldCheck,
   Sticker,
+  SunMoon,
   SwatchBook,
   TriangleAlert,
   UserRoundCog,
@@ -40,6 +42,8 @@ import {
 
 const icons: Record<string, LucideIcon> = {
   overview: LayoutDashboard,
+  life: SunMoon,
+  diaries: NotebookPen,
   "style-cards": SwatchBook,
   topics: Network,
   jargons: MessageSquareText,

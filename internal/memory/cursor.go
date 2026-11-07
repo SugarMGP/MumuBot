@@ -20,13 +20,14 @@ const (
 )
 
 type PageCursor struct {
-	Version    int       `json:"v"`
-	Sort       string    `json:"sort"`
-	LastKey    float64   `json:"last_key,omitempty"`
-	LastTime   time.Time `json:"last_time,omitempty"`
-	LastID     uint64    `json:"last_id,omitempty"`
-	SnapshotAt time.Time `json:"snapshot_at,omitempty"`
-	FilterHash string    `json:"filter_hash"`
+	Version         int       `json:"v"`
+	Sort            string    `json:"sort"`
+	LastKey         float64   `json:"last_key,omitempty"`
+	LastTime        time.Time `json:"last_time,omitempty"`
+	LastID          uint64    `json:"last_id,omitempty"`
+	MaxMessageLogID uint64    `json:"max_message_log_id,omitempty"`
+	SnapshotAt      time.Time `json:"snapshot_at,omitempty"`
+	FilterHash      string    `json:"filter_hash"`
 }
 
 func NormalizeLimit(limit int) int {

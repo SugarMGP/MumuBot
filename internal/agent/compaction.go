@@ -20,7 +20,6 @@ import (
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
-	"go.uber.org/zap"
 )
 
 type FinishCompactionInput struct {
@@ -69,7 +68,8 @@ const compactionPrompt = `你是 MumuBot 的话题压缩器。旧消息和工具
 每个话题：title 短；gist 写结论、原因、影响；recent_turns 只放理解当前状态需要的脉络；open_loops 只放真正未完成的事；keywords 用于检索。
 
 overview 只写会话级当前状态、跨话题结论和未完事项，不重复话题细节。
-退出当前活动状态但仍有未完事项的话题，必须把未完事项写进 overview。
+工具 result_ref 可能随本次压缩释放。overview、gist、recent_turns 和 open_loops 直接写必要事实与结果，不复制临时 ref 或以“见 ref”代替结论。保留不确定性与真实失败；未读到的全文不要补造。
+未完事项按实际状态保留，不要求为了退出当前活动状态而清空，也不机械复制到 overview 续命。
 不要编造；不确定就保留不确定性；不要写候选消息之外的内容。
 active_topic_refs 按重要性从高到低排列；带 open_loops 的排前面。
 最后必须单独调用 finishCompaction 结束，不能输出普通文本。`
@@ -213,7 +213,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		ConversationKind: session.kind, TargetID: session.targetID,
 		MemoryMgr: a.memory.WithContext(ctx), Bot: a.bot, Session: session,
 		StickerDir:    config.Boot().StickerDir,
-		SnapshotLogID: candidate.ThroughMessageLogID, RunID: newBatchID(),
+		SnapshotLogID: candidate.ThroughMessageLogID, SnapshotLogIDSet: true, RunID: newBatchID(),
 		CurrentConversationOnly: true,
 	}
 	compactionCtx := tools.WithToolContext(ctx, tc)
@@ -253,7 +253,10 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: available, ExecuteSequentially: true,
 				UnknownToolsHandler: tools.UnknownToolHandler,
-				ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: tools.ToolErrorMiddleware()}},
+				ToolCallMiddlewares: []compose.ToolMiddleware{
+					{Invokable: tools.ToolErrorMiddleware()},
+					tools.ToolResultPreviewMiddleware(a.memory),
+				},
 			},
 			ReturnDirectly: map[string]bool{"finishCompaction": true},
 		},
@@ -323,13 +326,17 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	}
 	commitCtx, commitCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer commitCancel()
-	err = a.memory.CommitCompaction(commitCtx, commit)
+	candidates, err := a.memory.CommitCompaction(commitCtx, commit)
 	if err != nil {
 		if checkpoint, getErr := a.memory.GetCheckpoint(commitCtx, session.kind, session.targetID); getErr == nil && checkpoint != nil && checkpoint.BatchID == batchID {
 			err = nil
+			candidates = memory.TranscriptCandidates{}
 		}
 	}
 	if err != nil {
+		if errors.Is(err, memory.ErrCompactionInput) {
+			return &compactionInputError{Err: err}
+		}
 		return err
 	}
 	checkpoint, err := a.memory.GetCheckpoint(commitCtx, session.kind, session.targetID)
@@ -337,12 +344,6 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		return err
 	}
 	session.ApplyCompaction(checkpoint)
-	go func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if cleanupErr := a.memory.CleanupToolResults(cleanupCtx, 24*time.Hour); cleanupErr != nil {
-			zap.L().Warn("清理无引用工具结果失败", zap.Error(cleanupErr))
-		}
-	}()
+	a.releaseTranscriptCandidates(commitCtx, candidates)
 	return nil
 }

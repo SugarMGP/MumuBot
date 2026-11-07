@@ -15,7 +15,7 @@ const idleCompactionTimeout = 15 * time.Minute
 // scanIdleCompactions 只做廉价筛选并投递空闲压缩，不在调度循环里执行
 func (a *Agent) scanIdleCompactions() {
 	cfg := config.Snapshot()
-	if cfg.Compactor.IdleMinutes <= 0 || a.stopping.Load() {
+	if cfg.Compactor.IdleMinutes <= 0 || a.stopping.Load() || a.qqSleeping() {
 		return
 	}
 	for _, session := range a.sessions.snapshot() {
@@ -121,6 +121,7 @@ func (a *Agent) runIdleCompaction(session *Session) {
 	}
 	attempts := 0
 	if err := a.runCompactionWithRepair(ctx, session, candidate, &attempts, &remaining); err != nil {
+		session.MarkCompactionFailure(time.Now())
 		zap.L().Warn("空闲压缩失败", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
 		if !session.LastActivityAt().After(last) {
 			session.MarkIdleDone()

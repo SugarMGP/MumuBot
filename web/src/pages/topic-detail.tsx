@@ -180,7 +180,7 @@ export default function TopicDetailPage() {
   const changes = data.summary_changes;
 
   return (
-    <div className="admin-memory-page space-y-6">
+    <div className="space-y-6">
       <header className="flex flex-col gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <Link
@@ -204,26 +204,44 @@ export default function TopicDetailPage() {
             )}
           </Badge>
           <Badge
-            variant={thread.status === "active" ? "success" : "ghost"}
+            variant={
+              thread.forgotten_at
+                ? "destructive"
+                : thread.status === "active"
+                  ? "success"
+                  : "ghost"
+            }
           >
-            {enumLabel(t, "topicStatus", thread.status)}
+            {thread.forgotten_at
+              ? t("topics.status.forgotten")
+              : enumLabel(t, "topicStatus", thread.status)}
           </Badge>
           <Badge variant="outline">
             {t("topics.anchorsBadge", { count: thread.anchor_count })}
           </Badge>
           <Badge variant="outline">
-            {t("topics.sourcesBadge", { count: thread.source_count })}
+            {t("topics.card.sources", {
+              available: thread.source_available,
+              total: thread.source_total,
+            })}
           </Badge>
+          <span>
+            {thread.forgotten_at
+              ? t("topics.card.forgotten")
+              : t("topics.card.forgetAt", {
+                  time: formatDateTime(thread.forget_at),
+                })}
+          </span>
           <span>{t("topics.updatedAt", { time: formatDateTime(thread.updated_at) })}</span>
         </div>
       </header>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_clamp(280px,24vw,340px)] items-start gap-4">
+      <div className="grid grid-cols-1 items-start gap-4 min-[1280px]:grid-cols-[minmax(0,1fr)_clamp(280px,24vw,340px)]">
         <div className="space-y-4">
           <Card>
-            <div className="space-y-4 p-5">
+            <div className="admin-card-stack admin-card-pad">
               <div className="flex items-center gap-2 text-primary">
-                <h2 className="text-lg font-semibold text-foreground">
+                <h2 className="admin-card-title text-foreground">
                   {t("topics.currentSummary")}
                 </h2>
                 {data.current_summary_version > 0 ? (
@@ -232,7 +250,7 @@ export default function TopicDetailPage() {
                   </Badge>
                 ) : null}
               </div>
-              <p className="text-sm leading-7 text-foreground/75">
+              <p className="admin-prose">
                 {summary?.gist || t("topics.noSummaryYet")}
               </p>
               {summary ? (
@@ -280,7 +298,9 @@ export default function TopicDetailPage() {
                             className="flex items-start gap-2 text-sm"
                           >
                             <span className="mt-2 size-1.5 shrink-0 rounded-full bg-warning" />
-                            <span className="text-foreground/75">{item}</span>
+                            <span className="admin-body-text text-foreground">
+                              {item}
+                            </span>
                           </li>
                         ))}
                       </ul>
@@ -291,7 +311,7 @@ export default function TopicDetailPage() {
                       <h3 className="text-xs font-semibold text-muted-foreground">
                         {t("topics.recentTurns")}
                       </h3>
-                      <ul className="mt-2 space-y-1 text-sm text-foreground/75">
+                      <ul className="admin-body-text mt-2 space-y-1 text-foreground">
                         {summary.recent_turns.map((item, index) => (
                           <li key={`${item}-${index}`}>· {item}</li>
                         ))}
@@ -304,9 +324,9 @@ export default function TopicDetailPage() {
           </Card>
 
           <Card>
-            <div className="space-y-3 p-5">
+            <div className="admin-card-stack admin-card-pad">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">
+                <h2 className="admin-card-title text-foreground">
                   {t("topics.relatedMessages")}
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -362,7 +382,7 @@ export default function TopicDetailPage() {
                         className={
                           message.recalled
                             ? "mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-destructive"
-                            : "mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/75"
+                            : "admin-body-text mt-1 whitespace-pre-wrap break-words text-foreground"
                         }
                       >
                         {message.text || t("common.none")}
@@ -375,11 +395,11 @@ export default function TopicDetailPage() {
           </Card>
         </div>
 
-        <aside className="space-y-3">
+        <aside className="space-y-4">
           <Card>
-            <div className="space-y-3 p-4">
+            <div className="admin-card-pad-compact space-y-3">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">
+                <h2 className="admin-card-title-compact text-foreground">
                   {t("topics.summaryHistory")}
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">

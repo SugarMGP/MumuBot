@@ -10,6 +10,8 @@ import (
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/refstore"
+	"mumu-bot/internal/workerproto"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -23,16 +25,21 @@ type SpeakCallback func(ctx context.Context, targetID int64, content string, rep
 // SendStickerCallback 发送表情包回调函数类型
 type SendStickerCallback func(ctx context.Context, targetID int64, fileName string, description string) error
 type SendImageURLCallback func(ctx context.Context, imageURL string) error
-type SessionMessageCallback func(ctx context.Context, fromKind string, fromTargetID int64, toKind string, toTargetID int64, text string) (*memory.SessionMessage, error)
+type SessionMessageCallback func(ctx context.Context, fromKind string, fromTargetID int64, toKind string, toTargetID int64, text string, wake bool) (*memory.SessionMessage, error)
+type SessionMessageContextCallback func(ctx context.Context, fromKind string, fromTargetID int64, toKind string, toTargetID int64, text string, wake bool, contextMode string) (*memory.SessionMessage, error)
 
 // BashResult 是 worker executor 一次命令执行的结果
 type BashResult struct {
-	Success   bool   `json:"success"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	ExitCode  int    `json:"exit_code"`
-	TimedOut  bool   `json:"timed_out"`
-	Truncated bool   `json:"truncated"`
+	Success     bool   `json:"success"`
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	StdoutBytes int64  `json:"stdout_bytes"`
+	StderrBytes int64  `json:"stderr_bytes"`
+	StdoutLog   string `json:"stdout_log,omitempty"`
+	StderrLog   string `json:"stderr_log,omitempty"`
+	ExitCode    int    `json:"exit_code"`
+	TimedOut    bool   `json:"timed_out"`
+	Truncated   bool   `json:"truncated"`
 }
 
 // BashCallback 在 worker 沙箱里执行命令
@@ -41,36 +48,130 @@ type BashCallback func(ctx context.Context, command string, timeoutSeconds int) 
 // UpdateWorkerTitleCallback 更新 worker 当前任务标题
 type UpdateWorkerTitleCallback func(ctx context.Context, title string) error
 
+// FileContent 是主服务从 worker home 读取的受限原始字节
+type FileContent struct {
+	Data        []byte
+	ContentType string
+}
+
+// PersonalFileClient 访问 worker 的唯一 home，所有路径都由 worker 再校验
+type PersonalFileClient interface {
+	ListFiles(ctx context.Context, req workerproto.FileListRequest) (*workerproto.FileListResponse, error)
+	ReadFile(ctx context.Context, req workerproto.FileReadRequest) (*workerproto.FileReadResponse, error)
+	WriteFile(ctx context.Context, req workerproto.FileWriteRequest) (*workerproto.FileWriteResponse, error)
+	SaveFile(ctx context.Context, req workerproto.FileSaveRequest) (*workerproto.FileSaveResponse, error)
+	FileContent(ctx context.Context, path string) (*FileContent, error)
+}
+
+// SendFileResult 是一次文件或图片投递的真实回执
+type SendFileResult struct {
+	Kind      string `json:"kind"`
+	FileID    string `json:"file_id,omitempty"`
+	MessageID int64  `json:"message_id,omitempty"`
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+}
+
+// SnapshotFileClient 在主服务快照与 worker home 之间流式互转
+type SnapshotFileClient interface {
+	CreateSnapshot(ctx context.Context, path string, maxBytes int64) (*refstore.Ref, error)
+	ImportSnapshot(ctx context.Context, ref string, path string, overwrite bool) error
+}
+
+// SendFileCallback 向指定可用会话发送个人目录中的文件或图片
+type SendFileCallback func(ctx context.Context, kind string, targetID int64, name string, data []byte, asImage bool) (*SendFileResult, error)
+
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	ConversationKind          string
-	TargetID                  int64
-	MemoryMgr                 *memory.Manager
-	Bot                       *onebot.Client
-	SnapshotLogID             uint
-	RunID                     string
-	VisibleTranscriptIDs      []uint
-	InjectedArrivalSeq        uint64
-	CompactionAttempts        int
-	CurrentConversationOnly   bool
-	MemoryReadVersions        map[uint]uint64
-	MemoryMaintained          bool
-	TopicMaintained           bool
-	SpeakCallback             SpeakCallback       // 发言回调
-	SendStickerCallback       SendStickerCallback // 发送表情包回调
-	SendImageURLCallback      SendImageURLCallback
-	SessionMessageCallback    SessionMessageCallback
-	BashCallback              BashCallback
-	UpdateWorkerTitleCallback UpdateWorkerTitleCallback
-	ReadForwardCallback       func(ctx context.Context, id string, index int) (any, error)
-	GroupInfoCallback         func(ctx context.Context) string
-	StickerDir                string
-	Session                   SessionContext
-	ThinkStartArrivalSeq      uint64
-	ObservedThroughSeq        uint64
-	RecallCallback            func(messageID int64, arrivalSeq uint64)
+	ConversationKind              string
+	TargetID                      int64
+	MemoryMgr                     *memory.Manager
+	Bot                           *onebot.Client
+	SnapshotLogID                 uint
+	SnapshotLogIDSet              bool
+	RunID                         string
+	InjectedArrivalSeq            uint64
+	CompactionAttempts            int
+	CurrentConversationOnly       bool
+	MemoryReadVersions            map[uint]uint64
+	MemoryMaintained              bool
+	TopicMaintained               bool
+	SpeakCallback                 SpeakCallback       // 发言回调
+	SendStickerCallback           SendStickerCallback // 发送表情包回调
+	SendImageURLCallback          SendImageURLCallback
+	SessionMessageCallback        SessionMessageCallback
+	SessionMessageContextCallback SessionMessageContextCallback
+	SessionRunningCallback        func(kind string, targetID int64) bool
+	SleepChangedCallback          func(ctx context.Context, awake bool)
+	BashCallback                  BashCallback
+	UpdateWorkerTitleCallback     UpdateWorkerTitleCallback
+	PersonalFiles                 PersonalFileClient
+	SnapshotFiles                 SnapshotFileClient
+	SendFileCallback              SendFileCallback
+	CancelWorkerCallback          func(ctx context.Context, workerID uint, reason string) (bool, error)
+	ResolvePendingFile            func(ctx context.Context, locator refstore.Locator) (string, error)
+	SendImageBytesCallback        func(ctx context.Context, imageRef, name string, data []byte) error
+	ReadForwardCallback           func(ctx context.Context, id string, index int) (any, error)
+	// EndAfterSleep 只在 sleepUntil 成功落库后置位，下一次模型边界正常收尾
+	ModelRequested       bool
+	EndAfterSleep        bool
+	GroupInfoCallback    func(ctx context.Context) string
+	StickerDir           string
+	Session              SessionContext
+	ThinkStartArrivalSeq uint64
+	ObservedThroughSeq   uint64
+	RecallCallback       func(messageID int64, arrivalSeq uint64)
 
-	memoryMu sync.Mutex
+	memoryMu           sync.Mutex
+	recallMu           sync.Mutex
+	reinforcedMemories map[uint]bool
+	reinforcedTopics   map[uint]bool
+}
+
+// MemoryRecallNeeded 判断本轮是否还需要强化该记忆
+func (tc *ToolContext) MemoryRecallNeeded(id uint) bool {
+	if tc == nil || id == 0 {
+		return false
+	}
+	tc.recallMu.Lock()
+	defer tc.recallMu.Unlock()
+	return !tc.reinforcedMemories[id]
+}
+
+// MarkMemoryRecall 在数据库强化成功后记录本轮已强化
+func (tc *ToolContext) MarkMemoryRecall(id uint) {
+	if tc == nil || id == 0 {
+		return
+	}
+	tc.recallMu.Lock()
+	defer tc.recallMu.Unlock()
+	if tc.reinforcedMemories == nil {
+		tc.reinforcedMemories = map[uint]bool{}
+	}
+	tc.reinforcedMemories[id] = true
+}
+
+// TopicRecallNeeded 判断本轮是否还需要强化该话题
+func (tc *ToolContext) TopicRecallNeeded(id uint) bool {
+	if tc == nil || id == 0 {
+		return false
+	}
+	tc.recallMu.Lock()
+	defer tc.recallMu.Unlock()
+	return !tc.reinforcedTopics[id]
+}
+
+// MarkTopicRecall 在数据库强化成功后记录本轮已强化
+func (tc *ToolContext) MarkTopicRecall(id uint) {
+	if tc == nil || id == 0 {
+		return
+	}
+	tc.recallMu.Lock()
+	defer tc.recallMu.Unlock()
+	if tc.reinforcedTopics == nil {
+		tc.reinforcedTopics = map[uint]bool{}
+	}
+	tc.reinforcedTopics[id] = true
 }
 
 // ctxKey 上下文键类型

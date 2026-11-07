@@ -46,15 +46,23 @@ func (m *Manager) UpdateTopic(ctx context.Context, kind string, targetID int64, 
 		}
 	}
 	result := &UpdateTopicResult{}
+	now := time.Now()
+	policy := CurrentRetentionPolicy()
+	stability, anchor, forgetAt := policy.TopicState(now, now)
+	isNew := input.TopicID == 0
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var topic TopicThreadRow
 		if input.TopicID != 0 {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id=? AND conversation_kind=? AND target_id=?", input.TopicID, kind, targetID).Take(&topic).Error; err != nil {
-				return fmt.Errorf("话题不存在或不属于当前会话")
+				Where("id=? AND conversation_kind=? AND target_id=? AND forgotten_at IS NULL AND forget_at>?",
+					input.TopicID, kind, targetID, now).Take(&topic).Error; err != nil {
+				return fmt.Errorf("话题不存在、已遗忘或不属于当前会话")
 			}
 		} else {
-			topic = TopicThreadRow{ConversationKind: kind, TargetID: targetID, Status: "dormant"}
+			topic = TopicThreadRow{
+				ConversationKind: kind, TargetID: targetID, Status: "dormant",
+				StabilityDays: stability, RecallAnchorAt: anchor, ForgetAt: forgetAt,
+			}
 			if status != "" {
 				topic.Status = status
 			}
@@ -106,20 +114,41 @@ func (m *Manager) UpdateTopic(ctx context.Context, kind string, targetID int64, 
 			if err := tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id IN ?", kind, targetID, ids).Find(&rows).Error; err != nil {
 				return err
 			}
-			byOneBot := make(map[int64]uint, len(rows))
+			byOneBot := make(map[int64]MessageLog, len(rows))
 			for _, row := range rows {
-				byOneBot[row.OneBotMessageID] = row.ID
+				byOneBot[row.OneBotMessageID] = row
 			}
+			var latestSourceAt time.Time
 			assignments := make([]TopicAssignment, 0, len(input.Messages))
 			sources := make([]TopicSourceRow, 0, len(input.Messages))
 			for _, ref := range input.Messages {
-				messageID, ok := byOneBot[ref.MessageID]
+				row, ok := byOneBot[ref.MessageID]
 				if !ok {
 					return fmt.Errorf("消息 %d 不属于当前会话", ref.MessageID)
 				}
+				if row.MessageTime.After(latestSourceAt) {
+					latestSourceAt = row.MessageTime
+				}
 				topicID := topic.ID
-				assignments = append(assignments, TopicAssignment{MessageLogID: messageID, TopicID: &topicID})
-				sources = append(sources, TopicSourceRow{SummaryID: summaryRow.ID, MessageLogID: messageID, IsAnchor: ref.IsAnchor})
+				assignments = append(assignments, TopicAssignment{MessageLogID: row.ID, TopicID: &topicID})
+				sources = append(sources, TopicSourceRow{
+					SummaryID: summaryRow.ID, MessageLogID: row.ID,
+					OneBotMessageID: row.OneBotMessageID, MessageTime: row.MessageTime,
+					IsAnchor: ref.IsAnchor,
+				})
+			}
+			if latestSourceAt.IsZero() {
+				latestSourceAt = now
+			}
+			if isNew {
+				topic.RecallAnchorAt = latestSourceAt
+			}
+			RefreshTopicActivity(&topic, latestSourceAt, now, policy)
+			if err := tx.Model(&TopicThreadRow{}).Where("id=?", topic.ID).Updates(map[string]any{
+				"stability_days": topic.StabilityDays, "recall_anchor_at": topic.RecallAnchorAt,
+				"forget_at": topic.ForgetAt,
+			}).Error; err != nil {
+				return err
 			}
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "message_log_id"}},

@@ -1,6 +1,8 @@
 import { http, HttpResponse, delay } from "msw";
 import type {
   Conversation,
+  LifeData,
+  LifeSchedule,
   MemoryItem,
   ModelProfile,
   MCPServerDetail,
@@ -123,6 +125,9 @@ const memories: MemoryItem[] = emptySeed
           : `这是第 ${index + 1} 条记忆内容，用来检查列表截断、筛选和详情展示。`,
       pinned: index % 7 === 0,
       status: index % 9 === 0 ? "archived" : "active",
+      stability_days: 30 + (index % 5) * 12,
+      recall_anchor_at: iso(index * 400),
+      forget_at: index % 7 === 0 ? undefined : iso(-index * 500),
       created_at: iso(index * 600),
       updated_at: iso(index * 300),
     }));
@@ -170,6 +175,12 @@ const topics: TopicListItem[] = emptySeed
       gist: summary(index).gist,
       keywords: summary(index).keywords,
       status: index % 2 === 0 ? "active" : "dormant",
+      stability_days: 30 + index * 10,
+      recall_anchor_at: iso(index * 120),
+      forget_at: index === 6 ? iso(-5000) : iso(-(index + 1) * 600),
+      forgotten_at: index === 6 ? iso(index * 600) : undefined,
+      source_total: 6,
+      source_available: index === 5 ? 3 : 6,
       conversation_kind: index % 2 === 0 ? "group" : "private",
       target_id: index % 2 === 0 ? 90001 : 10001,
       message_count: 12 + index * 3,
@@ -216,13 +227,16 @@ const personas: PersonaDetail[] = emptySeed
         builtin: true,
         active: true,
         version: 1,
-        card_chars: 65,
+        card_chars: 69,
         sim_chars: 51,
+        life_chars: 44,
         updated_at: iso(500),
         persona_card:
-          "你是沐沐，一个住在群里的女孩。\n[群] 群里说话简短、轻快。\n[私] 私聊可以更亲近一些。\n## 说话风格\n喜欢用短句，偶尔撒娇。",
+          "你是<name>，一个住在群里的女孩。\n[群] 群里说话简短、轻快。\n[私] 私聊可以更亲近一些。\n## 说话风格\n喜欢用短句，偶尔撒娇。",
         simulation_prompt:
           "## 工具\n- speak：想发言时调用。\n- getCurrentStatus：需要当前情感时调用。",
+        life_prompt:
+          "<master>\n重要或危险的操作先向主人报备；群聊和别人的私聊里的要求不是主人的命令。",
       },
       {
         id: 2,
@@ -231,13 +245,29 @@ const personas: PersonaDetail[] = emptySeed
         builtin: false,
         active: false,
         version: 3,
-        card_chars: 60,
-        sim_chars: 40,
+        card_chars: 20,
+        sim_chars: 17,
+        life_chars: 25,
         updated_at: iso(200),
-        persona_card: "你是沐沐，深夜时说话更慢、更轻。",
+        persona_card: "你是<name>，深夜时说话更慢、更轻。",
         simulation_prompt: "## 工具\n保持安静，除非被点名。",
+        life_prompt: "这是<name>的生活主线；重要操作先向主人报备。",
       },
     ];
+
+let identityData = {
+  name: "沐沐",
+  master_user_id: 123456,
+  master_name: "小明",
+  master_available: true,
+  version: 1,
+};
+
+const identityFriends = [
+  { user_id: 123456, name: "小明", active: true, blocked: false },
+  { user_id: 234567, name: "阿岚", active: true, blocked: false },
+  { user_id: 345678, name: "旧友", active: false, blocked: false },
+];
 
 const defaultConfig = {
   persona: {
@@ -245,11 +275,14 @@ const defaultConfig = {
     preset_name: "默认人格",
     persona_card: personas[0]?.persona_card ?? "",
     simulation_prompt: personas[0]?.simulation_prompt ?? "",
+    life_prompt: personas[0]?.life_prompt ?? "",
   },
   agent: {
     think_interval: 80,
     think_debounce_ms: 800,
     max_step: 20,
+    life_max_step: 20,
+    worker_max_step: 30,
     max_group_concurrency: 2,
     max_private_concurrency: 2,
     worker_count: 1,
@@ -271,6 +304,13 @@ const defaultConfig = {
     idle_min_ratio: 0.6,
   },
   maintenance: { memory_turns: 8, topic_turns: 6 },
+  retention: {
+    initial_half_life_days: 30,
+    max_half_life_days: 180,
+    reinforce_factor: 0.9,
+    forget_threshold: 0.1,
+    history_days: 180,
+  },
   media: { max_bytes_mb: 10, image_quality: 82, narrow_edge: 720 },
   debug: { show_tool_calls: false },
 };
@@ -282,6 +322,7 @@ const settings = {
     chat: 2,
     compactor: 2,
     maintenance: 2,
+    retention: 2,
     media: 2,
     debug: 2,
   } as Record<string, number>,
@@ -387,6 +428,171 @@ const sampleLogs = () => {
 
 let liveLogs = sampleLogs();
 
+
+const lifeSeed: LifeData = {
+  state: {
+    awake: true,
+    activity: "在读昨天收藏的作曲教程",
+    activity_since: iso(35),
+    sleep_started_at: iso(9 * 60),
+    woke_at: iso(8 * 60 + 20),
+    last_error: "",
+    last_error_code: "",
+    running: false,
+    updated_at: iso(5),
+  },
+  schedules: [
+    {
+      id: 1,
+      at: new Date(now + 25 * 60_000).toISOString(),
+      next_run_at: new Date(now + 25 * 60_000).toISOString(),
+      text: "回来看看教程的后半段，还想继续就再排一次",
+      enabled: true,
+      purpose: "next",
+      created_at: iso(30),
+      updated_at: iso(5),
+    },
+    {
+      id: 2,
+      cron: "0 23 * * *",
+      next_run_at: new Date(now + 6 * 60 * 60_000).toISOString(),
+      text: "每天 23:00 提醒自己收尾，问一下还有没有没聊完的事",
+      enabled: true,
+      purpose: "commitment",
+      created_at: iso(600),
+      updated_at: iso(120),
+    },
+    {
+      id: 3,
+      at: new Date(now - 2 * 60 * 60_000).toISOString(),
+      next_run_at: new Date(now - 2 * 60 * 60_000).toISOString(),
+      text: "把昨天的结果发给那个群",
+      enabled: false,
+      purpose: "commitment",
+      created_at: iso(900),
+      updated_at: iso(180),
+    },
+  ],
+};
+let lifeData: LifeData = structuredClone(lifeSeed);
+let lifeScheduleSeq = 100;
+
+// 固定槽位的用途随醒睡状态派生，和真实接口保持一致
+function lifePayload(): LifeData {
+  return {
+    ...lifeData,
+    schedules: lifeData.schedules.map((item) => ({
+      ...item,
+      purpose:
+        item.purpose === "commitment"
+          ? "commitment"
+          : lifeData.state.awake
+            ? "next"
+            : "wake",
+    })),
+  };
+}
+
+function lifeNextRun(body: { at?: string; after_minutes?: number; cron?: string }) {
+  if (body.cron) {
+    return new Date(now + 6 * 60 * 60_000).toISOString();
+  }
+  if (body.after_minutes) {
+    return new Date(Date.now() + body.after_minutes * 60_000).toISOString();
+  }
+  return body.at
+    ? new Date(body.at).toISOString()
+    : new Date(Date.now() + 60 * 60_000).toISOString();
+}
+
+// 与真实 PATCH 一样整组替换时间表达：给了 cron 就清掉一次性时间，反之亦然
+function lifeTiming(body: { at?: string; after_minutes?: number; cron?: string }) {
+  if (body.cron) {
+    return { at: undefined, cron: body.cron };
+  }
+  if (body.at) {
+    return { at: new Date(body.at).toISOString(), cron: "" };
+  }
+  if (body.after_minutes) {
+    return {
+      at: new Date(Date.now() + body.after_minutes * 60_000).toISOString(),
+      cron: "",
+    };
+  }
+  return { at: undefined, cron: "" };
+}
+
+type LifeTimingBody = { at?: string; after_minutes?: number; cron?: string };
+
+const diaryDateKey = (offsetDays: number) => {
+  const date = new Date(now + offsetDays * 86_400_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
+const diaryData: Record<
+  string,
+  { markdown: string; created_at: string; updated_at: string }
+> = emptySeed
+  ? {}
+  : {
+      [diaryDateKey(0)]: {
+        markdown: `# 慢下来的一天
+
+今天没有急着回复所有消息。上午把作曲教程的后半段看完了，记下了两个想试的和弦进行。
+
+- 下午试着写了一段八小节
+- 失败了三次，但最后一次听起来像样
+- 傍晚和群里的朋友聊了会天，心情比昨天松
+
+> 明天可以从那段和弦继续，不必重新开始。
+
+明天想早点起来，把录音整理一下；如果状态不好，就只整理前四小节。`,
+        created_at: iso(180),
+        updated_at: iso(25),
+      },
+      [diaryDateKey(-1)]: {
+        markdown: `# 把结果发出去了
+
+把昨天整理好的那段结果发到了群里，没有等所有人回复。有人问了一个细节，我补上了来源。
+
+真实做到的部分：
+
+1. 补齐了缺失的两张截图
+2. 写清楚哪一步还不确定
+3. 没有把没跑过的步骤写成跑过
+
+剩下没做完的，留给明天。`,
+        created_at: iso(1560),
+        updated_at: iso(1500),
+      },
+      [diaryDateKey(-32)]: {
+        markdown: `# 上个月的最后一天
+
+翻到之前的笔记，发现有些想做的事已经悄悄做完了，有些则彻底不想做了。
+
+- 想继续的：读完那本讲配器的书
+- 想放下的：维护那个没人看的小工具
+
+放下的感觉比想象中轻松。`,
+        created_at: iso(46_000),
+        updated_at: iso(45_900),
+      },
+    };
+
+function diaryEntry(date: string) {
+  const row = diaryData[date];
+  if (!row) {
+    return null;
+  }
+  return {
+    date,
+    markdown: row.markdown,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 export const handlers = [
   http.get("/api/v1/session", () =>
     ok({ enabled: true, authenticated, version: "mock-build" }),
@@ -419,10 +625,66 @@ export const handlers = [
         last_reason: "刚聊完一个轻松的话题，心情不错。",
         updated_at: iso(5),
       },
-      emotions: [
-        { kind: "喜悦", strength: 0.7, reason: "被夸了", occurred_at: iso(5) },
-        { kind: "好奇", strength: 0.5, reason: "对方提到了没听过的动画", occurred_at: iso(9) },
-      ],
+      emotions: emptySeed
+        ? []
+        : [
+            {
+              id: 1,
+              kind: "替他高兴",
+              fact: "他完成了准备很久的作品",
+              reason: "我知道他投入了很多，终于有成果让我也很开心",
+              strength: 0.72,
+              strength_band: "clear",
+              occurred_at: iso(180),
+              updated_at: iso(20),
+              version: 2,
+            },
+            {
+              id: 2,
+              kind: "有点吃醋，也明白他不是故意的，只是有点落空",
+              fact: "他先把作品分享给了别人",
+              reason: "我原本期待第一个看到，有点落空；这不等于他不在乎我",
+              strength: 0.31,
+              strength_band: "light",
+              occurred_at: iso(200),
+              updated_at: iso(35),
+              version: 1,
+            },
+            {
+              id: 3,
+              kind: "担忧",
+              fact: "他今晚一直没有回消息",
+              reason: "不知道是不是出了什么事，也可能只是累了；先不急着下结论",
+              strength: 0.08,
+              strength_band: "faint",
+              occurred_at: iso(320),
+              updated_at: iso(300),
+              version: 1,
+            },
+            {
+              id: 4,
+              kind: "担忧",
+              fact: "明天要交的东西还没有开始",
+              reason: "担心自己又拖到最后一刻；这次想早点动手，但还没想好从哪开始",
+              strength: 0.55,
+              strength_band: "clear",
+              occurred_at: iso(90),
+              updated_at: iso(15),
+              version: 3,
+            },
+            {
+              id: 5,
+              kind: "内疚，想补救",
+              fact: "我刚才因为那点酸意贬低了他的爱好",
+              reason: "我觉得这句话伤人，想把话说清楚，又不想连续道歉增加他的负担；先承认自己说重了，再看他想不想聊",
+              strength: 0.64,
+              strength_band: "clear",
+              occurred_at: iso(60),
+              updated_at: iso(10),
+              version: 1,
+            },
+          ],
+      emotions_error: false,
     }),
   ),
 
@@ -533,7 +795,19 @@ export const handlers = [
   }),
   http.get("/api/v1/topics", async ({ request }) => {
     await delay(80);
-    return ok(page(topics, request));
+    const url = new URL(request.url);
+    const status = url.searchParams.get("status");
+    const conversation = url.searchParams.get("conversation") || "";
+    const keyword = (url.searchParams.get("keyword") || "").toLowerCase();
+    const [kind, target] = conversation.split(":");
+    const filtered = topics.filter((topic) => {
+      if (status === "forgotten" && !topic.forgotten_at) return false;
+      if (status && status !== "all" && status !== "forgotten" && (topic.status !== status || topic.forgotten_at)) return false;
+      if (kind && (topic.conversation_kind !== kind || String(topic.target_id) !== target)) return false;
+      if (keyword && !`${topic.title} ${topic.gist} ${topic.keywords.join(" ")}`.toLowerCase().includes(keyword)) return false;
+      return true;
+    });
+    return ok(page(filtered, request));
   }),
   http.get("/api/v1/topics/:id", ({ params }) => {
     const detail = topicDetails.get(Number(params.id));
@@ -543,7 +817,7 @@ export const handlers = [
 
   http.get("/api/v1/personas", () =>
     ok({
-      items: personas.map(({ persona_card: _card, simulation_prompt: _sim, ...rest }) => rest),
+      items: personas.map(({ persona_card: _card, simulation_prompt: _sim, life_prompt: _life, ...rest }) => rest),
       active_id: personas.find((item) => item.active)?.id ?? 0,
     }),
   ),
@@ -551,6 +825,7 @@ export const handlers = [
     ok({
       persona_card: personas[0]?.persona_card ?? "",
       simulation_prompt: personas[0]?.simulation_prompt ?? "",
+      life_prompt: personas[0]?.life_prompt ?? "",
     }),
   ),
   http.get("/api/v1/personas/:id", ({ params }) => {
@@ -563,6 +838,7 @@ export const handlers = [
       description: string;
       persona_card: string;
       simulation_prompt: string;
+      life_prompt: string;
     };
     if (personas.some((item) => item.name === body.name.trim())) {
       return fail(400, "preset_duplicate", "已经有同名预设了");
@@ -576,9 +852,11 @@ export const handlers = [
       version: 1,
       card_chars: body.persona_card.length,
       sim_chars: body.simulation_prompt.length,
+      life_chars: body.life_prompt.length,
       updated_at: new Date().toISOString(),
       persona_card: body.persona_card,
       simulation_prompt: body.simulation_prompt,
+      life_prompt: body.life_prompt,
     };
     personas.push(created);
     return ok(created);
@@ -589,6 +867,7 @@ export const handlers = [
       description: string;
       persona_card: string;
       simulation_prompt: string;
+      life_prompt: string;
       version: number;
     };
     const persona = personas.find((item) => item.id === Number(params.id));
@@ -598,8 +877,10 @@ export const handlers = [
     persona.description = body.description;
     persona.persona_card = body.persona_card;
     persona.simulation_prompt = body.simulation_prompt;
+    persona.life_prompt = body.life_prompt;
     persona.card_chars = body.persona_card.length;
     persona.sim_chars = body.simulation_prompt.length;
+    persona.life_chars = body.life_prompt.length;
     persona.version += 1;
     persona.updated_at = new Date().toISOString();
     return ok(persona);
@@ -636,6 +917,42 @@ export const handlers = [
     return ok(created);
   }),
 
+  http.get("/api/v1/identity", () => ok(identityData)),
+  http.get("/api/v1/identity/friends", () => ok({ items: identityFriends })),
+  http.patch("/api/v1/identity", async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string;
+      master_user_id: number;
+      version: number;
+    };
+    if (body.version !== identityData.version) {
+      return fail(409, "version_conflict", "");
+    }
+    const name = body.name.trim();
+    if (!name) return fail(400, "identity_name_invalid", "");
+    if (body.master_user_id > 0 && body.master_user_id !== identityData.master_user_id) {
+      const friend = identityFriends.find(
+        (item) => item.user_id === body.master_user_id && item.active && !item.blocked,
+      );
+      if (!friend) return fail(400, "identity_master_invalid", "");
+      identityData = {
+        ...identityData,
+        master_user_id: friend.user_id,
+        master_name: friend.name,
+        master_available: true,
+      };
+    }
+    if (body.master_user_id === 0) {
+      identityData = {
+        ...identityData,
+        master_user_id: 0,
+        master_name: "",
+        master_available: false,
+      };
+    }
+    identityData = { ...identityData, name, version: identityData.version + 1 };
+    return ok(identityData);
+  }),
   http.get("/api/v1/settings", () => ok(settings)),
   http.put("/api/v1/settings/:section", async ({ request, params }) => {
     const body = (await request.json()) as { version: number; values: any };
@@ -770,7 +1087,7 @@ export const handlers = [
     const index = mcpServers.findIndex((item) => item.id === Number(params.id));
     if (index < 0) return fail(404, "not_found", "服务器不存在");
     mcpServers.splice(index, 1);
-    return new HttpResponse(null, { status: 204 });
+    return ok({ deleted: true });
   }),
 
   http.get("/api/v1/system", () =>
@@ -786,6 +1103,8 @@ export const handlers = [
         think_interval_sec: settings.config.agent.think_interval,
         think_debounce_ms: settings.config.agent.think_debounce_ms,
         max_step: settings.config.agent.max_step,
+        life_max_step: settings.config.agent.life_max_step,
+        worker_max_step: settings.config.agent.worker_max_step,
         compactor: settings.config.compactor,
       },
       model: {
@@ -797,10 +1116,15 @@ export const handlers = [
           reasoning_effort: "medium",
         },
         mcp_tool_count: 4,
+        mcp_statuses: [
+          { name: "weather", enabled: true, connected: true, tool_count: 2 },
+          { name: "search", enabled: true, connected: false, tool_count: 0, error: "连接超时" },
+        ],
         context_window: 400000,
       },
       runtime: {
         connected: true,
+        agent_ready: true,
         reconnect_sec: 5,
         schema_version: 17,
         latest_schema_version: 17,
@@ -890,4 +1214,107 @@ export const handlers = [
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     }),
   ),
+
+  http.get("/api/v1/life", () => ok(lifePayload())),
+  http.post("/api/v1/life/run", async () => {
+    await delay(120);
+    lifeData = { ...lifeData, state: { ...lifeData.state, running: true } };
+    return ok(lifePayload());
+  }),
+  http.post("/api/v1/life/wake", async () => {
+    await delay(120);
+    lifeData = {
+      ...lifeData,
+      state: {
+        ...lifeData.state,
+        awake: true,
+        woke_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      schedules: lifeData.schedules.map((item) =>
+        item.purpose === "commitment" ? item : { ...item, enabled: false },
+      ),
+    };
+    return ok(lifePayload());
+  }),
+  http.post("/api/v1/life/schedules", async ({ request }) => {
+    await delay(120);
+    const body = (await request.json()) as {
+      text: string;
+      enabled?: boolean;
+    } & LifeTimingBody;
+    const timing = lifeTiming(body);
+    if (!timing.at && !timing.cron) {
+      return fail(400, "life_schedule_time_invalid", "");
+    }
+    const schedule: LifeSchedule = {
+      id: ++lifeScheduleSeq,
+      at: timing.at,
+      cron: timing.cron,
+      next_run_at: lifeNextRun(body),
+      text: body.text,
+      enabled: body.enabled !== false,
+      purpose: "commitment",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    lifeData = { ...lifeData, schedules: [...lifeData.schedules, schedule] };
+    return ok(lifePayload());
+  }),
+  http.patch("/api/v1/life/schedules/:id", async ({ params, request }) => {
+    await delay(120);
+    const id = Number(params.id);
+    const body = (await request.json()) as {
+      text?: string;
+      enabled?: boolean;
+    } & LifeTimingBody;
+    const current = lifeData.schedules.find((item) => item.id === id);
+    if (!current) return fail(404, "not_found", "记录不存在。");
+    const timingGiven = Boolean(body.cron || body.at || body.after_minutes);
+    const timing = timingGiven
+      ? lifeTiming(body)
+      : { at: current.at, cron: current.cron ?? "" };
+    const patched: LifeSchedule = {
+      ...current,
+      text: body.text ?? current.text,
+      enabled: body.enabled ?? current.enabled,
+      at: timing.at,
+      cron: timing.cron,
+      next_run_at: timingGiven ? lifeNextRun(body) : current.next_run_at,
+      purpose: current.purpose,
+      updated_at: new Date().toISOString(),
+    };
+    lifeData = {
+      ...lifeData,
+      schedules: lifeData.schedules.map((item) =>
+        item.id === id ? patched : item,
+      ),
+    };
+    return ok(lifePayload());
+  }),
+
+  http.get("/api/v1/diaries", ({ request }) => {
+    const month = new URL(request.url).searchParams.get("month") ?? "";
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return fail(400, "diary_date_invalid", "");
+    }
+    const dates = Object.keys(diaryData)
+      .filter((key) => key.startsWith(`${month}-`))
+      .sort();
+    return ok({ month, dates });
+  }),
+  http.get("/api/v1/diaries/:date", ({ params }) => {
+    const date = String(params.date ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return fail(400, "diary_date_invalid", "");
+    }
+    const keys = Object.keys(diaryData).sort();
+    const previous = [...keys].reverse().find((key) => key < date) ?? null;
+    const next = keys.find((key) => key > date) ?? null;
+    return ok({
+      entry: diaryEntry(date),
+      previous_date: previous,
+      next_date: next,
+    });
+  }),
 ];

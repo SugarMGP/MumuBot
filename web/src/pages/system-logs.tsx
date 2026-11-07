@@ -85,7 +85,7 @@ export default function SystemLogsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <PageHeader
           title={t("system.title")}
           subtitle={t("system.subtitle")}
@@ -95,15 +95,13 @@ export default function SystemLogsPage() {
       </div>
 
       <Card>
-        <div className="space-y-4 p-5">
+        <div className="admin-card-stack admin-card-pad">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold text-foreground">
+              <h2 className="admin-card-title text-foreground">
                 {t("system.logs.title")}
               </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {t("system.logs.hint")}
-              </p>
+              <p className="admin-card-desc mt-1">{t("system.logs.hint")}</p>
             </div>
             <Badge
               variant={stream.status === "live" ? "success" : "warning"}
@@ -116,7 +114,7 @@ export default function SystemLogsPage() {
             </Badge>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-muted/40 p-2.5">
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-muted/40 p-3">
             <Field label={t("common.search")} className="w-64">
               <Input
                 type="search"

@@ -61,10 +61,6 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./worker-home/1:/home/worker
-      - ./worker-home/2:/home/worker2
-      - ./worker-home/3:/home/worker3
-      - ./worker-home/4:/home/worker4
-      - ./worker-home/5:/home/worker5
       - nix-store:/nix
     networks:
       - worker

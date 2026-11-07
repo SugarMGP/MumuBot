@@ -115,8 +115,17 @@ func (m *Manager) AppendUserTranscript(ctx context.Context, kind string, targetI
 
 // PendingInputs 返回尚未进入模型的输入，包括真人消息、观察和会话间消息
 func (m *Manager) PendingInputs(ctx context.Context, kind string, targetID int64) ([]TranscriptEntry, error) {
+	return m.PendingInputsAfter(ctx, kind, targetID, 0)
+}
+
+// PendingInputsAfter 只恢复显式工作集边界之后的待处理输入
+func (m *Manager) PendingInputsAfter(ctx context.Context, kind string, targetID int64, afterID uint) ([]TranscriptEntry, error) {
 	var rows []TranscriptEntry
-	err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND entry_kind IN ('user','observation','agent_message') AND visible_seq IS NULL", kind, targetID).Order("input_seq,id").Find(&rows).Error
+	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND entry_kind IN ('user','observation','agent_message') AND visible_seq IS NULL", kind, targetID)
+	if afterID > 0 {
+		q = q.Where("id>?", afterID)
+	}
+	err := q.Order("input_seq,id").Find(&rows).Error
 	return rows, err
 }
 
@@ -126,6 +135,17 @@ func (m *Manager) MarkVisible(ctx context.Context, kind string, targetID int64, 
 	if len(ids) == 0 {
 		return result, nil
 	}
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		result, err = markVisibleTx(tx, kind, targetID, ids)
+		return err
+	})
+	return result, err
+}
+
+// markVisibleTx 在调用方事务里按给定顺序给尚未可见的行分配 visible_seq
+func markVisibleTx(tx *gorm.DB, kind string, targetID int64, ids []uint) (map[uint]uint64, error) {
+	result := map[uint]uint64{}
 	unique := make([]uint, 0, len(ids))
 	seen := map[uint]bool{}
 	for _, id := range ids {
@@ -134,53 +154,52 @@ func (m *Manager) MarkVisible(ctx context.Context, kind string, targetID int64, 
 			unique = append(unique, id)
 		}
 	}
-	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		rows := make([]TranscriptEntry, 0, len(unique))
-		if len(unique) > 0 {
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id IN ? AND conversation_kind=? AND target_id=?", unique, kind, targetID).
-				Find(&rows).Error; err != nil {
-				return err
-			}
-			if len(rows) != len(unique) {
-				return fmt.Errorf("transcript 记录不存在或不属于当前会话")
-			}
+	if len(unique) == 0 {
+		return result, nil
+	}
+	rows := make([]TranscriptEntry, 0, len(unique))
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id IN ? AND conversation_kind=? AND target_id=?", unique, kind, targetID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) != len(unique) {
+		return nil, fmt.Errorf("transcript 记录不存在或不属于当前会话")
+	}
+	byID := make(map[uint]TranscriptEntry, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+		if row.VisibleSeq != nil {
+			result[row.ID] = *row.VisibleSeq
 		}
-		byID := make(map[uint]TranscriptEntry, len(rows))
-		for _, row := range rows {
-			byID[row.ID] = row
-			if row.VisibleSeq != nil {
-				result[row.ID] = *row.VisibleSeq
-			}
+	}
+	unvisible := make([]uint, 0, len(unique))
+	for _, id := range unique {
+		if byID[id].VisibleSeq == nil {
+			unvisible = append(unvisible, id)
 		}
-		unvisible := make([]uint, 0, len(unique))
-		for _, id := range unique {
-			if byID[id].VisibleSeq == nil {
-				unvisible = append(unvisible, id)
-			}
-		}
-		if len(unvisible) > 0 {
-			start, _, err := allocateSequenceRange(tx, kind, targetID, "next_visible_seq", uint64(len(unvisible)))
-			if err != nil {
-				return err
-			}
-			values := make([]string, 0, len(unvisible))
-			args := make([]any, 0, len(unvisible)*2)
-			for i, id := range unvisible {
-				seq := start + uint64(i)
-				values = append(values, "(?::bigint,?::bigint)")
-				args = append(args, int64(id), int64(seq))
-				result[id] = seq
-			}
-			sql := "UPDATE conversation_transcript SET visible_seq=v.seq::bigint FROM (VALUES " +
-				strings.Join(values, ",") + ") AS v(id,seq) WHERE conversation_transcript.id=v.id::bigint"
-			if err := tx.Exec(sql, args...).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	return result, err
+	}
+	if len(unvisible) == 0 {
+		return result, nil
+	}
+	start, _, err := allocateSequenceRange(tx, kind, targetID, "next_visible_seq", uint64(len(unvisible)))
+	if err != nil {
+		return nil, err
+	}
+	values := make([]string, 0, len(unvisible))
+	args := make([]any, 0, len(unvisible)*2)
+	for i, id := range unvisible {
+		seq := start + uint64(i)
+		values = append(values, "(?::bigint,?::bigint)")
+		args = append(args, int64(id), int64(seq))
+		result[id] = seq
+	}
+	sql := "UPDATE conversation_transcript SET visible_seq=v.seq::bigint FROM (VALUES " +
+		strings.Join(values, ",") + ") AS v(id,seq) WHERE conversation_transcript.id=v.id::bigint"
+	if err := tx.Exec(sql, args...).Error; err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // ResumeToolTranscript 读取同一运行中相同 CallID 的已有回执，避免重复执行工具
@@ -254,9 +273,13 @@ func (m *Manager) GetTranscript(ctx context.Context, id uint) (*TranscriptEntry,
 
 // VisibleTranscript 返回检查点之后需要恢复进上下文的工作集记录
 // pending 的 user/observation/agent_message 由各自的 pending 查询恢复
-func (m *Manager) VisibleTranscript(ctx context.Context, kind string, targetID int64, afterVisibleSeq uint64) ([]TranscriptEntry, error) {
+func (m *Manager) VisibleTranscript(ctx context.Context, kind string, targetID int64, afterVisibleSeq uint64, afterID uint) ([]TranscriptEntry, error) {
 	var rows []TranscriptEntry
 	q := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", kind, targetID)
+	// worker 和生活主线用检查点内部编号裁剪恢复范围，不必每次把完整历史装回内存
+	if afterID > 0 {
+		q = q.Where("id>?", afterID)
+	}
 	// 代头行在首次成功请求前没有 visible_seq，必须一并恢复，否则重启会重复写入
 	openKinds := "('assistant','tool','system_prompt','context_digest','group_note','system_note','pinned_memory')"
 	if afterVisibleSeq > 0 {
@@ -269,18 +292,35 @@ func (m *Manager) VisibleTranscript(ctx context.Context, kind string, targetID i
 	return rows, err
 }
 
-// DeleteTranscriptHeads 删除压缩换代的头部行，下一代由新的预设重新写入
-func (m *Manager) DeleteTranscriptHeads(tx *gorm.DB, kind string, targetID int64, visibleSeq uint64) error {
-	return tx.Where("conversation_kind=? AND target_id=? AND entry_kind IN ('system_prompt','group_note','context_digest','pinned_memory') AND (visible_seq IS NULL OR visible_seq<=?)", kind, targetID, visibleSeq).
-		Delete(&TranscriptEntry{}).Error
+// DeleteTranscriptHeads 删除压缩换代的头部行，返回本批引用候选
+func (m *Manager) DeleteTranscriptHeads(tx *gorm.DB, kind string, targetID int64) (TranscriptCandidates, error) {
+	condition := "conversation_kind=? AND target_id=? AND entry_kind IN ('system_prompt','group_note','context_digest','pinned_memory')"
+	args := []any{kind, targetID}
+	candidates, err := transcriptCandidates(tx, condition, args...)
+	if err != nil {
+		return TranscriptCandidates{}, err
+	}
+	if err := tx.Where(condition, args...).Delete(&TranscriptEntry{}).Error; err != nil {
+		return TranscriptCandidates{}, err
+	}
+	return candidates, nil
 }
 
-// DeleteTranscriptThrough 删除检查点覆盖的工作集记录
-func (m *Manager) DeleteTranscriptThrough(tx *gorm.DB, kind string, targetID int64, visibleSeq uint64) error {
+// DeleteTranscriptThrough 删除检查点覆盖的工作集记录，并返回本批引用候选
+func (m *Manager) DeleteTranscriptThrough(tx *gorm.DB, kind string, targetID int64, visibleSeq uint64) (TranscriptCandidates, error) {
 	if visibleSeq == 0 {
-		return nil
+		return TranscriptCandidates{}, nil
 	}
-	return tx.Where("conversation_kind=? AND target_id=? AND visible_seq IS NOT NULL AND visible_seq<=?", kind, targetID, visibleSeq).Delete(&TranscriptEntry{}).Error
+	condition := "conversation_kind=? AND target_id=? AND visible_seq IS NOT NULL AND visible_seq<=?"
+	args := []any{kind, targetID, visibleSeq}
+	candidates, err := transcriptCandidates(tx, condition, args...)
+	if err != nil {
+		return TranscriptCandidates{}, err
+	}
+	if err := tx.Where(condition, args...).Delete(&TranscriptEntry{}).Error; err != nil {
+		return TranscriptCandidates{}, err
+	}
+	return candidates, nil
 }
 
 // GetCheckpoint 读取会话当前检查点
@@ -337,60 +377,4 @@ func (m *Manager) EnsureToolTranscript(ctx context.Context, entry *TranscriptEnt
 		return nil, false, err
 	}
 	return &existing, false, nil
-}
-
-type TranscriptSeed struct {
-	EntryKind    string
-	MessageLogID uint
-	Payload      json.RawMessage
-	CreatedAt    time.Time
-}
-
-// SeedTranscriptIfEmpty 把近期原文变成可见工作集，已有工作集时不写入
-func (m *Manager) SeedTranscriptIfEmpty(ctx context.Context, kind string, targetID int64, seeds []TranscriptSeed) ([]TranscriptEntry, bool, error) {
-	if kind == "" || targetID <= 0 || len(seeds) == 0 {
-		return nil, false, nil
-	}
-	createdEntries := make([]TranscriptEntry, 0, len(seeds))
-	created := false
-	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&TranscriptEntry{}).Where("conversation_kind=? AND target_id=?", kind, targetID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			return nil
-		}
-		created = true
-		for _, seed := range seeds {
-			if seed.EntryKind != "user" && seed.EntryKind != "assistant" {
-				return fmt.Errorf("历史工作集类型无效")
-			}
-			entry := TranscriptEntry{
-				ConversationKind: kind, TargetID: targetID, EntryKind: seed.EntryKind,
-				MessageLogID: &seed.MessageLogID, Payload: seed.Payload, CreatedAt: seed.CreatedAt,
-			}
-			if seed.EntryKind == "user" {
-				inputSeq, err := m.AllocateInputSeq(tx, kind, targetID)
-				if err != nil {
-					return err
-				}
-				entry.InputSeq = &inputSeq
-			}
-			visibleSeq, err := m.AllocateVisibleSeq(tx, kind, targetID)
-			if err != nil {
-				return err
-			}
-			entry.VisibleSeq = &visibleSeq
-			if len(entry.Payload) == 0 {
-				entry.Payload = json.RawMessage(`{}`)
-			}
-			if err := tx.Create(&entry).Error; err != nil {
-				return err
-			}
-			createdEntries = append(createdEntries, entry)
-		}
-		return nil
-	})
-	return createdEntries, created, err
 }

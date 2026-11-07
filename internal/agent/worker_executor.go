@@ -22,7 +22,8 @@ type workerExecutor struct {
 func newWorkerExecutor(baseURL string) *workerExecutor {
 	return &workerExecutor{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		client:  &http.Client{Timeout: 30 * time.Second},
+		// 总超时由每次请求的 timeout+15 秒控制，不能再叠加固定 30 秒提前杀掉合法长命令
+		client: &http.Client{},
 	}
 }
 
@@ -68,20 +69,17 @@ func (e *workerExecutor) exec(ctx context.Context, req workerproto.ExecRequest) 
 
 func (a *Agent) workerBashCallback(workerID uint) tools.BashCallback {
 	return func(ctx context.Context, command string, timeoutSeconds int) (*tools.BashResult, error) {
-		session, err := a.memory.GetWorkerSessionByID(ctx, workerID)
-		if err != nil {
-			return nil, fmt.Errorf("读取 worker 失败: %w", err)
-		}
 		out, err := a.workerExec.exec(ctx, workerproto.ExecRequest{
-			SessionID: workerID, User: session.UserName, Home: session.HomeDir,
-			Command: command, TimeoutSeconds: timeoutSeconds,
+			SessionID: workerID, Command: command, TimeoutSeconds: timeoutSeconds,
 		})
 		if err != nil {
 			return nil, err
 		}
 		return &tools.BashResult{
-			Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
-			TimedOut: out.TimedOut, Truncated: out.Truncated,
+			Stdout: out.Stdout, Stderr: out.Stderr,
+			StdoutBytes: out.StdoutBytes, StderrBytes: out.StderrBytes,
+			StdoutLog: out.StdoutLog, StderrLog: out.StderrLog,
+			ExitCode: out.ExitCode, TimedOut: out.TimedOut, Truncated: out.Truncated,
 		}, nil
 	}
 }

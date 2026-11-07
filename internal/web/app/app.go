@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mumu-bot/internal/agent"
@@ -22,10 +23,10 @@ import (
 
 type runtimeSnapshot struct {
 	Connected    bool
+	AgentReady   bool
 	SelfID       int64
 	MCPToolCount int
-	Mood         *memory.MoodState
-	Emotions     []memory.CurrentEmotion
+	MCPStatuses  []mcp.ServerStatus
 }
 
 type App struct {
@@ -33,7 +34,8 @@ type App struct {
 	admin      *services.AdminService
 	auth       *auth.Manager
 	memMgr     *memory.Manager
-	mumuAgent  *agent.Agent
+	mumuAgent  atomic.Pointer[agent.Agent]
+	botStatus  func() (bool, int64)
 	modelStore *modelprofiles.Store
 	mcpStore   *mcp.Store
 	router     http.Handler
@@ -46,17 +48,26 @@ const (
 
 func New(boot config.Bootstrap, admin *services.AdminService, memMgr *memory.Manager, mumuAgent *agent.Agent, models *modelprofiles.Store, mcpServers *mcp.Store) *App {
 	app := &App{
-		boot:       boot,
-		admin:      admin,
-		auth:       auth.NewManager(boot.WebAdminKey, 24*time.Hour),
-		memMgr:     memMgr,
-		mumuAgent:  mumuAgent,
-		modelStore: models,
-		mcpStore:   mcpServers,
+		boot: boot, admin: admin, auth: auth.NewManager(boot.WebAdminKey, 24*time.Hour),
+		memMgr: memMgr, modelStore: models, mcpStore: mcpServers,
+	}
+	if mumuAgent != nil {
+		app.mumuAgent.Store(mumuAgent)
 	}
 	app.router = app.routes()
 	return app
 }
+
+// SetAgent 在 QQ 就绪后挂上运行态；后台在此之前已经可用
+func (a *App) SetAgent(mumuAgent *agent.Agent) {
+	a.mumuAgent.Store(mumuAgent)
+}
+
+// currentAgent 并发安全地读取当前运行态
+func (a *App) currentAgent() *agent.Agent { return a.mumuAgent.Load() }
+
+// SetBotStatus 让后台在 Agent 尚未建立时也能读到 OneBot 的真实连接状态
+func (a *App) SetBotStatus(status func() (bool, int64)) { a.botStatus = status }
 
 func (a *App) Addr() string {
 	return fmt.Sprintf(":%d", a.boot.ServerPort)
@@ -96,8 +107,18 @@ func (a *App) routes() http.Handler {
 			protected.Get("/memories/{id}", a.handleMemoryDetail)
 			protected.Patch("/memories/{id}", a.handleMemoryUpdate)
 			protected.Get("/members", a.handleMembers)
+			protected.Get("/life", a.handleLife)
+			protected.Post("/life/schedules", a.handleLifeScheduleCreate)
+			protected.Patch("/life/schedules/{id}", a.handleLifeScheduleUpdate)
+			protected.Post("/life/wake", a.handleLifeWake)
+			protected.Post("/life/run", a.handleLifeRun)
+			protected.Get("/diaries", a.handleDiaryMonth)
+			protected.Get("/diaries/{date}", a.handleDiaryDay)
 			protected.Get("/conversations", a.handleConversations)
 			protected.Patch("/conversations/{kind}/{targetID}", a.handleConversationUpdate)
+			protected.Get("/identity", a.handleIdentity)
+			protected.Get("/identity/friends", a.handleIdentityFriends)
+			protected.Patch("/identity", a.handleIdentityUpdate)
 			protected.Get("/personas", a.handlePersonas)
 			protected.Get("/personas/template", a.handlePersonaTemplate)
 			protected.Get("/personas/{id}", a.handlePersonaDetail)
@@ -230,22 +251,20 @@ func (a *App) enabledGroups() []int64 {
 
 func (a *App) runtimeSnapshot() runtimeSnapshot {
 	snapshot := runtimeSnapshot{}
-	if a.mumuAgent != nil {
-		snapshot.Connected = a.mumuAgent.OneBotConnected()
-		snapshot.SelfID = a.mumuAgent.BotSelfID()
-		snapshot.MCPToolCount = a.mumuAgent.MCPToolCount()
+	if a.botStatus != nil {
+		snapshot.Connected, snapshot.SelfID = a.botStatus()
 	}
-	if a.memMgr != nil {
-		if mood, err := a.memMgr.GetMoodState(); err == nil {
-			snapshot.Mood = mood
-		}
-		if emotions, err := a.memMgr.CurrentEmotions(context.Background(), -1, 3); err == nil {
-			snapshot.Emotions = emotions
-		}
+	if agent := a.currentAgent(); agent != nil {
+		snapshot.Connected = agent.OneBotConnected()
+		snapshot.AgentReady = agent.Ready()
+		snapshot.SelfID = agent.BotSelfID()
+		snapshot.MCPToolCount = agent.MCPToolCount()
+		snapshot.MCPStatuses = agent.MCPStatuses()
 	}
 	return snapshot
 }
 
 func (a *App) agentReady() bool {
-	return a.mumuAgent != nil && a.mumuAgent.Ready()
+	agent := a.currentAgent()
+	return agent != nil && agent.Ready()
 }

@@ -20,7 +20,7 @@ export function Pagination({
   const hasNext = page * pageSize < total;
 
   return (
-    <div className="mt-6 flex items-center justify-between border-t border-border pt-4 text-sm text-muted-foreground">
+    <div className="admin-body-text mt-6 flex items-center justify-between border-t border-border pt-4 text-muted-foreground">
       <div>
         {t("common.page", { page, start, end, total })}
       </div>

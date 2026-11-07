@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/filemeta"
 	"mumu-bot/internal/media"
 )
 
@@ -13,19 +14,20 @@ func NormalizeContent(raw string) string {
 }
 
 type MessageLog struct {
-	ID               uint       `gorm:"primaryKey" json:"id"`
-	OneBotMessageID  int64      `gorm:"not null" json:"onebot_message_id"`
-	ConversationKind string     `gorm:"type:text;not null" json:"conversation_kind"`
-	TargetID         int64      `gorm:"column:target_id;index;not null" json:"target_id"`
-	UserID           int64      `gorm:"index;not null" json:"user_id"`
-	Nickname         string     `gorm:"type:text;not null" json:"nickname"`
-	TextContent      string     `gorm:"type:text;not null" json:"text_content"`
-	DisplayContent   string     `gorm:"type:text;not null" json:"display_content"`
-	ReplyToMessageID *int64     `json:"reply_to_message_id,omitempty"`
-	IsMentioned      bool       `gorm:"not null" json:"is_mentioned"`
-	MessageTime      time.Time  `gorm:"index;not null" json:"message_time"`
-	RecalledAt       *time.Time `json:"recalled_at,omitempty"`
-	MediaRefs        media.Refs `gorm:"column:media_refs;type:jsonb" json:"media_refs,omitempty"`
+	ID               uint          `gorm:"primaryKey" json:"id"`
+	OneBotMessageID  int64         `gorm:"not null" json:"onebot_message_id"`
+	ConversationKind string        `gorm:"type:text;not null" json:"conversation_kind"`
+	TargetID         int64         `gorm:"column:target_id;index;not null" json:"target_id"`
+	UserID           int64         `gorm:"index;not null" json:"user_id"`
+	Nickname         string        `gorm:"type:text;not null" json:"nickname"`
+	TextContent      string        `gorm:"type:text;not null" json:"text_content"`
+	DisplayContent   string        `gorm:"type:text;not null" json:"display_content"`
+	ReplyToMessageID *int64        `json:"reply_to_message_id,omitempty"`
+	IsMentioned      bool          `gorm:"not null" json:"is_mentioned"`
+	MessageTime      time.Time     `gorm:"index;not null" json:"message_time"`
+	RecalledAt       *time.Time    `json:"recalled_at,omitempty"`
+	MediaRefs        media.Refs    `gorm:"column:media_refs;type:jsonb" json:"media_refs,omitempty"`
+	FileRefs         filemeta.Refs `gorm:"column:file_refs;type:jsonb;not null;default:'[]'" json:"file_refs,omitempty"`
 }
 
 func (MessageLog) TableName() string { return "message_logs" }
@@ -35,7 +37,7 @@ type MessageForward struct {
 	ID           uint         `gorm:"primaryKey" json:"id"`
 	Handle       string       `gorm:"column:handle;type:text;not null;uniqueIndex" json:"handle"`
 	MessageLogID uint         `gorm:"column:message_log_id;index;not null" json:"message_log_id"`
-	ParentHandle string       `gorm:"column:parent_handle;type:text;index" json:"parent_handle,omitempty"`
+	ParentHandle *string      `gorm:"column:parent_handle;type:text;index" json:"parent_handle,omitempty"`
 	Nodes        ForwardNodes `gorm:"column:nodes;type:jsonb;not null" json:"nodes"`
 	CreatedAt    time.Time    `gorm:"column:created_at;not null" json:"created_at"`
 }

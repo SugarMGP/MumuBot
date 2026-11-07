@@ -82,18 +82,25 @@ func (a *Agent) resolveMentionDisplayName(ctx context.Context, msg *onebot.Conve
 	return fmt.Sprintf("%d", userID)
 }
 
-// buildConversationToolContext 构造工具执行上下文，会话内的消息编号与媒体都由会话维护
-func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, targetID int64, session *Session) context.Context {
+// buildConversationToolContext 构造工具执行上下文，会话内的消息编号与媒体都由会话维护；
+// 历史读取快照取本轮开始时数据库的真实最大原文编号，睡眠期间只落日志的消息也能被查到
+func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, targetID int64, session *Session) (context.Context, error) {
+	snapshot, err := a.memory.LatestMessageLogID(ctx)
+	if err != nil {
+		return ctx, fmt.Errorf("读取历史读取快照失败: %w", err)
+	}
 	tc := &tools.ToolContext{
-		ConversationKind:   kind,
-		TargetID:           targetID,
-		MemoryMgr:          a.memory.WithContext(ctx),
-		Bot:                a.bot,
-		Session:            session,
-		StickerDir:         config.Boot().StickerDir,
-		SnapshotLogID:      session.LatestLogID(),
-		RunID:              newRunID(),
-		MemoryReadVersions: map[uint]uint64{},
+		ConversationKind:       kind,
+		TargetID:               targetID,
+		MemoryMgr:              a.memory.WithContext(ctx),
+		Bot:                    a.bot,
+		Session:                session,
+		StickerDir:             config.Boot().StickerDir,
+		SnapshotLogID:          snapshot,
+		SnapshotLogIDSet:       true,
+		RunID:                  newRunID(),
+		MemoryReadVersions:     map[uint]uint64{},
+		SessionRunningCallback: a.sessionRunning,
 		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) error {
 			if kind == memory.ConversationKindPrivate {
 				return a.doPrivateSpeak(callCtx, gid, content, replyTo)
@@ -112,6 +119,12 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 			}
 			return a.doSendImageURL(callCtx, targetID, imageURL)
 		},
+		SendImageBytesCallback: func(callCtx context.Context, imageRef, name string, data []byte) error {
+			_, err := a.sendPersonalFileWithRef(callCtx, kind, targetID, name, data, true, imageRef)
+			return err
+		},
+		SendFileCallback:       a.sendPersonalFile,
+		SnapshotFiles:          nil,
 		SessionMessageCallback: a.deliverSessionMessage,
 		ReadForwardCallback: func(callCtx context.Context, id string, index int) (any, error) {
 			return a.readForward(callCtx, id, index)
@@ -126,7 +139,7 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 			a.onRecall(kind, targetID, messageID, arrivalSeq)
 		},
 	}
-	return tools.WithToolContext(ctx, tc)
+	return tools.WithToolContext(ctx, tc), nil
 }
 
 // newRunID 生成当前 ReAct 的幂等分组标识

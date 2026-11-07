@@ -1,8 +1,8 @@
 package tools
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
@@ -38,7 +39,10 @@ type UserProfileOutput struct {
 	Remark         string             `json:"remark,omitempty"`
 	GroupCard      string             `json:"group_card,omitempty"`
 	Signature      string             `json:"signature,omitempty"`
-	AvatarURL      string             `json:"avatar_url,omitempty"`
+	AvatarRef      string             `json:"avatar_ref,omitempty"`
+	AvatarState    string             `json:"avatar_state,omitempty"`
+	AvatarError    string             `json:"avatar_error,omitempty"`
+	Warning        string             `json:"warning,omitempty"`
 	PinnedMemories []UserPinnedMemory `json:"pinned_memories"`
 }
 
@@ -72,7 +76,15 @@ func getUserProfileFunc(ctx context.Context, input *UserProfileInput) (*schema.T
 			output.GroupCard = info.Card
 		}
 	}
-	if info, err := tc.Bot.GetStrangerInfo(ctx, userID, true); err == nil && info != nil {
+	if isSelf {
+		if profile, err := tc.Bot.GetSelfProfile(ctx); err == nil && profile != nil {
+			if strings.TrimSpace(profile.Nickname) != "" {
+				output.Nickname = profile.Nickname
+			}
+			output.Signature = strings.TrimSpace(profile.Signature)
+			output.Warning = profile.Warning
+		}
+	} else if info, err := tc.Bot.GetStrangerInfo(ctx, userID, true); err == nil && info != nil {
 		if strings.TrimSpace(info.Nickname) != "" {
 			output.Nickname = info.Nickname
 		}
@@ -95,19 +107,26 @@ func getUserProfileFunc(ctx context.Context, input *UserProfileInput) (*schema.T
 			UpdatedAt: item.UpdatedAt.Format("2006-01-02 15:04:05"),
 		})
 	}
-	output.AvatarURL = fmt.Sprintf("https://q1.qlogo.cn/g?b=qq&nk=%d&s=640", userID)
+	avatarURL := fmt.Sprintf("https://q1.qlogo.cn/g?b=qq&nk=%d&s=640", userID)
+	output.AvatarState = "unavailable"
+	if image, _ := downloadAvatar(ctx, avatarURL); len(image) > 0 {
+		if tc.MemoryMgr.RefStore() != nil {
+			ref, refErr := tc.MemoryMgr.RefStore().CreateReady(ctx, "avatar.jpg", bytes.NewReader(image), 10*1024*1024, nil)
+			if refErr != nil {
+				output.AvatarError = refErr.Error()
+			} else {
+				output.AvatarRef = ref.ImageRef()
+				output.AvatarState = "ready"
+			}
+		}
+	} else {
+		output.AvatarError = "头像下载失败"
+	}
 	text, err := sonic.MarshalString(output)
 	if err != nil {
 		return nil, err
 	}
-	parts := []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: text}}
-	if image, mime := downloadAvatar(ctx, output.AvatarURL); len(image) > 0 {
-		encoded := base64.StdEncoding.EncodeToString(image)
-		parts = append(parts, schema.ToolOutputPart{Type: schema.ToolPartTypeImage, Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{
-			Base64Data: &encoded, MIMEType: mime,
-		}}})
-	}
-	return &schema.ToolResult{Parts: parts}, nil
+	return &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: text}}}, nil
 }
 
 func downloadAvatar(ctx context.Context, url string) ([]byte, string) {
@@ -130,16 +149,13 @@ func downloadAvatar(ctx context.Context, url string) ([]byte, string) {
 		return nil, ""
 	}
 	mime := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	if !strings.HasPrefix(mime, "image/") {
-		return nil, ""
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-	if err != nil || len(body) == 0 {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024+1))
+	if err != nil || len(body) == 0 || len(body) > 512*1024 || media.ImageMIME(body) == "" {
 		return nil, ""
 	}
 	return body, mime
 }
 
 func NewGetUserProfileTool() (tool.EnhancedInvokableTool, error) {
-	return utils.InferEnhancedTool("getUserProfile", "查看用户资料、全部置顶记忆和头像；结果会整体进入上下文。user_id 支持 QQ 号或 self。", getUserProfileFunc)
+	return utils.InferEnhancedTool("getUserProfile", "查看用户资料、全部置顶记忆和头像引用；头像不直接进入上下文，需要时用 avatar_ref 调 viewImage。user_id 支持 QQ 号或 self。", getUserProfileFunc)
 }

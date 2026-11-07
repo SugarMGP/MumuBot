@@ -51,6 +51,8 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 			ThinkIntervalSec:  cfg.Agent.ThinkInterval,
 			ThinkDebounceMS:   cfg.Agent.ThinkDebounceMS,
 			MaxStep:           cfg.Agent.MaxStep,
+			LifeMaxStep:       cfg.Agent.LifeMaxStep,
+			WorkerMaxStep:     cfg.Agent.WorkerMaxStep,
 			Compactor: compactorDTO{
 				TriggerRatio:      cfg.Compactor.TriggerRatio,
 				DigestBudgetRatio: cfg.Compactor.DigestBudgetRatio,
@@ -63,10 +65,12 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 		Model: systemModelDTO{
 			Active:        activeModel,
 			MCPToolCount:  snapshot.MCPToolCount,
+			MCPStatuses:   snapshot.MCPStatuses,
 			ContextWindow: contextWindow,
 		},
 		Runtime: systemRuntimeDTO{
 			Connected:           snapshot.Connected,
+			AgentReady:          snapshot.AgentReady,
 			ReconnectSec:        a.boot.OneBotReconnect,
 			SchemaVersion:       schemaVersion,
 			LatestSchemaVersion: migration.LatestSchemaVersion(),

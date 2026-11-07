@@ -42,8 +42,14 @@ type TopicThreadView struct {
 	ConversationKind string
 	TargetID         int64
 	Status           string
+	StabilityDays    float64
+	RecallAnchorAt   time.Time
+	ForgetAt         time.Time
+	ForgottenAt      *time.Time
 	UpdatedAt        time.Time
 	MessageCount     int64
+	SourceTotal      int
+	SourceAvailable  int
 	Summaries        []TopicSummaryView
 	AnchorMessageIDs []uint
 	SourceMessageIDs []uint
@@ -171,11 +177,13 @@ func (s *AdminService) ListTopicThreads(f ListFilter) (Page[TopicThreadView], er
 	if targetID > 0 {
 		base = base.Where("target_id=?", targetID)
 	}
-	if f.Status != "" && f.Status != "all" {
-		base = base.Where("status=?", f.Status)
+	if f.Status == "forgotten" {
+		base = base.Where("forgotten_at IS NOT NULL")
+	} else if f.Status != "" && f.Status != "all" {
+		base = base.Where("status=? AND forgotten_at IS NULL", f.Status)
 	}
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		p := "%" + k + "%"
+		p := memory.LiteralContainsPattern(k)
 		base = base.Where("EXISTS (SELECT 1 FROM topic_summaries ts WHERE ts.topic_id=topic_threads.id AND (COALESCE(ts.summary_json->>'title','') ILIKE ? OR COALESCE(ts.summary_json->>'gist','') ILIKE ? OR ts.summary_json::text ILIKE ?))", p, p, p)
 	}
 	var total int64
@@ -274,8 +282,28 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThreadRow) ([]Topi
 	for topicID, summaryID := range latestByTopic {
 		latestTopicBySummary[summaryID] = topicID
 	}
+	allSourceIDs := make([]uint, 0, len(sourceRows))
 	for _, row := range sourceRows {
 		addMessage(latestTopicBySummary[row.SummaryID], row.MessageLogID)
+		allSourceIDs = append(allSourceIDs, row.MessageLogID)
+	}
+	existingSourceIDs := map[uint]bool{}
+	if len(allSourceIDs) > 0 {
+		var existing []uint
+		if err := s.db.Model(&memory.MessageLog{}).Where("id IN ?", allSourceIDs).Pluck("id", &existing).Error; err != nil {
+			return nil, err
+		}
+		for _, id := range existing {
+			existingSourceIDs[id] = true
+		}
+	}
+	sourceTotalBySummary := map[uint]int{}
+	sourceAvailableBySummary := map[uint]int{}
+	for _, row := range sourceRows {
+		sourceTotalBySummary[row.SummaryID]++
+		if existingSourceIDs[row.MessageLogID] {
+			sourceAvailableBySummary[row.SummaryID]++
+		}
 	}
 	countByTopic := make(map[uint]int64, len(messagesByTopic))
 	for topicID, messages := range messagesByTopic {
@@ -283,10 +311,17 @@ func (s *AdminService) loadTopicThreads(threads []memory.TopicThreadRow) ([]Topi
 	}
 	items := make([]TopicThreadView, 0, len(threads))
 	for _, thread := range threads {
-		view := TopicThreadView{ID: thread.ID, ConversationKind: thread.ConversationKind, TargetID: thread.TargetID, Status: thread.Status, UpdatedAt: thread.UpdatedAt, MessageCount: countByTopic[thread.ID], Summaries: summariesByTopic[thread.ID]}
+		view := TopicThreadView{
+			ID: thread.ID, ConversationKind: thread.ConversationKind, TargetID: thread.TargetID,
+			Status: thread.Status, StabilityDays: thread.StabilityDays, RecallAnchorAt: thread.RecallAnchorAt,
+			ForgetAt: thread.ForgetAt, ForgottenAt: thread.ForgottenAt, UpdatedAt: thread.UpdatedAt,
+			MessageCount: countByTopic[thread.ID], Summaries: summariesByTopic[thread.ID],
+		}
 		if latest := view.LatestSummary(); latest != nil {
 			view.AnchorMessageIDs = anchors[latest.ID]
 			view.SourceMessageIDs = sources[latest.ID]
+			view.SourceTotal = sourceTotalBySummary[latest.ID]
+			view.SourceAvailable = sourceAvailableBySummary[latest.ID]
 		}
 		items = append(items, view)
 	}
@@ -318,7 +353,7 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 	page, size := normalizePage(f.Page, f.PageSize)
 	q := s.db.Model(&memory.MemberProfile{})
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		p := "%" + k + "%"
+		p := memory.LiteralContainsPattern(k)
 		q = q.Where("nickname ILIKE ? OR CAST(user_id AS TEXT) ILIKE ? OR EXISTS (SELECT 1 FROM member_names mn WHERE mn.user_id=member_profiles.user_id AND mn.value ILIKE ?)", p, p, p)
 	}
 	var total int64
@@ -369,7 +404,7 @@ func (s *AdminService) ListStickers(f ListFilter) (Page[memory.Sticker], error) 
 	var items []memory.Sticker
 	q := s.db.Model(&memory.Sticker{})
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		p := "%" + k + "%"
+		p := memory.LiteralContainsPattern(k)
 		q = q.Where("description ILIKE ? OR file_name ILIKE ? OR file_hash ILIKE ?", p, p, p)
 	}
 	q = order(q, f.Sort, f.Order, map[string]string{"use": "use_count", "updated": "updated_at", "created": "created_at", "default": "use_count"})

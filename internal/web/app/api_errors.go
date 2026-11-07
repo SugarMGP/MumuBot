@@ -8,7 +8,6 @@ import (
 	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/modelprofiles"
-	"mumu-bot/internal/web/services"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -39,6 +38,8 @@ func (a *App) failFromError(w http.ResponseWriter, r *http.Request, err error) {
 		respondError(w, http.StatusBadRequest, "preset_duplicate", "已经有同名预设了。", nil)
 	case errors.Is(err, memory.ErrPersonaPresetInvalid), errors.Is(err, mcp.ErrInvalidConfig):
 		respondError(w, http.StatusBadRequest, "validation_failed", messageValidation, nil)
+	case errors.Is(err, memory.ErrScheduleTextInvalid):
+		respondError(w, http.StatusBadRequest, lifeScheduleTextInvalid, "", nil)
 	case errors.Is(err, memory.ErrPersonaPresetBuiltin):
 		respondError(w, http.StatusBadRequest, "preset_builtin", "内置预设不能删除。", nil)
 	case errors.Is(err, memory.ErrPersonaPresetActive):
@@ -47,8 +48,6 @@ func (a *App) failFromError(w http.ResponseWriter, r *http.Request, err error) {
 		respondError(w, http.StatusBadRequest, "model_active", "当前正在使用的模型不能删除。", nil)
 	case errors.Is(err, modelprofiles.ErrInvalidModel):
 		respondError(w, http.StatusBadRequest, "validation_failed", messageValidation, nil)
-	case errors.Is(err, services.ErrDuplicateActiveMemory):
-		respondError(w, http.StatusBadRequest, "memory_duplicate", "已有一条相同内容处于启用状态。", nil)
 	case errors.As(err, &validation):
 		respondError(w, http.StatusBadRequest, "validation_failed", validation.Message, nil)
 	default:

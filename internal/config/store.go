@@ -17,15 +17,18 @@ var ErrVersionConflict = errors.New("配置已被其他页面修改，请刷新�
 
 const (
 	SectionPersona     = "persona"
+	SectionIdentity    = "identity"
 	SectionAgent       = "agent"
 	SectionChat        = "chat"
 	SectionCompactor   = "compactor"
 	SectionMaintenance = "maintenance"
+	SectionRetention   = "retention"
 	SectionMedia       = "media"
 	SectionDebug       = "debug"
 )
 
 var store struct {
+	saveMu   sync.Mutex
 	mu       sync.RWMutex
 	db       *gorm.DB
 	current  atomic.Pointer[RuntimeConfig]
@@ -49,8 +52,14 @@ func InitStore(db *gorm.DB) error {
 	return Reload()
 }
 
-// Reload 重新读取 app_config，未知或损坏的行回退默认值
+// Reload 重新读取 app_config；与配置保存串行，避免旧快照覆盖新值
 func Reload() error {
+	store.saveMu.Lock()
+	defer store.saveMu.Unlock()
+	return reload()
+}
+
+func reload() error {
 	store.mu.RLock()
 	db := store.db
 	store.mu.RUnlock()
@@ -118,6 +127,13 @@ func SectionVersions() map[string]int64 {
 
 // SaveSection 保存一个配置 section；expectedVersion 为 0 表示新建
 func SaveSection(ctx context.Context, key string, value any, expectedVersion int64) error {
+	return SaveSectionWithApply(ctx, key, value, expectedVersion, nil)
+}
+
+// SaveSectionWithApply 在同一数据库事务里保存 section 并执行依赖它的数据调整
+func SaveSectionWithApply(ctx context.Context, key string, value any, expectedVersion int64, apply func(tx *gorm.DB, before, after RuntimeConfig) error) error {
+	store.saveMu.Lock()
+	defer store.saveMu.Unlock()
 	store.mu.RLock()
 	db := store.db
 	current := Snapshot()
@@ -138,26 +154,37 @@ func SaveSection(ctx context.Context, key string, value any, expectedVersion int
 		return err
 	}
 	var changed int64
-	if expectedVersion > 0 {
-		result := db.WithContext(ctx).Exec(`
-			UPDATE app_config SET config_value = ?::jsonb, version = version + 1, updated_at = now()
-			WHERE config_key = ? AND version = ?`, string(raw), key, expectedVersion)
-		if result.Error != nil {
-			return fmt.Errorf("保存配置失败: %w", result.Error)
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if expectedVersion > 0 {
+			result := tx.Exec(`
+				UPDATE app_config SET config_value = ?::jsonb, version = version + 1, updated_at = now()
+				WHERE config_key = ? AND version = ?`, string(raw), key, expectedVersion)
+			if result.Error != nil {
+				return fmt.Errorf("保存配置失败: %w", result.Error)
+			}
+			changed = result.RowsAffected
+		} else {
+			result := tx.Exec(`
+				INSERT INTO app_config(config_key, config_value, version, updated_at)
+				VALUES (?, ?::jsonb, 1, now())
+				ON CONFLICT (config_key) DO NOTHING`, key, string(raw))
+			if result.Error != nil {
+				return fmt.Errorf("保存配置失败: %w", result.Error)
+			}
+			changed = result.RowsAffected
 		}
-		changed = result.RowsAffected
-	} else {
-		result := db.WithContext(ctx).Exec(`
-			INSERT INTO app_config(config_key, config_value, version, updated_at)
-			VALUES (?, ?::jsonb, 1, now())
-			ON CONFLICT (config_key) DO NOTHING`, key, string(raw))
-		if result.Error != nil {
-			return fmt.Errorf("保存配置失败: %w", result.Error)
+		if changed == 0 {
+			return ErrVersionConflict
 		}
-		changed = result.RowsAffected
-	}
-	if changed == 0 {
-		return ErrVersionConflict
+		if apply != nil {
+			if err := apply(tx, *current, validated); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	store.mu.Lock()
 	store.current.Store(&validated)
@@ -172,6 +199,8 @@ func SaveSection(ctx context.Context, key string, value any, expectedVersion int
 
 // ResetSection 删除覆盖值并恢复代码默认
 func ResetSection(ctx context.Context, key string, expectedVersion int64) error {
+	store.saveMu.Lock()
+	defer store.saveMu.Unlock()
 	store.mu.RLock()
 	db := store.db
 	store.mu.RUnlock()
@@ -185,11 +214,13 @@ func ResetSection(ctx context.Context, key string, expectedVersion int64) error 
 	if expectedVersion > 0 && result.RowsAffected == 0 {
 		return ErrVersionConflict
 	}
-	return Reload()
+	return reload()
 }
 
 func applySection(cfg *RuntimeConfig, key string, raw json.RawMessage) error {
 	switch key {
+	case SectionIdentity:
+		return json.Unmarshal(raw, &cfg.Identity)
 	case SectionAgent:
 		return json.Unmarshal(raw, &cfg.Agent)
 	case SectionChat:
@@ -198,6 +229,8 @@ func applySection(cfg *RuntimeConfig, key string, raw json.RawMessage) error {
 		return json.Unmarshal(raw, &cfg.Compactor)
 	case SectionMaintenance:
 		return json.Unmarshal(raw, &cfg.Maintenance)
+	case SectionRetention:
+		return json.Unmarshal(raw, &cfg.Retention)
 	case SectionMedia:
 		return json.Unmarshal(raw, &cfg.Media)
 	case SectionDebug:

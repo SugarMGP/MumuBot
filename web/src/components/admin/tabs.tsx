@@ -15,7 +15,6 @@ function TabLink({
     <NavLink
       to={to}
       end={end}
-      role="tab"
       className={({ isActive }) =>
         cn(
           "px-3 py-1.5 text-sm font-medium transition-colors",
@@ -33,29 +32,27 @@ function TabLink({
 export function SettingsTabs() {
   const { t } = useTranslation();
   return (
-    <div
+    <nav
       className="inline-flex shrink-0 overflow-hidden rounded-lg border border-border"
-      role="tablist"
       aria-label={t("settings.title")}
     >
       <TabLink to="/admin/settings" label={t("settings.tabs.general")} end />
       <TabLink to="/admin/settings/models" label={t("settings.tabs.models")} />
       <TabLink to="/admin/settings/mcp" label={t("settings.tabs.mcp")} />
-    </div>
+    </nav>
   );
 }
 
 export function SystemTabs() {
   const { t } = useTranslation();
   return (
-    <div
+    <nav
       className="inline-flex shrink-0 overflow-hidden rounded-lg border border-border"
-      role="tablist"
       aria-label={t("system.title")}
     >
       <TabLink to="/admin/system" label={t("system.tabs.status")} end />
       <TabLink to="/admin/system/logs" label={t("system.tabs.logs")} />
       <TabLink to="/admin/system/models" label={t("system.tabs.models")} />
-    </div>
+    </nav>
   );
 }

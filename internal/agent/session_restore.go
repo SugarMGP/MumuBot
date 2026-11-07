@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
@@ -20,7 +19,7 @@ func (a *Agent) restoreSessions() error {
 		return fmt.Errorf("读取可恢复群聊失败: %w", err)
 	}
 	for _, groupID := range groupIDs {
-		if err := a.restoreTranscriptSession(memory.ConversationKindGroup, groupID); err != nil {
+		if err := a.restoreTranscriptSession(memory.ConversationKindGroup, groupID, 0); err != nil {
 			return fmt.Errorf("恢复群 %d 工作集失败: %w", groupID, err)
 		}
 	}
@@ -29,7 +28,7 @@ func (a *Agent) restoreSessions() error {
 		return fmt.Errorf("读取可恢复私聊失败: %w", err)
 	}
 	for _, target := range privateTargets {
-		if err := a.restoreTranscriptSession(memory.ConversationKindPrivate, target.TargetID); err != nil {
+		if err := a.restoreTranscriptSession(memory.ConversationKindPrivate, target.TargetID, 0); err != nil {
 			return fmt.Errorf("恢复好友 %d 工作集失败: %w", target.TargetID, err)
 		}
 	}
@@ -38,15 +37,26 @@ func (a *Agent) restoreSessions() error {
 		return fmt.Errorf("读取可恢复 worker 失败: %w", err)
 	}
 	for _, worker := range workers {
-		if err := a.restoreTranscriptSession(memory.ConversationKindWorker, int64(worker.ID)); err != nil {
+		afterID := worker.ContextThroughID
+		if worker.ContextStartID > 0 {
+			afterID = max(afterID, worker.ContextStartID-1)
+		}
+		if err := a.restoreTranscriptSession(memory.ConversationKindWorker, int64(worker.ID), afterID); err != nil {
 			return fmt.Errorf("恢复 worker %d 工作集失败: %w", worker.ID, err)
 		}
+	}
+	lifeState, stateErr := a.memory.GetLifeState(a.ctx)
+	if stateErr != nil {
+		return fmt.Errorf("读取 life 状态失败: %w", stateErr)
+	}
+	if err := a.restoreTranscriptSession(memory.ConversationKindLife, memory.LifeTargetID, lifeState.ContextThroughID); err != nil {
+		return fmt.Errorf("恢复 life 工作集失败: %w", err)
 	}
 	return nil
 }
 
 // restoreTranscriptSession 读取检查点、保留尾部和工作集 pending
-func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
+func (a *Agent) restoreTranscriptSession(kind string, targetID int64, afterID uint) error {
 	session := a.sessions.get(kind, targetID)
 	session.ClearTokenBase()
 	if latest, timeErr := a.memory.LatestMessageTime(a.ctx, kind, targetID, a.bot.GetSelfID()); timeErr == nil && !latest.IsZero() {
@@ -60,7 +70,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 	if checkpoint != nil && checkpoint.ThroughVisibleSeq != nil {
 		after = *checkpoint.ThroughVisibleSeq
 	}
-	visible, err := a.memory.VisibleTranscript(a.ctx, kind, targetID, after)
+	visible, err := a.memory.VisibleTranscript(a.ctx, kind, targetID, after, afterID)
 	if err != nil {
 		return err
 	}
@@ -69,13 +79,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 		return err
 	}
 	if len(visible) == 0 && len(pending) == 0 {
-		if checkpoint == nil {
-			logs, getErr := a.memory.GetRecentMessagesScope(a.ctx, kind, targetID, 0, restoreMessageLimit, 0)
-			if getErr != nil {
-				return getErr
-			}
-			a.restoreSession(kind, targetID, trimRestoreMessages(logs, a.bot.GetSelfID(), a.contextWindow(), session.textScale()))
-		}
+		// 工作集只从 transcript/checkpoint 恢复；原文通过历史工具按需读取
 		return nil
 	}
 
@@ -134,7 +138,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64) error {
 		if entry.EntryKind == "agent_message" {
 			var payload schema.AgenticMessage
 			if sonic.Unmarshal(entry.Payload, &payload) == nil {
-				session.RestorePendingAgentMessage(&payload, entry.ID)
+				session.RestorePendingAgentMessage(&payload, entry.ID, payloadWake(&payload), payloadAllowSleep(&payload))
 			}
 			continue
 		}
@@ -247,110 +251,25 @@ func valueOrZero(value *uint64) uint64 {
 	return *value
 }
 
-// restoreSession 在缺少工作集时把近期原文接成可见工作集，不伪造工具轨迹
-func (a *Agent) restoreSession(kind string, targetID int64, logs []memory.MessageLog) {
-	if len(logs) == 0 {
-		return
+// payloadAllowSleep 读取“允许在睡眠中启动”的持久标记，缺省不允许
+func payloadAllowSleep(payload *schema.AgenticMessage) bool {
+	if payload == nil || payload.Extra == nil {
+		return false
 	}
-	session := a.sessions.get(kind, targetID)
-	session.ClearTokenBase()
-	if latest, timeErr := a.memory.LatestMessageTime(a.ctx, kind, targetID, a.bot.GetSelfID()); timeErr == nil && !latest.IsZero() {
-		session.SetLastActivity(latest)
-	}
-	seeds := make([]memory.TranscriptSeed, 0, len(logs))
-	users := map[uint]*sessionUser{}
-	selfID := a.bot.GetSelfID()
-	for _, log := range logs {
-		var payloadMessage *schema.AgenticMessage
-		if log.UserID == selfID {
-			payloadMessage = assistantHistoryMessage(log)
-		} else {
-			msg := a.conversationMessageFromLog(log)
-			payloadMessage = msgToPayload(msg)
-			if payloadMessage == nil {
-				continue
-			}
-			session.mu.Lock()
-			user := session.newUserLocked(msg, log.ID, log.MediaRefs)
-			session.mu.Unlock()
-			payloadMessage = user.Msg
-			users[log.ID] = user
-		}
-		payload, err := sonic.Marshal(payloadMessage)
-		if err != nil {
-			continue
-		}
-		entryKind := "user"
-		if log.UserID == selfID {
-			entryKind = "assistant"
-		}
-		seeds = append(seeds, memory.TranscriptSeed{EntryKind: entryKind, MessageLogID: log.ID, Payload: payload, CreatedAt: log.MessageTime})
-	}
-	entries, created, err := a.memory.SeedTranscriptIfEmpty(a.ctx, kind, targetID, seeds)
-	if err != nil || !created {
-		return
-	}
-	for _, entry := range entries {
-		if entry.EntryKind == "user" {
-			var logID uint
-			if entry.MessageLogID != nil {
-				logID = *entry.MessageLogID
-			}
-			user := users[logID]
-			if user == nil {
-				continue
-			}
-			user.TranscriptID = entry.ID
-			session.mu.Lock()
-			session.seen = append(session.seen, sessionEntry{user: user, msg: user.Msg, transcriptID: entry.ID, visibleSeq: valueOrZero(entry.VisibleSeq)})
-			session.mu.Unlock()
-			continue
-		}
-		var message schema.AgenticMessage
-		if sonic.Unmarshal(entry.Payload, &message) == nil {
-			session.AppendSeenMessage(&message, entry.ID, valueOrZero(entry.VisibleSeq))
-		}
-	}
+	value, ok := payload.Extra["allow_asleep"].(bool)
+	return ok && value
 }
 
-// trimRestoreMessages 首次升级时只接续预算内的近期原文，优先保留最新消息
-func trimRestoreMessages(logs []memory.MessageLog, selfID int64, window int, scale float64) []memory.MessageLog {
-	if len(logs) == 0 {
-		return logs
+// payloadWake 读取内部消息持久化的唤醒标记，缺省按需要处理
+func payloadWake(payload *schema.AgenticMessage) bool {
+	if payload == nil || payload.Extra == nil {
+		return true
 	}
-	cfg := config.Snapshot()
-	if window <= 0 || cfg.Compactor.RecentTailRatio <= 0 {
-		return logs
+	value, ok := payload.Extra["wake"].(bool)
+	if !ok {
+		return true
 	}
-	budget := int(float64(window) * cfg.Compactor.RecentTailRatio)
-	if budget <= 0 {
-		return logs
-	}
-	keepFrom := len(logs)
-	total := 0
-	for i := len(logs) - 1; i >= 0; i-- {
-		var payload *schema.AgenticMessage
-		if logs[i].UserID == selfID {
-			payload = assistantHistoryMessage(logs[i])
-		} else {
-			payload = msgToPayload(messageLogToSessionMessage(logs[i]))
-		}
-		cost := messageTokensScaled(payload, scale)
-		if keepFrom < len(logs) && total+cost > budget {
-			break
-		}
-		total += cost
-		keepFrom = i
-	}
-	return logs[keepFrom:]
-}
-
-func assistantHistoryMessage(log memory.MessageLog) *schema.AgenticMessage {
-	text := strings.TrimSpace(log.DisplayContent)
-	if text == "" {
-		text = strings.TrimSpace(log.TextContent)
-	}
-	return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{{Type: schema.ContentBlockTypeAssistantGenText, AssistantGenText: &schema.AssistantGenText{Text: text}}}}
+	return value
 }
 
 func msgToPayload(msg *onebot.ConversationMessage) *schema.AgenticMessage {
@@ -391,6 +310,7 @@ func messageLogToSessionMessage(log memory.MessageLog) *onebot.ConversationMessa
 		Nickname:         log.Nickname,
 		Content:          log.TextContent,
 		FinalContent:     log.DisplayContent,
+		Files:            log.FileRefs,
 		IsMentioned:      log.IsMentioned,
 		Time:             log.MessageTime,
 		Reply:            reply,

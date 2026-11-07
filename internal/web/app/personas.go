@@ -13,6 +13,7 @@ import (
 const (
 	personaCardLimit = 10000
 	personaSimLimit  = 5000
+	personaLifeLimit = 12000
 )
 
 func personaSummary(preset memory.PersonaPreset) personaSummaryDTO {
@@ -25,6 +26,7 @@ func personaSummary(preset memory.PersonaPreset) personaSummaryDTO {
 		Version:     preset.Version,
 		CardChars:   len([]rune(preset.PersonaCard)),
 		SimChars:    len([]rune(preset.Simulation)),
+		LifeChars:   len([]rune(preset.LifePrompt)),
 		UpdatedAt:   preset.UpdatedAt,
 	}
 }
@@ -34,6 +36,7 @@ func personaDetail(preset memory.PersonaPreset) personaDetailDTO {
 		personaSummaryDTO: personaSummary(preset),
 		PersonaCard:       preset.PersonaCard,
 		SimulationPrompt:  preset.Simulation,
+		LifePrompt:        preset.LifePrompt,
 	}
 }
 
@@ -54,10 +57,11 @@ func (a *App) handlePersonas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handlePersonaTemplate(w http.ResponseWriter, r *http.Request) {
-	card, simulation := config.BuiltinPersonaTexts()
+	card, simulation, lifePrompt := config.BuiltinPersonaTexts()
 	respondData(w, http.StatusOK, personaTemplateResponse{
 		PersonaCard:      card,
 		SimulationPrompt: simulation,
+		LifePrompt:       lifePrompt,
 	}, nil)
 }
 
@@ -84,6 +88,7 @@ type personaInput struct {
 	Description      string `json:"description"`
 	PersonaCard      string `json:"persona_card"`
 	SimulationPrompt string `json:"simulation_prompt"`
+	LifePrompt       string `json:"life_prompt"`
 	Version          int64  `json:"version"`
 }
 
@@ -97,8 +102,12 @@ func (a *App) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "预设名称不能为空。")
 		return
 	}
-	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" {
-		a.failBadRequest(w, "人格卡与仿真提示词都不能为空。")
+	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" || strings.TrimSpace(body.LifePrompt) == "" {
+		a.failBadRequest(w, "人格卡、仿真提示词与生活职责都不能为空。")
+		return
+	}
+	if len([]rune(body.PersonaCard)) > personaCardLimit || len([]rune(body.SimulationPrompt)) > personaSimLimit || len([]rune(body.LifePrompt)) > personaLifeLimit {
+		a.failBadRequest(w, "人格预设内容超过长度上限。")
 		return
 	}
 	created, err := a.memMgr.CreatePersonaPreset(r.Context(), memory.PersonaPreset{
@@ -106,6 +115,7 @@ func (a *App) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 		Description: strings.TrimSpace(body.Description),
 		PersonaCard: body.PersonaCard,
 		Simulation:  body.SimulationPrompt,
+		LifePrompt:  body.LifePrompt,
 	})
 	if err != nil {
 		a.failFromError(w, r, err)
@@ -129,11 +139,15 @@ func (a *App) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "预设名称不能为空。")
 		return
 	}
-	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" {
-		a.failBadRequest(w, "人格卡与仿真提示词都不能为空。")
+	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" || strings.TrimSpace(body.LifePrompt) == "" {
+		a.failBadRequest(w, "人格卡、仿真提示词与生活职责都不能为空。")
 		return
 	}
-	if err := a.memMgr.UpdatePersonaPreset(r.Context(), id, strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), body.PersonaCard, body.SimulationPrompt, body.Version); err != nil {
+	if len([]rune(body.PersonaCard)) > personaCardLimit || len([]rune(body.SimulationPrompt)) > personaSimLimit || len([]rune(body.LifePrompt)) > personaLifeLimit {
+		a.failBadRequest(w, "人格预设内容超过长度上限。")
+		return
+	}
+	if err := a.memMgr.UpdatePersonaPreset(r.Context(), id, strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), body.PersonaCard, body.SimulationPrompt, body.LifePrompt, body.Version); err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
@@ -195,8 +209,8 @@ func (a *App) reloadPersonaWarning() *warningPayload {
 	if err := config.Reload(); err != nil {
 		return &warningPayload{Code: "runtime_reload_failed"}
 	}
-	if a.agentReady() {
-		if err := a.mumuAgent.Reload(); err != nil {
+	if agent := a.currentAgent(); agent != nil && agent.Ready() {
+		if err := agent.Reload(); err != nil {
 			return &warningPayload{Code: "runtime_reload_failed"}
 		}
 	}

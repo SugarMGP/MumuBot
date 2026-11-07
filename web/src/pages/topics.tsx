@@ -52,10 +52,10 @@ export default function TopicsPage() {
   };
 
   return (
-    <div className="admin-memory-page space-y-6">
+    <div className="space-y-6">
       <PageHeader title={t("topics.title")} subtitle={t("topics.subtitle")} />
 
-      <FilterPanel title={t("common.filter")}>
+      <FilterPanel>
         <form
           className="grid grid-cols-[minmax(170px,240px)_160px_minmax(0,1fr)_auto] items-end gap-3"
           onSubmit={submit}
@@ -101,6 +101,7 @@ export default function TopicsPage() {
               <option value="">{t("topics.filters.allStatuses")}</option>
               <option value="active">{t("topics.status.active")}</option>
               <option value="dormant">{t("topics.status.dormant")}</option>
+              <option value="forgotten">{t("topics.status.forgotten")}</option>
             </NativeSelect>
           </Field>
           <Field label={t("topics.filters.keyword")}>
@@ -128,12 +129,16 @@ export default function TopicsPage() {
               key={item.id}
               to={`/admin/topics/${item.id}`}
               state={{ from: location.pathname + location.search }}
-              className="admin-record-card rounded-xl border border-border bg-card p-5 pl-6 shadow-card transition-colors"
-              data-tone={item.status === "active" ? "success" : undefined}
+              className="admin-record-card admin-card-pad rounded-xl border border-border bg-card pl-6 shadow-card transition-[border-color,box-shadow,background-color] duration-150"
+              data-tone={
+                item.status === "active" && !item.forgotten_at
+                  ? "success"
+                  : undefined
+              }
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <h2 className="line-clamp-2 text-lg font-semibold leading-6 text-foreground">
+                  <h2 className="admin-card-title line-clamp-2 leading-6 text-foreground">
                     {item.title || t("topics.untitled", { id: item.id })}
                   </h2>
                   <p className="admin-number mt-1 text-xs text-muted-foreground">
@@ -148,13 +153,21 @@ export default function TopicsPage() {
                   </p>
                 </div>
                 <Badge
-                  variant={item.status === "active" ? "success" : "ghost"}
+                  variant={
+                    item.forgotten_at
+                      ? "destructive"
+                      : item.status === "active"
+                        ? "success"
+                        : "ghost"
+                  }
                   className="shrink-0"
                 >
-                  {enumLabel(t, "topicStatus", item.status)}
+                  {item.forgotten_at
+                    ? t("topics.status.forgotten")
+                    : enumLabel(t, "topicStatus", item.status)}
                 </Badge>
               </div>
-              <p className="mt-3 line-clamp-3 text-sm leading-7 text-foreground/75">
+              <p className="admin-body-text mt-3 line-clamp-3 text-foreground/75">
                 {item.gist || t("topics.noSummary")}
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -163,14 +176,28 @@ export default function TopicsPage() {
                 ))}
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
-                <span>
-                  {formatDateTime(item.updated_at)}
-                  {" · "}
-                  {t("topics.card.messages", { count: item.message_count })}
-                  {" · "}
-                  {t("topics.card.anchors", { count: item.anchor_count })}
-                  {" · "}
-                  {t("topics.card.openLoops", { count: item.open_loop_count })}
+                <span className="flex flex-col gap-0.5">
+                  <span>
+                    {formatDateTime(item.updated_at)}
+                    {" · "}
+                    {t("topics.card.messages", { count: item.message_count })}
+                    {" · "}
+                    {t("topics.card.anchors", { count: item.anchor_count })}
+                    {" · "}
+                    {t("topics.card.openLoops", { count: item.open_loop_count })}
+                  </span>
+                  <span>
+                    {item.forgotten_at
+                      ? t("topics.card.forgotten")
+                      : t("topics.card.forgetAt", {
+                          time: formatDateTime(item.forget_at),
+                        })}
+                    {" · "}
+                    {t("topics.card.sources", {
+                      available: item.source_available,
+                      total: item.source_total,
+                    })}
+                  </span>
                 </span>
                 <span className="font-medium text-primary">
                   {t("topics.card.detail")} →

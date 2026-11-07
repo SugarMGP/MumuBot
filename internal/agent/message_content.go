@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/refstore"
 
 	"go.uber.org/zap"
 )
@@ -30,14 +33,8 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 	if err := a.resolveReplyInfo(ctx, msg); err != nil {
 		zap.L().Debug("解析回复消息失败", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(err))
 	}
+	a.ensureIncomingFileRefs(msg)
 	pieces, pending, forwards := a.parseMessageContent(ctx, msg)
-	if generation := a.currentGeneration(); generation != nil {
-		for _, name := range generation.toolNames {
-			for index := range pieces {
-				pieces[index].text = strings.ReplaceAll(pieces[index].text, name, "\"危险指令，已屏蔽\"")
-			}
-		}
-	}
 	refs := a.cacheMedia(ctx, pending)
 	a.markCollectedStickers(ctx, refs)
 	session := a.sessions.get(msg.ConversationKind, msg.TargetID)
@@ -47,8 +44,83 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 		}
 		refs[index].Short = session.MediaShortHash(refs[index])
 	}
+	a.ensureIncomingImageRefs(ctx, refs)
 	msg.FinalContent = renderContentPieces(pieces, refs)
 	return refs, forwards
+}
+
+// ensureIncomingFileRefs 给真实 QQ 文件登记 pending file_ref，不自动下载
+func (a *Agent) ensureIncomingFileRefs(msg *onebot.ConversationMessage) {
+	if a == nil || a.memory == nil || msg == nil {
+		return
+	}
+	store := a.memory.RefStore()
+	if store == nil {
+		return
+	}
+	for index := range msg.Files {
+		file := &msg.Files[index]
+		if file.SnapshotRef != "" || strings.TrimSpace(file.FileID) == "" {
+			continue
+		}
+		size := file.Size
+		ref, err := store.CreatePending(file.Name, refstore.Locator{
+			ConversationKind: msg.ConversationKind, TargetID: msg.TargetID,
+			FileID: file.FileID, FileHash: file.FileHash, BusID: file.BusID,
+			Name: file.Name, Size: size,
+		})
+		if err != nil {
+			zap.L().Warn("登记 QQ 文件引用失败", zap.Int64("message_id", msg.MessageID), zap.Error(err))
+			continue
+		}
+		file.SnapshotRef = ref.FileRef()
+	}
+}
+
+// ensureIncomingImageRefs 把已缓存的当前展示图片固定成 image_ref
+func (a *Agent) ensureIncomingImageRefs(ctx context.Context, refs []media.Ref) {
+	if a == nil || a.memory == nil {
+		return
+	}
+	store := a.memory.RefStore()
+	if store == nil {
+		return
+	}
+	for index := range refs {
+		item := &refs[index]
+		if item.Path == "" || item.ImageRef != "" {
+			continue
+		}
+		name := item.Short + ".webp"
+		if item.Sticker {
+			name = item.Short + filepath.Ext(item.Path)
+		}
+		ref, err := store.CreateReadyFromFile(ctx, name, item.Path, 10*1024*1024, nil)
+		if err != nil {
+			zap.L().Warn("保存图片引用失败", zap.String("short", item.Short), zap.Error(err))
+			continue
+		}
+		item.ImageRef = ref.ImageRef()
+		if item.Sticker {
+			if err := store.MarkSticker(ref.ImageRef()); err != nil {
+				zap.L().Warn("标记表情包引用失败", zap.String("image_ref", ref.ImageRef()), zap.Error(err))
+			}
+		}
+	}
+}
+
+// formatFileSize 生成文件正文里的可读大小
+func formatFileSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit && exp < 3; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
 // renderContentPieces 渲染展示正文，媒体占位带上会话内短哈希
@@ -74,6 +146,10 @@ func renderContentPieces(pieces []contentPiece, refs []media.Ref) string {
 				continue
 			}
 			b.WriteString(" [表情包:" + ref.Short + "]")
+			continue
+		}
+		if ref.ImageRef != "" {
+			b.WriteString(" [图片:" + ref.ImageRef + "]")
 			continue
 		}
 		b.WriteString(" [图片:" + ref.Short + "]")
@@ -165,10 +241,24 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 		case "record":
 			pieces = append(pieces, contentPiece{text: " [语音]", mediaIdx: -1})
 		case "file":
-			if part.Index < 0 || part.Index >= len(msg.FileNames) {
+			if part.Index < 0 || part.Index >= len(msg.Files) {
 				continue
 			}
-			pieces = append(pieces, contentPiece{text: " [文件]", mediaIdx: -1})
+			file := msg.Files[part.Index]
+			name := file.Name
+			if name == "" {
+				name = "未命名文件"
+			}
+			text := " [文件:" + name
+			if file.SnapshotRef != "" {
+				text += "，file_ref=" + file.SnapshotRef + "（待取）"
+			}
+			if file.Size != nil && *file.Size > 0 {
+				text += "，" + formatFileSize(*file.Size)
+			}
+			text += "，消息 " + strconv.FormatInt(msg.MessageID, 10)
+			text += "，附件下标 " + strconv.Itoa(part.Index) + "]"
+			pieces = append(pieces, contentPiece{text: text, mediaIdx: -1})
 		case "card":
 			if part.Index < 0 || part.Index >= len(msg.Cards) {
 				continue

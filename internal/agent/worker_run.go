@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
@@ -18,9 +19,18 @@ func (a *Agent) thinkWorker(workerID int64) {
 	}
 	defer generation.wg.Done()
 	id := uint(workerID)
+	target, err := a.memory.GetConversationTarget(a.ctx, memory.ConversationKindWorker, workerID)
+	if err != nil || target == nil || !target.Active {
+		return
+	}
 	session := a.sessions.get(memory.ConversationKindWorker, workerID)
 	session.maintenanceMu.Lock()
 	defer session.maintenanceMu.Unlock()
+	state, stateErr := newRunState("worker")
+	if stateErr != nil {
+		_ = a.memory.SetWorkerStatus(a.ctx, id, memory.WorkerStatusFailed, stateErr.Error(), "")
+		return
+	}
 
 	for {
 		pending := session.PendingMessages()
@@ -34,11 +44,25 @@ func (a *Agent) thinkWorker(workerID int64) {
 			cancel()
 			return
 		}
-		ctx := withGeneration(runCtx, generation)
+		ctx := withRunState(runCtx, state)
+		ctx = withGeneration(ctx, generation)
 		ctx = a.buildWorkerToolContext(ctx, workerID, session)
 		tc := tools.GetToolContext(ctx)
 		tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
+		if state.steps.Remaining() <= 0 {
+			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, fmt.Errorf("本轮步数用完"))
+			a.finishWorkerRun(id, epoch)
+			cancel()
+			return
+		}
+		workerAgent, agentErr := a.newWorkerAgent(ctx, generation, generation.workerTools, state.steps.Remaining())
+		if agentErr != nil {
+			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, agentErr)
+			a.finishWorkerRun(id, epoch)
+			cancel()
+			return
+		}
 		messages, err := a.assembleWorkerMessages(ctx, session)
 		if err != nil {
 			if a.workerRunCurrent(id, epoch) {
@@ -48,19 +72,31 @@ func (a *Agent) thinkWorker(workerID int64) {
 			cancel()
 			return
 		}
-		runErr := a.runAgent(ctx, generation.workerAgent, messages)
+		runErr := a.runAgent(ctx, workerAgent, messages)
 		if !a.workerRunCurrent(id, epoch) {
 			a.finishWorkerRun(id, epoch)
 			cancel()
 			return
 		}
+		if a.workerRunCanceled(id, epoch) {
+			a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.modelName)
+			a.finishWorkerRun(id, epoch)
+			cancel()
+			return
+		}
 		if runErr != nil {
+			if a.workerRunCanceled(id, epoch) {
+				a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.modelName)
+				a.finishWorkerRun(id, epoch)
+				cancel()
+				return
+			}
 			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, runErr)
 			a.finishWorkerRun(id, epoch)
 			cancel()
 			return
 		}
-		if len(session.PendingMessages()) == 0 {
+		if !hasActionableMessage(session.PendingMessages()) {
 			a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.modelName)
 			a.finishWorkerRun(id, epoch)
 			cancel()
@@ -78,6 +114,10 @@ func (a *Agent) scanWorkerThinks() {
 		return
 	}
 	for _, worker := range workers {
+		// failed/cancelled 不因周期扫描自行重跑，等 life 明确投来新指令
+		if worker.Status == memory.WorkerStatusFailed || worker.Status == memory.WorkerStatusCancelled {
+			continue
+		}
 		target, err := a.memory.GetConversationTarget(a.ctx, memory.ConversationKindWorker, int64(worker.ID))
 		if err != nil || !target.Active {
 			continue

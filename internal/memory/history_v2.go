@@ -17,7 +17,7 @@ type HistoryQueryV2 struct {
 	ExcludeKeywords  []string
 	From             *time.Time
 	To               *time.Time
-	MaxMessageLogID  uint
+	MaxMessageLogID  *uint
 	Cursor           string
 	Limit            int
 }
@@ -31,7 +31,7 @@ type HistoryFilter struct {
 	ExcludeKeywords  []string   `json:"exclude_keywords"`
 	From             *time.Time `json:"from,omitempty"`
 	To               *time.Time `json:"to,omitempty"`
-	MaxMessageLogID  uint       `json:"max_message_log_id,omitempty"`
+	MaxMessageLogID  *uint      `json:"max_message_log_id,omitempty"`
 }
 
 type HistoryPage struct {
@@ -55,8 +55,9 @@ func historyCursorCondition(scoreExpr string, scoreArgs []any, cursor PageCursor
 	}
 	args := make([]any, 0, len(scoreArgs)*2+3)
 	args = append(args, scoreArgs...)
+	args = append(args, cursor.LastKey)
 	args = append(args, scoreArgs...)
-	args = append(args, cursor.LastKey, cursor.LastKey, cursor.LastID)
+	args = append(args, cursor.LastKey, cursor.LastID)
 	return "(" + scoreExpr + " < ? OR (" + scoreExpr + " = ? AND ml.id < ?))", args
 }
 
@@ -75,11 +76,18 @@ func (m *Manager) SearchHistoryV2(ctx context.Context, input HistoryQueryV2) (Hi
 	if err != nil {
 		return HistoryPage{}, err
 	}
+	cursorFilter := filter
+	cursorFilter.MaxMessageLogID = nil
 	if cursor.FilterHash == "" {
-		cursor.FilterHash = CursorFilterHash(filter)
+		cursor.FilterHash = CursorFilterHash(cursorFilter)
 	}
-	if err := ValidateCursorFilter(cursor, filter); err != nil {
+	if err := ValidateCursorFilter(cursor, cursorFilter); err != nil {
 		return HistoryPage{}, err
+	}
+	effectiveMax := input.MaxMessageLogID
+	if cursor.MaxMessageLogID > 0 {
+		value := uint(cursor.MaxMessageLogID)
+		effectiveMax = &value
 	}
 	q := m.db.WithContext(ctx).Table("message_logs ml")
 	if filter.ConversationKind != "" {
@@ -95,10 +103,10 @@ func (m *Manager) SearchHistoryV2(ctx context.Context, input HistoryQueryV2) (Hi
 		q = q.Where("ml.message_time>=?", *filter.From)
 	}
 	if filter.To != nil {
-		q = q.Where("ml.message_time<=?", *filter.To)
+		q = q.Where("ml.message_time<?", *filter.To)
 	}
-	if filter.MaxMessageLogID > 0 {
-		q = q.Where("ml.id<=?", filter.MaxMessageLogID)
+	if effectiveMax != nil {
+		q = q.Where("ml.id<=?", *effectiveMax)
 	}
 
 	keywords := NormalizeKeywords(input.Keywords)
@@ -109,7 +117,7 @@ func (m *Manager) SearchHistoryV2(ctx context.Context, input HistoryQueryV2) (Hi
 		parts := make([]string, 0, len(keywords))
 		args := make([]any, 0, len(keywords)*2)
 		for _, keyword := range keywords {
-			pattern := "%" + strings.ToLower(keyword) + "%"
+			pattern := LiteralContainsPattern(strings.ToLower(keyword))
 			parts = append(parts, "(lower(ml.text_content) LIKE ? OR lower(ml.display_content) LIKE ?)")
 			args = append(args, pattern, pattern)
 			scoreParts = append(scoreParts, historyKeywordScoreExpr())
@@ -122,7 +130,7 @@ func (m *Manager) SearchHistoryV2(ctx context.Context, input HistoryQueryV2) (Hi
 		q = q.Where("("+strings.Join(parts, join)+")", args...)
 	}
 	for _, keyword := range excludes {
-		pattern := "%" + strings.ToLower(keyword) + "%"
+		pattern := LiteralContainsPattern(strings.ToLower(keyword))
 		q = q.Where("NOT (lower(ml.text_content) LIKE ? OR lower(ml.display_content) LIKE ?)", pattern, pattern)
 	}
 
@@ -160,7 +168,15 @@ func (m *Manager) SearchHistoryV2(ctx context.Context, input HistoryQueryV2) (Hi
 	page := HistoryPage{Items: items, HasMore: hasMore}
 	if len(rows) > 0 {
 		last := rows[len(rows)-1]
-		page.NextCursor = NewPageCursor("similarity", last.SearchScore, time.Time{}, last.ID, time.Time{}, filter)
+		maxID := uint(0)
+		if effectiveMax != nil {
+			maxID = *effectiveMax
+		}
+		page.NextCursor = EncodeCursor(PageCursor{
+			Version: 1, Sort: "similarity", LastKey: last.SearchScore,
+			LastID: uint64(last.ID), MaxMessageLogID: uint64(maxID),
+			FilterHash: CursorFilterHash(cursorFilter),
+		})
 	}
 	return page, nil
 }
@@ -170,17 +186,23 @@ type HistoryRange struct {
 	TargetID         int64
 	AroundMessageID  int64
 	TopicID          uint
-	MaxMessageLogID  uint
+	MaxMessageLogID  *uint
 	Before           int
 	After            int
 }
 
-func (m *Manager) ReadHistoryRange(ctx context.Context, input HistoryRange) ([]MessageLog, error) {
+type HistoryRangeResult struct {
+	Messages        []MessageLog
+	SourceTotal     int
+	SourceAvailable int
+}
+
+func (m *Manager) ReadHistoryRange(ctx context.Context, input HistoryRange) (HistoryRangeResult, error) {
 	if input.ConversationKind == "" || input.TargetID <= 0 {
-		return nil, fmt.Errorf("历史读取需要会话来源")
+		return HistoryRangeResult{}, fmt.Errorf("历史读取需要会话来源")
 	}
 	if input.AroundMessageID == 0 && input.TopicID == 0 {
-		return nil, fmt.Errorf("历史读取需要消息或话题")
+		return HistoryRangeResult{}, fmt.Errorf("历史读取需要消息或话题")
 	}
 	before, after := input.Before, input.After
 	if before <= 0 {
@@ -199,41 +221,43 @@ func (m *Manager) ReadHistoryRange(ctx context.Context, input HistoryRange) ([]M
 	if input.AroundMessageID != 0 {
 		var anchor MessageLog
 		if err := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", input.ConversationKind, input.TargetID, input.AroundMessageID).Take(&anchor).Error; err != nil {
-			return nil, err
+			return HistoryRangeResult{}, err
 		}
-		if input.MaxMessageLogID > 0 && anchor.ID > input.MaxMessageLogID {
-			return nil, fmt.Errorf("消息超出当前读取快照")
+		if input.MaxMessageLogID != nil && anchor.ID > *input.MaxMessageLogID {
+			return HistoryRangeResult{}, fmt.Errorf("消息超出当前读取快照")
 		}
 		var beforeRows []MessageLog
 		if before > 0 {
 			qBefore := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND id<?", input.ConversationKind, input.TargetID, anchor.ID)
-			if input.MaxMessageLogID > 0 {
-				qBefore = qBefore.Where("id<=?", input.MaxMessageLogID)
+			if input.MaxMessageLogID != nil {
+				qBefore = qBefore.Where("id<=?", *input.MaxMessageLogID)
 			}
 			if err := qBefore.Order("id DESC").Limit(before).Find(&beforeRows).Error; err != nil {
-				return nil, err
+				return HistoryRangeResult{}, err
 			}
 			slices.Reverse(beforeRows)
 		}
 		var afterRows []MessageLog
 		if after > 0 {
 			qAfter := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=? AND id>?", input.ConversationKind, input.TargetID, anchor.ID)
-			if input.MaxMessageLogID > 0 {
-				qAfter = qAfter.Where("id<=?", input.MaxMessageLogID)
+			if input.MaxMessageLogID != nil {
+				qAfter = qAfter.Where("id<=?", *input.MaxMessageLogID)
 			}
 			if err := qAfter.Order("id ASC").Limit(after).Find(&afterRows).Error; err != nil {
-				return nil, err
+				return HistoryRangeResult{}, err
 			}
 		}
 		rows = append(rows, beforeRows...)
 		rows = append(rows, anchor)
 		rows = append(rows, afterRows...)
-		return rows, nil
+		return HistoryRangeResult{Messages: rows}, nil
 	}
 
 	var topic TopicThreadRow
-	if err := m.db.WithContext(ctx).Where("id=? AND conversation_kind=? AND target_id=?", input.TopicID, input.ConversationKind, input.TargetID).Take(&topic).Error; err != nil {
-		return nil, fmt.Errorf("话题不属于指定会话")
+	now := time.Now()
+	if err := m.db.WithContext(ctx).Where("id=? AND conversation_kind=? AND target_id=? AND forgotten_at IS NULL AND forget_at>?",
+		input.TopicID, input.ConversationKind, input.TargetID, now).Take(&topic).Error; err != nil {
+		return HistoryRangeResult{}, fmt.Errorf("话题已遗忘或不属于指定会话")
 	}
 	qTopic := m.db.WithContext(ctx).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID)
 	qTopic = qTopic.Where(`id IN (
@@ -242,11 +266,24 @@ func (m *Manager) ReadHistoryRange(ctx context.Context, input HistoryRange) ([]M
 		SELECT src.message_log_id FROM topic_summary_sources src
 		JOIN topic_summaries ts ON ts.id=src.summary_id WHERE ts.topic_id=?
 	)`, input.TopicID, input.TopicID)
-	if input.MaxMessageLogID > 0 {
-		qTopic = qTopic.Where("id<=?", input.MaxMessageLogID)
+	if input.MaxMessageLogID != nil {
+		qTopic = qTopic.Where("id<=?", *input.MaxMessageLogID)
 	}
 	if err := qTopic.Order("id ASC").Limit(before + after + 1).Find(&rows).Error; err != nil {
-		return nil, err
+		return HistoryRangeResult{}, err
 	}
-	return rows, nil
+	var stats struct {
+		Total     int
+		Available int
+	}
+	if err := m.db.WithContext(ctx).Raw(`
+		SELECT COUNT(DISTINCT src.message_log_id) AS total,
+			COUNT(DISTINCT ml.id) AS available
+		FROM topic_summary_sources src
+		JOIN topic_summaries ts ON ts.id=src.summary_id
+		LEFT JOIN message_logs ml ON ml.id=src.message_log_id
+		WHERE ts.topic_id=?`, input.TopicID).Scan(&stats).Error; err != nil {
+		return HistoryRangeResult{}, err
+	}
+	return HistoryRangeResult{Messages: rows, SourceTotal: stats.Total, SourceAvailable: stats.Available}, nil
 }

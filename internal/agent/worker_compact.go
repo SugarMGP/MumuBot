@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/memory"
+	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
@@ -16,11 +15,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func (a *Agent) newWorkerSummarizer(generation *Generation) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
+func (a *Agent) newWorkerSummarizer(ctx context.Context, generation *Generation) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
 	if generation == nil || generation.contextWindow <= 0 {
 		return nil, nil
 	}
-	ratio := config.Snapshot().Compactor.TriggerRatio
+	ratio := configFor(ctx).Compactor.TriggerRatio
 	if ratio <= 0 {
 		return nil, nil
 	}
@@ -48,27 +47,11 @@ func (a *Agent) newWorkerSummarizer(generation *Generation) (adk.TypedChatModelA
 }
 
 func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *Session, before, after adk.TypedChatModelAgentState[*schema.AgenticMessage]) error {
-	ids := make([]uint, 0, len(before.Messages))
+	ids := transcriptIDs(before.Messages)
 	maxID := uint(0)
-	for _, message := range before.Messages {
-		id := workerTranscriptID(message)
-		if id == 0 {
-			continue
-		}
-		ids = append(ids, id)
+	for _, id := range ids {
 		if id > maxID {
 			maxID = id
-		}
-	}
-	if tc := tools.GetToolContext(ctx); tc != nil {
-		for _, id := range tc.VisibleTranscriptIDs {
-			if id == 0 {
-				continue
-			}
-			ids = append(ids, id)
-			if id > maxID {
-				maxID = id
-			}
 		}
 	}
 	row, err := a.memory.GetWorkerSessionByID(ctx, workerID)
@@ -83,25 +66,36 @@ func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *S
 	if err != nil {
 		return err
 	}
-	if err := a.memory.SaveWorkerContext(ctx, workerID, json.RawMessage(payload), through); err != nil {
+	seqs, err := a.memory.CommitWorkerCheckpoint(ctx, workerID, json.RawMessage(payload), through, ids)
+	if err != nil {
 		return err
 	}
-	if len(ids) > 0 {
-		seqs, err := a.memory.MarkVisible(ctx, memory.ConversationKindWorker, int64(workerID), ids)
-		if err != nil {
-			return err
-		}
-		session.ApplyVisibleSeqs(seqs)
-	}
+	session.ApplyVisibleSeqs(seqs)
+	session.ApplyCheckpoint(through)
 	zap.L().Info("worker 上下文已压缩", zap.Uint("worker_id", workerID), zap.Uint("through_id", through))
 	return nil
 }
 
-func workerTranscriptID(message *schema.AgenticMessage) uint {
+// transcriptIDs 按消息在请求中的真实顺序收集已持久化行号，供成功后分配 visible_seq
+func transcriptIDs(messages []*schema.AgenticMessage) []uint {
+	ids := make([]uint, 0, len(messages))
+	seen := map[uint]bool{}
+	for _, message := range messages {
+		id := transcriptEntryID(message)
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func transcriptEntryID(message *schema.AgenticMessage) uint {
 	if message == nil || message.Extra == nil {
 		return 0
 	}
-	switch value := message.Extra["worker_transcript_id"].(type) {
+	switch value := message.Extra["transcript_id"].(type) {
 	case uint:
 		return value
 	case uint64:
@@ -120,14 +114,14 @@ func workerTranscriptID(message *schema.AgenticMessage) uint {
 	}
 }
 
-func tagWorkerTranscriptID(message *schema.AgenticMessage, id uint) {
+func tagTranscriptEntryID(message *schema.AgenticMessage, id uint) {
 	if message == nil || id == 0 {
 		return
 	}
 	if message.Extra == nil {
 		message.Extra = map[string]any{}
 	}
-	message.Extra["worker_transcript_id"] = id
+	message.Extra["transcript_id"] = id
 }
 
 func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([]*schema.AgenticMessage, error) {
@@ -138,6 +132,10 @@ func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([
 	checkpoint := make([]*schema.AgenticMessage, 0)
 	through := row.ContextThroughID
 	hasCheckpoint := len(row.ContextSummary) > 0 && string(row.ContextSummary) != "[]"
+	if row.ContextStartID > 0 && through < row.ContextStartID {
+		hasCheckpoint = false
+		through = 0
+	}
 	if hasCheckpoint {
 		if err := sonic.Unmarshal(row.ContextSummary, &checkpoint); err != nil {
 			zap.L().Warn("解析 worker 摘要检查点失败，回退完整 transcript", zap.Uint("worker_id", row.ID), zap.Error(err))
@@ -147,7 +145,8 @@ func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([
 		}
 	}
 	if !hasCheckpoint {
-		if err := session.ensureGenerationHead(ctx, a.memory, workerInstruction, ""); err != nil {
+		workerPrompt := persona.Render(workerInstruction, persona.IdentityFromConfig(configFor(ctx).Identity))
+		if err := session.ensureGenerationHead(ctx, a.memory, workerPrompt, ""); err != nil {
 			return nil, err
 		}
 	}
@@ -157,7 +156,6 @@ func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([
 	session.mu.Unlock()
 
 	messages := make([]*schema.AgenticMessage, 0, len(checkpoint)+len(entries)+len(pending))
-	includedIDs := make([]uint, 0, len(entries)+len(pending))
 	if hasCheckpoint {
 		messages = append(messages, checkpoint...)
 	}
@@ -165,30 +163,29 @@ func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([
 		if entry.msg == nil {
 			continue
 		}
+		if row.ContextStartID > 0 && entry.transcriptID < row.ContextStartID {
+			continue
+		}
 		if hasCheckpoint && entry.transcriptID <= through {
 			continue
 		}
-		tagWorkerTranscriptID(entry.msg, entry.transcriptID)
-		if entry.transcriptID > 0 {
-			includedIDs = append(includedIDs, entry.transcriptID)
-		}
+		tagTranscriptEntryID(entry.msg, entry.transcriptID)
 		messages = append(messages, entry.msg)
 	}
 	for _, user := range pending {
 		if user == nil || user.Msg == nil {
 			continue
 		}
+		if row.ContextStartID > 0 && user.TranscriptID > 0 && user.TranscriptID < row.ContextStartID {
+			continue
+		}
 		if hasCheckpoint && user.TranscriptID > 0 && user.TranscriptID <= through {
 			continue
 		}
-		tagWorkerTranscriptID(user.Msg, user.TranscriptID)
-		if user.TranscriptID > 0 {
-			includedIDs = append(includedIDs, user.TranscriptID)
-		}
+		tagTranscriptEntryID(user.Msg, user.TranscriptID)
 		messages = append(messages, user.Msg)
 	}
 	if tc := tools.GetToolContext(ctx); tc != nil {
-		tc.VisibleTranscriptIDs = append([]uint(nil), includedIDs...)
 		if seq := maxPendingSeq(pending); seq > tc.InjectedArrivalSeq {
 			tc.InjectedArrivalSeq = seq
 		}

@@ -22,6 +22,7 @@ const (
 	kindPinnedMemory  = "pinned_memory"
 	kindGroupNote     = "group_note"
 	kindSystemNote    = "system_note"
+	kindLifeSummary   = "life_summary"
 
 	systemMessagePrefix = "[系统消息："
 )
@@ -73,7 +74,7 @@ func isHeadEntry(msg *schema.AgenticMessage) bool {
 	return headPriority(messageKind(msg)) >= 0
 }
 
-// orderEntries 把代头提到最前，其余保持原顺序
+// orderEntries 代头优先，其余按真实可见顺序排列，尚未可见的轨迹保持追加顺序放在末尾
 func orderEntries(entries []sessionEntry) []sessionEntry {
 	heads := make([]sessionEntry, 0, 4)
 	rest := make([]sessionEntry, 0, len(entries))
@@ -90,6 +91,13 @@ func orderEntries(entries []sessionEntry) []sessionEntry {
 			return left < right
 		}
 		return heads[i].transcriptID < heads[j].transcriptID
+	})
+	sort.SliceStable(rest, func(i, j int) bool {
+		left, right := rest[i].visibleSeq, rest[j].visibleSeq
+		if left == 0 || right == 0 {
+			return left != 0 && right == 0
+		}
+		return left < right
 	})
 	return append(heads, rest...)
 }
@@ -126,7 +134,17 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 	systemMsg.Extra = map[string]any{"kind": kindSystemPrompt}
 	specs = append(specs, headEntrySpec{kind: kindSystemPrompt, msg: systemMsg})
 	if s.kind == memory.ConversationKindWorker {
-		return s.appendHeadEntries(ctx, mem, specs)
+		_, err := s.appendHeadEntries(ctx, mem, specs)
+		return err
+	}
+	if s.kind == memory.ConversationKindLife {
+		// life 没有群说明和话题摘要，只带自己的置顶记忆
+		messages, err := buildLifeHead(ctx, mem, instruction)
+		if err != nil {
+			return err
+		}
+		_, err = s.appendHeadMessages(ctx, mem, messages)
+		return err
 	}
 	if text := strings.TrimSpace(groupExtra); text != "" {
 		noteMsg := schema.UserAgenticMessage(systemNote("群说明", text))
@@ -156,7 +174,84 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 		pinnedMsg.Extra = map[string]any{"kind": kindPinnedMemory}
 		specs = append(specs, headEntrySpec{kind: kindPinnedMemory, msg: pinnedMsg})
 	}
+	_, err = s.appendHeadEntries(ctx, mem, specs)
+	return err
+}
+
+// buildLifeHead 构造本代生活代头：人格 + 自己的置顶记忆，供首次装配和摘要换代共用
+func buildLifeHead(ctx context.Context, mem *memory.Manager, instruction string) ([]*schema.AgenticMessage, error) {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return nil, fmt.Errorf("人格预设为空")
+	}
+	system := schema.SystemAgenticMessage(instruction)
+	system.Extra = map[string]any{"kind": kindSystemPrompt}
+	messages := []*schema.AgenticMessage{system}
+	pinned, err := mem.PinnedMemoriesForSelf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if text := strings.TrimSpace(renderPinnedMemories(pinned)); text != "" {
+		pinnedMsg := schema.UserAgenticMessage(systemNote("长期记忆", text))
+		pinnedMsg.Extra = map[string]any{"kind": kindPinnedMemory}
+		messages = append(messages, pinnedMsg)
+	}
+	return messages, nil
+}
+
+// appendHeadMessages 把已有的代头消息原样写成 transcript 行，返回可标记 visible 的行号
+func (s *Session) appendHeadMessages(ctx context.Context, mem *memory.Manager, messages []*schema.AgenticMessage) ([]uint, error) {
+	specs := make([]headEntrySpec, 0, len(messages))
+	for _, msg := range messages {
+		kind := messageKind(msg)
+		if headPriority(kind) < 0 {
+			return nil, fmt.Errorf("无效的代头类型")
+		}
+		specs = append(specs, headEntrySpec{kind: kind, msg: msg})
+	}
 	return s.appendHeadEntries(ctx, mem, specs)
+}
+
+// headEntries 把代头消息编码成待写入的 transcript 行
+func headEntries(messages []*schema.AgenticMessage) ([]memory.HeadEntry, error) {
+	entries := make([]memory.HeadEntry, 0, len(messages))
+	for _, msg := range messages {
+		kind := messageKind(msg)
+		if headPriority(kind) < 0 {
+			return nil, fmt.Errorf("无效的代头类型")
+		}
+		payload, err := sonic.Marshal(msg)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, memory.HeadEntry{Kind: kind, Payload: payload})
+	}
+	return entries, nil
+}
+
+// attachHeadMessages 给事务里已写入的代头补上行号并挂到内存
+func (s *Session) attachHeadMessages(messages []*schema.AgenticMessage, ids []uint) {
+	if len(messages) == 0 || len(messages) != len(ids) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, msg := range messages {
+		tagTranscriptEntryID(msg, ids[i])
+		s.seen = append(s.seen, sessionEntry{msg: msg, transcriptID: ids[i]})
+	}
+}
+
+// stripHeadEntries 去掉代头，供摘要检查点只保留摘要正文
+func stripHeadEntries(messages []*schema.AgenticMessage) []*schema.AgenticMessage {
+	kept := make([]*schema.AgenticMessage, 0, len(messages))
+	for _, message := range messages {
+		if isHeadEntry(message) {
+			continue
+		}
+		kept = append(kept, message)
+	}
+	return kept
 }
 
 // renderPinnedMemories 渲染当前会话主体和自己的全部 active 置顶记忆
@@ -252,34 +347,38 @@ func (s *Session) generationHead() (system *sessionEntry, note *sessionEntry) {
 }
 
 // appendHeadEntries 批量写入代头，事务成功后才挂到内存，避免半代头
-func (s *Session) appendHeadEntries(ctx context.Context, mem *memory.Manager, specs []headEntrySpec) error {
+func (s *Session) appendHeadEntries(ctx context.Context, mem *memory.Manager, specs []headEntrySpec) ([]uint, error) {
 	if len(specs) == 0 {
-		return nil
+		return nil, nil
 	}
 	entries := make([]*memory.TranscriptEntry, 0, len(specs))
 	for _, spec := range specs {
 		payload, err := sonic.Marshal(spec.msg)
 		if err != nil {
-			return fmt.Errorf("编码%s失败: %w", spec.kind, err)
+			return nil, fmt.Errorf("编码%s失败: %w", spec.kind, err)
 		}
 		entries = append(entries, &memory.TranscriptEntry{
 			ConversationKind: s.kind, TargetID: s.targetID, EntryKind: spec.kind, Payload: payload,
 		})
 	}
 	if err := mem.AppendTranscripts(ctx, entries); err != nil {
-		return err
+		return nil, err
 	}
+	ids := make([]uint, 0, len(entries))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, spec := range specs {
+		tagTranscriptEntryID(spec.msg, entries[i].ID)
 		s.seen = append(s.seen, sessionEntry{msg: spec.msg, transcriptID: entries[i].ID})
+		ids = append(ids, entries[i].ID)
 	}
-	return nil
+	return ids, nil
 }
 
 // appendHeadEntry 追加单条非人格代头，例如群说明变更
 func (s *Session) appendHeadEntry(ctx context.Context, mem *memory.Manager, kind string, msg *schema.AgenticMessage) error {
-	return s.appendHeadEntries(ctx, mem, []headEntrySpec{{kind: kind, msg: msg}})
+	_, err := s.appendHeadEntries(ctx, mem, []headEntrySpec{{kind: kind, msg: msg}})
+	return err
 }
 
 // noteHash 用来判断群说明是否变化

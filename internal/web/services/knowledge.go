@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -56,14 +55,11 @@ func (s *AdminService) filterKnowledge(q *gorm.DB, f KnowledgeFilter) *gorm.DB {
 		q = q.Where("ki.status=?", f.Status)
 	}
 	if k := strings.TrimSpace(f.Keyword); k != "" {
-		p := "%" + k + "%"
+		p := memory.LiteralContainsPattern(k)
 		q = q.Where("ki.label ILIKE ? OR ki.content ILIKE ?", p, p)
 	}
 	return q
 }
-
-// ErrDuplicateActiveMemory 表示已有同内容的启用记忆
-var ErrDuplicateActiveMemory = errors.New("已有一条相同内容处于启用状态")
 
 type KnowledgeDetail struct {
 	Item      memory.KnowledgeRecord
@@ -91,8 +87,8 @@ func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint) (KnowledgeD
 
 func (s *AdminService) UpdateKnowledgeStatus(ctx context.Context, id uint, status string) error {
 	status = strings.TrimSpace(status)
-	if status != "active" && status != "archived" {
-		return fmt.Errorf("记忆状态无效")
+	if status != "archived" {
+		return fmt.Errorf("记忆只能归档，不能从后台恢复")
 	}
 	item, err := s.GetKnowledge(id)
 	if err != nil {
@@ -101,21 +97,8 @@ func (s *AdminService) UpdateKnowledgeStatus(ctx context.Context, id uint, statu
 	if item.Status == status {
 		return nil
 	}
-	action := "archive"
-	if status == "active" {
-		action = "restore"
-		var duplicate int64
-		if err := s.db.WithContext(ctx).Model(&memory.KnowledgeRecord{}).
-			Where("subject_type=? AND subject_target=? AND memory_type=? AND content_hash=? AND status='active' AND id<>?", item.SubjectType, item.SubjectTarget, item.MemoryType, item.ContentHash, item.ID).
-			Count(&duplicate).Error; err != nil {
-			return err
-		}
-		if duplicate > 0 {
-			return ErrDuplicateActiveMemory
-		}
-	}
 	_, err = s.memory.ManageMemories(ctx, []memory.MemoryChange{{
-		Action: action, ItemID: item.ID, ExpectedVersion: item.Version, Reason: "后台维护",
+		Action: "archive", ItemID: item.ID, ExpectedVersion: item.Version, Reason: "后台归档",
 	}})
 	return err
 }

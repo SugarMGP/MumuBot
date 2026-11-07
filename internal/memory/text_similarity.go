@@ -81,3 +81,9 @@ func textGrams(text string) map[string]struct{} {
 	flushWord()
 	return grams
 }
+
+// LiteralContainsPattern 把用户输入转成只含字面量的 LIKE/ILIKE contains 模式
+func LiteralContainsPattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + replacer.Replace(value) + "%"
+}

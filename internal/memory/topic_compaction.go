@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,15 +12,26 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrCompactionInput 表示模型提交的压缩参数不可用，可修正后重试
+var ErrCompactionInput = errors.New("压缩参数不可用")
+
+func compactionInputErrorf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrCompactionInput, fmt.Sprintf(format, args...))
+}
+
 // CommitCompaction 原子写入话题、归属、检查点，并删除被覆盖的工作集记录
-func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) error {
+func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) (TranscriptCandidates, error) {
 	if input.ConversationKind == "" || input.TargetID <= 0 || input.ThroughMessageID == 0 || input.ThroughVisibleSeq == 0 || strings.TrimSpace(input.BatchID) == "" {
-		return fmt.Errorf("压缩提交范围无效")
+		return TranscriptCandidates{}, compactionInputErrorf("压缩提交范围无效")
 	}
 	if input.UnassignedCount > 16 || (input.UnassignedCount > 0 && input.Coverage < 0.80) {
-		return fmt.Errorf("话题覆盖率不足：未分配 %d 条", input.UnassignedCount)
+		return TranscriptCandidates{}, compactionInputErrorf("话题覆盖率不足：未分配 %d 条", input.UnassignedCount)
 	}
 	topicIDs := map[string]uint{}
+	now := time.Now()
+	policy := CurrentRetentionPolicy()
+	newStability, newAnchor, newForgetAt := policy.TopicState(now, now)
+	released := TranscriptCandidates{}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var checkpoint CompactionCheckpoint
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID).Take(&checkpoint).Error
@@ -41,7 +53,7 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 				oneBotIDs = append(oneBotIDs, ref.MessageID)
 			}
 		}
-		messageByOneBot := make(map[int64]uint, len(oneBotIDs))
+		messageByOneBot := make(map[int64]MessageLog, len(oneBotIDs))
 		if len(oneBotIDs) > 0 {
 			var messages []MessageLog
 			if err := tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id IN ? AND id<=?",
@@ -49,65 +61,57 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 				return err
 			}
 			for _, message := range messages {
-				messageByOneBot[message.OneBotMessageID] = message.ID
+				messageByOneBot[message.OneBotMessageID] = message
 			}
 		}
 		if err := validateTopicMessages(input, messageByOneBot); err != nil {
 			return err
 		}
 		var existing []TopicThreadRow
-		if err := tx.Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID).Order("id").Find(&existing).Error; err != nil {
+		if err := tx.Where("conversation_kind=? AND target_id=? AND forgotten_at IS NULL AND forget_at>?",
+			input.ConversationKind, input.TargetID, now).Order("id").Find(&existing).Error; err != nil {
 			return err
 		}
+		topicRows := make(map[uint]TopicThreadRow, len(existing))
+		newTopicIDs := map[uint]bool{}
 		existingIDs := map[uint]bool{}
 		existingTopicIDs := make([]uint, 0, len(existing))
 		for _, topic := range existing {
 			existingIDs[topic.ID] = true
 			existingTopicIDs = append(existingTopicIDs, topic.ID)
+			topicRows[topic.ID] = topic
 		}
 		latestByTopic, err := latestTopicSummaries(tx, existingTopicIDs)
 		if err != nil {
 			return err
 		}
-		type openLoopBatch struct {
-			topicID uint
-			loops   []string
-		}
-		oldOpenLoops := make([]openLoopBatch, 0)
-		for _, topic := range existing {
-			if topic.Status != "active" && hasCheckpoint {
-				continue
-			}
-			if latest, ok := latestByTopic[topic.ID]; ok {
-				var summary TopicSummary
-				if sonic.UnmarshalString(latest.SummaryJSON, &summary) == nil && len(summary.OpenLoops) > 0 {
-					oldOpenLoops = append(oldOpenLoops, openLoopBatch{topicID: topic.ID, loops: summary.OpenLoops})
-				}
-			}
-		}
-
 		for i := range input.Topics {
 			topicInput := &input.Topics[i]
 			if topicInput.TopicID == 0 {
 				if id := parseTopicIDRef(topicInput.Ref); id > 0 {
 					if !existingIDs[id] {
-						return fmt.Errorf("话题 %d 不属于当前会话", id)
+						return compactionInputErrorf("话题 %d 不属于当前会话", id)
 					}
 					topicInput.TopicID = id
 				} else {
-					thread := TopicThreadRow{ConversationKind: input.ConversationKind, TargetID: input.TargetID, Status: "dormant"}
+					thread := TopicThreadRow{
+						ConversationKind: input.ConversationKind, TargetID: input.TargetID, Status: "dormant",
+						StabilityDays: newStability, RecallAnchorAt: newAnchor, ForgetAt: newForgetAt,
+					}
 					if err := tx.Create(&thread).Error; err != nil {
 						return err
 					}
 					topicInput.TopicID = thread.ID
+					topicRows[thread.ID] = thread
+					newTopicIDs[thread.ID] = true
 				}
 			} else {
 				if !existingIDs[topicInput.TopicID] {
-					return fmt.Errorf("话题 %d 不属于当前会话", topicInput.TopicID)
+					return compactionInputErrorf("话题 %d 不属于当前会话", topicInput.TopicID)
 				}
 			}
 			if _, exists := topicIDs[topicInput.Ref]; exists {
-				return fmt.Errorf("话题引用 %s 重复", topicInput.Ref)
+				return compactionInputErrorf("话题引用 %s 重复", topicInput.Ref)
 			}
 			topicIDs[topicInput.Ref] = topicInput.TopicID
 			existingIDs[topicInput.TopicID] = true
@@ -126,21 +130,22 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 				id = parseTopicIDRef(ref)
 			}
 			if id == 0 || !existingIDs[id] {
-				return fmt.Errorf("激活话题引用 %s 无效", ref)
+				return compactionInputErrorf("激活话题引用 %s 无效", ref)
 			}
 			if activeSet[id] {
-				return fmt.Errorf("激活话题 %d 重复", id)
+				return compactionInputErrorf("激活话题 %d 重复", id)
 			}
 			activeSet[id] = true
 			activeIDs = append(activeIDs, id)
 		}
 
 		assigned := map[uint]bool{}
+		latestSourceAt := make(map[uint]time.Time)
 		assignments := make([]TopicAssignment, 0)
 		sources := make([]TopicSourceRow, 0)
 		for _, topicInput := range input.Topics {
 			if err := ValidateTopicSummary(topicInput.Summary); err != nil {
-				return err
+				return compactionInputErrorf("%v", err)
 			}
 			latest, hasLatest := latestByTopic[topicInput.TopicID]
 			nextSummaryVersion := uint64(1)
@@ -157,14 +162,21 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 			}
 			latestByTopic[topicInput.TopicID] = row
 			for _, ref := range topicInput.Messages {
-				messageID, ok := messageByOneBot[ref.MessageID]
-				if !ok || messageID > input.ThroughMessageID {
-					return fmt.Errorf("消息 %d 不属于当前压缩范围", ref.MessageID)
+				message, ok := messageByOneBot[ref.MessageID]
+				if !ok || message.ID > input.ThroughMessageID {
+					return compactionInputErrorf("消息 %d 不属于当前压缩范围", ref.MessageID)
 				}
 				topicID := topicInput.TopicID
-				assignments = append(assignments, TopicAssignment{MessageLogID: messageID, TopicID: &topicID})
-				sources = append(sources, TopicSourceRow{SummaryID: row.ID, MessageLogID: messageID, IsAnchor: ref.IsAnchor})
-				assigned[messageID] = true
+				assignments = append(assignments, TopicAssignment{MessageLogID: message.ID, TopicID: &topicID})
+				sources = append(sources, TopicSourceRow{
+					SummaryID: row.ID, MessageLogID: message.ID,
+					OneBotMessageID: message.OneBotMessageID, MessageTime: message.MessageTime,
+					IsAnchor: ref.IsAnchor,
+				})
+				assigned[message.ID] = true
+				if current := latestSourceAt[topicID]; message.MessageTime.After(current) {
+					latestSourceAt[topicID] = message.MessageTime
+				}
 			}
 		}
 		if len(assignments) > 0 {
@@ -188,7 +200,7 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 				return err
 			}
 			if int(found) != len(input.CandidateMessageIDs) {
-				return fmt.Errorf("压缩候选消息范围无效")
+				return compactionInputErrorf("压缩候选消息范围无效")
 			}
 			unassigned := make([]uint, 0, len(input.CandidateMessageIDs))
 			for _, id := range input.CandidateMessageIDs {
@@ -203,26 +215,29 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 			}
 		}
 
-		overview := strings.TrimSpace(input.Overview)
-		for _, batch := range oldOpenLoops {
-			if activeSet[batch.topicID] {
+		for topicID, sourceAt := range latestSourceAt {
+			topic, ok := topicRows[topicID]
+			if !ok {
 				continue
 			}
-			for _, loop := range batch.loops {
-				loop = strings.TrimSpace(loop)
-				if loop != "" && !strings.Contains(overview, loop) {
-					if overview != "" {
-						overview += "\n"
-					}
-					overview += "未完成事项延续：" + loop
-				}
+			if newTopicIDs[topicID] {
+				topic.RecallAnchorAt = sourceAt
+			}
+			RefreshTopicActivity(&topic, sourceAt, now, policy)
+			if err := tx.Model(&TopicThreadRow{}).Where("id=?", topic.ID).Updates(map[string]any{
+				"stability_days": topic.StabilityDays, "recall_anchor_at": topic.RecallAnchorAt,
+				"forget_at": topic.ForgetAt,
+			}).Error; err != nil {
+				return err
 			}
 		}
+
+		overview := strings.TrimSpace(input.Overview)
 		if overview == "" {
-			return fmt.Errorf("压缩概览不能为空")
+			return compactionInputErrorf("压缩概览不能为空")
 		}
 		if len([]rune(overview)) > 12000 {
-			return fmt.Errorf("压缩概览超过 12000 字")
+			return compactionInputErrorf("压缩概览超过 12000 字")
 		}
 
 		for _, topic := range existing {
@@ -250,7 +265,7 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 		for _, topicID := range activeIDs {
 			latest, ok := latestByTopic[topicID]
 			if !ok {
-				return fmt.Errorf("激活话题 %d 缺少摘要", topicID)
+				return compactionInputErrorf("激活话题 %d 缺少摘要", topicID)
 			}
 			snapshots = append(snapshots, TopicSnapshot{TopicID: topicID, SummaryID: latest.ID})
 		}
@@ -269,15 +284,24 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 		if err := m.SaveCheckpoint(tx, checkpoint); err != nil {
 			return err
 		}
-		if err := m.DeleteTranscriptHeads(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq); err != nil {
+		headRefs, err := m.DeleteTranscriptHeads(tx, input.ConversationKind, input.TargetID)
+		if err != nil {
 			return err
 		}
-		if err := m.DeleteTranscriptThrough(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq); err != nil {
+		released.ToolRefs = append(released.ToolRefs, headRefs.ToolRefs...)
+		released.SnapshotRefs = append(released.SnapshotRefs, headRefs.SnapshotRefs...)
+		refs, err := m.DeleteTranscriptThrough(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq)
+		if err != nil {
 			return err
 		}
+		released.ToolRefs = append(released.ToolRefs, refs.ToolRefs...)
+		released.SnapshotRefs = append(released.SnapshotRefs, refs.SnapshotRefs...)
 		return nil
 	})
-	return err
+	if err != nil {
+		return TranscriptCandidates{}, err
+	}
+	return released, nil
 }
 
 func ValidateTopicSummary(summary TopicSummary) error {
@@ -324,19 +348,19 @@ func parseTopicIDRef(ref string) uint {
 	return id
 }
 
-func validateTopicMessages(input CompactionCommit, messageByOneBot map[int64]uint) error {
+func validateTopicMessages(input CompactionCommit, messageByOneBot map[int64]MessageLog) error {
 	seen := map[int64]bool{}
 	for _, topic := range input.Topics {
 		for _, ref := range topic.Messages {
 			if ref.MessageID == 0 {
-				return fmt.Errorf("话题 message_id 不能为空")
+				return compactionInputErrorf("话题 message_id 不能为空")
 			}
 			if seen[ref.MessageID] {
-				return fmt.Errorf("消息 %d 重复归属多个话题", ref.MessageID)
+				return compactionInputErrorf("消息 %d 重复归属多个话题", ref.MessageID)
 			}
 			seen[ref.MessageID] = true
 			if _, ok := messageByOneBot[ref.MessageID]; !ok {
-				return fmt.Errorf("消息 %d 不属于当前压缩范围", ref.MessageID)
+				return compactionInputErrorf("消息 %d 不属于当前压缩范围", ref.MessageID)
 			}
 		}
 	}

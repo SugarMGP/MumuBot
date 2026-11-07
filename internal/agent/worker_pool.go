@@ -10,17 +10,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func workerPoolUserName(index int) string {
-	if index == 0 {
-		return "worker"
-	}
-	return fmt.Sprintf("worker%d", index+1)
-}
-
-func workerPoolHome(userName string) string {
-	return "/home/" + userName
-}
-
 // SyncWorkers 把 worker 池对齐到后台配置的数量；减少时停用并保留 transcript，增加时优先复用停用 worker
 func (a *Agent) SyncWorkers(desired int) error {
 	if desired < 0 || desired > config.MaxWorkerCount {
@@ -70,6 +59,7 @@ func (a *Agent) SyncWorkers(desired int) error {
 			return err
 		}
 		zap.L().Info("worker 已从池中停用", zap.Uint("worker_id", entry.worker.ID))
+		a.notifyLifeWorkerCancelled(a.ctx, entry.worker.ID)
 		active = active[:len(active)-1]
 		inactive = append(inactive, entry)
 	}
@@ -91,29 +81,18 @@ func (a *Agent) SyncWorkers(desired int) error {
 		zap.L().Info("worker 已重新加入池", zap.Uint("worker_id", entry.worker.ID))
 	}
 
-	usedUsers := make(map[string]bool, len(entries))
-	for _, entry := range entries {
-		usedUsers[entry.worker.UserName] = true
-	}
 	for len(active) < desired {
-		userName := ""
-		for index := 0; index < config.MaxWorkerCount; index++ {
-			candidate := workerPoolUserName(index)
-			if !usedUsers[candidate] {
-				userName = candidate
-				break
-			}
-		}
-		if userName == "" {
-			return fmt.Errorf("没有可用的 worker 用户名额")
-		}
-		row, err := a.memory.CreateWorkerSession(a.ctx, "空闲", userName, workerPoolHome(userName))
+		row, err := a.memory.CreateWorkerSession(a.ctx, "空闲")
 		if err != nil {
 			return err
 		}
-		usedUsers[userName] = true
 		active = append(active, poolEntry{worker: *row, active: true})
-		zap.L().Info("worker 已加入池", zap.Uint("worker_id", row.ID), zap.String("user", userName))
+		zap.L().Info("worker 已加入池", zap.Uint("worker_id", row.ID))
 	}
+	workerThinkMax := desired
+	if workerThinkMax <= 0 {
+		workerThinkMax = 1
+	}
+	a.workerConcurrency.SetMax(workerThinkMax)
 	return nil
 }

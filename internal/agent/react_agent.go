@@ -21,8 +21,6 @@ import (
 const (
 	replyCacheTTL      = 30 * time.Minute
 	replyCacheCapacity = 1024
-	// restoreMessageLimit 重启后从消息库恢复的会话消息条数
-	restoreMessageLimit = 50
 )
 
 type Agent struct {
@@ -40,6 +38,7 @@ type Agent struct {
 	groupConcurrency   *ThinkConcurrency
 	privateConcurrency *ThinkConcurrency
 	workerConcurrency  *ThinkConcurrency
+	lifeConcurrency    *ThinkConcurrency
 	workerExec         *workerExecutor
 	workerCancelMu     sync.Mutex
 	workerRuns         map[uint]workerRun
@@ -62,12 +61,18 @@ type Agent struct {
 	privateMu            sync.Mutex
 	privateStopped       bool
 
-	stopping atomic.Bool
-	wg       sync.WaitGroup
+	stopping   atomic.Bool
+	lifeAsleep atomic.Bool
+	wg         sync.WaitGroup
 
 	idleMu    sync.Mutex
 	idleWg    sync.WaitGroup
 	idleSlots chan struct{}
+
+	lastOrphanCleanup     time.Time
+	lastToolCleanup       time.Time
+	lastSnapshotCleanup   time.Time
+	lastTrajectoryCleanup time.Time
 }
 
 type pendingThink struct {
@@ -105,12 +110,25 @@ func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.St
 	cfg := config.Snapshot()
 	a.groupConcurrency = NewThinkConcurrency(a.ctx, cfg.Agent.MaxGroupConcurrency, a.thinkGroup)
 	a.privateConcurrency = NewThinkConcurrency(a.ctx, cfg.Agent.MaxPrivateConcurrency, a.thinkPrivate)
-	a.workerConcurrency = NewThinkConcurrency(a.ctx, 2, a.thinkWorker)
+	workerThinkMax := cfg.Agent.WorkerCount
+	if workerThinkMax <= 0 {
+		workerThinkMax = 1
+	}
+	a.workerConcurrency = NewThinkConcurrency(a.ctx, workerThinkMax, a.thinkWorker)
+	a.lifeConcurrency = NewThinkConcurrency(a.ctx, 1, a.thinkLife)
 	a.groupCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("group_id", targetID) })
 	a.privateCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("target_id", targetID) })
 	if err := mem.FailRunningWorkerSessions(context.Background()); err != nil {
 		return nil, fmt.Errorf("恢复 worker 状态失败: %w", err)
 	}
+	if err := mem.EnsureLife(context.Background()); err != nil {
+		return nil, fmt.Errorf("初始化 life 会话失败: %w", err)
+	}
+	lifeState, err := mem.GetLifeState(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("读取 life 状态失败: %w", err)
+	}
+	a.lifeAsleep.Store(!lifeState.Awake)
 	if err := a.SyncWorkers(cfg.Agent.WorkerCount); err != nil {
 		return nil, fmt.Errorf("同步 worker 池失败: %w", err)
 	}
@@ -125,6 +143,9 @@ func (a *Agent) Start() error {
 
 	a.wg.Add(1)
 	go a.conversationThinkLoop()
+	a.wg.Add(1)
+	go a.lifeClockLoop()
+	a.startRetentionLoop()
 	zap.L().Info("Agent 已启动")
 	return nil
 }
@@ -155,6 +176,9 @@ func (a *Agent) shutdown() {
 	if a.workerConcurrency != nil {
 		a.workerConcurrency.Close()
 	}
+	if a.lifeConcurrency != nil {
+		a.lifeConcurrency.Close()
+	}
 	a.groupCommits.close()
 	a.privateCommits.close()
 
@@ -175,6 +199,24 @@ func (a *Agent) closeGeneration() {
 		generation.wg.Wait()
 		generation.close()
 	}
+}
+
+// qqSleeping 表示 QQ 当前不接入新的聊天输入和新回合
+func (a *Agent) qqSleeping() bool { return a.lifeAsleep.Load() }
+
+// sessionRunning 返回会话是否正在运行一个回合，供会话目录展示真实概况
+func (a *Agent) sessionRunning(kind string, targetID int64) bool {
+	switch kind {
+	case memory.ConversationKindGroup:
+		return a.groupConcurrency != nil && a.groupConcurrency.IsRunning(targetID)
+	case memory.ConversationKindPrivate:
+		return a.privateConcurrency != nil && a.privateConcurrency.IsRunning(targetID)
+	case memory.ConversationKindWorker:
+		return a.workerConcurrency != nil && a.workerConcurrency.IsRunning(targetID)
+	case memory.ConversationKindLife:
+		return a.lifeConcurrency != nil && a.lifeConcurrency.IsRunning(targetID)
+	}
+	return false
 }
 
 func (a *Agent) OneBotConnected() bool {
@@ -211,6 +253,15 @@ func (a *Agent) MCPToolCount() int {
 	return len(generation.mcp.GetTools())
 }
 
+// MCPStatuses 返回当前 generation 的逐服务加载状态
+func (a *Agent) MCPStatuses() []mcp.ServerStatus {
+	generation := a.currentGeneration()
+	if generation == nil || generation.mcp == nil {
+		return nil
+	}
+	return generation.mcp.Statuses()
+}
+
 // Ready 返回是否已构建 generation
 // BotName 返回机器人账号昵称，供后台展示
 func (a *Agent) BotName() string { return a.botName() }
@@ -238,6 +289,9 @@ func (a *Agent) Activate() error {
 		generation.close()
 		return fmt.Errorf("恢复聊天上下文失败: %w", err)
 	}
+	if err := a.bootstrapLife(a.ctx); err != nil {
+		zap.L().Warn("生活主线启动失败，等待新的输入或恢复操作", zap.Error(err))
+	}
 	a.bot.ReleaseEventGate()
 	return nil
 }
@@ -263,9 +317,17 @@ func (a *Agent) Reload() error {
 			generation.close()
 			return fmt.Errorf("恢复聊天上下文失败: %w", err)
 		}
+		if err := a.bootstrapLife(a.ctx); err != nil {
+			zap.L().Warn("生活主线启动失败，等待新的输入或恢复操作", zap.Error(err))
+		}
 		a.bot.ReleaseEventGate()
 	}
 	return nil
+}
+
+// HasGeneration 表示当前 Agent 是否已持有可用的模型运行态
+func (a *Agent) HasGeneration() bool {
+	return a != nil && a.currentGeneration() != nil
 }
 
 func (a *Agent) currentGeneration() *Generation {

@@ -13,8 +13,6 @@ import (
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/tools"
 
-	"github.com/bytedance/sonic"
-
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -37,6 +35,9 @@ type sessionUser struct {
 	IsObservation     bool
 	IsAgentMessage    bool
 	IsMaintenanceHint bool
+	IsSelfCheck       bool
+	Wake              bool
+	AllowSleep        bool
 }
 
 type sessionEntry struct {
@@ -55,26 +56,30 @@ type Session struct {
 	targetID int64
 	memory   *memory.Manager
 
-	mu                   sync.Mutex
-	seen                 []sessionEntry
-	pending              []*sessionUser
-	media                *mediaIndex
-	injected             uint64
-	selfAt               []time.Time
-	notes                []string
-	nextOrder            uint64
-	fullScale            float64
-	tokenBase            *tokenBase
-	compactionRetryAfter time.Time
-	turnSeq              uint64
-	lastMemoryTurn       uint64
-	lastTopicTurn        uint64
-	lastMemoryHintTurn   uint64
-	lastTopicHintTurn    uint64
-	lastActivityAt       time.Time
-	maintenanceMu        sync.Mutex
-	idleDoneForActivity  bool
-	idleCancel           context.CancelFunc
+	mu                       sync.Mutex
+	seen                     []sessionEntry
+	pending                  []*sessionUser
+	media                    *mediaIndex
+	injected                 uint64
+	selfAt                   []time.Time
+	notes                    []string
+	nextOrder                uint64
+	fullScale                float64
+	tokenBase                *tokenBase
+	compactionRetryAfter     time.Time
+	compactionBeforeModel    bool
+	failedBatchThrough       uint64
+	requestActionableThrough uint64
+	turnSeq                  uint64
+	lastMemoryTurn           uint64
+	lastTopicTurn            uint64
+	lastMemoryHintTurn       uint64
+	lastTopicHintTurn        uint64
+	lastActivityAt           time.Time
+	maintenanceMu            sync.Mutex
+	contextStartID           uint
+	idleDoneForActivity      bool
+	idleCancel               context.CancelFunc
 }
 
 type tokenBase struct {
@@ -147,8 +152,9 @@ func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaR
 	return user
 }
 
-// AppendAgentMessage 把另一个会话投递的内部消息加入待处理工作集
-func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptID uint, at time.Time) *sessionUser {
+// AppendAgentMessage 把另一个会话投递的内部消息加入待处理工作集；
+// wake=false 只保存不触发新回合，allowSleep 表示允许在 life 睡眠时仍启动这一轮
+func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptID uint, at time.Time, wake, allowSleep bool) *sessionUser {
 	if message == nil {
 		return nil
 	}
@@ -157,8 +163,9 @@ func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptI
 	if at.IsZero() {
 		at = time.Now()
 	}
+	tagTranscriptEntryID(message, transcriptID)
 	user := &sessionUser{
-		Text: agenticMessageText(message), Msg: message, IsAgentMessage: true,
+		Text: agenticMessageText(message), Msg: message, IsAgentMessage: true, Wake: wake, AllowSleep: allowSleep,
 		TranscriptID: transcriptID, ReceivedAt: time.Now(), At: at, Order: s.nextOrderLocked(),
 	}
 	s.pending = append(s.pending, user)
@@ -205,82 +212,32 @@ func (s *Session) RestorePendingObservation(payload *schema.AgenticMessage, tran
 	s.pending = append(s.pending, &sessionUser{Msg: payload, TranscriptID: transcriptID, IsObservation: true, Order: s.nextOrderLocked()})
 }
 
-func (s *Session) RestorePendingAgentMessage(payload *schema.AgenticMessage, transcriptID uint) {
+func (s *Session) RestorePendingAgentMessage(payload *schema.AgenticMessage, transcriptID uint, wake, allowSleep bool) {
 	if payload == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pending = append(s.pending, &sessionUser{Msg: payload, Text: agenticMessageText(payload), IsAgentMessage: true, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
-}
-
-// RestorePendingMaintenanceHint 恢复尚未进入模型输入的维护提醒
-func (s *Session) RestorePendingMaintenanceHint(payload *schema.AgenticMessage, transcriptID uint) {
-	if payload == nil {
+	// 生活时钟可能在恢复前已经投递并写入内存，同一 transcript 行不重复入队
+	if s.hasTranscriptLocked(transcriptID) {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pending = append(s.pending, &sessionUser{Msg: payload, Text: agenticMessageText(payload), IsMaintenanceHint: true, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
+	s.pending = append(s.pending, &sessionUser{Msg: payload, Text: agenticMessageText(payload), IsAgentMessage: true, Wake: wake, AllowSleep: allowSleep, TranscriptID: transcriptID, Order: s.nextOrderLocked()})
 }
 
-func agenticMessageText(message *schema.AgenticMessage) string {
-	if message == nil {
-		return ""
-	}
-	var parts []string
-	for _, block := range message.ContentBlocks {
-		if block != nil && block.UserInputText != nil {
-			parts = append(parts, block.UserInputText.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-func (s *Session) AppendSeenMessage(msg *schema.AgenticMessage, transcriptID uint, visibleSeq uint64) {
-	if msg == nil {
-		return
-	}
+// HasSleepWakePending 判断是否有明确允许在睡眠中启动生活回合的待处理输入
+func (s *Session) HasSleepWakePending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seen = append(s.seen, sessionEntry{msg: msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
-}
-
-// AppendSeenObservation 恢复已进入模型的观察事件，保留 user 标记供分段和窗口统计
-func (s *Session) AppendSeenObservation(msg *schema.AgenticMessage, transcriptID uint, visibleSeq uint64) {
-	if msg == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	user := &sessionUser{Msg: msg, TranscriptID: transcriptID, IsObservation: true}
-	s.seen = append(s.seen, sessionEntry{user: user, msg: msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
-}
-
-func (s *Session) ApplyVisibleSeqs(seqs map[uint]uint64) {
-	if len(seqs) == 0 {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.seen {
-		if seq, ok := seqs[s.seen[i].transcriptID]; ok {
-			s.seen[i].visibleSeq = seq
-		}
-	}
-	kept := s.pending[:0]
 	for _, user := range s.pending {
-		if seq, ok := seqs[user.TranscriptID]; ok {
-			entry := sessionEntry{msg: user.Msg, transcriptID: user.TranscriptID, visibleSeq: seq}
-			if !user.IsMaintenanceHint {
-				entry.user = user
-			}
-			s.seen = append(s.seen, entry)
+		if user == nil || !user.IsAgentMessage || !user.Wake {
 			continue
 		}
-		kept = append(kept, user)
+		if user.AllowSleep {
+			return true
+		}
 	}
-	s.pending = kept
+	return false
 }
 
 func (s *Session) nextOrderLocked() uint64 {
@@ -301,7 +258,7 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		LogID: logID, Ref: ref, Content: strings.TrimSpace(msg.Content), At: msg.Time,
 		ReceivedAt: msg.ReceivedAt, Mentioned: msg.IsMentioned, SenderID: msg.UserID,
 		Nickname: msg.Nickname, ReferencedIDs: referenced, ArrivalSeq: msg.ArrivalSeq,
-		MessageID: msg.MessageID, IsObservation: msg.MessageID == 0, Order: s.nextOrderLocked(),
+		MessageID: msg.MessageID, IsObservation: msg.MessageID == 0, Wake: true, Order: s.nextOrderLocked(),
 	}
 	user.Text = s.renderUserText(msg, ref, mediaRefs)
 	user.Msg = schema.UserAgenticMessage(user.Text)
@@ -391,7 +348,7 @@ func (s *Session) PendingAfter(seq uint64) []tools.PendingMessage {
 		if user == nil || user.IsMaintenanceHint || user.ArrivalSeq <= seq || user.ArrivalSeq <= s.injected {
 			continue
 		}
-		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
+		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID, Actionable: user.MessageID != 0 || (user.IsAgentMessage && user.Wake)})
 	}
 	return list
 }
@@ -403,7 +360,7 @@ func (s *Session) PendingAgentMessages() []tools.PendingMessage {
 	list := make([]tools.PendingMessage, 0)
 	for _, user := range s.pending {
 		if user != nil && !user.IsMaintenanceHint && user.IsAgentMessage {
-			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
+			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID, Actionable: user.Wake})
 		}
 	}
 	return list
@@ -456,24 +413,6 @@ func (s *Session) ResolveMediaByHash(hash string) (media.Ref, bool) {
 	return s.media.resolve(hash)
 }
 
-// LatestLogID 返回当前会话已经进入工作集的最新消息日志编号，用作工具读取快照
-func (s *Session) LatestLogID() uint {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var latest uint
-	for _, entry := range s.seen {
-		if entry.user != nil && entry.user.LogID > latest {
-			latest = entry.user.LogID
-		}
-	}
-	for _, user := range s.pending {
-		if user.LogID > latest {
-			latest = user.LogID
-		}
-	}
-	return latest
-}
-
 func (s *Session) RecentWindow(now time.Time, window time.Duration) (total int, self int, lastSelf time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -512,27 +451,21 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction
 
 	messages := make([]*schema.AgenticMessage, 0, len(entries)+len(pending)+2)
 	for _, entry := range orderEntries(entries) {
-		if entry.msg != nil {
-			messages = append(messages, entry.msg)
+		if entry.msg == nil {
+			continue
 		}
-	}
-	visibleIDs := make([]uint, 0)
-	for _, entry := range entries {
-		if entry.transcriptID != 0 && entry.visibleSeq == 0 {
-			visibleIDs = append(visibleIDs, entry.transcriptID)
-		}
+		tagTranscriptEntryID(entry.msg, entry.transcriptID)
+		messages = append(messages, entry.msg)
 	}
 	for _, user := range pending {
-		if user.Msg != nil {
-			messages = append(messages, user.Msg)
+		if user.Msg == nil {
+			continue
 		}
-		if user.TranscriptID != 0 {
-			visibleIDs = append(visibleIDs, user.TranscriptID)
-		}
+		tagTranscriptEntryID(user.Msg, user.TranscriptID)
+		messages = append(messages, user.Msg)
 	}
 
 	if tc := tools.GetToolContext(ctx); tc != nil {
-		tc.VisibleTranscriptIDs = append(tc.VisibleTranscriptIDs, visibleIDs...)
 		if seq := maxPendingSeq(pending); seq > tc.InjectedArrivalSeq {
 			tc.InjectedArrivalSeq = seq
 		}
@@ -548,111 +481,4 @@ func maxPendingSeq(pending []*sessionUser) uint64 {
 		}
 	}
 	return seq
-}
-
-// CompleteTurn 在成功完成一次思考后推进维护计数
-func (s *Session) CompleteTurn(memoryMaintained, topicMaintained bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.turnSeq++
-	if memoryMaintained {
-		s.lastMemoryTurn = s.turnSeq
-	}
-	if topicMaintained {
-		s.lastTopicTurn = s.turnSeq
-	}
-}
-
-// MaintenanceDue 返回本轮需要追加的维护提醒和对应计数
-func (s *Session) MaintenanceDue(memoryTurns, topicTurns int) (string, uint64, uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var labels []string
-	nextMemory, nextTopic := s.lastMemoryHintTurn, s.lastTopicHintTurn
-	if memoryTurns > 0 && s.turnSeq-s.lastMemoryTurn >= uint64(memoryTurns) && s.turnSeq-s.lastMemoryHintTurn >= uint64(max(1, memoryTurns/2)) {
-		labels = append(labels, fmt.Sprintf("你已经连续 %d 轮没有更新长期记忆。如果有稳定偏好、身份、约定、重要经历或需要纠正的旧记忆，先用 searchMemory 查重，再用 manageMemory 新建或更新；没有就继续，不要为了清空提醒而硬写。", memoryTurns))
-		nextMemory = s.turnSeq
-	}
-	if topicTurns > 0 && s.turnSeq-s.lastTopicTurn >= uint64(topicTurns) && s.turnSeq-s.lastTopicHintTurn >= uint64(max(1, topicTurns/2)) {
-		labels = append(labels, fmt.Sprintf("你已经连续 %d 轮没有更新话题。如果刚才的对话有实质进展、结论、未完事项或收尾，用 updateTopic 更新摘要和关键消息；没有就继续，不要硬造话题。", topicTurns))
-		nextTopic = s.turnSeq
-	}
-	if len(labels) == 0 {
-		return "", nextMemory, nextTopic
-	}
-	return strings.Join(labels, "\n"), nextMemory, nextTopic
-}
-
-// AppendMaintenanceHint 写入持久化系统提醒并加入待处理输入
-func (s *Session) AppendMaintenanceHint(ctx context.Context, mem *memory.Manager, text string, memoryTurn, topicTurn uint64) error {
-	if mem == nil || strings.TrimSpace(text) == "" {
-		return nil
-	}
-	msg := schema.UserAgenticMessage(systemNote("维护提醒", text))
-	msg.Extra = map[string]any{"kind": "maintenance_hint"}
-	payload, err := sonic.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	entry := &memory.TranscriptEntry{ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "system_note", Payload: payload}
-	if err := mem.AppendTranscript(ctx, entry); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	s.pending = append(s.pending, &sessionUser{Msg: msg, Text: text, TranscriptID: entry.ID, IsMaintenanceHint: true, Order: s.nextOrderLocked()})
-	s.lastMemoryHintTurn = memoryTurn
-	s.lastTopicHintTurn = topicTurn
-	s.mu.Unlock()
-	return nil
-}
-
-// IdleAvailable 判断当前空闲周期是否已经尝试过压缩
-func (s *Session) IdleAvailable() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return !s.idleDoneForActivity
-}
-
-// MarkIdleStart 登记空闲压缩取消函数
-func (s *Session) MarkIdleStart(cancel context.CancelFunc) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.idleCancel = cancel
-}
-
-// ClearIdleStart 清除空闲压缩取消函数
-func (s *Session) ClearIdleStart() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.idleCancel = nil
-}
-
-// MarkIdleDone 标记当前空闲周期已经处理过
-func (s *Session) MarkIdleDone() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.idleDoneForActivity = true
-}
-
-// MarkTopicMaintained 记录话题维护
-func (s *Session) MarkTopicMaintained() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.lastTopicTurn = s.turnSeq
-}
-
-// LastActivityAt 返回最近真实消息时间
-func (s *Session) LastActivityAt() time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.lastActivityAt
-}
-
-// SetLastActivity 更新最近真实消息时间
-func (s *Session) SetLastActivity(at time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if at.After(s.lastActivityAt) {
-		s.lastActivityAt = at
-	}
 }

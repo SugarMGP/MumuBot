@@ -74,8 +74,8 @@ func (a *App) handleMemoryUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := strings.TrimSpace(body.Status)
-	if status != "active" && status != "archived" {
-		a.failBadRequest(w, "记忆状态无效。")
+	if status != "archived" {
+		a.failBadRequest(w, "记忆只能归档，不能从后台恢复。")
 		return
 	}
 	if err := a.admin.UpdateKnowledgeStatus(r.Context(), id, status); err != nil {
@@ -92,15 +92,18 @@ func (a *App) handleMemoryUpdate(w http.ResponseWriter, r *http.Request) {
 
 func memoryItemDTO(item memory.KnowledgeRecord) memoryDTO {
 	return memoryDTO{
-		ID:            item.ID,
-		SubjectType:   item.SubjectType,
-		SubjectTarget: item.SubjectTarget,
-		MemoryType:    item.MemoryType,
-		Label:         item.Label,
-		Content:       item.Content,
-		Pinned:        item.Pinned,
-		Status:        item.Status,
-		CreatedAt:     item.CreatedAt,
-		UpdatedAt:     item.UpdatedAt,
+		ID:             item.ID,
+		SubjectType:    item.SubjectType,
+		SubjectTarget:  item.SubjectTarget,
+		MemoryType:     item.MemoryType,
+		Label:          item.Label,
+		Content:        item.Content,
+		Pinned:         item.Pinned,
+		Status:         item.Status,
+		StabilityDays:  item.StabilityDays,
+		RecallAnchorAt: item.RecallAnchorAt,
+		ForgetAt:       item.ForgetAt,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
 	}
 }

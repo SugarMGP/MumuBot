@@ -60,6 +60,9 @@
 
 :root {
   --radius: 0.75rem;
+  --admin-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --admin-motion-quick: 150ms;
+  --admin-motion-panel: 200ms;
 
   --background: #f8f9fc;
   --foreground: #20212d;
@@ -128,6 +131,9 @@
   --admin-section-title-size: clamp(1.0625rem, 0.951rem + 0.174vw, 1.125rem);
   --admin-body-size: clamp(0.8125rem, 0.701rem + 0.174vw, 0.875rem);
   --admin-caption-size: clamp(0.6875rem, 0.576rem + 0.174vw, 0.75rem);
+  --admin-card-gap: 1rem;
+  --admin-form-gap: 1rem;
+  --admin-card-pad-tile: 0.75rem;
 }
 
 .dark {
@@ -288,7 +294,76 @@
     font-size: var(--admin-title-size);
     font-weight: 600;
     line-height: 1.15;
-    letter-spacing: -0.01em;
+  }
+
+  .admin-card-pad {
+    padding: var(--admin-card-pad);
+  }
+
+  .admin-card-pad-compact {
+    padding: var(--admin-card-pad-compact);
+  }
+
+  .admin-card-pad-tile {
+    padding: var(--admin-card-pad-tile);
+  }
+
+  .admin-card-title {
+    font-size: var(--admin-section-title-size);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .admin-card-title-compact {
+    font-size: var(--admin-body-size);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .admin-card-desc {
+    font-size: var(--admin-caption-size);
+    line-height: 1.55;
+    color: var(--muted-foreground);
+  }
+
+  .admin-body-text {
+    font-size: var(--admin-body-size);
+    line-height: 1.65;
+  }
+
+  .admin-caption-text {
+    font-size: var(--admin-caption-size);
+    line-height: 1.55;
+  }
+
+  .admin-label-text {
+    font-size: var(--admin-body-size);
+    font-weight: 500;
+  }
+
+  .admin-card-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--admin-card-gap);
+  }
+
+  .admin-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--admin-form-gap);
+  }
+
+  .admin-metric-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    line-height: 1.1;
+  }
+
+  .admin-prose {
+    font-size: var(--admin-body-size);
+    line-height: 1.8;
+    color: var(--foreground);
   }
 
   .admin-icon-tile {
@@ -357,10 +432,9 @@
   .admin-member-row {
     display: grid;
     grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.25fr);
-    gap: clamp(14px, 1.2vw, 20px);
+    gap: var(--admin-card-gap);
     align-items: center;
-    padding: clamp(12px, 1vw, 16px) clamp(14px, 1.4vw, 20px);
-    min-height: 104px;
+    padding: var(--admin-card-pad);
   }
 
   .admin-member-stat {
@@ -696,13 +770,76 @@
   }
 }
 
+/* C7：只给共用弹层和页内选中标记补短动效，不给数据卡整块上浮 */
+@keyframes admin-dialog-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes admin-dialog-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes admin-dialog-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes admin-dialog-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes admin-sheet-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes admin-sheet-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(18px); }
+}
+
+[data-slot="dialog-overlay"][data-state="open"] {
+  animation: admin-dialog-overlay-in var(--admin-motion-quick) ease-out both;
+}
+
+[data-slot="dialog-overlay"][data-state="closed"] {
+  animation: admin-dialog-overlay-out var(--admin-motion-quick) ease-in both;
+}
+
+[data-slot="dialog-content"][data-variant="center"][data-state="open"] {
+  animation: admin-dialog-fade-in 160ms var(--admin-motion-ease) both;
+}
+
+[data-slot="dialog-content"][data-variant="center"][data-state="closed"] {
+  animation: admin-dialog-fade-out 140ms ease-in both;
+}
+
+[data-slot="dialog-content"][data-variant="sheet"][data-state="open"] {
+  animation: admin-sheet-in var(--admin-motion-panel) var(--admin-motion-ease) both;
+}
+
+[data-slot="dialog-content"][data-variant="sheet"][data-state="closed"] {
+  animation: admin-sheet-out 160ms ease-in both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
+    animation: none !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .admin-sidebar nav a:hover > svg,
+  .admin-sidebar nav a:focus-visible > svg,
+  .admin-sidebar nav a:hover > span,
+  .admin-sidebar nav a:focus-visible > span {
+    transform: none;
   }
 }

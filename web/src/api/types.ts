@@ -27,11 +27,17 @@ export interface DashboardData {
     updated_at: string;
   } | null;
   emotions: Array<{
+    id: number;
     kind: string;
-    strength: number;
+    fact: string;
     reason: string;
+    strength: number;
+    strength_band: string;
     occurred_at: string;
+    updated_at: string;
+    version: number;
   }>;
+  emotions_error: boolean;
 }
 
 export interface ListPayload<T> {
@@ -88,6 +94,9 @@ export interface MemoryItem {
   content: string;
   pinned: boolean;
   status: string;
+  stability_days: number;
+  recall_anchor_at: string;
+  forget_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -154,6 +163,12 @@ export interface TopicListItem {
   gist: string;
   keywords: string[];
   status: string;
+  stability_days: number;
+  recall_anchor_at: string;
+  forget_at: string;
+  forgotten_at?: string;
+  source_total: number;
+  source_available: number;
   conversation_kind: string;
   target_id: number;
   message_count: number;
@@ -192,12 +207,14 @@ export interface PersonaSummary {
   version: number;
   card_chars: number;
   sim_chars: number;
+  life_chars: number;
   updated_at: string;
 }
 
 export interface PersonaDetail extends PersonaSummary {
   persona_card: string;
   simulation_prompt: string;
+  life_prompt: string;
 }
 
 export interface PersonasData {
@@ -208,6 +225,32 @@ export interface PersonasData {
 export interface PersonaTemplate {
   persona_card: string;
   simulation_prompt: string;
+  life_prompt: string;
+}
+
+export interface IdentityData {
+  name: string;
+  master_user_id: number;
+  master_name: string;
+  master_available: boolean;
+  version: number;
+}
+
+export interface IdentityFriend {
+  user_id: number;
+  name: string;
+  active: boolean;
+  blocked: boolean;
+}
+
+export interface IdentityFriendsData {
+  items: IdentityFriend[];
+}
+
+export interface IdentityInput {
+  name: string;
+  master_user_id: number;
+  version: number;
 }
 
 export interface RateLimitConfig {
@@ -234,6 +277,8 @@ export interface RuntimeConfig {
     think_interval: number;
     think_debounce_ms: number;
     max_step: number;
+    life_max_step: number;
+    worker_max_step: number;
     max_group_concurrency: number;
     max_private_concurrency: number;
     worker_count: number;
@@ -258,6 +303,13 @@ export interface RuntimeConfig {
     memory_turns: number;
     topic_turns: number;
   };
+  retention: {
+    initial_half_life_days: number;
+    max_half_life_days: number;
+    reinforce_factor: number;
+    forget_threshold: number;
+    history_days: number;
+  };
   media: {
     max_bytes_mb: number;
     image_quality: number;
@@ -273,6 +325,7 @@ export type SettingsSectionKey =
   | "chat"
   | "compactor"
   | "maintenance"
+  | "retention"
   | "media"
   | "debug";
 
@@ -341,6 +394,8 @@ export interface SystemData {
     think_interval_sec: number;
     think_debounce_ms: number;
     max_step: number;
+    life_max_step: number;
+    worker_max_step: number;
     compactor: RuntimeConfig["compactor"];
   };
   model: {
@@ -352,10 +407,12 @@ export interface SystemData {
       reasoning_effort: string;
     } | null;
     mcp_tool_count: number;
+    mcp_statuses?: { name: string; enabled: boolean; connected: boolean; tool_count: number; error?: string }[];
     context_window: number;
   };
   runtime: {
     connected: boolean;
+    agent_ready: boolean;
     reconnect_sec: number;
     schema_version: number;
     latest_schema_version: number;
@@ -420,4 +477,67 @@ export interface ApiErrorPayload {
     message: string;
     details?: Record<string, unknown>;
   };
+}
+
+export interface LifeState {
+  awake: boolean;
+  activity: string;
+  activity_since?: string;
+  sleep_started_at?: string;
+  woke_at?: string;
+  last_error: string;
+  last_error_code: string;
+  running: boolean;
+  updated_at: string;
+}
+
+export interface LifeSchedule {
+  id: number;
+  at?: string;
+  cron?: string;
+  next_run_at: string;
+  text: string;
+  enabled: boolean;
+  purpose: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LifeData {
+  state: LifeState;
+  schedules: LifeSchedule[];
+}
+
+export interface DiaryEntry {
+  date: string;
+  markdown: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiaryDayData {
+  entry: DiaryEntry | null;
+  previous_date: string | null;
+  next_date: string | null;
+}
+
+export interface DiaryMonthData {
+  month: string;
+  dates: string[];
+}
+
+export interface LifeScheduleInput {
+  text: string;
+  at?: string;
+  after_minutes?: number;
+  cron?: string;
+  enabled?: boolean;
+}
+
+export interface LifeScheduleUpdate {
+  text?: string;
+  enabled?: boolean;
+  at?: string;
+  after_minutes?: number;
+  cron?: string;
 }

@@ -3,6 +3,7 @@ package workerexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,19 +24,61 @@ type Server struct {
 	DefaultUser string
 	DefaultHome string
 	Shell       string
+	uid         uint32
+	gid         uint32
+	groups      []uint32
+	root        *os.Root
 }
 
-func New(defaultUser, defaultHome, shell string) *Server {
+// New 在启动时确定唯一执行账号和 home，后续请求不能覆盖
+func New(defaultUser, defaultHome, shell string) (*Server, error) {
 	if defaultUser == "" {
 		defaultUser = "worker"
 	}
-	if defaultHome == "" {
-		defaultHome = "/home/worker"
+	u, err := user.Lookup(defaultUser)
+	if err != nil {
+		return nil, fmt.Errorf("找不到 worker 用户 %s: %w", defaultUser, err)
+	}
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("worker 用户 UID 无效: %w", err)
+	}
+	gid, err := strconv.ParseUint(u.Gid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("worker 用户 GID 无效: %w", err)
+	}
+	groups, _ := u.GroupIds()
+	groupIDs := make([]uint32, 0, len(groups))
+	for _, raw := range groups {
+		id, convErr := strconv.ParseUint(raw, 10, 32)
+		if convErr == nil && id > 0 {
+			groupIDs = append(groupIDs, uint32(id))
+		}
+	}
+	home := strings.TrimSpace(defaultHome)
+	if home == "" {
+		home = strings.TrimSpace(u.HomeDir)
+	}
+	if home == "" {
+		return nil, fmt.Errorf("worker home 不能为空")
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return nil, fmt.Errorf("创建 worker home 失败: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".tmp"), 0o755); err != nil {
+		return nil, fmt.Errorf("创建 worker 临时目录失败: %w", err)
 	}
 	if shell == "" {
 		shell = "/bin/bash"
 	}
-	return &Server{DefaultUser: defaultUser, DefaultHome: defaultHome, Shell: shell}
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		return nil, fmt.Errorf("打开 worker home 失败: %w", err)
+	}
+	return &Server{
+		DefaultUser: defaultUser, DefaultHome: home, Shell: shell,
+		uid: uint32(uid), gid: uint32(gid), groups: groupIDs, root: root,
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -44,6 +87,11 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, workerproto.HealthResponse{OK: true})
 	})
 	mux.HandleFunc("/v1/exec", s.handleExec)
+	mux.HandleFunc("/v1/files/list", s.handleFileList)
+	mux.HandleFunc("/v1/files/read", s.handleFileRead)
+	mux.HandleFunc("/v1/files/write", s.handleFileWrite)
+	mux.HandleFunc("/v1/files/save", s.handleFileSave)
+	mux.HandleFunc("/v1/files/content", s.handleFileContent)
 	return mux
 }
 
@@ -71,45 +119,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Exec(ctx context.Context, req workerproto.ExecRequest) (*workerproto.ExecResponse, error) {
-	username := strings.TrimSpace(req.User)
-	if username == "" {
-		username = s.DefaultUser
-	}
-	u, err := user.Lookup(username)
-	if err != nil {
-		return nil, fmt.Errorf("找不到 worker 用户 %s: %w", username, err)
-	}
-	uid, err := strconv.Atoi(u.Uid)
-	if err != nil {
-		return nil, fmt.Errorf("worker 用户 UID 无效: %w", err)
-	}
-	gid, err := strconv.Atoi(u.Gid)
-	if err != nil {
-		return nil, fmt.Errorf("worker 用户 GID 无效: %w", err)
-	}
-	groups, _ := u.GroupIds()
-	groupIDs := make([]uint32, 0, len(groups))
-	for _, raw := range groups {
-		id, convErr := strconv.Atoi(raw)
-		if convErr == nil && id > 0 {
-			groupIDs = append(groupIDs, uint32(id))
-		}
-	}
-
-	home := strings.TrimSpace(req.Home)
-	if home == "" {
-		home = strings.TrimSpace(u.HomeDir)
-	}
-	if home == "" {
-		home = s.DefaultHome
-	}
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		return nil, fmt.Errorf("创建 worker home 失败: %w", err)
-	}
+	username := s.DefaultUser
+	home := s.DefaultHome
 	tmpDir := filepath.Join(home, ".tmp")
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return nil, fmt.Errorf("创建 worker 临时目录失败: %w", err)
-	}
 
 	timeout := req.TimeoutSeconds
 	if timeout <= 0 {
@@ -119,20 +131,32 @@ func (s *Server) Exec(ctx context.Context, req workerproto.ExecRequest) (*worker
 		timeout = workerproto.MaxTimeoutSeconds
 	}
 
-	stdoutFile, err := os.CreateTemp("", "mumu-worker-stdout-*")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return nil, err
+	}
+	stdoutFile, err := os.CreateTemp(tmpDir, "exec-stdout-*")
 	if err != nil {
 		return nil, err
 	}
 	stdoutPath := stdoutFile.Name()
-	defer os.Remove(stdoutPath)
-	defer stdoutFile.Close()
-	stderrFile, err := os.CreateTemp("", "mumu-worker-stderr-*")
+	keepStdout := false
+	defer func() {
+		if !keepStdout {
+			_ = os.Remove(stdoutPath)
+		}
+	}()
+	stderrFile, err := os.CreateTemp(tmpDir, "exec-stderr-*")
 	if err != nil {
+		_ = os.Remove(stdoutPath)
 		return nil, err
 	}
 	stderrPath := stderrFile.Name()
-	defer os.Remove(stderrPath)
-	defer stderrFile.Close()
+	keepStderr := false
+	defer func() {
+		if !keepStderr {
+			_ = os.Remove(stderrPath)
+		}
+	}()
 
 	cmd := exec.Command(s.Shell, "-lc", req.Command)
 	cmd.Dir = home
@@ -155,9 +179,9 @@ func (s *Server) Exec(ctx context.Context, req workerproto.ExecRequest) (*worker
 	if runtime.GOOS == "linux" {
 		sysProcAttr.Setpgid = true
 	}
-	if os.Geteuid() != uid {
+	if os.Geteuid() != int(s.uid) {
 		sysProcAttr.Credential = &syscall.Credential{
-			Uid: uint32(uid), Gid: uint32(gid), Groups: groupIDs,
+			Uid: s.uid, Gid: s.gid, Groups: s.groups,
 		}
 	}
 	cmd.SysProcAttr = sysProcAttr
@@ -186,18 +210,33 @@ func (s *Server) Exec(ctx context.Context, req workerproto.ExecRequest) (*worker
 		}
 	}
 
-	stdout, outTruncated := readLimited(stdoutPath, workerproto.OutputLimitBytes)
-	stderr, errTruncated := readLimited(stderrPath, workerproto.OutputLimitBytes)
+	_ = stdoutFile.Close()
+	_ = stderrFile.Close()
+	stdoutLog := relativeHomePath(home, stdoutPath)
+	stderrLog := relativeHomePath(home, stderrPath)
+	stdout, outTruncated, stdoutBytes := readLimited(stdoutPath, stdoutLog, workerproto.OutputLimitBytes)
+	stderr, errTruncated, stderrBytes := readLimited(stderrPath, stderrLog, workerproto.OutputLimitBytes)
+	keepStdout = outTruncated
+	keepStderr = errTruncated
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
+	if !outTruncated {
+		stdoutLog = ""
+	}
+	if !errTruncated {
+		stderrLog = ""
+	}
 	return &workerproto.ExecResponse{
-		Stdout: stdout, Stderr: stderr, ExitCode: exitCode,
-		TimedOut: timedOut, Truncated: outTruncated || errTruncated,
+		Stdout: stdout, Stderr: stderr,
+		StdoutBytes: stdoutBytes, StderrBytes: stderrBytes,
+		StdoutLog: stdoutLog, StderrLog: stderrLog,
+		ExitCode: exitCode, TimedOut: timedOut, Truncated: outTruncated || errTruncated,
 	}, nil
 }
 
+// killProcessGroup 先按 worker 权限杀进程组，遇到 sudo 子进程权限不足时走既有非交互 sudo
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -206,24 +245,52 @@ func killProcessGroup(cmd *exec.Cmd) {
 	if pid <= 0 {
 		return
 	}
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	err := syscall.Kill(-pid, syscall.SIGKILL)
+	if err != nil && errors.Is(err, syscall.EPERM) {
+		_ = exec.Command("sudo", "-n", "/bin/kill", "-s", "KILL", "--", "-"+strconv.Itoa(pid)).Run()
+	}
 	_ = cmd.Process.Kill()
 }
 
-func readLimited(path string, limit int64) (string, bool) {
+func relativeHomePath(home, path string) string {
+	rel, err := filepath.Rel(home, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return rel
+}
+
+// readLimited 保留有界 head+tail，并返回实际字节数和可续读日志路径
+func readLimited(path, displayPath string, limit int64) (string, bool, int64) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false
+		return "", false, 0
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	info, err := f.Stat()
 	if err != nil {
-		return "", false
+		return "", false, 0
 	}
-	if int64(len(data)) > limit {
-		return string(data[:limit]), true
+	size := info.Size()
+	if size <= limit {
+		data, readErr := io.ReadAll(f)
+		if readErr != nil {
+			return "", false, size
+		}
+		return string(data), false, size
 	}
-	return string(data), false
+	headSize := limit * 3 / 4
+	tailSize := limit - headSize
+	head := make([]byte, headSize)
+	tail := make([]byte, tailSize)
+	if _, err := f.ReadAt(head, 0); err != nil && !errors.Is(err, io.EOF) {
+		return "", false, size
+	}
+	if _, err := f.ReadAt(tail, size-tailSize); err != nil && !errors.Is(err, io.EOF) {
+		return "", false, size
+	}
+	marker := fmt.Sprintf("\n\n[输出共 %d 字节，超过单流上限 %d；已保留前 %d 字节和后 %d 字节；完整输出见 %s]\n\n", size, limit, headSize, tailSize, displayPath)
+	return string(head) + marker + string(tail), true, size
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -6,17 +6,25 @@ export function FilterPanel({
   actions,
   children,
 }: {
-  title: string;
+  title?: string;
   actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <Card>
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between gap-6">
-          <h2 className="text-lg font-semibold text-foreground">{title}</h2>
-          {actions ? <div className="shrink-0">{actions}</div> : null}
-        </div>
+      <div className="admin-card-pad-compact flex flex-col gap-3">
+        {title || actions ? (
+          <div className="flex items-center justify-between gap-6">
+            {title ? (
+              <h2 className="admin-card-title-compact text-foreground">
+                {title}
+              </h2>
+            ) : (
+              <span />
+            )}
+            {actions ? <div className="shrink-0">{actions}</div> : null}
+          </div>
+        ) : null}
         {children}
       </div>
     </Card>
@@ -33,7 +41,7 @@ export function EmptyState({
   return (
     <div
       className={
-        "rounded-xl border border-dashed border-border bg-card/40 px-4 py-14 text-center text-sm text-muted-foreground " +
+        "admin-body-text rounded-xl border border-dashed border-border bg-card/40 px-6 py-12 text-center text-muted-foreground " +
         (className ?? "")
       }
     >

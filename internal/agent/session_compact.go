@@ -7,15 +7,30 @@ import (
 
 const estimatedImageTokens = 1200
 
-// splitSegments 按真人消息把连续记录切成交互段
+// splitSegments 按输入分段，工具调用尚未闭合时不在新输入处分开
 func splitSegments(entries []sessionEntry) []*sessionSegment {
 	segments := make([]*sessionSegment, 0, len(entries))
+	openCalls := make(map[string]bool)
 	for _, entry := range entries {
-		if len(segments) == 0 || entry.user != nil {
+		if len(segments) == 0 || (entry.user != nil && len(openCalls) == 0) {
 			segments = append(segments, &sessionSegment{})
 		}
 		segment := segments[len(segments)-1]
 		segment.items = append(segment.items, entry)
+		if entry.msg == nil {
+			continue
+		}
+		for _, block := range entry.msg.ContentBlocks {
+			if block == nil {
+				continue
+			}
+			if block.FunctionToolCall != nil {
+				openCalls[block.FunctionToolCall.CallID] = true
+			}
+			if block.FunctionToolResult != nil {
+				delete(openCalls, block.FunctionToolResult.CallID)
+			}
+		}
 	}
 	return segments
 }

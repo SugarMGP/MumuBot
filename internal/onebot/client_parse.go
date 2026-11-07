@@ -24,7 +24,7 @@ func (c *Client) parseGroupMessage(ev *event.GroupMessage) *ConversationMessage 
 		return nil
 	}
 	msg := &ConversationMessage{ConversationKind: "group", TargetID: int64(ev.GroupID)}
-	c.parseConversationMessage(msg, ev.Time(), int64(ev.MessageID), int64(ev.Sender.UserID), ev.Sender.Nickname, ev.Sender.Card, ev.Message)
+	c.parseConversationMessage(msg, ev.Time(), int64(ev.MessageID), int64(ev.Sender.UserID), ev.Sender.Nickname, ev.Sender.Card, ev.Message, ev.Raw())
 	return msg
 }
 
@@ -34,12 +34,12 @@ func (c *Client) parsePrivateMessage(ev *event.PrivateMessage) *ConversationMess
 		return nil
 	}
 	msg := &ConversationMessage{ConversationKind: "private", TargetID: int64(ev.TargetID), IsMentioned: true}
-	c.parseConversationMessage(msg, ev.Time(), int64(ev.MessageID), int64(ev.Sender.UserID), ev.Sender.Nickname, "", ev.Message)
+	c.parseConversationMessage(msg, ev.Time(), int64(ev.MessageID), int64(ev.Sender.UserID), ev.Sender.Nickname, "", ev.Message, ev.Raw())
 	return msg
 }
 
 // parseConversationMessage 填充公共字段并解析消息段，进入前已确定会话作用域
-func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime int64, messageID, userID int64, nickname, groupCard string, chain message.Chain) {
+func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime int64, messageID, userID int64, nickname, groupCard string, chain message.Chain, raw []byte) {
 	c.resolveNestedForwards(chain)
 	if eventTime > 0 {
 		msg.Time = time.Unix(eventTime, 0)
@@ -50,7 +50,7 @@ func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime in
 	msg.UserID = userID
 	msg.Nickname = nickname
 	msg.GroupCard = groupCard
-	parseMessageSegments(chain, msg)
+	parseMessageSegments(chain, msg, rawFileSegments(raw))
 	selfID := c.GetSelfID()
 	for _, atID := range msg.AtList {
 		if selfID > 0 && atID == selfID {
@@ -124,10 +124,10 @@ func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache m
 }
 
 // parseMessageSegments 解析强类型消息段，填充消息各字段
-func parseMessageSegments(chain message.Chain, msg *ConversationMessage) {
+func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFiles []map[string]any) {
 	var textParts []string
 
-	for _, seg := range chain {
+	for index, seg := range chain {
 		switch data := seg.Data.(type) {
 		case message.TextData:
 			textParts = append(textParts, data.Text)
@@ -189,9 +189,10 @@ func parseMessageSegments(chain message.Chain, msg *ConversationMessage) {
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "video", Index: len(msg.Videos) - 1})
 
 		case message.FileData: // 文件
-			// 强类型文件段只有 file_id，没有文件名，展示层回退为 [文件]
-			msg.FileNames = append(msg.FileNames, "")
-			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "file", Index: len(msg.FileNames) - 1})
+			ref := fileRefFromRaw(rawFileAt(rawFiles, index))
+			ref.FileID = data.FileID
+			msg.Files = append(msg.Files, ref)
+			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "file", Index: len(msg.Files) - 1})
 
 		case message.JSONData: // JSON 卡片消息
 			if card := parseCardMessage(data.Data); card != nil {

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agent"
 	"mumu-bot/internal/llm"
+	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/secrets"
 
@@ -39,6 +41,37 @@ type modelInput struct {
 	ReasoningEffort string `json:"reasoning_effort"`
 	APIKey          string `json:"api_key"`
 	Version         int64  `json:"version"`
+}
+
+// ensureModelCapacity 在切换或缩小当前模型窗口前检查真实工作集
+func (a *App) ensureModelCapacity(ctx context.Context, window int) ([]string, bool) {
+	if window <= 0 {
+		return nil, true
+	}
+	currentAgent := a.currentAgent()
+	var affected []string
+	var err error
+	if currentAgent != nil && currentAgent.HasGeneration() {
+		affected, err = currentAgent.ContextCapacity(ctx, window)
+	} else {
+		var mcpManager *mcp.Manager
+		if a.mcpStore != nil {
+			configs, configErr := a.mcpStore.EnabledConfigs(ctx)
+			if configErr != nil {
+				zap.L().Warn("读取 MCP 配置失败，容量检查只计内置工具", zap.Error(configErr))
+			} else if len(configs) > 0 {
+				mcpManager = mcp.NewMCPManager()
+				_ = mcpManager.Load(ctx, configs)
+				defer mcpManager.Close()
+			}
+		}
+		affected, err = agent.ContextCapacityFor(ctx, a.memMgr, window, mcpManager)
+	}
+	if err != nil {
+		zap.L().Warn("检查模型上下文容量失败", zap.Error(err))
+		return nil, false
+	}
+	return affected, true
 }
 
 func (a *App) handleModelCreate(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +118,13 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "请求格式不正确。")
 		return
 	}
+	current, currentErr := a.modelStore.Active(r.Context())
+	if currentErr == nil && current.ID == id && body.ContextWindow > 0 && body.ContextWindow < current.ContextWindow {
+		if affected, ok := a.ensureModelCapacity(r.Context(), body.ContextWindow); !ok || len(affected) > 0 {
+			respondError(w, http.StatusBadRequest, "model_context_too_small", "当前工作集无法装入新的上下文窗口，请先整理上下文。", map[string]any{"sessions": affected})
+			return
+		}
+	}
 	updated, err := a.modelStore.Update(r.Context(), modelprofiles.Profile{
 		ID:              id,
 		Name:            strings.TrimSpace(body.Name),
@@ -100,10 +140,12 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var warning *warningPayload
-	if updated.Active && a.agentReady() {
-		if err := a.mumuAgent.Reload(); err != nil {
-			zap.L().Warn("模型已保存但运行态应用失败", zap.Error(err))
-			warning = &warningPayload{Code: "runtime_reload_failed"}
+	if updated.Active {
+		if agent := a.currentAgent(); agent != nil {
+			if err := agent.Reload(); err != nil {
+				zap.L().Warn("模型已保存但运行态应用失败", zap.Error(err))
+				warning = &warningPayload{Code: "runtime_reload_failed"}
+			}
 		}
 	}
 	respondData(w, http.StatusOK, updated, warning)
@@ -129,6 +171,15 @@ func (a *App) handleModelActivate(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "validation_failed", "模型编号无效。", nil)
 		return
 	}
+	target, targetErr := a.modelStore.Get(r.Context(), id)
+	if targetErr != nil {
+		a.failFromError(w, r, targetErr)
+		return
+	}
+	if affected, ok := a.ensureModelCapacity(r.Context(), target.ContextWindow); !ok || len(affected) > 0 {
+		respondError(w, http.StatusBadRequest, "model_context_too_small", "当前工作集无法装入目标模型的上下文窗口，请先整理上下文。", map[string]any{"sessions": affected})
+		return
+	}
 	old, oldErr := a.modelStore.Active(r.Context())
 	if oldErr != nil && !errors.Is(oldErr, modelprofiles.ErrNotFound) {
 		a.failFromError(w, r, oldErr)
@@ -138,8 +189,8 @@ func (a *App) handleModelActivate(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, err)
 		return
 	}
-	if a.mumuAgent != nil {
-		if err := a.mumuAgent.Reload(); err != nil {
+	if agent := a.currentAgent(); agent != nil {
+		if err := agent.Reload(); err != nil {
 			if oldErr == nil {
 				_ = a.modelStore.SetActive(context.Background(), old.ID)
 			} else {

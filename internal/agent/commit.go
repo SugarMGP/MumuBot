@@ -3,7 +3,11 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+
+	"mumu-bot/internal/config"
 
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
@@ -72,7 +76,7 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 			ConversationKind: msg.ConversationKind, OneBotMessageID: msg.MessageID,
 			TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname,
 			TextContent: msg.Content, DisplayContent: msg.FinalContent,
-			IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs,
+			IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs, FileRefs: msg.Files,
 		}
 		if msg.Reply != nil && msg.Reply.MessageID != 0 {
 			replyTo := msg.Reply.MessageID
@@ -98,10 +102,14 @@ func saveMessageForwards(tx *gorm.DB, log *memory.MessageLog, drafts []forwardDr
 	}
 	rows := make([]memory.MessageForward, 0, len(drafts))
 	for _, draft := range drafts {
+		var parent *string
+		if draft.Parent != "" {
+			parent = &draft.Parent
+		}
 		rows = append(rows, memory.MessageForward{
 			Handle:       draft.Handle,
 			MessageLogID: log.ID,
-			ParentHandle: draft.Parent,
+			ParentHandle: parent,
 			Nodes:        draft.Nodes,
 		})
 	}
@@ -136,6 +144,15 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 		msg = a.applyPendingRecall(ctx, msg)
 	}
 	if !created {
+		return
+	}
+	if a.handleWakeCommand(ctx, msg) {
+		return
+	}
+	// 睡眠期间只保留原文、媒体和转发：不进入 QQ 工作集，也不启动新回合
+	if a.qqSleeping() && msg.UserID != a.bot.GetSelfID() &&
+		msg.ConversationKind != memory.ConversationKindWorker && msg.ConversationKind != memory.ConversationKindLife {
+		a.updateMember(ctx, msg)
 		return
 	}
 	// 引用缓存只由按序提交写入，避免并行解析在撤回后写回旧值
@@ -173,4 +190,57 @@ func (a *Agent) commitOne(item commitItem) {
 	default:
 		a.commitConversationMessage(item)
 	}
+}
+
+// handleWakeCommand 只认主人私聊的纯文本 /wake；指令本身不启动普通 Private ReAct
+func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationMessage) bool {
+	if msg == nil || msg.ConversationKind != memory.ConversationKindPrivate || msg.UserID != config.Snapshot().Identity.MasterUserID {
+		return false
+	}
+	if strings.TrimSpace(msg.Content) != "/wake" || len(msg.MessageParts) == 0 {
+		return false
+	}
+	for _, part := range msg.MessageParts {
+		if part.Kind != "text" {
+			return false
+		}
+	}
+	state, err := a.memory.GetLifeState(ctx)
+	if err != nil {
+		zap.L().Warn("处理主人叫醒指令时读取 life 状态失败", zap.Error(err))
+		return true
+	}
+	if state.Awake {
+		zap.L().Info("life 已经醒着，忽略重复叫醒指令", zap.Int64("user_id", msg.UserID))
+		return true
+	}
+	now := time.Now()
+	summary := ""
+	if state.SleepStartedAt != nil {
+		summary = a.sleepSummaryText(ctx, *state.SleepStartedAt, now)
+	}
+	note := "主人从私聊发出了 /wake。" + "\n" + "真实来源：private:" + fmt.Sprintf("%d", msg.UserID)
+	if summary != "" {
+		note += "\n" + summary
+	}
+	// 先静默落信，确保叫醒后不会因为投递失败而丢掉这次醒来；
+	// 只有信落稳后才改睡眠状态，最后再显式调度 life
+	row, err := a.enqueueSessionMessage(ctx, memory.ConversationKindPrivate, msg.UserID,
+		memory.ConversationKindLife, memory.LifeTargetID, note, false, true)
+	if err != nil {
+		zap.L().Warn("主人叫醒 life 前投信失败", zap.Error(err))
+		return true
+	}
+	if err := a.memory.WakeLife(ctx, now); err != nil {
+		zap.L().Warn("主人叫醒 life 失败", zap.Error(err))
+		a.recordLifeError(context.WithoutCancel(ctx), "wake_failed", err.Error())
+		return true
+	}
+	a.applyLifeAwake(ctx, true)
+	a.sessions.get(memory.ConversationKindLife, memory.LifeTargetID).MarkAgentMessageWake(row.ID)
+	if err := a.memory.MarkSessionMessageWake(context.WithoutCancel(ctx), row.ID); err != nil {
+		zap.L().Warn("持久化叫醒消息的 wake 标记失败", zap.Error(err))
+	}
+	a.scheduleLifeThink()
+	return true
 }

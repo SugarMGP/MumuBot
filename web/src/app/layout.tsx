@@ -21,16 +21,36 @@ import { useSession } from "@/hooks/use-session";
 import { cn } from "@/lib/cn";
 import { AppErrorBoundary } from "./error-boundary";
 
-const navItems = [
-  { href: "/admin", key: "overview", end: true },
-  { href: "/admin/memories", key: "memories" },
-  { href: "/admin/topics", key: "topics" },
-  { href: "/admin/members", key: "members" },
-  { href: "/admin/conversations", key: "conversations" },
-  { href: "/admin/stickers", key: "stickers" },
-  { href: "/admin/personas", key: "personas" },
-  { href: "/admin/settings", key: "settings" },
-  { href: "/admin/system", key: "system" },
+const navGroups = [
+  {
+    key: "",
+    items: [{ href: "/admin", key: "overview", end: true }],
+  },
+  {
+    key: "lifeMemory",
+    items: [
+      { href: "/admin/life", key: "life", end: false },
+      { href: "/admin/diaries", key: "diaries", end: false },
+      { href: "/admin/memories", key: "memories", end: false },
+      { href: "/admin/topics", key: "topics", end: false },
+    ],
+  },
+  {
+    key: "communication",
+    items: [
+      { href: "/admin/conversations", key: "conversations", end: false },
+      { href: "/admin/members", key: "members", end: false },
+      { href: "/admin/stickers", key: "stickers", end: false },
+    ],
+  },
+  {
+    key: "operations",
+    items: [
+      { href: "/admin/personas", key: "personas", end: false },
+      { href: "/admin/settings", key: "settings", end: false },
+      { href: "/admin/system", key: "system", end: false },
+    ],
+  },
 ];
 
 export function AdminLayout() {
@@ -108,31 +128,47 @@ export function AdminLayout() {
             className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
             aria-label={t("nav.label")}
           >
-            <ul className="space-y-1">
-              {navItems.map((item) => (
-                <li key={item.href}>
-                  <NavLink
-                    to={item.href}
-                    end={item.end}
-                    title={t(`nav.${item.key}`)}
-                    className={({ isActive }) =>
-                      cn(
-                        "group relative flex h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
-                        isActive
-                          ? "bg-primary/12 text-primary before:absolute before:-left-3 before:h-7 before:w-1 before:rounded-r-full before:bg-primary"
-                          : "text-foreground/60 hover:bg-primary/10 hover:text-primary",
-                      )
-                    }
-                  >
-                    <AdminIcon
-                      name={item.key === "personas" ? "persona" : item.key}
-                      className="size-[18px]"
-                    />
-                    <span>{t(`nav.${item.key}`)}</span>
-                  </NavLink>
-                </li>
+            <div className="space-y-3">
+              {navGroups.map((group, groupIndex) => (
+                <div
+                  key={group.key || "home"}
+                  className={cn(
+                    groupIndex > 0 && "border-t border-border/70 pt-3",
+                  )}
+                >
+                  {group.key ? (
+                    <p className="px-3 pb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground/60">
+                      {t(`nav.groups.${group.key}`)}
+                    </p>
+                  ) : null}
+                  <ul className="space-y-1">
+                    {group.items.map((item) => (
+                      <li key={item.href}>
+                        <NavLink
+                          to={item.href}
+                          end={item.end}
+                          title={t(`nav.${item.key}`)}
+                          className={({ isActive }) =>
+                            cn(
+                              "group relative flex h-10 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
+                              isActive
+                                ? "bg-primary/12 text-primary before:absolute before:-left-3 before:h-6 before:w-1 before:rounded-r-full before:bg-primary"
+                                : "text-foreground/60 hover:bg-primary/10 hover:text-primary",
+                            )
+                          }
+                        >
+                          <AdminIcon
+                            name={item.key === "personas" ? "persona" : item.key}
+                            className="size-[18px]"
+                          />
+                          <span>{t(`nav.${item.key}`)}</span>
+                        </NavLink>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           </nav>
           <div className="mt-3 border-t border-border pt-3">
             <div className="flex items-center justify-between px-2 pb-2">

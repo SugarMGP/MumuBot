@@ -3,12 +3,16 @@ package agent
 import (
 	"context"
 	"strings"
+	"time"
 
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/schema"
 )
+
+const toolResultPreviewRunes = tools.ToolResultPreviewRunes
 
 // BeginToolTranscript 在执行工具前幂等登记工具回执
 func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, callID, arguments string) (id uint, existingResult string, resumed bool, err error) {
@@ -49,22 +53,34 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 		blocks = textResultBlocks(toolResultManifest(blocks))
 		enhanced = nil
 	}
-	if resultRef == "" && row.ToolName != "readToolResult" && !hasMediaBlock(blocks) {
-		if fullText := blocksText(blocks); len([]rune(fullText)) > 5000 {
-			ref, saveErr := s.memory.SaveToolResultText(ctx, fullText)
-			if saveErr != nil {
-				return "", nil, saveErr
-			}
+	windowRead := tools.IsWindowReadTool(row.ToolName)
+	if resultRef == "" && !windowRead && !hasMediaBlock(blocks) {
+		fullText := blocksText(blocks)
+		preview, ref, truncated, saveErr := tools.ExternalizeText(ctx, s.memory, fullText)
+		if saveErr != nil {
+			return "", nil, saveErr
+		}
+		if truncated {
 			resultRef = ref
-			preview := truncateRunes(fullText, 1600) + "\n\n[工具结果已保存，使用 readToolResult 读取全文]"
 			blocks = textResultBlocks(preview)
 			resultText = preview
 			enhanced = nil
 		}
 	}
+	toolArguments := ""
+	var prior struct {
+		Extra map[string]any `json:"extra"`
+	}
+	if sonic.Unmarshal(row.Payload, &prior) == nil {
+		toolArguments, _ = prior.Extra["tool_arguments"].(string)
+	}
 	payload, err := sonic.Marshal(&schema.AgenticMessage{
-		Role:  schema.AgenticRoleTypeUser,
-		Extra: map[string]any{"source": "tool_result", "tool_status": status},
+		Role: schema.AgenticRoleTypeUser,
+		Extra: map[string]any{
+			"source": "tool_result", "tool_status": status,
+			"completed_at":   time.Now().UTC().Format(time.RFC3339Nano),
+			"tool_arguments": strings.TrimSpace(toolArguments),
+		},
 		ContentBlocks: []*schema.ContentBlock{{
 			Type: schema.ContentBlockTypeFunctionToolResult,
 			FunctionToolResult: &schema.FunctionToolResult{
@@ -80,6 +96,7 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	}
 	var resultMsg schema.AgenticMessage
 	if err := sonic.Unmarshal(payload, &resultMsg); err == nil {
+		tagTranscriptEntryID(&resultMsg, id)
 		s.mu.Lock()
 		s.seen = append(s.seen, sessionEntry{msg: &resultMsg, transcriptID: id})
 		s.mu.Unlock()
@@ -221,14 +238,6 @@ func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, tool
 	return entry, created, nil
 }
 
-func truncateRunes(value string, max int) string {
-	runes := []rune(value)
-	if len(runes) <= max {
-		return value
-	}
-	return string(runes[:max]) + "…"
-}
-
 func commonValue(value *string) string {
 	if value == nil {
 		return ""
@@ -265,11 +274,10 @@ func convertFile(value *schema.ToolOutputFile) *schema.UserInputFile {
 }
 
 // CaptureStateToolResults 补记 Eino 提供给模型但未被工具 wrapper 捕获的结果，例如未知工具
-func (s *Session) CaptureStateToolResults(ctx context.Context, runID string, messages []*schema.AgenticMessage) ([]uint, error) {
+func (s *Session) CaptureStateToolResults(ctx context.Context, runID string, messages []*schema.AgenticMessage) error {
 	if s.memory == nil || strings.TrimSpace(runID) == "" {
-		return nil, nil
+		return nil
 	}
-	var captured []uint
 	for _, message := range messages {
 		if message == nil {
 			continue
@@ -278,15 +286,20 @@ func (s *Session) CaptureStateToolResults(ctx context.Context, runID string, mes
 			if block == nil || block.FunctionToolResult == nil || strings.TrimSpace(block.FunctionToolResult.CallID) == "" {
 				continue
 			}
+			// 已带行号的历史结果不再写库，也不为新 run 复制一份
+			if transcriptEntryID(message) != 0 {
+				continue
+			}
 			result := block.FunctionToolResult
-			if _, _, ok, err := s.memory.ResumeToolTranscript(ctx, s.kind, s.targetID, runID, result.CallID); err != nil {
-				return nil, err
+			if id, _, ok, err := s.memory.ResumeToolTranscript(ctx, s.kind, s.targetID, runID, result.CallID); err != nil {
+				return err
 			} else if ok {
+				tagTranscriptEntryID(message, id)
 				continue
 			}
 			payload, err := sonic.Marshal(message)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			status := "succeeded"
 			var outcome struct {
@@ -301,18 +314,18 @@ func (s *Session) CaptureStateToolResults(ctx context.Context, runID string, mes
 				ToolStatus: status, Payload: payload,
 			})
 			if err != nil {
-				return nil, err
+				return err
 			}
+			tagTranscriptEntryID(message, entry.ID)
 			if !created {
 				continue
 			}
 			s.mu.Lock()
 			s.seen = append(s.seen, sessionEntry{msg: message, transcriptID: entry.ID})
 			s.mu.Unlock()
-			captured = append(captured, entry.ID)
 		}
 	}
-	return captured, nil
+	return nil
 }
 
 func toolResultBlocksText(blocks []*schema.FunctionToolResultContentBlock) string {

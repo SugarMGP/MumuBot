@@ -9,27 +9,31 @@ import { PageSkeleton } from "@/components/admin/loading";
 import { toastApiError, toastSuccess } from "@/components/admin/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/form-controls";
 import { formatDateTime } from "@/lib/format";
 
 function ConversationRow({
   conversation,
+  busy,
   onBlockedChange,
   onPromptSaved,
 }: {
   conversation: Conversation;
+  busy: boolean;
   onBlockedChange: (blocked: boolean) => void;
-  onPromptSaved: (prompt: string) => void;
+  onPromptSaved: (prompt: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [prompt, setPrompt] = useState(conversation.extra_prompt);
 
   const label = conversation.name || conversation.remote_remark || "";
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-muted/40">
+    <div className="-mx-4 flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-muted/40">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">
@@ -51,6 +55,7 @@ function ConversationRow({
           <Button
             variant={conversation.blocked ? "outline" : "ghost"}
             size="xs"
+            disabled={busy}
             onClick={() => onBlockedChange(!conversation.blocked)}
           >
             {conversation.blocked ? t("contacts.unblock") : t("contacts.block")}
@@ -88,11 +93,15 @@ function ConversationRow({
               </Button>
               <Button
                 size="xs"
-                onClick={() => {
-                  onPromptSaved(prompt);
-                  setEditing(false);
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  const saved = await onPromptSaved(prompt);
+                  setSaving(false);
+                  if (saved) setEditing(false);
                 }}
               >
+                {saving ? <Spinner /> : null}
                 {t("contacts.savePrompt")}
               </Button>
             </div>
@@ -184,8 +193,8 @@ export default function ConversationsPage() {
     empty: string,
   ) => (
     <Card>
-      <div className="p-4">
-        <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+      <div className="admin-card-pad-compact">
+        <h2 className="admin-card-title-compact text-foreground">{title}</h2>
         <div className="mt-2 divide-y divide-border">
           {items.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
@@ -196,6 +205,7 @@ export default function ConversationsPage() {
               <ConversationRow
                 key={`${conversation.kind}-${conversation.target_id}`}
                 conversation={conversation}
+                busy={mutation.isPending}
                 onBlockedChange={(blocked) =>
                   mutation.mutate({
                     kind: conversation.kind,
@@ -203,13 +213,18 @@ export default function ConversationsPage() {
                     blocked,
                   })
                 }
-                onPromptSaved={(prompt) =>
-                  mutation.mutate({
-                    kind: conversation.kind,
-                    targetID: conversation.target_id,
-                    extraPrompt: prompt,
-                  })
-                }
+                onPromptSaved={async (prompt) => {
+                  try {
+                    await mutation.mutateAsync({
+                      kind: conversation.kind,
+                      targetID: conversation.target_id,
+                      extraPrompt: prompt,
+                    });
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                }}
               />
             ))
           )}

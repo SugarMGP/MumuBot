@@ -16,14 +16,12 @@ export function SectionCard({
 }) {
   return (
     <Card className={className}>
-      <div className="flex flex-col gap-4 p-5">
+      <div className="admin-card-stack admin-card-pad">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+            <h2 className="admin-card-title text-foreground">{title}</h2>
             {description ? (
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {description}
-              </p>
+              <p className="admin-card-desc mt-1">{description}</p>
             ) : null}
           </div>
           {actions ? <div className="shrink-0">{actions}</div> : null}

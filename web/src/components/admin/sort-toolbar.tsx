@@ -32,7 +32,7 @@ export function SortToolbar({
 
   return (
     <div className="flex items-center justify-between gap-4">
-      <div className="text-sm text-muted-foreground">{summary}</div>
+      <div className="admin-body-text text-muted-foreground">{summary}</div>
       <div className="flex items-center gap-2">
         <div className="inline-flex overflow-hidden rounded-lg border border-border">
           {options.map((option) => {

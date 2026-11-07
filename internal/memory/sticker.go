@@ -103,7 +103,7 @@ func (m *Manager) SearchStickerPage(ctx context.Context, keyword, cursorRaw stri
 		args := make([]interface{}, 0, len(keywords))
 		for _, kw := range keywords {
 			likeConditions = append(likeConditions, "description LIKE ?")
-			args = append(args, "%"+kw+"%")
+			args = append(args, LiteralContainsPattern(kw))
 		}
 		q = q.Where(strings.Join(likeConditions, " OR "), args...)
 	}

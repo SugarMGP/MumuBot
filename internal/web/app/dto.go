@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"mumu-bot/internal/config"
+	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/modelstats"
@@ -43,10 +44,15 @@ type moodDTO struct {
 }
 
 type emotionDTO struct {
-	Kind       string    `json:"kind"`
-	Strength   float64   `json:"strength"`
-	Reason     string    `json:"reason"`
-	OccurredAt time.Time `json:"occurred_at"`
+	ID           uint      `json:"id"`
+	Kind         string    `json:"kind"`
+	Fact         string    `json:"fact"`
+	Reason       string    `json:"reason"`
+	Strength     float64   `json:"strength"`
+	StrengthBand string    `json:"strength_band"`
+	OccurredAt   time.Time `json:"occurred_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Version      uint64    `json:"version"`
 }
 
 type dashboardResponse struct {
@@ -55,6 +61,7 @@ type dashboardResponse struct {
 	Runtime           runtimeDTO   `json:"runtime"`
 	Mood              *moodDTO     `json:"mood"`
 	Emotions          []emotionDTO `json:"emotions"`
+	EmotionsError     bool         `json:"emotions_error"`
 }
 
 type stickerDTO struct {
@@ -96,16 +103,19 @@ type conversationsResponse struct {
 }
 
 type memoryDTO struct {
-	ID            uint      `json:"id"`
-	SubjectType   string    `json:"subject_type"`
-	SubjectTarget string    `json:"subject_target"`
-	MemoryType    string    `json:"memory_type"`
-	Label         string    `json:"label"`
-	Content       string    `json:"content"`
-	Pinned        bool      `json:"pinned"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             uint       `json:"id"`
+	SubjectType    string     `json:"subject_type"`
+	SubjectTarget  string     `json:"subject_target"`
+	MemoryType     string     `json:"memory_type"`
+	Label          string     `json:"label"`
+	Content        string     `json:"content"`
+	Pinned         bool       `json:"pinned"`
+	Status         string     `json:"status"`
+	StabilityDays  float64    `json:"stability_days"`
+	RecallAnchorAt time.Time  `json:"recall_anchor_at"`
+	ForgetAt       *time.Time `json:"forget_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type memoryDetailResponse struct {
@@ -133,18 +143,24 @@ type topicSummaryChangeDTO struct {
 }
 
 type topicListItemDTO struct {
-	ID               uint      `json:"id"`
-	Title            string    `json:"title"`
-	Gist             string    `json:"gist"`
-	Keywords         []string  `json:"keywords"`
-	Status           string    `json:"status"`
-	ConversationKind string    `json:"conversation_kind"`
-	TargetID         int64     `json:"target_id"`
-	MessageCount     int64     `json:"message_count"`
-	AnchorCount      int       `json:"anchor_count"`
-	SourceCount      int       `json:"source_count"`
-	OpenLoopCount    int       `json:"open_loop_count"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               uint       `json:"id"`
+	Title            string     `json:"title"`
+	Gist             string     `json:"gist"`
+	Keywords         []string   `json:"keywords"`
+	Status           string     `json:"status"`
+	StabilityDays    float64    `json:"stability_days"`
+	RecallAnchorAt   time.Time  `json:"recall_anchor_at"`
+	ForgetAt         time.Time  `json:"forget_at"`
+	ForgottenAt      *time.Time `json:"forgotten_at,omitempty"`
+	SourceTotal      int        `json:"source_total"`
+	SourceAvailable  int        `json:"source_available"`
+	ConversationKind string     `json:"conversation_kind"`
+	TargetID         int64      `json:"target_id"`
+	MessageCount     int64      `json:"message_count"`
+	AnchorCount      int        `json:"anchor_count"`
+	SourceCount      int        `json:"source_count"`
+	OpenLoopCount    int        `json:"open_loop_count"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type topicMessageDTO struct {
@@ -177,6 +193,7 @@ type personaSummaryDTO struct {
 	Version     int64     `json:"version"`
 	CardChars   int       `json:"card_chars"`
 	SimChars    int       `json:"sim_chars"`
+	LifeChars   int       `json:"life_chars"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
@@ -184,6 +201,7 @@ type personaDetailDTO struct {
 	personaSummaryDTO
 	PersonaCard      string `json:"persona_card"`
 	SimulationPrompt string `json:"simulation_prompt"`
+	LifePrompt       string `json:"life_prompt"`
 }
 
 type personasResponse struct {
@@ -194,6 +212,7 @@ type personasResponse struct {
 type personaTemplateResponse struct {
 	PersonaCard      string `json:"persona_card"`
 	SimulationPrompt string `json:"simulation_prompt"`
+	LifePrompt       string `json:"life_prompt"`
 }
 
 type settingsResponse struct {
@@ -255,13 +274,16 @@ type systemContextDTO struct {
 	ThinkIntervalSec  int          `json:"think_interval_sec"`
 	ThinkDebounceMS   int          `json:"think_debounce_ms"`
 	MaxStep           int          `json:"max_step"`
+	LifeMaxStep       int          `json:"life_max_step"`
+	WorkerMaxStep     int          `json:"worker_max_step"`
 	Compactor         compactorDTO `json:"compactor"`
 }
 
 type systemModelDTO struct {
-	Active        *modelProfileDTO `json:"active"`
-	MCPToolCount  int              `json:"mcp_tool_count"`
-	ContextWindow int              `json:"context_window"`
+	Active        *modelProfileDTO   `json:"active"`
+	MCPToolCount  int                `json:"mcp_tool_count"`
+	MCPStatuses   []mcp.ServerStatus `json:"mcp_statuses,omitempty"`
+	ContextWindow int                `json:"context_window"`
 }
 
 type modelProfileDTO struct {
@@ -273,7 +295,8 @@ type modelProfileDTO struct {
 }
 
 type systemRuntimeDTO struct {
-	Connected           bool  `json:"connected"`
+	Connected           bool
+	AgentReady          bool  `json:"connected"`
 	ReconnectSec        int   `json:"reconnect_sec"`
 	SchemaVersion       int   `json:"schema_version"`
 	LatestSchemaVersion int   `json:"latest_schema_version"`

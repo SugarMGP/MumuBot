@@ -7,6 +7,8 @@ import { AdminLayout } from "./layout";
 
 const LoginPage = lazy(() => import("@/pages/login"));
 const DashboardPage = lazy(() => import("@/pages/dashboard"));
+const LifePage = lazy(() => import("@/pages/life"));
+const DiariesPage = lazy(() => import("@/pages/diaries"));
 const MemoriesPage = lazy(() => import("@/pages/memories"));
 const MemoryDetailPage = lazy(() => import("@/pages/memory-detail"));
 const TopicsPage = lazy(() => import("@/pages/topics"));
@@ -62,6 +64,16 @@ export const router = createBrowserRouter([
         path: "admin",
         element: withSuspense(<DashboardPage />),
         handle: { titleKey: "dashboard.title" },
+      },
+      {
+        path: "admin/life",
+        element: withSuspense(<LifePage />),
+        handle: { titleKey: "life.title" },
+      },
+      {
+        path: "admin/diaries",
+        element: withSuspense(<DiariesPage />),
+        handle: { titleKey: "diaries.title" },
       },
       {
         path: "admin/memories",

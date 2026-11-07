@@ -51,6 +51,9 @@ function bucketLabel(row: StatsSeriesRow): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const chartFont =
+  '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif';
+
 export default function SystemModelsPage() {
   const { t, i18n } = useTranslation();
   const { resolved } = useTheme();
@@ -69,37 +72,37 @@ export default function SystemModelsPage() {
     const series = query.data?.series ?? [];
     return {
       color: palette.colors,
-      textStyle: { color: palette.text },
+      textStyle: { color: palette.text, fontFamily: chartFont },
       tooltip: {
         trigger: "axis",
         backgroundColor: palette.tooltipBg,
         borderColor: palette.axis,
-        textStyle: { color: palette.tooltipText },
+        textStyle: { color: palette.tooltipText, fontFamily: chartFont },
       },
       legend: {
         top: 0,
-        textStyle: { color: palette.text, fontSize: 11 },
+        textStyle: { color: palette.text, fontSize: 11, fontFamily: chartFont },
       },
       grid: { left: 12, right: 16, top: 40, bottom: 8, containLabel: true },
       xAxis: {
         type: "category",
         data: series.map(bucketLabel),
         axisLine: { lineStyle: { color: palette.axis } },
-        axisLabel: { color: palette.text, fontSize: 10 },
+        axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
       },
       yAxis: [
         {
           type: "value",
           name: t("system.stats.requestShort"),
-          nameTextStyle: { color: palette.text, fontSize: 10 },
-          axisLabel: { color: palette.text, fontSize: 10 },
+          nameTextStyle: { color: palette.text, fontSize: 10, fontFamily: chartFont },
+          axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
           splitLine: { lineStyle: { color: palette.split } },
         },
         {
           type: "value",
           name: t("system.stats.tokenShort"),
-          nameTextStyle: { color: palette.text, fontSize: 10 },
-          axisLabel: { color: palette.text, fontSize: 10 },
+          nameTextStyle: { color: palette.text, fontSize: 10, fontFamily: chartFont },
+          axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
           splitLine: { show: false },
         },
         {
@@ -107,8 +110,8 @@ export default function SystemModelsPage() {
           name: t("system.stats.latencyShort"),
           position: "right",
           offset: 48,
-          nameTextStyle: { color: palette.text, fontSize: 10 },
-          axisLabel: { color: palette.text, fontSize: 10 },
+          nameTextStyle: { color: palette.text, fontSize: 10, fontFamily: chartFont },
+          axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
           splitLine: { show: false },
         },
       ],
@@ -160,24 +163,24 @@ export default function SystemModelsPage() {
   const pieOptions = useMemo(() => {
     const build = (rows: AggregateRow[], title: string) => ({
       color: palette.colors,
-      textStyle: { color: palette.text },
+      textStyle: { color: palette.text, fontFamily: chartFont },
       tooltip: {
         trigger: "item",
         backgroundColor: palette.tooltipBg,
         borderColor: palette.axis,
-        textStyle: { color: palette.tooltipText },
+        textStyle: { color: palette.tooltipText, fontFamily: chartFont },
       },
       legend: {
         bottom: 0,
         itemWidth: 10,
         itemHeight: 10,
         itemGap: 12,
-        textStyle: { color: palette.text, fontSize: 11 },
+        textStyle: { color: palette.text, fontSize: 11, fontFamily: chartFont },
       },
       title: {
         text: title,
         left: "center",
-        textStyle: { color: palette.text, fontSize: 12, fontWeight: 500 },
+        textStyle: { color: palette.text, fontSize: 12, fontWeight: 500, fontFamily: chartFont },
       },
       series: [
         {
@@ -208,7 +211,7 @@ export default function SystemModelsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <PageHeader
           title={t("system.title")}
           subtitle={t("system.subtitle")}
@@ -234,7 +237,7 @@ export default function SystemModelsPage() {
       </div>
 
       <Card>
-        <div className="grid grid-cols-5 divide-x divide-border">
+        <div className="grid grid-cols-2 divide-x divide-border min-[1280px]:grid-cols-5">
           {[
             {
               label: t("system.stats.requests"),
@@ -282,13 +285,13 @@ export default function SystemModelsPage() {
               }),
             },
           ].map((item) => (
-            <div key={item.label} className="p-4">
-              <p className="text-xs text-muted-foreground">{item.label}</p>
-              <p className="admin-number mt-2 text-2xl font-semibold text-foreground">
+            <div key={item.label} className="admin-card-pad-compact">
+              <p className="admin-caption-text text-muted-foreground">{item.label}</p>
+              <p className="admin-metric-value mt-2 text-2xl text-foreground">
                 {item.value}
               </p>
               {item.hint ? (
-                <p className="mt-1 text-xs text-muted-foreground/70">
+                <p className="admin-caption-text mt-1 text-muted-foreground/60">
                   {item.hint}
                 </p>
               ) : null}
@@ -297,7 +300,7 @@ export default function SystemModelsPage() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-5">
+      <div className="grid grid-cols-1 gap-4 min-[1400px]:grid-cols-[minmax(0,1.6fr)_minmax(360px,1fr)]">
         <SectionCard title={t("system.stats.trend")}>
           {query.data.series.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">
@@ -315,7 +318,7 @@ export default function SystemModelsPage() {
         </SectionCard>
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-5">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,1fr))] gap-4">
         {[
           {
             title: t("system.stats.byTask"),
