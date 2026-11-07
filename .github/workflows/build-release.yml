@@ -9,7 +9,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   prepare:
@@ -33,11 +32,6 @@ jobs:
     - name: Build frontend assets
       working-directory: web
       run: bun run build
-
-    - name: Set up Go
-      uses: actions/setup-go@v7
-      with:
-        go-version-file: go.mod
 
     - name: Prepare build directory
       run: |
@@ -99,6 +93,7 @@ jobs:
         sudo apt-get install -y libwebp-dev
         # libwebp-dev 带 libwebp.a 与 libsharpyuv.a，整份静态链进去，产物不依赖任何系统库
         echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv -lm" >> $GITHUB_ENV
+        # 避免 glibc 的 DNS 与账号查询在静态产物运行时依赖 NSS 动态库
         echo "GOFLAGS=-tags=netgo,osusergo" >> $GITHUB_ENV
 
     - name: Install MSYS2 and libwebp (Windows)
@@ -152,8 +147,19 @@ jobs:
         retention-days: 1
 
   container:
-    name: Publish Container Image
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.image }} image (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [main, worker]
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+            machine: x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
     permissions:
       contents: read
       packages: write
@@ -161,8 +167,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      - name: Verify native architecture and set image name
+        run: |
+          test "$(uname -m)" = "${{ matrix.platform.machine }}"
+          echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}${{ matrix.image == 'worker' && '-worker' || '' }}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -178,38 +186,57 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
+          images: ${{ env.IMAGE_NAME }}
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: VERSION=${{ github.ref_name }}
-          tags: ${{ steps.meta.outputs.tags }}
+          file: ${{ matrix.image == 'worker' && './Dockerfile.worker' || './Dockerfile' }}
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: ${{ matrix.image == 'main' && format('VERSION={0}', github.ref_name) || '' }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=container
-          cache-to: type=gha,mode=max,scope=container
+          cache-from: type=gha,scope=image-${{ matrix.image }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.image }}-${{ matrix.platform.arch }}
 
-  worker-container:
-    name: Publish Worker Image
+      - name: Export image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests-${{ matrix.image }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-images:
+    name: Publish ${{ matrix.image }} image
+    needs: container
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [main, worker]
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+      - name: Set image name
+        run: echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}${{ matrix.image == 'worker' && '-worker' || '' }}" >> "$GITHUB_ENV"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      - name: Download image digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-digests-${{ matrix.image }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -221,11 +248,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract worker image metadata
-        id: worker-meta
+      - name: Extract image metadata
+        id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -233,21 +260,23 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest
 
-      - name: Build and push worker image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile.worker
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.worker-meta.outputs.tags }}
-          labels: ${{ steps.worker-meta.outputs.labels }}
-          cache-from: type=gha,scope=worker-container
-          cache-to: type=gha,mode=max,scope=worker-container
+      - name: Publish multi-platform image
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=(--tag "$tag")
+          done
+          for digest in *; do
+            args+=("$IMAGE_NAME@sha256:$digest")
+          done
+          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools inspect --raw "$IMAGE_NAME:$GITHUB_REF_NAME" | jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'
 
   release:
     name: Publish Release
-    needs: [build, container, worker-container]
+    needs: [build, publish-images]
     runs-on: ubuntu-latest
     permissions:
       contents: write

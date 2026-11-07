@@ -56,8 +56,7 @@ RUN set -eux; \
     node --version; npm --version; bun --version; bun --revision; uv --version; sd --version; fdfind --version; batcat --version; command -v 7z pdftotext
 
 # 多用户 Nix；容器没有 systemd，由 entrypoint 启动 nix-daemon
-# QEMU 不支持安装阶段的 seccomp 过滤，仅在安装命令中关闭
-RUN curl -fLsS https://nixos.org/nix/install | NIX_CONFIG='filter-syscalls = false' sh -s -- --daemon
+RUN curl -fLsS https://nixos.org/nix/install | sh -s -- --daemon
 RUN mkdir -p /etc/nix && \
     printf 'experimental-features = nix-command flakes\nsandbox = false\ntrusted-users = root worker\n' >> /etc/nix/nix.conf
 
