@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { lifeApi } from "@/api/client-endpoints";
+import { ApiError } from "@/api/client";
 import type { LifeData, LifeSchedule, LifeScheduleUpdate } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { PageHeader } from "@/components/admin/page-header";
@@ -35,6 +36,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
+import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
+import { LifeWorkers } from "./life-workers";
 
 type TimingMode = "once" | "after" | "cron";
 
@@ -114,6 +117,21 @@ export default function LifePage() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<ScheduleForm | null>(null);
   const [wakeOpen, setWakeOpen] = useState(false);
+  const [formBaseline, setFormBaseline] = useState("");
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [formError, setFormError] = useState("");
+  const dirty = form !== null && JSON.stringify(form) !== formBaseline;
+  const blocker = useDirtyGuard(dirty);
+  const openForm = (next: ScheduleForm) => {
+    setForm(next);
+    setFormBaseline(JSON.stringify(next));
+    setFormError("");
+  };
+  const closeForm = () => {
+    if (saveMutation.isPending) return;
+    if (dirty) setDiscardOpen(true);
+    else setForm(null);
+  };
 
   const query = useQuery({
     queryKey: ["life"],
@@ -172,9 +190,13 @@ export default function LifePage() {
     onSuccess: (result) => {
       applyData(result.data);
       setForm(null);
+      setFormError("");
       toastSuccess(t("life.saved"));
     },
-    onError: toastApiError,
+    onError: (error) => {
+      setFormError(error instanceof ApiError ? error.code : "unknown");
+      toastApiError(error);
+    },
   });
 
   const toggleMutation = useMutation({
@@ -188,7 +210,7 @@ export default function LifePage() {
   });
 
   if (query.isPending) return <PageSkeleton />;
-  if (query.isError || !query.data) {
+  if (!query.data) {
     return (
       <p className="text-sm text-muted-foreground">{t("life.loadFailed")}</p>
     );
@@ -209,7 +231,7 @@ export default function LifePage() {
   const openEdit = (schedule: LifeSchedule) => {
     const timing: TimingMode = schedule.cron ? "cron" : "once";
     const at = toLocalInput(schedule.at);
-    setForm({
+    openForm({
       id: schedule.id,
       text: schedule.text,
       timing,
@@ -235,9 +257,9 @@ export default function LifePage() {
 
   return (
     <div className="space-y-6">
+      {query.isRefetchError ? <p role="alert" className="text-sm text-destructive">{t("common.refreshFailed")}</p> : null}
       <PageHeader
         title={t("life.title")}
-        subtitle={t("life.subtitle")}
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -261,7 +283,6 @@ export default function LifePage() {
 
       <SectionCard
         title={t("life.stateTitle")}
-        description={t("life.stateSubtitle")}
         actions={
           <div className="flex items-center gap-2">
             <Badge variant={state.running ? "accent" : "ghost"}>
@@ -354,15 +375,15 @@ export default function LifePage() {
                 )
               }
             />
+            {state.retry_at || state.retry_exhausted ? <StatusRow label={t("life.retry")} value={state.retry_at ? t("life.retryAt", { count: state.retry_count, time: formatDateTime(state.retry_at) }) : t("life.retryExhausted")} /> : null}
           </div>
         </div>
       </SectionCard>
 
       <SectionCard
         title={t("life.schedulesTitle")}
-        description={t("life.schedulesSubtitle")}
         actions={
-          <Button size="sm" onClick={() => setForm({ ...emptyForm })}>
+          <Button size="sm" onClick={() => openForm({ ...emptyForm })}>
             {t("life.newSchedule")}
           </Button>
         }
@@ -461,7 +482,9 @@ export default function LifePage() {
         )}
       </SectionCard>
 
-      <Dialog open={form !== null} onOpenChange={(open) => !open && setForm(null)}>
+      <LifeWorkers workers={data.workers} />
+
+      <Dialog open={form !== null} onOpenChange={(open) => !open && closeForm()}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
@@ -471,7 +494,7 @@ export default function LifePage() {
           </DialogHeader>
           {form ? (
             <div className="mt-4 space-y-4">
-              <Field label={t("life.text")}>
+              <Field label={t("life.text")} error={formError === "life_schedule_text_invalid" ? t(`errors.${formError}`) : undefined}>
                 <Textarea
                   rows={3}
                   value={form.text}
@@ -481,7 +504,7 @@ export default function LifePage() {
                   }
                 />
               </Field>
-              <Field label={t("life.timing")}>
+              <Field label={t("life.timing")} error={formError === "life_schedule_time_invalid" ? t(`errors.${formError}`) : undefined}>
                 <NativeSelect
                   value={form.timing}
                   onChange={(event) =>
@@ -540,7 +563,7 @@ export default function LifePage() {
             <Button
               variant="ghost"
               disabled={saveMutation.isPending}
-              onClick={() => setForm(null)}
+              onClick={closeForm}
             >
               {t("common.cancel")}
             </Button>
@@ -554,6 +577,9 @@ export default function LifePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DirtyGuardDialog blocker={blocker} />
+      <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title={t("common.unsavedTitle")} description={t("common.unsavedBody")} confirmLabel={t("common.leave")} destructive={false} onConfirm={() => { setDiscardOpen(false); setForm(null); }} />
 
       <ConfirmDialog
         open={wakeOpen}

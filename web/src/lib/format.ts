@@ -22,9 +22,3 @@ export function truncateMiddle(value: string, head: number, tail = 0): string {
   if (tail <= 0) return runes.slice(0, head).join("") + "…";
   return runes.slice(0, head).join("") + "…" + runes.slice(-tail).join("");
 }
-
-export function firstReadable(value: string, count: number): string {
-  const text = value.trim();
-  if (!text) return "";
-  return Array.from(text).slice(0, count).join("");
-}

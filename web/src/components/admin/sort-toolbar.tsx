@@ -21,18 +21,8 @@ export function SortToolbar({
   onOrder: (order: string) => void;
 }) {
   const { t } = useTranslation();
-  const activeLabel =
-    options.find((option) => option.key === currentSort)?.label ??
-    options[0]?.label ??
-    "";
-  const summary = t("common.currentSort", {
-    sort: activeLabel,
-    order: currentOrder === "asc" ? t("common.asc") : t("common.desc"),
-  });
-
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="admin-body-text text-muted-foreground">{summary}</div>
+    <div className="flex items-center justify-end gap-4">
       <div className="flex items-center gap-2">
         <div className="inline-flex overflow-hidden rounded-lg border border-border">
           {options.map((option) => {
@@ -46,6 +36,7 @@ export function SortToolbar({
                     ? "bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
                     : "bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 }
+                aria-pressed={active}
                 onClick={() => onSort(option.key)}
               >
                 {option.label}
@@ -67,6 +58,7 @@ export function SortToolbar({
                 size="xs"
                 className="rounded-none"
                 onClick={() => onOrder(option.value)}
+                aria-pressed={active}
                 aria-label={option.label}
                 title={option.label}
               >

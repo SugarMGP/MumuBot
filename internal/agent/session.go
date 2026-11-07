@@ -25,6 +25,7 @@ type sessionUser struct {
 	At                time.Time
 	ReceivedAt        time.Time
 	Mentioned         bool
+	AtOther           bool
 	SenderID          int64
 	Nickname          string
 	ReferencedIDs     []int64
@@ -191,6 +192,9 @@ func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, media
 	user.TranscriptID = transcriptID
 	if payload != nil {
 		user.Msg = payload
+		if payload.Extra != nil {
+			user.AtOther, _ = payload.Extra["at_other"].(bool)
+		}
 		if text := agenticMessageText(payload); text != "" {
 			user.Text = text
 		}
@@ -256,12 +260,13 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 	}
 	user := &sessionUser{
 		LogID: logID, Ref: ref, Content: strings.TrimSpace(msg.Content), At: msg.Time,
-		ReceivedAt: msg.ReceivedAt, Mentioned: msg.IsMentioned, SenderID: msg.UserID,
+		ReceivedAt: msg.ReceivedAt, Mentioned: msg.IsMentioned, AtOther: len(msg.AtList) > 0 && !msg.IsMentioned, SenderID: msg.UserID,
 		Nickname: msg.Nickname, ReferencedIDs: referenced, ArrivalSeq: msg.ArrivalSeq,
 		MessageID: msg.MessageID, IsObservation: msg.MessageID == 0, Wake: true, Order: s.nextOrderLocked(),
 	}
 	user.Text = s.renderUserText(msg, ref, mediaRefs)
 	user.Msg = schema.UserAgenticMessage(user.Text)
+	user.Msg.Extra = map[string]any{"at_other": user.AtOther}
 	for _, item := range mediaRefs {
 		s.media.register(item)
 	}
@@ -348,7 +353,7 @@ func (s *Session) PendingAfter(seq uint64) []tools.PendingMessage {
 		if user == nil || user.IsMaintenanceHint || user.ArrivalSeq <= seq || user.ArrivalSeq <= s.injected {
 			continue
 		}
-		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID, Actionable: user.MessageID != 0 || (user.IsAgentMessage && user.Wake)})
+		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
 	}
 	return list
 }
@@ -360,7 +365,7 @@ func (s *Session) PendingAgentMessages() []tools.PendingMessage {
 	list := make([]tools.PendingMessage, 0)
 	for _, user := range s.pending {
 		if user != nil && !user.IsMaintenanceHint && user.IsAgentMessage {
-			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID, Actionable: user.Wake})
+			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
 		}
 	}
 	return list

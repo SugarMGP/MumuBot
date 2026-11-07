@@ -227,8 +227,8 @@ github.com/yargevad/filepathx v1.0.0 h1:SYcT+N3tYGi+NvazubCNlvgIPbzAk7i7y2dwg3I5
 github.com/yargevad/filepathx v1.0.0/go.mod h1:BprfX/gpYNJHJfc35GjRRpVcwWXS89gGulUIU5tK3tA=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
-github.com/zjutjh/onebot-sdk v1.1.0 h1:rz6qoVWGcERUM8+eVwNH04bcbkhQ7HTeZAcEdjZ4UhI=
-github.com/zjutjh/onebot-sdk v1.1.0/go.mod h1:zHiXMep0+cl65LXX+B3oiP7LIps20c2uOwQ4L/5oVfs=
+github.com/zjutjh/onebot-sdk v1.1.1 h1:1au80iVlaXSWgybK+ZhHYDHU36HXgETKF8k+glJx+ss=
+github.com/zjutjh/onebot-sdk v1.1.1/go.mod h1:zHiXMep0+cl65LXX+B3oiP7LIps20c2uOwQ4L/5oVfs=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=

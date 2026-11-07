@@ -7,14 +7,17 @@ import (
 	"errors"
 	"strings"
 
+	"mumu-bot/internal/media"
+
 	"gorm.io/gorm"
 )
 
 // ForwardNode 合并转发里的一条消息
 type ForwardNode struct {
-	Sender  string   `json:"sender,omitempty"`
-	Content string   `json:"content"`
-	Nested  []string `json:"nested,omitempty"` // 嵌套转发的句柄
+	Sender  string     `json:"sender,omitempty"`
+	Content string     `json:"content"`
+	Nested  []string   `json:"nested,omitempty"` // 嵌套转发的句柄
+	Images  media.Refs `json:"images,omitempty"`
 }
 
 // ForwardNodes 转发消息列表，落库为 jsonb

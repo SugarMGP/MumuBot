@@ -191,7 +191,7 @@ export default function ModelsPage() {
   });
 
   if (query.isPending) return <PageSkeleton />;
-  if (query.isError || !query.data) {
+  if (!query.data) {
     return (
       <p className="text-sm text-muted-foreground">{t("common.loadFailed")}</p>
     );
@@ -199,10 +199,10 @@ export default function ModelsPage() {
 
   return (
     <div className="space-y-6">
+      {query.isRefetchError ? <p role="alert" className="text-sm text-destructive">{t("common.refreshFailed")}</p> : null}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <PageHeader
           title={t("models.title")}
-          subtitle={t("models.subtitle")}
           actions={
             <Button onClick={() => update({ edit: "new" })}>
               {t("models.add")}
@@ -259,9 +259,6 @@ export default function ModelsPage() {
                       {profile.active ? (
                         <Badge>{t("models.active")}</Badge>
                       ) : null}
-                      <Badge variant="ghost">
-                        {t("models.version", { version: profile.version })}
-                      </Badge>
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
@@ -314,7 +311,6 @@ export default function ModelsPage() {
         open={panelOpen}
         onOpenChange={requestClose}
         title={editMode ? t("models.edit") : t("models.create")}
-        description={t("models.panelHint")}
         footer={
           <>
             <Button

@@ -188,7 +188,7 @@ func (m *Manager) CleanupTrajectories(ctx context.Context, now time.Time) (Trans
 		return TranscriptCandidates{}, 0, err
 	}
 	if validTrajectorySummary(life.Summary) && life.ThroughID > 0 {
-		candidates, count, err := m.cleanupCoveredTrajectory(ctx, ConversationKindLife, int64(LifeTargetID), life.ThroughID, cutoff)
+		candidates, count, err := m.cleanupTrajectory(ctx, ConversationKindLife, int64(LifeTargetID), life.ThroughID, cutoff, true)
 		if err != nil {
 			return TranscriptCandidates{}, 0, err
 		}
@@ -208,7 +208,7 @@ func (m *Manager) CleanupTrajectories(ctx context.Context, now time.Time) (Trans
 	for _, worker := range workers {
 		// 显式关闭的旧上下文不要求先有摘要，过了原文保留期即可清理
 		if worker.StartID > 1 {
-			candidates, count, err := m.cleanupCoveredTrajectory(ctx, ConversationKindWorker, int64(worker.ID), worker.StartID-1, cutoff)
+			candidates, count, err := m.cleanupTrajectory(ctx, ConversationKindWorker, int64(worker.ID), worker.StartID-1, cutoff, false)
 			if err != nil {
 				return TranscriptCandidates{}, 0, err
 			}
@@ -219,7 +219,7 @@ func (m *Manager) CleanupTrajectories(ctx context.Context, now time.Time) (Trans
 		if !validTrajectorySummary(worker.Summary) || worker.ThroughID == 0 {
 			continue
 		}
-		candidates, count, err := m.cleanupCoveredTrajectory(ctx, ConversationKindWorker, int64(worker.ID), worker.ThroughID, cutoff)
+		candidates, count, err := m.cleanupTrajectory(ctx, ConversationKindWorker, int64(worker.ID), worker.ThroughID, cutoff, true)
 		if err != nil {
 			return TranscriptCandidates{}, 0, err
 		}
@@ -235,61 +235,55 @@ func validTrajectorySummary(raw []byte) bool {
 	return text != "" && text != "[]" && text != "null"
 }
 
-func (m *Manager) cleanupCoveredTrajectory(ctx context.Context, kind string, targetID int64, throughID uint, cutoff time.Time) (TranscriptCandidates, int, error) {
+func (m *Manager) cleanupTrajectory(ctx context.Context, kind string, targetID int64, throughID uint, cutoff time.Time, requireVisible bool) (TranscriptCandidates, int, error) {
 	candidates := TranscriptCandidates{}
 	deleted := 0
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var incomplete bool
-		if err := tx.Raw(`SELECT EXISTS(
-			SELECT 1 FROM conversation_transcript
-			WHERE conversation_kind=? AND target_id=? AND id<=?
-				AND (tool_status IN ('planned','running') OR (entry_kind='tool' AND visible_seq IS NULL))
-		)`, kind, targetID, throughID).Scan(&incomplete).Error; err != nil {
+		// 只清理过期前缀，保留新轨迹以及尚未结束的工具链
+		var firstProtected *uint
+		if err := tx.Raw(`SELECT MIN(t.id) FROM conversation_transcript t
+			LEFT JOIN message_logs m ON m.id=t.message_log_id
+			WHERE t.conversation_kind=? AND t.target_id=? AND t.id<=?
+				AND t.entry_kind IN ('user','observation','agent_message','assistant','tool','system_note')
+				AND (COALESCE((t.payload->'extra'->>'completed_at')::timestamptz,m.message_time,t.created_at)>=?
+					OR t.tool_status IN ('planned','running')
+					OR (? AND t.entry_kind='tool' AND t.visible_seq IS NULL))`, kind, targetID, throughID, cutoff, requireVisible).Scan(&firstProtected).Error; err != nil {
 			return err
 		}
-		if incomplete {
+		if firstProtected != nil {
+			throughID = min(throughID, *firstProtected-1)
+		}
+		if throughID == 0 {
 			return nil
 		}
-		incomplete, chainErr := incompleteToolChains(tx, kind, targetID, throughID)
-		if chainErr != nil {
-			return chainErr
-		}
-		if incomplete {
-			return nil
-		}
-		var maxSeq *uint64
-		if err := tx.Table("conversation_transcript AS t").
-			Select("MAX(t.visible_seq)").
-			Joins("LEFT JOIN message_logs AS m ON m.id=t.message_log_id").
-			Where("t.conversation_kind=? AND t.target_id=? AND t.id<=? AND t.entry_kind IN ('user','observation','agent_message','assistant','tool') AND t.visible_seq IS NOT NULL AND COALESCE(m.message_time,t.created_at)<?", kind, targetID, throughID, cutoff).
-			Scan(&maxSeq).Error; err != nil {
+		incomplete, err := incompleteToolChains(tx, kind, targetID, throughID, requireVisible)
+		if err != nil || incomplete {
 			return err
 		}
-		if maxSeq == nil {
-			return nil
+		condition := "conversation_kind=? AND target_id=? AND id<=? AND entry_kind IN ('user','observation','agent_message','assistant','tool','system_note')"
+		args := []any{kind, targetID, throughID}
+		if requireVisible {
+			condition += " AND visible_seq IS NOT NULL"
 		}
-		condition := "conversation_kind=? AND target_id=? AND id<=? AND entry_kind IN ('user','observation','agent_message','assistant','tool') AND visible_seq IS NOT NULL AND visible_seq<=? AND COALESCE((SELECT message_time FROM message_logs WHERE id=message_log_id),created_at)<?"
-		args := []any{kind, targetID, throughID, *maxSeq, cutoff}
-		var err error
 		candidates, err = transcriptCandidates(tx, condition, args...)
 		if err != nil {
 			return err
 		}
 		result := tx.Where(condition, args...).Delete(&TranscriptEntry{})
-		if result.Error != nil {
-			return result.Error
-		}
 		deleted = int(result.RowsAffected)
-		return nil
+		return result.Error
 	})
 	return candidates, deleted, err
 }
 
 // incompleteToolChains 保护跨 cutoff、尚未回执或回执尚未进入成功请求的助手调用链
-func incompleteToolChains(tx *gorm.DB, kind string, targetID int64, throughID uint) (bool, error) {
+func incompleteToolChains(tx *gorm.DB, kind string, targetID int64, throughID uint, requireVisible bool) (bool, error) {
 	var assistants []TranscriptEntry
-	if err := tx.Where("conversation_kind=? AND target_id=? AND entry_kind='assistant' AND visible_seq IS NOT NULL AND id<=?", kind, targetID, throughID).
-		Find(&assistants).Error; err != nil {
+	q := tx.Where("conversation_kind=? AND target_id=? AND entry_kind='assistant' AND id<=?", kind, targetID, throughID)
+	if requireVisible {
+		q = q.Where("visible_seq IS NOT NULL")
+	}
+	if err := q.Find(&assistants).Error; err != nil {
 		return false, err
 	}
 	for _, assistant := range assistants {
@@ -312,14 +306,14 @@ func incompleteToolChains(tx *gorm.DB, kind string, targetID int64, throughID ui
 				continue
 			}
 			var result TranscriptEntry
-			err := tx.Where("conversation_kind=? AND target_id=? AND entry_kind='tool' AND tool_call_id=?", kind, targetID, callID).Take(&result).Error
+			err := tx.Where("conversation_kind=? AND target_id=? AND entry_kind='tool' AND run_id=? AND tool_call_id=?", kind, targetID, assistant.RunID, callID).Take(&result).Error
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return true, nil
 				}
 				return false, err
 			}
-			if result.VisibleSeq == nil || result.ID > throughID || result.ToolStatus == "" || result.ToolStatus == "running" || result.ToolStatus == "planned" {
+			if (requireVisible && result.VisibleSeq == nil) || result.ID > throughID || result.ToolStatus == "" || result.ToolStatus == "running" || result.ToolStatus == "planned" {
 				return true, nil
 			}
 		}

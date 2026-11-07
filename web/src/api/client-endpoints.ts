@@ -30,6 +30,8 @@ import type {
   TopicDetailData,
   TopicConversationsData,
   TopicListItem,
+  WorkerHistoryData,
+  WorkerEntryData,
 } from "./types";
 
 export const sessionApi = {
@@ -223,6 +225,10 @@ export const diariesApi = {
 };
 
 export const lifeApi = {
+  workerHistory: (id: number, beforeID = 0) =>
+    apiGet<WorkerHistoryData>(`/api/v1/life/workers/${id}/history${buildQuery({ before_id: beforeID })}`),
+  workerEntry: (id: number, entryID: number, offset = 0) =>
+    apiGet<WorkerEntryData>(`/api/v1/life/workers/${id}/entries/${entryID}${buildQuery({ offset })}`),
   get: () => apiGet<LifeData>("/api/v1/life"),
   createSchedule: (input: LifeScheduleInput) =>
     apiMutate<LifeData>("POST", "/api/v1/life/schedules", input),

@@ -41,8 +41,6 @@ func rawUnionPtr[T ~struct {
 	return &v
 }
 
-func oneBotID(id int64) string { return strconv.FormatInt(id, 10) }
-
 // sendChain 发送消息段链并返回消息编号与该会话的运行时顺序序号
 func (c *Client) sendChain(ctx context.Context, kind string, targetID int64, chain message.Chain) (int64, uint64, error) {
 	client, err := c.apiClient()
@@ -169,9 +167,8 @@ func (c *Client) DeleteMsg(ctx context.Context, kind string, targetID, messageID
 	if err != nil {
 		return 0, err
 	}
-	// message_id 是不透明外部定位符，保持字符串形态等值传递
 	_, err = client.DeleteMsg(ctx, api.DeleteMsgRequest{
-		MessageID: rawUnion[api.DeleteMsgRequestMessageIDUnion](oneBotID(messageID)),
+		MessageID: message.ID(messageID),
 	})
 	if err != nil {
 		return 0, err
@@ -186,7 +183,7 @@ func (c *Client) GetMsg(ctx context.Context, messageID int64) (*api.GetMsgRespon
 		return nil, err
 	}
 	return client.GetMsg(ctx, api.GetMsgRequest{
-		MessageID: rawUnion[api.GetMsgRequestMessageIDUnion](oneBotID(messageID)),
+		MessageID: message.ID(messageID),
 	})
 }
 
@@ -213,8 +210,6 @@ func (c *Client) GetGroupInfo(ctx context.Context, groupID int64) (*GroupInfo, e
 	return info, nil
 }
 
-// GetGroupMemberInfo 获取群成员信息
-
 // GetStrangerInfo 查询陌生人资料
 func (c *Client) GetStrangerInfo(ctx context.Context, userID int64, noCache bool) (*StrangerInfo, error) {
 	client, err := c.apiClient()
@@ -223,7 +218,7 @@ func (c *Client) GetStrangerInfo(ctx context.Context, userID int64, noCache bool
 	}
 	resp, err := client.GetStrangerInfo(ctx, api.GetStrangerInfoRequest{
 		UserID:  message.ID(userID),
-		NoCache: api.GetStrangerInfoRequestNoCacheUnion{Raw: []byte(strconv.FormatBool(noCache))},
+		NoCache: rawUnion[api.GetStrangerInfoRequestNoCacheUnion](noCache),
 	})
 	if err != nil {
 		return nil, err
@@ -239,6 +234,7 @@ func (c *Client) GetStrangerInfo(ctx context.Context, userID int64, noCache bool
 	}, nil
 }
 
+// GetGroupMemberInfo 获取群成员信息
 func (c *Client) GetGroupMemberInfo(ctx context.Context, groupID, userID int64, noCache bool) (*GroupMemberInfo, error) {
 	cacheKey := groupMemberCacheKey(groupID, userID)
 	if !noCache {
@@ -295,34 +291,20 @@ func (c *Client) SetMsgEmojiLike(ctx context.Context, messageID int64, emojiID i
 		return err
 	}
 	_, err = client.SetMsgEmojiLike(ctx, api.SetMsgEmojiLikeRequest{
-		MessageID: rawUnion[api.SetMsgEmojiLikeRequestMessageIDUnion](oneBotID(messageID)),
+		MessageID: message.ID(messageID),
 		EmojiID:   rawUnion[api.SetMsgEmojiLikeRequestEmojiIDUnion](emojiID),
 		Set:       rawUnionPtr[api.SetMsgEmojiLikeRequestSetUnion](true),
 	})
 	return err
 }
 
-// MarkMsgAsRead 标记消息已读
-func (c *Client) MarkMsgAsRead(ctx context.Context, messageID int64) error {
-	client, err := c.apiClient()
+// MarkMessageRead 按真实消息编号标记所在会话已读，后端差异由 SDK 门面处理
+func (c *Client) MarkMessageRead(ctx context.Context, messageID int64) error {
+	sdk, err := c.currentSDK()
 	if err != nil {
 		return err
 	}
-	_, err = client.MarkMsgAsRead(ctx, api.MarkMsgAsReadRequest{MessageID: message.ID(messageID)})
-	return err
-}
-
-// MarkPrivateMsgAsRead 标记好友私聊消息已读
-func (c *Client) MarkPrivateMsgAsRead(ctx context.Context, userID, messageID int64) error {
-	client, err := c.apiClient()
-	if err != nil {
-		return err
-	}
-	_, err = client.MarkPrivateMsgAsRead(ctx, api.MarkPrivateMsgAsReadRequest{
-		UserID:    rawUnionPtr[api.MarkPrivateMsgAsReadRequestUserIDUnion](message.ID(userID)),
-		MessageID: message.ID(messageID),
-	})
-	return err
+	return sdk.MarkMessageRead(ctx, message.ID(messageID))
 }
 
 // FriendPoke 戳一戳好友（私聊）

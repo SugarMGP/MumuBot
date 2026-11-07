@@ -4,6 +4,7 @@ import { Link, useLocation, useParams } from "react-router";
 import { topicApi } from "@/api/client-endpoints";
 import type { TopicDiffSegment, TopicSummaryChange } from "@/api/types";
 import { PageSkeleton } from "@/components/admin/loading";
+import { AdminIcon } from "@/components/admin/icons";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
@@ -60,31 +61,9 @@ function ChangeCard({ change }: { change: TopicSummaryChange }) {
             {formatDateTime(change.captured_at)}
           </time>
           <p className="mt-1 text-sm font-medium leading-5">{headline}</p>
-          <div className="mt-2 flex flex-wrap gap-1">
-            {change.title.changed ? (
-              <Badge variant="info">{t("topics.change.badgeTitle")}</Badge>
-            ) : null}
-            {change.gist.changed ? (
-              <Badge variant="success">{t("topics.change.badgeGist")}</Badge>
-            ) : null}
-            {loopCount > 0 ? (
-              <Badge variant="warning">
-                {t("topics.change.badgeOpenLoops")}
-              </Badge>
-            ) : null}
-          </div>
         </div>
         <span className="admin-topic-change-card__chevron">
-          <svg
-            viewBox="0 0 24 24"
-            className="size-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            aria-hidden="true"
-          >
-            <path d="m6 9 6 6 6-6" />
-          </svg>
+          <AdminIcon name="chevron-down" className="size-4" />
         </span>
       </summary>
       <div className="admin-topic-change-card__body">
@@ -261,9 +240,6 @@ export default function TopicDetailPage() {
                       {t("topics.keywords")}
                     </h3>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-muted-foreground">
-                        {formatDateTime(thread.updated_at)}
-                      </span>
                       {summary.keywords?.map((keyword) => (
                         <Badge key={keyword}>{keyword}</Badge>
                       ))}

@@ -14,7 +14,9 @@ import (
 func (a *Agent) thinkWorker(workerID int64) {
 	generation := a.acquireGeneration()
 	if generation == nil {
-		_ = a.memory.SetWorkerStatus(a.ctx, uint(workerID), memory.WorkerStatusFailed, "模型未就绪", "")
+		if err := a.memory.SetWorkerStatus(a.ctx, uint(workerID), memory.WorkerStatusFailed, "模型未就绪", ""); err == nil {
+			a.notifyLifeWorkerFailure(a.ctx, uint(workerID), "模型未就绪")
+		}
 		return
 	}
 	defer generation.wg.Done()
@@ -28,7 +30,9 @@ func (a *Agent) thinkWorker(workerID int64) {
 	defer session.maintenanceMu.Unlock()
 	state, stateErr := newRunState("worker")
 	if stateErr != nil {
-		_ = a.memory.SetWorkerStatus(a.ctx, id, memory.WorkerStatusFailed, stateErr.Error(), "")
+		if err := a.memory.SetWorkerStatus(a.ctx, id, memory.WorkerStatusFailed, stateErr.Error(), ""); err == nil {
+			a.notifyLifeWorkerFailure(a.ctx, id, stateErr.Error())
+		}
 		return
 	}
 
@@ -79,18 +83,12 @@ func (a *Agent) thinkWorker(workerID int64) {
 			return
 		}
 		if a.workerRunCanceled(id, epoch) {
-			a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.modelName)
+			a.setWorkerStatusIfCurrent(context.WithoutCancel(ctx), id, epoch, memory.WorkerStatusCancelled, "", generation.modelName)
 			a.finishWorkerRun(id, epoch)
 			cancel()
 			return
 		}
 		if runErr != nil {
-			if a.workerRunCanceled(id, epoch) {
-				a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.modelName)
-				a.finishWorkerRun(id, epoch)
-				cancel()
-				return
-			}
 			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, runErr)
 			a.finishWorkerRun(id, epoch)
 			cancel()

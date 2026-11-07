@@ -23,11 +23,11 @@ type sessionResponse struct {
 }
 
 type countsDTO struct {
-	Memories       int64 `json:"memories"`
-	Members        int64 `json:"members"`
-	ActiveMemories int64 `json:"active_memories"`
-	Topics         int64 `json:"topics"`
-	Stickers       int64 `json:"stickers"`
+	ActiveConversations int64 `json:"active_conversations"`
+	ActiveMemories      int64 `json:"active_memories"`
+	ActiveTopics        int64 `json:"active_topics"`
+	RunningWorkers      int64 `json:"running_workers"`
+	WorkerCount         int64 `json:"worker_count"`
 }
 
 type runtimeDTO struct {
@@ -56,12 +56,11 @@ type emotionDTO struct {
 }
 
 type dashboardResponse struct {
-	EnabledGroupCount int          `json:"enabled_group_count"`
-	Counts            countsDTO    `json:"counts"`
-	Runtime           runtimeDTO   `json:"runtime"`
-	Mood              *moodDTO     `json:"mood"`
-	Emotions          []emotionDTO `json:"emotions"`
-	EmotionsError     bool         `json:"emotions_error"`
+	Counts        countsDTO    `json:"counts"`
+	Runtime       runtimeDTO   `json:"runtime"`
+	Mood          *moodDTO     `json:"mood"`
+	Emotions      []emotionDTO `json:"emotions"`
+	EmotionsError bool         `json:"emotions_error"`
 }
 
 type stickerDTO struct {
@@ -295,8 +294,8 @@ type modelProfileDTO struct {
 }
 
 type systemRuntimeDTO struct {
-	Connected           bool
-	AgentReady          bool  `json:"connected"`
+	Connected           bool  `json:"connected"`
+	AgentReady          bool  `json:"agent_ready"`
 	ReconnectSec        int   `json:"reconnect_sec"`
 	SchemaVersion       int   `json:"schema_version"`
 	LatestSchemaVersion int   `json:"latest_schema_version"`

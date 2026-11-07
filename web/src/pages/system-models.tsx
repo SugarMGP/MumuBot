@@ -64,12 +64,19 @@ export default function SystemModelsPage() {
   const query = useQuery({
     queryKey: ["model-stats", range],
     queryFn: () => systemApi.stats(range),
+    refetchInterval: 30_000,
   });
   const palette = chartPalette(resolved);
   const locale = i18n.language.startsWith("zh") ? "zh-CN" : "en-US";
 
   const trendOption = useMemo(() => {
     const series = query.data?.series ?? [];
+    const labels = [t("system.stats.requestShort"), t("system.stats.tokenShort"), t("system.stats.latencyShort")];
+    const values = [
+      series.map((row) => row.request_count),
+      series.map((row) => row.total_tokens),
+      series.map((row) => row.request_count > 0 ? Math.round(row.latency_ms_sum / row.request_count) : 0),
+    ];
     return {
       color: palette.colors,
       textStyle: { color: palette.text, fontFamily: chartFont },
@@ -79,71 +86,21 @@ export default function SystemModelsPage() {
         borderColor: palette.axis,
         textStyle: { color: palette.tooltipText, fontFamily: chartFont },
       },
-      legend: {
-        top: 0,
-        textStyle: { color: palette.text, fontSize: 11, fontFamily: chartFont },
-      },
-      grid: { left: 12, right: 16, top: 40, bottom: 8, containLabel: true },
-      xAxis: {
-        type: "category",
-        data: series.map(bucketLabel),
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      title: labels.map((text, index) => ({ text, top: `${index * 32}%`, left: 12, textStyle: { color: palette.text, fontSize: 12, fontWeight: 500, fontFamily: chartFont } })),
+      grid: labels.map((_, index) => ({ left: 12, right: 16, top: `${index * 32 + 8}%`, height: "21%", containLabel: true })),
+      xAxis: labels.map((_, index) => ({
+        type: "category", gridIndex: index, data: series.map(bucketLabel),
         axisLine: { lineStyle: { color: palette.axis } },
+        axisLabel: { show: index === 2, color: palette.text, fontSize: 10, fontFamily: chartFont },
+        axisTick: { show: index === 2 },
+      })),
+      yAxis: labels.map((_, index) => ({
+        type: "value", gridIndex: index,
         axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-      },
-      yAxis: [
-        {
-          type: "value",
-          name: t("system.stats.requestShort"),
-          nameTextStyle: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-          axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-          splitLine: { lineStyle: { color: palette.split } },
-        },
-        {
-          type: "value",
-          name: t("system.stats.tokenShort"),
-          nameTextStyle: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-          axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-          splitLine: { show: false },
-        },
-        {
-          type: "value",
-          name: t("system.stats.latencyShort"),
-          position: "right",
-          offset: 48,
-          nameTextStyle: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-          axisLabel: { color: palette.text, fontSize: 10, fontFamily: chartFont },
-          splitLine: { show: false },
-        },
-      ],
-      series: [
-        {
-          name: t("system.stats.requestShort"),
-          type: "line",
-          smooth: true,
-          symbolSize: 4,
-          data: series.map((row) => row.request_count),
-        },
-        {
-          name: t("system.stats.tokenShort"),
-          type: "line",
-          smooth: true,
-          symbolSize: 4,
-          yAxisIndex: 1,
-          data: series.map((row) => row.total_tokens),
-        },
-        {
-          name: t("system.stats.latencyShort"),
-          type: "line",
-          smooth: true,
-          symbolSize: 4,
-          yAxisIndex: 2,
-          data: series.map((row) =>
-            row.request_count > 0
-              ? Math.round((row.latency_ms_sum / row.request_count) * 10) / 10
-              : 0,
-          ),
-        },
-      ],
+        splitLine: { lineStyle: { color: palette.split } },
+      })),
+      series: labels.map((name, index) => ({ name, type: "line", smooth: true, symbolSize: 4, xAxisIndex: index, yAxisIndex: index, data: values[index] })),
     };
   }, [palette, query.data?.series, t]);
 
@@ -237,7 +194,7 @@ export default function SystemModelsPage() {
       </div>
 
       <Card>
-        <div className="grid grid-cols-2 divide-x divide-border min-[1280px]:grid-cols-5">
+        <div className="grid grid-cols-5 divide-x divide-border">
           {[
             {
               label: t("system.stats.requests"),
@@ -287,7 +244,7 @@ export default function SystemModelsPage() {
           ].map((item) => (
             <div key={item.label} className="admin-card-pad-compact">
               <p className="admin-caption-text text-muted-foreground">{item.label}</p>
-              <p className="admin-metric-value mt-2 text-2xl text-foreground">
+              <p className="admin-metric-value mt-2 break-words text-xl text-foreground">
                 {item.value}
               </p>
               {item.hint ? (
@@ -307,7 +264,7 @@ export default function SystemModelsPage() {
               {t("system.stats.empty")}
             </p>
           ) : (
-            <Chart option={trendOption} className="admin-model-chart" />
+            <Chart option={trendOption} className="admin-model-trend" />
           )}
         </SectionCard>
         <SectionCard title={t("system.stats.distribution")}>

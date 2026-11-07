@@ -44,6 +44,10 @@ func (a *Agent) lifeClockLoop() {
 // runLifeClock 处理一批到期日程；投递成功即返回，不阻塞其他到期项
 func (a *Agent) runLifeClock() {
 	now := time.Now()
+	a.deliverLifeRetry(now)
+	if err := a.memory.CleanupExpiredSchedules(a.ctx, now); err != nil {
+		zap.L().Warn("清理过期日程失败", zap.Error(err))
+	}
 	rows, err := a.memory.DueSchedules(a.ctx, now, lifeClockBatch)
 	if err != nil {
 		zap.L().Warn("读取到期日程失败", zap.Error(err))
@@ -54,6 +58,25 @@ func (a *Agent) runLifeClock() {
 			return
 		}
 		a.deliverSchedule(row, now)
+	}
+}
+
+func (a *Agent) deliverLifeRetry(now time.Time) {
+	const text = "上一轮运行失败，现在按五分钟间隔进行有限补试。接续尚未完成的事，不重放已完成的工具；仍然失败时保留真实原因。"
+	var message *schema.AgenticMessage
+	build := func(row *memory.SessionMessage) (json.RawMessage, error) {
+		message = schema.UserAgenticMessage(fmt.Sprintf("[系统消息：生活补试]\n内部消息编号：%d\n投递时间：%s\n%s", row.ID, now.Format("2006-01-02 15:04:05"), text))
+		message.Extra = map[string]any{"kind": "agent_message", "source": "life_retry", "wake": true}
+		return sonic.Marshal(message)
+	}
+	row, entry, err := a.memory.DeliverLifeRetry(a.ctx, now, text, build)
+	if err != nil {
+		zap.L().Warn("投递 life 补试失败", zap.Error(err))
+		return
+	}
+	if entry != nil {
+		a.sessions.get(memory.ConversationKindLife, memory.LifeTargetID).AppendAgentMessage(message, entry.ID, row.CreatedAt, true, false)
+		a.scheduleLifeThink()
 	}
 }
 
@@ -108,7 +131,7 @@ func (a *Agent) deliverSchedule(row memory.Schedule, now time.Time) {
 	}
 }
 
-// advanceSchedule 计算下一次时点：一次性日程停用，重复日程按 cron 推进
+// advanceSchedule 计算下一次时点：一次性日程投递后结束，重复日程按 cron 推进
 func (a *Agent) advanceSchedule(row *memory.Schedule, now time.Time) (time.Time, bool, error) {
 	if row.RunAt != nil {
 		return row.NextRunAt, false, nil

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const MaxSessionMessageRunes = 2000
@@ -49,17 +50,17 @@ func validSessionKind(kind string) bool {
 		kind == ConversationKindWorker || kind == ConversationKindLife
 }
 
-// EnqueueSessionAgentMessage 在事务内先创建目标 transcript 行取得内部编号，
-// 再用该编号渲染唯一一份 payload；目标不可用或渲染失败时整笔回滚
-func (m *Manager) EnqueueSessionAgentMessage(ctx context.Context, fromKind string, fromTarget int64, toKind string, toTarget int64, text string, build func(*SessionMessage) (json.RawMessage, error)) (*SessionMessage, *TranscriptEntry, error) {
-	return m.EnqueueSessionAgentMessageWithPrepare(ctx, fromKind, fromTarget, toKind, toTarget, text, build, nil)
-}
-
 // EnqueueSessionAgentMessageWithPrepare 在同一事务内允许 worker 新上下文先落起点
 func (m *Manager) EnqueueSessionAgentMessageWithPrepare(ctx context.Context, fromKind string, fromTarget int64, toKind string, toTarget int64, text string, build func(*SessionMessage) (json.RawMessage, error), prepare func(*gorm.DB, *SessionMessage) error) (*SessionMessage, *TranscriptEntry, error) {
 	var row *SessionMessage
 	var entry *TranscriptEntry
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 生活投信和时钟统一先锁生活状态，再锁目标，避免重置补试时形成反向锁序
+		if toKind == ConversationKindLife {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id=?", LifeTargetID).Take(&LifeState{}).Error; err != nil {
+				return err
+			}
+		}
 		created, transcript, err := m.enqueueSessionMessageTx(tx, fromKind, fromTarget, toKind, toTarget, text, build, prepare)
 		if err != nil {
 			return err

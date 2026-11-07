@@ -11,9 +11,6 @@ export function toastSuccess(message: string) {
   toast.success(message);
 }
 
-export function toastWarning(message: string) {
-  toast.warning(message);
-}
 
 export function toastApiError(error: unknown) {
   if (error instanceof ApiError) {

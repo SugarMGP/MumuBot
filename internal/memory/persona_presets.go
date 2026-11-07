@@ -73,19 +73,6 @@ func (m *Manager) GetPersonaPreset(ctx context.Context, id uint) (*PersonaPreset
 	return &row, nil
 }
 
-// GetActivePersonaPreset 读取当前使用的预设
-func (m *Manager) GetActivePersonaPreset(ctx context.Context) (*PersonaPreset, error) {
-	var row PersonaPreset
-	err := m.db.WithContext(ctx).Where("active").Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("读取当前人格预设失败: %w", err)
-	}
-	return &row, nil
-}
-
 // CreatePersonaPreset 新建预设，名字重复时报错
 func (m *Manager) CreatePersonaPreset(ctx context.Context, preset PersonaPreset) (*PersonaPreset, error) {
 	preset.Name = strings.TrimSpace(preset.Name)

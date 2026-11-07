@@ -9,20 +9,22 @@ import (
 )
 
 func (a *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	stats, err := a.admin.OverviewStats()
+	snapshot := a.runtimeSnapshot()
+	stats, err := a.admin.OverviewStats(r.Context(), snapshot.SelfID)
 	if err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
-	snapshot := a.runtimeSnapshot()
+	if !snapshot.AgentReady {
+		stats.RunningWorkers = 0
+	}
 	response := dashboardResponse{
-		EnabledGroupCount: len(a.enabledGroups()),
 		Counts: countsDTO{
-			Memories:       stats.MemoryCount,
-			Members:        stats.MemberCount,
-			ActiveMemories: stats.ActiveCount,
-			Topics:         stats.TopicCount,
-			Stickers:       stats.StickerCount,
+			ActiveConversations: stats.ActiveConversations,
+			ActiveMemories:      stats.ActiveMemories,
+			ActiveTopics:        stats.ActiveTopics,
+			RunningWorkers:      stats.RunningWorkers,
+			WorkerCount:         stats.WorkerCount,
 		},
 		Runtime: runtimeDTO{
 			Connected:    snapshot.Connected,

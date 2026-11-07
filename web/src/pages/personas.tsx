@@ -68,7 +68,7 @@ function parseBlocks(text: string): PersonaBlock[] {
       };
       return;
     }
-    if (/^##\s/.test(trimmed)) {
+    if (/^## /.test(trimmed)) {
       if (
         current.lines.length > 0 ||
         current.rest !== "" ||
@@ -106,7 +106,8 @@ function setBlockMode(
       ? `${marker} ${block.rest}`
       : marker;
   } else {
-    lines.splice(block.startLine, 0, marker);
+    const afterHeading = /^## /.test(block.lines[0]?.trim() ?? "");
+    lines.splice(block.startLine + (afterHeading ? 1 : 0), 0, marker);
   }
   return lines.join("\n");
 }
@@ -155,7 +156,7 @@ function BlockPreview({
                 >
                   {t(`personas.preview.${block.mode}`)}
                 </Badge>
-                <div className="flex gap-1">
+                {block.rest.trim() || block.lines.some((line) => line.trim() && !/^## /.test(line.trim())) ? <div className="flex gap-1">
                   {(["group", "private", "common"] as PersonaMode[]).map((mode) => (
                     <Button
                       key={mode}
@@ -171,7 +172,7 @@ function BlockPreview({
                       {t(`personas.preview.${mode}`)}
                     </Button>
                   ))}
-                </div>
+                </div> : null}
               </div>
               {block.rest ? (
                 <p className="mt-2 text-xs text-foreground/75">{block.rest}</p>
@@ -454,7 +455,7 @@ export default function PersonasPage() {
   );
 
   if (list.isPending) return <PageSkeleton />;
-  if (list.isError || !list.data) {
+  if (!list.data) {
     return (
       <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3">
         <p className="text-sm text-muted-foreground">
@@ -469,6 +470,7 @@ export default function PersonasPage() {
 
   return (
     <div className="space-y-6">
+      {list.isRefetchError ? <p role="alert" className="text-sm text-destructive">{t("common.refreshFailed")}</p> : null}
       <PageHeader
         title={t("personas.title")}
         subtitle={t("personas.subtitle")}
@@ -602,9 +604,9 @@ export default function PersonasPage() {
             </div>
           ) : null}
 
-          <p className="admin-caption-text text-muted-foreground/75">
+          {identityEditing ? <p className="admin-caption-text text-muted-foreground/75">
             {t("personas.identity.variables")}
-          </p>
+          </p> : null}
           {identity.isError || friends.isError ? (
             <p className="text-xs text-destructive">
               {t("personas.identity.loadFailed")}
@@ -684,13 +686,6 @@ export default function PersonasPage() {
                         ) : null}
                       </span>
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t("personas.chars", {
-                        card: preset.card_chars,
-                        sim: preset.sim_chars,
-                        life: preset.life_chars,
-                      })}
-                    </p>
                     <p className="mt-0.5 text-xs text-muted-foreground/60">
                       {t("personas.updatedAt", {
                         time: formatDateTime(preset.updated_at),

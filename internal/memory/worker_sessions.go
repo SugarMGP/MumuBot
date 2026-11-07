@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -161,12 +162,14 @@ func (m *Manager) CommitWorkerCheckpoint(ctx context.Context, id uint, summary j
 }
 
 // FailRunningWorkerSessions 在进程重启时把中断的 worker 标成失败
-func (m *Manager) FailRunningWorkerSessions(ctx context.Context) error {
-	return m.db.WithContext(ctx).Model(&WorkerSession{}).
+func (m *Manager) FailRunningWorkerSessions(ctx context.Context) ([]WorkerSession, error) {
+	var interrupted []WorkerSession
+	err := m.db.WithContext(ctx).Model(&interrupted).Clauses(clause.Returning{}).
 		Where("status=?", WorkerStatusRunning).
 		Updates(map[string]any{
 			"status":     WorkerStatusFailed,
 			"last_error": "进程重启，任务中断",
 			"updated_at": time.Now(),
 		}).Error
+	return interrupted, err
 }

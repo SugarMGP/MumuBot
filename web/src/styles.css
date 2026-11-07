@@ -43,12 +43,6 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  /* 兼容旧设计令牌命名，便于移植既有样式 */
-  --color-base-100: var(--card);
-  --color-base-200: var(--muted);
-  --color-base-300: var(--border);
-  --color-base-content: var(--foreground);
-
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -431,33 +425,25 @@
 
   .admin-member-row {
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.25fr);
+    grid-template-columns: minmax(200px, 1fr) auto;
     gap: var(--admin-card-gap);
     align-items: center;
-    padding: var(--admin-card-pad);
+    padding: var(--admin-card-pad-compact);
   }
 
   .admin-member-stat {
-    display: grid;
-    grid-template-columns: 1fr 16px;
-    gap: 6px 8px;
-    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--spacing) * 2);
     border-radius: var(--admin-inner-radius);
-    background: var(--muted);
+    padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
     font-size: var(--admin-caption-size);
     transition: background-color 160ms ease;
   }
 
   .admin-member-stat strong {
-    font-size: 1.25rem;
+    font-size: var(--admin-section-title-size);
     font-weight: 600;
-    grid-row: 2;
-  }
-
-  .admin-member-stat svg {
-    grid-column: 2;
-    grid-row: 1 / 3;
-    align-self: center;
   }
 
   .admin-member-stat:hover {
@@ -606,6 +592,11 @@
     background: var(--diff-remove-bg);
     color: var(--diff-remove-fg);
     text-decoration: line-through;
+  }
+
+  .admin-model-trend {
+    height: clamp(26rem, 48vh, 32rem);
+    min-width: 0;
   }
 
   .admin-model-chart {

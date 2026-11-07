@@ -359,7 +359,7 @@ export default function SettingsPage() {
   };
 
   if (query.isPending) return <PageSkeleton />;
-  if (query.isError || !config) {
+  if (!config) {
     return (
       <p className="text-sm text-muted-foreground">{t("common.loadFailed")}</p>
     );
@@ -367,6 +367,7 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      {query.isRefetchError ? <p role="alert" className="text-sm text-destructive">{t("common.refreshFailed")}</p> : null}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <PageHeader
           title={t("settings.title")}

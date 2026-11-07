@@ -285,7 +285,10 @@ func renderBoundedDigest(ctx context.Context, session *Session, digest *memory.C
 		return memory.RenderContextDigest(digest.Overview, digest.Topics, 0), 0
 	}
 	budget := int(float64(window) * cfg.Compactor.DigestBudgetRatio)
-	fixed := session.estimateTextTokens(systemNote("长期记忆", pinnedText)) + session.estimateTextTokens(systemNote("上下文摘要", memory.RenderContextDigest(digest.Overview, nil, 0)))
+	fixed := session.estimateTextTokens(systemNote("长期记忆", pinnedText))
+	if fixed+session.estimateTextTokens(systemNote("上下文摘要", memory.RenderContextDigest(digest.Overview, nil, len(digest.Topics)))) > budget {
+		zap.L().Warn("固定摘要内容超过注入预算，保留概览与置顶记忆", zap.Int("budget", budget))
+	}
 	selected := make([]memory.ContextTopic, 0, len(digest.Topics))
 	for _, topic := range digest.Topics {
 		candidate := append(selected, topic)

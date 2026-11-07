@@ -93,7 +93,7 @@ require (
 	github.com/mark3labs/mcp-go v0.54.1
 	github.com/openai/openai-go/v3 v3.44.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/zjutjh/onebot-sdk v1.1.0
+	github.com/zjutjh/onebot-sdk v1.1.1
 	go.uber.org/zap v1.28.0
 	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d
 	golang.org/x/net v0.59.0

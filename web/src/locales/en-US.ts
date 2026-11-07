@@ -2,6 +2,8 @@ import type zhCN from "./zh-CN";
 
 const enUS: typeof zhCN = {
   common: {
+    refreshFailed: "Refresh failed. Showing the last loaded content.",
+    refreshing: "Refreshing…",
     appName: "MumuBot",
     loading: "Loading…",
     retry: "Retry",
@@ -34,7 +36,6 @@ const enUS: typeof zhCN = {
     sortBy: "Sort",
     asc: "Ascending",
     desc: "Descending",
-    currentSort: "Sorted by {{sort}}, {{order}}",
     theme: {
       title: "Theme",
       light: "Light",
@@ -95,7 +96,6 @@ const enUS: typeof zhCN = {
     title: "Diaries",
     subtitle: "Days she wrote down; browse by date and leave missing days as they are.",
     calendarTitle: "Calendar",
-    calendarHint: "Days with a diary are marked.",
     entryTitle: "That day",
     noEntry: "No diary for this day.",
     emptyMonth: "No diaries in this month.",
@@ -121,10 +121,27 @@ const enUS: typeof zhCN = {
     },
   },
   life: {
+    retry: "Retry",
+    retryAt: "Retry {{count}}: {{time}}",
+    retryExhausted: "Both retries failed; waiting for new input",
+    workers: {
+      queued: "Queued",
+      toolStatus: { planned: "Planned", running: "Running", succeeded: "Succeeded", failed: "Failed", unknown: "Unknown result", not_executed: "Not executed" },
+      title: "Workers",
+      session: "Session",
+      task: "Task",
+      view: "View history",
+      empty: "No workers",
+      emptyHistory: "No run history yet",
+      older: "Load earlier records",
+      readMore: "Read more",
+      record: "Record",
+      noText: "No text content",
+      status: { idle: "Idle", running: "Running", failed: "Failed", cancelled: "Cancelled", inactive: "Disabled", unknown: "Unknown" },
+      roles: { user: "Input", observation: "Observation", agent_message: "Internal message", assistant: "Assistant", tool: "Tool", system_note: "System note" },
+    },
     title: "Life",
-    subtitle: "Mumu's own time and plans; everything outside chat happens here.",
     stateTitle: "Current state",
-    stateSubtitle: "What she is doing and when she will check back.",
     schedulesTitle: "Schedules",
     schedulesSubtitle: "Commitments and next check-ins she set for herself; edits apply immediately.",
     awake: "Awake",
@@ -216,12 +233,10 @@ const enUS: typeof zhCN = {
     title: "Overview",
     subtitle: "Runtime status and memory at a glance.",
     metrics: {
-      groups: "Active groups",
-      memories: "Memories",
-      members: "Members",
-      activeMemories: "Active",
-      topics: "Topics",
-      stickers: "Stickers",
+      conversations: "Active chats · 24h",
+      memories: "Active memories",
+      topics: "Active topics",
+      workers: "Busy workers",
     },
     currentEmotions: "Current emotions",
     emotionsHint: "Feelings shared globally, plus energy and sociability",
@@ -366,9 +381,10 @@ const enUS: typeof zhCN = {
     moreNames: "Other aliases",
     otherNamesAria: "Other aliases of {{name}}",
     groupLabel: "Group {{id}}",
-    knowledge: "Memories about them",
+    knowledge: "Memories",
   },
   contacts: {
+    saveFailed: "Save failed. Your draft is kept; try again.",
     title: "Conversations",
     subtitle: "Review groups and friends, and control whether she responds.",
     groups: "Groups",
@@ -415,7 +431,7 @@ const enUS: typeof zhCN = {
   personas: {
     identity: {
       title: "Role and master",
-      description: "These settings are shared by every persona preset; prompts reference them with placeholders.",
+      description: "The role name and master apply to all presets and stay the same when you switch.",
       name: "Role name",
       nameHint: "Every prompt containing <name> uses this name.",
       master: "Master",
@@ -443,7 +459,6 @@ const enUS: typeof zhCN = {
     builtin: "Built-in",
     inUse: "In use",
     updatedAt: "Updated {{time}}",
-    chars: "Card {{card}} / Sim {{sim}} / Life {{life}} chars",
     editor: {
       newTitle: "New preset",
       name: "Name",
@@ -516,7 +531,7 @@ const enUS: typeof zhCN = {
     agent: {
       title: "Thinking & concurrency",
       hint:
-        "Chat, life, and worker step limits apply when the next think begins; concurrency and worker count follow their own rules without restarting.",
+        "Step limits apply from the next turn; concurrency and worker session counts change when saved.",
       thinkInterval: "Think interval (sec)",
       debounce: "Debounce window (ms)",
       chatMaxStep: "Chat steps per turn",
@@ -524,7 +539,7 @@ const enUS: typeof zhCN = {
       workerMaxStep: "Worker steps per turn",
       groupConcurrency: "Group concurrency (0 = unlimited)",
       privateConcurrency: "Private concurrency (0 = unlimited)",
-      workerCount: "Worker count (0-5)",
+      workerCount: "Worker sessions (0-5)",
     },
     chat: {
       title: "Chat & rate limits",
@@ -600,7 +615,6 @@ const enUS: typeof zhCN = {
   },
   models: {
     title: "Model profiles",
-    subtitle: "Manage chat models; only OpenAI Responses endpoints are supported.",
     list: "Saved models",
     empty: "No model profiles yet.",
     active: "In use",
@@ -613,7 +627,6 @@ const enUS: typeof zhCN = {
     edit: "Edit",
     create: "Add model",
     add: "Add model",
-    panelHint: "Connection details and reasoning settings live here; changes apply after saving.",
     discardTitle: "Discard unsaved changes?",
     discardBody: "Closing the panel will lose the current input.",
     discard: "Discard",
@@ -642,16 +655,13 @@ const enUS: typeof zhCN = {
       effortNone: "Omit",
       reasoningGroup: "Context and reasoning",
     },
-    version: "v{{version}}",
     secretUnavailable:
       "Encryption key is not configured; models cannot be saved yet.",
   },
   mcp: {
+    runtimePending: "Waiting to load",
     title: "MCP servers",
-    subtitle:
-      "Connect external tools. Saving applies the new configuration without restarting the process.",
     list: "Servers",
-    listHint: "Connection settings are encrypted as a whole.",
     empty: "No MCP servers yet.",
     enabled: "Enabled",
     disabled: "Disabled",
@@ -672,8 +682,6 @@ const enUS: typeof zhCN = {
     save: "Save server",
     create: "Add server",
     add: "Add server",
-    panelHint:
-      "Saving applies the current configuration; handle read, save, or apply errors first.",
     detailFailed: "Could not load the server details.",
     advanced: "Advanced settings",
     discardTitle: "Discard unsaved changes?",
@@ -688,8 +696,6 @@ const enUS: typeof zhCN = {
     secretUnavailable:
       "Encryption key is not configured; MCP settings cannot be saved yet.",
     invalidKeyValue: "Line {{line}} is not KEY=VALUE",
-    version: "v{{version}}",
-    versionLabel: "Version",
   },
   system: {
     title: "System",
@@ -801,7 +807,7 @@ const enUS: typeof zhCN = {
       model: "Model",
       requestShort: "Requests",
       tokenShort: "Tokens",
-      latencyShort: "Latency",
+      latencyShort: "Latency (ms)",
       empty: "No calls in this range.",
       percent: "{{value}}%",
       millis: "{{value}} ms",

@@ -24,7 +24,7 @@ function FieldRow({ label, value }: { label: string; value: ReactNode }) {
 
 export default function SystemStatusPage() {
   const { t } = useTranslation();
-  const query = useQuery({ queryKey: ["system"], queryFn: systemApi.get });
+  const query = useQuery({ queryKey: ["system"], queryFn: systemApi.get, refetchInterval: 15_000 });
 
   if (query.isPending) return <PageSkeleton />;
   if (query.isError || !query.data) {

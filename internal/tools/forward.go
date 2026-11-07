@@ -14,7 +14,7 @@ import (
 // ReadForwardInput 读取合并转发内容的参数
 type ReadForwardInput struct {
 	ID    string `json:"id" jsonschema:"description=合并转发句柄，来自消息里的合并转发占位"`
-	Index int    `json:"index,omitempty" jsonschema:"description=要看的第几条消息，从 0 开始；留空先看这份转发里有哪些消息"`
+	Index *int   `json:"index,omitempty" jsonschema:"description=要看的第几条消息，从 0 开始；留空先看这份转发里有哪些消息"`
 }
 
 // ForwardMessageSummary 转发里一条消息的概览
@@ -42,10 +42,21 @@ func readForwardFunc(ctx context.Context, input *ReadForwardInput) (any, error) 
 	if tc == nil || tc.ReadForwardCallback == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("合并转发读取能力未初始化"))
 	}
-	if input == nil || strings.TrimSpace(input.ID) == "" {
+	id := ""
+	if input != nil {
+		id = strings.TrimSpace(input.ID)
+	}
+	if id == "" {
 		return nil, fmt.Errorf("请提供合并转发句柄")
 	}
-	return tc.ReadForwardCallback(ctx, strings.TrimSpace(input.ID), input.Index)
+	index := -1
+	if input.Index != nil {
+		if *input.Index < 0 {
+			return nil, fmt.Errorf("index 必须从 0 开始")
+		}
+		index = *input.Index
+	}
+	return tc.ReadForwardCallback(ctx, id, index)
 }
 
 // NewReadForwardTool 返回逐层翻阅合并转发内容的工具

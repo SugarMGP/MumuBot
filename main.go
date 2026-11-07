@@ -77,13 +77,13 @@ func main() {
 	statsRecorder := modelstats.NewRecorder()
 	modelstats.SetDefault(statsRecorder)
 	statsRecorder.Start(db)
-	defer statsRecorder.Close()
 
 	memoryMgr, err := memory.NewManager(db, boot.MediaDir)
 	if err != nil {
 		zap.L().Fatal("记忆管理器创建失败", zap.Error(err))
 	}
 	defer memoryMgr.Close()
+	defer statsRecorder.Close()
 	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := bootstrapPersonaPresets(bootstrapCtx, memoryMgr); err != nil {
 		bootstrapCancel()

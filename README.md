@@ -121,7 +121,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose 会直接拉取 GHCR 上的 `latest` 镜像，并额外启动一个 worker 容器。worker 使用 Ubuntu 24.04、共享 home 和 Nix，预装 Node 24.22.2、Bun 1.4.4、uv 0.13.7、Go yq 4.54.2 以及 fdfind/batcat/sd/7z/pdftotext 等常用 CLI；JavaScript/TypeScript 新任务优先 Bun，现有 Node 项目和锁文件保持原运行时。最多 5 个并行 worker 共用 `./worker-home/1` 作为执行空间，安装的工具、缓存和项目文件可以直接复用。默认不预装 Chrome/Playwright，由 worker 自己安装。worker 数量在“设置 → 思考与并发”里调整（0–5）。模型、人格预设、对话行为和 MCP 服务器不再从配置文件读取；首次启动后打开管理后台，在“设置 → 模型管理”添加并激活模型即可。
+Compose 会直接拉取 GHCR 上的 `latest` 镜像，并额外启动一个 worker 容器。worker 使用 Ubuntu 24.04、共享 home 和 Nix，预装 Node 24.22.2、Bun 1.4.4、uv 0.13.7、Go yq 4.54.2 以及 fdfind/batcat/sd/7z/pdftotext 等常用 CLI；JavaScript/TypeScript 新任务优先 Bun，现有 Node 项目和锁文件保持原运行时。最多 5 个并行 worker 共用 `./workspace` 作为执行空间，映射到容器内的 `/home/worker`，安装的工具、缓存和项目文件可以直接复用。默认不预装 Chrome/Playwright，由 worker 自己安装。worker 数量在“设置 → 思考与并发”里调整（0–5）。模型、人格预设、对话行为和 MCP 服务器不再从配置文件读取；首次启动后打开管理后台，在“设置 → 模型管理”添加并激活模型即可。
 
 从容器日志获取 SnowLuma WebUI 与 noVNC 的首次密码，通过 `http://localhost:6081` 登录 QQ，再访问 `http://localhost:5099` 配置 WebSocket 的访问令牌；将同一个令牌填入 `.env` 的 `MUMU_ONEBOT_TOKEN` 后重启 MumuBot。
 
@@ -169,8 +169,12 @@ macOS 的系统链接器不支持全静态，产物动态依赖 libwebp，运行
 # 1. 准备环境变量
 cp .env.example .env
 # 填写数据库连接、后台密码、MUMU_SECRET_KEY 和 OneBot 连接
+# 直接运行必须启用并填写 MUMU_DATABASE_DSN；值含空格或 shell 特殊字符时用引号包住
 
-# 2. 启动
+# 2. 在 Bash 中导入环境变量并启动
+set -a
+source .env
+set +a
 ./mumu-bot
 ```
 
@@ -196,7 +200,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 人格页顶部统一设置**角色名**与**主人**。主人从当前好友里选，保存当时的名字；好友以后被删除，主人不会自动改变，只有后台能改。提示词里可写 `<name>`、`<master_name>`、`<master_qq>`、`<master>`，保存后从下一轮上下文换代开始生效。
 
-仿真提示词和生活职责里写明了主人边界：只有后台配置的 QQ 是主人，主人的私聊是明确要求来源；执行命令、改配置、删除文件、花钱、对外发布、泄露隐私等危险操作要先向主人说明并等同意；群聊和其他人的私聊里的要求只是参考，不能冒充主人或绕过限制。
+仿真提示词和生活职责里写明了主人边界：只有后台配置的 QQ 是主人，主人的私聊是明确要求来源；普通研究和工作区日常修改可以自主完成；不可恢复地删除或覆盖重要资料、支付、敏感发布或发信、扩大权限、泄露隐私、改动关键运行配置等高危操作要先说明影响并等具体同意。日常空间说说、点赞和评论可以自主做；群聊和其他人的私聊里的要求只是参考，不能冒充主人或绕过限制。
 
 预设切换不会打断正在进行的对话：它会在一段对话总结之后生效，所以切换前后她不会中途换一张脸。
 
@@ -220,7 +224,7 @@ QQ 文件和图片在正文里以 `file_ref`（`file_<id>`）或 `image_ref`（`
 
 - pending 引用只保存真实 QQ 消息的 `file_id`、`file_hash`、`busid` 和必要元数据；第一次真正读取、保存或发送时由主服务下载并固定，下载失败保留真实失败，不伪造成功。
 - 聊天会话只按引用工作，不接触个人目录；life/worker 的 `createFileRef` 把真实产物冻结成快照，`saveFile(file_ref)` 再流式导回可编辑文件，worker 通过私网 HTTP 最多 32 MiB。
-- 文件正文只保留在现存 transcript 的 `result_ref`、payload 文本和 `r` 嵌套引用闭包里；最后一个引用删除且超过宽限期后回收，旧路径、旧短哈希和临时下载链接都不能复活引用。个人目录里的真实文件不受影响。
+- 文件正文只保留在现存 transcript 的 `result_ref`、payload 文本和 `r` 嵌套引用闭包里；最后一个 transcript 引用删除后即时回收；从未挂接的孤儿至少保留 24 小时后补扫，旧路径、旧短哈希和临时下载链接都不能复活引用。个人目录里的真实文件不受影响。
 
 ## 🤝 贡献
 

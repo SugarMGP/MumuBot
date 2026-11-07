@@ -27,11 +27,11 @@
 - 主聊天和压缩共用当前模型；不要恢复 low、后台 Learner、Embedding 或独立压缩模型。
 - 主聊天是单次 ReAct，不拆 Planner/Replyer；是否发言最终由模型和工具决定，门控只做前置过滤。
 - 每群/每好友只允许一个 think 运行；life 单并发且不占 worker 名额；运行期间新消息进入会话，不创建 rerun，后续正常调度继续消费。
-- 思考从会话起始到达序号开始；`BeforeModelRewriteState` 在新消息到达时注入，同一批消息不合并。首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。
+- 思考从会话起始到达序号开始；`BeforeModelRewriteState` 在新消息到达时注入，同一批消息不合并。聊天首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。
 - 失败批次的上限取自最后一次实际发出的 request state；think 入口 pending 只说明入口收到了什么，不能替代本次请求真正纳入的输入。
 - `conversation_transcript` 是唯一工作集；不要在 `runAgent` 事件流或 `AfterAgent` 另装一套 transcript。
 - user transcript 在消息落库后创建；assistant 在模型成功后保存；工具 wrapper 在调用前后保存 running/终态回执。
-- 模型请求成功后才给本次请求实际包含的 transcript 行写 `visible_seq`；请求失败不推进、不回滚，也不自动重试。
+- 模型请求成功后才给本次请求实际包含的 transcript 行写 `visible_seq`；请求失败不推进、不回滚；聊天失败批次等新输入，life 由生活时钟按持久状态最多补试两次、间隔五分钟。
 - 模型新返回的 assistant 不在本次请求输入里，不得提前写 `visible_seq`；assistant/tool 的持久化可读性由轨迹本身保证。
 - `visible_seq` 按请求消息顺序分配，不能用数据库 ID 重排；代头在前，工具结果在请求它的 assistant 之后。
 - 消息写入 transcript 后必须把行号标回同一内存消息对象，真实输入从 `state.Messages` 按顺序收集；不要再维护 `VisibleTranscriptIDs` 之类的侧面猜测列表。
@@ -66,3 +66,5 @@
 - worker 后台任务统一使用命名 tmux、任务目录、日志和退出码文件，不新增 jobs/PTY/完成通知服务。取消模型回合不等于 tmux 任务停止；共享 home 中的其他任务不得擅自接管、修改或停止。
 - worker 重启恢复必须直接使用 `max(context_through_id, context_start_id-1)` 作为当前工作集读取边界，不先加载全部旧轨迹再在内存补剪；旧历史仍可经历史工具在保留期内回读。
 - MCP 单个服务的初始化和工具发现设置独立有界期限，超时后关闭该服务并继续其它服务；成功连接的长期生命周期仍绑定 Agent 上下文。模型请求本身不设置整体超时。
+
+- life 整次 think 成功后才清除失败与补试状态；连续消费和无安排自检的中间成功不能补充重试次数。新的明确输入和主动睡眠会结算旧补试，睡眠期间不投递失败补试。生活页只读展示 worker 现有状态和 transcript，不另建任务表。

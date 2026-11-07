@@ -181,13 +181,14 @@ go vet ./...
 - 模型档案只开放 `thinking.type` 和 `reasoning.effort` 两个推理参数；API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
 - 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
-- 强提及、点名和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
+- 强提及和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
 - 戳一戳只作为普通观察事件，不能成为回应理由；它没有稳定消息 ID，正文以 `[观察]` 渲染，不能借用其他消息 ID 回应。
 - 每个会话维护 `conversation_sessions` + `conversation_transcript` 持续工作集；真人消息各自是 user 行，助手与工具轨迹原样保存，压缩成功后只删除被 checkpoint 覆盖的 transcript 行。
 - 会话间消息只写目标 `conversation_transcript` 的 `entry_kind=agent_message` 行，行号就是内部消息编号；来源会话、投递时间和 wake 只在 payload，不再保留 `session_messages` 重复正文表。`listSessions` 按当前角色返回可见会话的元数据与真实概况，`sendSessionMessage` 只允许 active 且未 blocked 的目标，不自动回复。
 - 唯一生活主线固定为 `life:1`（kind/name 都是 life），单并发 ReAct，不占 worker 名额，和聊天共用当前模型、人格通用内容、长期记忆与情感；它负责生活安排、跨会话判断和统一派发 worker，不审阅每条群消息。
 - 投信按固定角色图：group/private 可以投 life 和彼此的普通消息，但不能直接派 worker；worker 只能回报 life；life 可以投给任意会话。`wake=false` 的静默信只保存，不能唤醒目标，也不能借强交互绕过群发言门控。
 - 生活时间只由 life 决定：`planNext` 更新固定槽位 `life_next`，`manageSchedule` 保存独立约定，`sleepUntil` 保存睡眠与起床安排；程序按 Asia/Shanghai 计算到期并只做投递与状态转换，不内置起床、睡前或日记时间。
+- life 补试次数、时点和耗尽状态直接定义在 v17；整次 think 成功、新的明确输入或主动睡眠时结算，不在连续消费或自检的中间成功处重置次数。一次性日程只有到期投递事务成功才删除；过期停用项清理，投递失败的启用项保留。
 - 日记是独立 `diaries` 表（日期主键、Markdown、首次/最后保存时间），不建记忆、话题、消息关联；life 用 `writeDiary` 写入，life 和群聊/私聊都可以用 `readDiary`/`searchDiary` 只读，后台只读月历。归属日由 life 显式选择：午睡不写，凌晨可写前一天，漏写可补，保存失败不写成成功，日记不自动产生日程或记忆。
 - life 不能套用群/私聊的话题压缩：它使用摘要检查点（`life_state.context_summary + context_through_id`）+ 检查点后的 transcript；已被有效摘要覆盖且超过历史期限的可见旧轨迹按 `history_days` 清理，当前代头、检查点后的工作集和未完成工具链继续保留。代头每次换代按当前人格与 self 置顶重建，检查点里不保存代头。
 - 睡眠是 QQ 的运行许可，不是 active/blocked：睡眠期间保留 OneBot 接收、媒体、转发、撤回和成员资料，只跳过工作集与调度；已经开始的回合和已接受的 worker 任务可以收尾，普通内部信不打断睡眠。机械唤醒只来自 life 的到期时间、显式后台/`wakeUp` 操作或主人私聊中的精确 `/wake`；不做关键词启发式判断。真实醒来时给 life 一条睡眠期间活跃会话的真人消息概况（数量、最后时间和会话 ID），不自动唤醒这些会话、不建未读表。
@@ -195,10 +196,10 @@ go vet ./...
 - QQ 空间、账号资料设置和账号级社交动作只挂给 life；群聊/私聊 Agent 负责在本会话表达并发送 `file_ref`/`image_ref`。按已确认的最新边界，life 不持有定向 `sendFile`/`sendImage`，它把产物 ref 和用途投给目标会话；life 自己仍可 `viewImage(path|image_ref)`、`readFile(path|file_ref)` 验收材料。worker 使用真实 `/home/worker` 路径并通过 `createFileRef`/`saveFile` 交接，补齐全员可复用的真实 `viewImage`；上传头像和空间配图只接 image ref。
 - 个人目录是 worker 唯一 `/home/worker`，Mumu 主服务不挂该目录。文件上传通过 worker 私网 HTTP 原始字节流读取，主服务内部按受支持位图内容建立 typed ref；worker 不接触 QQ 凭据。跨 worker session 共享同一个执行账号、home、工具与缓存，但 transcript、检查点、上下文和运行状态独立。
 - QQ 文件消息的 `file_id`、原名、大小、`file_hash`、`busid` 和待取 `file_ref` 保存在 `message_logs.file_refs`，临时下载 URL 不做长期定位根；首次读取/发送/存入 home 时才真实下载并固定快照，pending 必须有明确的待取/已固定状态，固定时核对已知声明大小。保存到个人目录的真实文件在 transcript 清理后仍保留，后台不新增文件管理页。`file_ref`/`image_ref` 是 MediaDir 下不可变快照，不建小表、按字节 SHA-256 去重；只有现存 transcript 里 `user/observation/agent_message/assistant/tool` 行的 `result_ref`、payload 文本和 `r` 嵌套引用是长期根；代头、摘要、系统提醒、记忆和日记里的裸 ref 不保活。被删 transcript 的本批候选在提交后按闭包即时释放，从未挂接的孤儿至少保留 24 小时后由启动/每日补扫回收。
-- 所有 worker session 共用唯一执行账号和 `/home/worker`，只是并行子 Agent；session 的 transcript、检查点、标题、运行状态和进程组仍独立，不共享对话上下文。`worker_sessions.context_start_id` 记录显式新上下文起点，life 只能向 idle 且无待处理任务的 worker 发送 `context_mode=new`，起点之前的旧历史仍可回查、到保留期后清理。安装的工具、Nix profile 和浏览器缓存复用；旧 `worker-home/2`–`5` 的资料由部署者自行盘点搬运，程序不自动删除或覆盖。
+- 所有 worker session 共用唯一执行账号和 `/home/worker`，只是并行子 Agent；session 的 transcript、检查点、标题、运行状态和进程组仍独立，不共享对话上下文。`worker_sessions.context_start_id` 记录显式新上下文起点，life 只能向 idle 且无待处理任务的 worker 发送 `context_mode=new`，起点之前的旧历史仍可回查、到保留期后清理。安装的工具、Nix profile 和浏览器缓存复用；宿主目录直接使用 `./workspace`，不保留旧路径兼容或自动搬迁。
 - Agent-facing 消息只使用全局唯一的 `one_bot_message_id`；不维护 `message_ref`、`next_message_ref`、`m` 或 `h` 自定义编号。消息 ID 不保证有序，聊天顺序继续使用 `ArrivalSeq`。
 - worker-exec 以 worker 身份启动，home 文件操作不依赖逐请求账号切换；sudo 子命令的取消使用参数数组的进程组 kill，不能通过 shell 拼接命令。
-- `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚、不自动重试，下一次由新消息触发。
+- `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚；聊天失败批次等新输入，life 的所有运行失败最多补试两次，每次间隔五分钟。
 - 新生成的 assistant/tool 轨迹即使持久化成功也尚无 `visible_seq`；只有它后来真正进入另一个成功模型请求时才推进。不能把“已经产生轨迹”和“已经作为输入被模型读过”混成同一状态。
 - `visible_seq` 必须按模型请求中的真实消息顺序分配：代头在前、待处理输入在后；不要按数据库主键重新排序。
 - 消息写入 transcript 后必须把 `transcript_id` 标回同一内存消息；真实输入从 `state.Messages` 收集，不另维护侧面猜测列表。

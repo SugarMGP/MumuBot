@@ -46,6 +46,11 @@ func (a *Agent) prepareMessageContent(ctx context.Context, msg *onebot.Conversat
 	}
 	a.ensureIncomingImageRefs(ctx, refs)
 	msg.FinalContent = renderContentPieces(pieces, refs)
+	for _, draft := range forwards {
+		for _, node := range draft.Nodes {
+			refs = append(refs, node.Images...)
+		}
+	}
 	return refs, forwards
 }
 
@@ -270,7 +275,7 @@ func (a *Agent) parseMessageContent(ctx context.Context, msg *onebot.Conversatio
 			if start >= end {
 				continue
 			}
-			handle, count, drafts := buildForwardNodes(msg.ForwardContent[start:end], 1, "")
+			handle, count, drafts := a.buildForwardNodes(ctx, msg.ForwardContent[start:end], 1, "")
 			if handle == "" || count == 0 {
 				continue
 			}

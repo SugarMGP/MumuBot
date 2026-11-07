@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -35,7 +36,6 @@ type PendingMessage struct {
 	Order        uint64
 	Msg          *schema.AgenticMessage
 	TranscriptID uint
-	Actionable   bool
 }
 
 // enhancedTool 返回多模态结果的工具
@@ -227,7 +227,7 @@ func saveStickerFunc(ctx context.Context, input *SaveStickerInput) (*SaveSticker
 		if err := file.Close(); err != nil {
 			return nil, err
 		}
-		item = media.Ref{Path: tempPath, Mime: ref.MIME, Hash: ref.SHA256, Sticker: true}
+		item = media.Ref{Path: tempPath, Mime: ref.MIME, Hash: fmt.Sprintf("%x", md5.Sum(data)), Sticker: true}
 	} else {
 		var ok bool
 		item, ok = tc.Session.ResolveMediaByHash(hashValue)

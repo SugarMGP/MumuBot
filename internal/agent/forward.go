@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 )
 
 // buildForwardNodes 把转发节点转成可翻阅的结构，嵌套转发单独存一份并给句柄
-func buildForwardNodes(nodes []message.ForwardNode, depth int, parent string) (string, int, []forwardDraft) {
+func (a *Agent) buildForwardNodes(ctx context.Context, nodes []message.ForwardNode, depth int, parent string) (string, int, []forwardDraft) {
 	handle := newForwardHandle()
 	draft := forwardDraft{Handle: handle, Parent: parent}
 	var drafts []forwardDraft
@@ -19,13 +20,29 @@ func buildForwardNodes(nodes []message.ForwardNode, depth int, parent string) (s
 		item := memory.ForwardNode{Sender: node.Nickname}
 		var text strings.Builder
 		for _, seg := range node.Message {
+			var source *pendingMedia
+			switch data := seg.Data.(type) {
+			case message.ImageData:
+				image := onebot.ImageInfoFromData(data)
+				source = &pendingMedia{URL: image.URL, File: image.File, Sticker: image.SubType == 1}
+			}
+			if source != nil {
+				refs := a.cacheMedia(ctx, []pendingMedia{*source})
+				if len(refs) > 0 && refs[0].Hash != "" {
+					item.Images = append(item.Images, refs[0])
+					text.WriteString("[图片:" + refs[0].Hash + "]")
+				} else {
+					text.WriteString(renderForwardSegment(seg))
+				}
+				continue
+			}
 			data, ok := seg.Data.(message.ForwardData)
 			if !ok {
 				text.WriteString(renderForwardSegment(seg))
 				continue
 			}
 			if len(data.Content) > 0 && depth < onebot.MaxForwardDepth {
-				nestedHandle, nestedCount, nestedDrafts := buildForwardNodes(data.Content, depth+1, handle)
+				nestedHandle, nestedCount, nestedDrafts := a.buildForwardNodes(ctx, data.Content, depth+1, handle)
 				if nestedHandle == "" {
 					continue
 				}

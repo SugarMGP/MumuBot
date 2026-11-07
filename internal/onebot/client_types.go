@@ -58,6 +58,18 @@ type ImageInfo struct {
 	Desc    string `json:"desc,omitempty"`
 }
 
+// ImageInfoFromData 使用两端的真实表情标记，商城表情不依赖 sub_type 一定存在
+func ImageInfoFromData(data message.ImageData) ImageInfo {
+	info := ImageInfo{URL: data.URL, File: data.File, Desc: data.Summary}
+	if subType, ok := parseStrNum(data.SubType); ok {
+		info.SubType = int(subType)
+	}
+	if data.EmojiID != "" || data.EmojiPackageID != 0 {
+		info.SubType = 1
+	}
+	return info
+}
+
 // VideoInfo 视频信息
 type VideoInfo struct {
 	URL  string `json:"url"`

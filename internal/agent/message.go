@@ -117,10 +117,7 @@ func (a *Agent) markMessageRead(msg *onebot.ConversationMessage) error {
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
-	if msg.ConversationKind == memory.ConversationKindPrivate {
-		return a.bot.MarkPrivateMsgAsRead(ctx, msg.TargetID, msg.MessageID)
-	}
-	return a.bot.MarkMsgAsRead(ctx, msg.MessageID)
+	return a.bot.MarkMessageRead(ctx, msg.MessageID)
 }
 
 func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMessage) error {
@@ -173,8 +170,10 @@ func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.Re
 	}
 
 	reply := &onebot.ReplyInfo{MessageID: messageID, Content: replyData.RawMessage}
-	// UserID 保留生成代码的原始联合形态（整数报文），直接解码；Sender map 值已退化为 float64，只取字符串字段
-	reply.SenderID = onebot.ParseIDFromRaw(replyData.UserID.Raw)
+	if reply.Content == "" {
+		reply.Content = replyData.Message.Text()
+	}
+	reply.SenderID = int64(replyData.UserID)
 	if sender := replyData.Sender; sender != nil {
 		if nick, ok := sender["nickname"].(string); ok {
 			reply.Nickname = nick

@@ -76,6 +76,11 @@ func (a *Agent) enqueueSessionMessageMode(ctx context.Context, fromKind string, 
 		return sonic.Marshal(message)
 	}
 	var prepare func(*gorm.DB, *memory.SessionMessage) error
+	if toKind == memory.ConversationKindLife && wake {
+		prepare = func(tx *gorm.DB, _ *memory.SessionMessage) error {
+			return memory.ResetLifeRetryTx(tx)
+		}
+	}
 	if contextMode == "new" {
 		if fromKind != memory.ConversationKindLife || toKind != memory.ConversationKindWorker {
 			return nil, fmt.Errorf("只有 life 派 worker 时可以选择新上下文")

@@ -80,7 +80,7 @@ func FormatSleepSummary(items []SleepConversationSummary, total int, from, to ti
 		if name == "" {
 			name = fmt.Sprint(item.TargetID)
 		}
-		lines = append(lines, fmt.Sprintf("- %s「%s」%d 条，最后 %s", label, name, item.Count, formatSleepTime(item.LastAt)))
+		lines = append(lines, fmt.Sprintf("- %s「%s」（%s:%d）%d 条，最后 %s", label, name, item.ConversationKind, item.TargetID, item.Count, formatSleepTime(item.LastAt)))
 	}
 	if len(items) > limit {
 		lines = append(lines, fmt.Sprintf("- 另有 %d 个会话有新消息", len(items)-limit))

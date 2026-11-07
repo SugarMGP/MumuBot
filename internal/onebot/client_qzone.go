@@ -8,56 +8,31 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/zjutjh/onebot-sdk/api"
+	"github.com/zjutjh/onebot-sdk/message"
 )
-
-const (
-	ActionGetQzoneFeeds  = "get_qzone_feeds"
-	ActionGetQzoneList   = "get_qzone_msg_list"
-	ActionGetQzoneDetail = "get_qzone_msg_detail"
-	ActionLikeQzone      = "like_qzone"
-	ActionCommentQzone   = "comment_qzone"
-)
-
-// QzoneString 兼容后端把帖子或评论编号发成字符串或数字
-type QzoneString string
-
-func (s *QzoneString) UnmarshalJSON(data []byte) error {
-	var text string
-	if err := sonic.Unmarshal(data, &text); err == nil {
-		*s = QzoneString(text)
-		return nil
-	}
-	var number json.Number
-	if err := sonic.Unmarshal(data, &number); err != nil {
-		*s = ""
-		return nil
-	}
-	*s = QzoneString(number.String())
-	return nil
-}
 
 type QzoneFeedItem struct {
-	Uin             int64       `json:"uin"`
-	Nickname        string      `json:"nickname"`
-	Time            int64       `json:"time"`
-	AppID           int64       `json:"appid"`
-	Key             QzoneString `json:"key"`
-	Tid             QzoneString `json:"tid"`
-	Content         string      `json:"content"`
-	ContentComplete *bool       `json:"content_complete"`
-	Images          []string    `json:"images"`
-	LikeCount       *int64      `json:"like_count"`
-	CommentCount    *int64      `json:"comment_count"`
+	Uin             int64          `json:"uin"`
+	Nickname        string         `json:"nickname"`
+	Time            int64          `json:"time"`
+	AppID           int64          `json:"appid"`
+	Key             message.StrNum `json:"key"`
+	Tid             message.StrNum `json:"tid"`
+	Content         string         `json:"content"`
+	ContentComplete *bool          `json:"content_complete"`
+	Images          []string       `json:"images"`
+	LikeCount       *int64         `json:"like_count"`
+	CommentCount    *int64         `json:"comment_count"`
 }
 
 type QzonePost struct {
-	Tid             QzoneString `json:"tid"`
-	Content         string      `json:"content"`
-	Time            int64       `json:"time"`
-	CommentNum      *int64      `json:"comment_num"`
-	IsPrivate       *bool       `json:"is_private"`
-	Images          []string    `json:"images"`
-	ContentComplete *bool       `json:"content_complete,omitempty"`
+	Tid             message.StrNum `json:"tid"`
+	Content         string         `json:"content"`
+	Time            int64          `json:"time"`
+	CommentNum      *int64         `json:"comment_num"`
+	IsPrivate       *bool          `json:"is_private"`
+	Images          []string       `json:"images"`
+	ContentComplete *bool          `json:"content_complete,omitempty"`
 }
 
 type QzoneFeedPage struct {
@@ -72,35 +47,26 @@ type QzoneUserPage struct {
 }
 
 type QzoneReply struct {
-	ReplyUin  int64       `json:"reply_uin"`
-	ReplyName string      `json:"reply_name"`
-	Content   string      `json:"content"`
-	Time      int64       `json:"time"`
-	CommentID QzoneString `json:"comment_id"`
+	ReplyUin  int64          `json:"reply_uin"`
+	ReplyName string         `json:"reply_name"`
+	Content   string         `json:"content"`
+	Time      int64          `json:"time"`
+	CommentID message.StrNum `json:"comment_id"`
 }
 
 type QzoneComment struct {
-	CommentID  QzoneString  `json:"comment_id"`
-	CommentUin int64        `json:"comment_uin"`
-	Content    string       `json:"content"`
-	Time       int64        `json:"time"`
-	Replies    []QzoneReply `json:"replies"`
+	CommentID  message.StrNum `json:"comment_id"`
+	CommentUin int64          `json:"comment_uin"`
+	Content    string         `json:"content"`
+	Time       int64          `json:"time"`
+	Replies    []QzoneReply   `json:"replies"`
 }
 
 type QzoneDetail struct {
-	Tid        QzoneString    `json:"tid"`
+	Tid        message.StrNum `json:"tid"`
 	Content    string         `json:"content"`
 	CommentNum *int64         `json:"comment_num"`
 	Comments   []QzoneComment `json:"comments"`
-}
-
-type qzoneCursor struct {
-	Raw json.RawMessage
-}
-
-func (c *qzoneCursor) UnmarshalJSON(data []byte) error {
-	c.Raw = append(c.Raw[:0], data...)
-	return nil
 }
 
 func qzoneCursorText(raw json.RawMessage) string {
@@ -120,19 +86,23 @@ func (c *Client) ListQzoneFeeds(ctx context.Context, cursor string, count int) (
 	if err != nil {
 		return nil, err
 	}
-	req := map[string]any{"count": count}
-	if strings.TrimSpace(cursor) != "" {
-		req["cursor"] = cursor
+	req := api.GetQzoneFeedsRequest{Count: rawUnionPtr[api.GetQzoneFeedsRequestCountUnion](count)}
+	if cursor != "" {
+		req.Cursor = &cursor
 	}
 	var raw struct {
 		Feeds      []QzoneFeedItem `json:"feeds"`
 		HasMore    bool            `json:"has_more"`
-		NextCursor qzoneCursor     `json:"next_cursor"`
+		NextCursor json.RawMessage `json:"next_cursor"`
 	}
-	if err := client.Call(ctx, ActionGetQzoneFeeds, req, &raw); err != nil {
+	response, err := client.GetQzoneFeeds(ctx, req)
+	if err != nil {
 		return nil, err
 	}
-	return &QzoneFeedPage{Feeds: raw.Feeds, HasMore: raw.HasMore, NextCursor: qzoneCursorText(raw.NextCursor.Raw)}, nil
+	if err := sonic.Unmarshal(response.Raw, &raw); err != nil {
+		return nil, fmt.Errorf("解析 QQ 空间动态失败: %w", err)
+	}
+	return &QzoneFeedPage{Feeds: raw.Feeds, HasMore: raw.HasMore, NextCursor: qzoneCursorText(raw.NextCursor)}, nil
 }
 
 func (c *Client) ListQzonePosts(ctx context.Context, userID int64, offset, limit int) (*QzoneUserPage, error) {
@@ -140,13 +110,20 @@ func (c *Client) ListQzonePosts(ctx context.Context, userID int64, offset, limit
 	if err != nil {
 		return nil, err
 	}
-	req := map[string]any{"pos": offset, "num": limit}
+	req := api.GetQzoneMsgListRequest{
+		Pos: rawUnionPtr[api.GetQzoneMsgListRequestPosUnion](offset),
+		Num: rawUnionPtr[api.GetQzoneMsgListRequestNumUnion](limit),
+	}
 	if userID > 0 {
-		req["target_uin"] = userID
+		req.TargetUin = rawUnionPtr[api.GetQzoneMsgListRequestTargetUINUnion](userID)
 	}
 	var raw QzoneUserPage
-	if err := client.Call(ctx, ActionGetQzoneList, req, &raw); err != nil {
+	response, err := client.GetQzoneMsgList(ctx, req)
+	if err != nil {
 		return nil, err
+	}
+	if err := sonic.Unmarshal(response.Raw, &raw); err != nil {
+		return nil, fmt.Errorf("解析 QQ 空间说说列表失败: %w", err)
 	}
 	return &raw, nil
 }
@@ -156,13 +133,21 @@ func (c *Client) ReadQzonePost(ctx context.Context, authorQQ int64, tid string, 
 	if err != nil {
 		return nil, err
 	}
-	req := map[string]any{"tid": tid, "pos": offset, "num": limit}
+	req := api.GetQzoneMsgDetailRequest{
+		Tid: rawUnionPtr[api.GetQzoneMsgDetailRequestTidUnion](tid),
+		Pos: rawUnionPtr[api.GetQzoneMsgDetailRequestPosUnion](offset),
+		Num: rawUnionPtr[api.GetQzoneMsgDetailRequestNumUnion](limit),
+	}
 	if authorQQ > 0 {
-		req["target_uin"] = authorQQ
+		req.TargetUin = rawUnionPtr[api.GetQzoneMsgDetailRequestTargetUINUnion](authorQQ)
 	}
 	var detail QzoneDetail
-	if err := client.Call(ctx, ActionGetQzoneDetail, req, &detail); err != nil {
+	response, err := client.GetQzoneMsgDetail(ctx, req)
+	if err != nil {
 		return nil, err
+	}
+	if err := sonic.Unmarshal(response.Raw, &detail); err != nil {
+		return nil, fmt.Errorf("解析 QQ 空间说说详情失败: %w", err)
 	}
 	return &detail, nil
 }
@@ -174,7 +159,7 @@ func (c *Client) PublishQzone(ctx context.Context, content string, images []stri
 	}
 	right := rawUnionPtr[api.SendQzoneMsgRequestUgcRightUnion](1)
 	resp, err := client.SendQzoneMsg(ctx, api.SendQzoneMsgRequest{
-		Content: content, Images: images, UgcRight: right,
+		Content: rawUnion[api.SendQzoneMsgRequestContentUnion](content), Images: images, UgcRight: right,
 	})
 	if err != nil {
 		return "", err
@@ -190,11 +175,15 @@ func (c *Client) LikeQzone(ctx context.Context, authorQQ int64, tid string, abst
 	if err != nil {
 		return err
 	}
-	req := map[string]any{"tid": tid, "abstime": abstime}
-	if authorQQ > 0 {
-		req["target_uin"] = authorQQ
+	req := api.LikeQzoneRequest{
+		Tid:     rawUnionPtr[api.LikeQzoneRequestTidUnion](tid),
+		Abstime: rawUnionPtr[api.LikeQzoneRequestAbstimeUnion](abstime),
 	}
-	return client.Call(ctx, ActionLikeQzone, req, &map[string]any{})
+	if authorQQ > 0 {
+		req.TargetUin = rawUnionPtr[api.LikeQzoneRequestTargetUINUnion](authorQQ)
+	}
+	_, err = client.LikeQzone(ctx, req)
+	return err
 }
 
 type QzoneCommentInput struct {
@@ -212,27 +201,34 @@ func (c *Client) CommentQzone(ctx context.Context, input QzoneCommentInput) (str
 	if err != nil {
 		return "", err
 	}
-	req := map[string]any{"tid": input.Tid, "content": input.Content}
+	req := api.CommentQzoneRequest{
+		Tid:     rawUnionPtr[api.CommentQzoneRequestTidUnion](input.Tid),
+		Content: rawUnion[api.CommentQzoneRequestContentUnion](input.Content),
+	}
 	if input.AuthorQQ > 0 {
-		req["target_uin"] = input.AuthorQQ
+		req.TargetUin = rawUnionPtr[api.CommentQzoneRequestTargetUINUnion](input.AuthorQQ)
 	}
 	if strings.TrimSpace(input.CommentID) != "" {
-		req["comment_id"] = input.CommentID
+		req.CommentID = rawUnionPtr[api.CommentQzoneRequestCommentIDUnion](input.CommentID)
 	}
 	if input.CommentUin > 0 {
-		req["comment_uin"] = input.CommentUin
+		req.CommentUin = rawUnionPtr[api.CommentQzoneRequestCommentUINUnion](input.CommentUin)
 	}
 	if input.ReplyUin > 0 {
-		req["reply_uin"] = input.ReplyUin
+		req.ReplyUin = rawUnionPtr[api.CommentQzoneRequestReplyUINUnion](input.ReplyUin)
 	}
 	if strings.TrimSpace(input.ReplyName) != "" {
-		req["reply_name"] = input.ReplyName
+		req.ReplyName = rawUnionPtr[api.CommentQzoneRequestReplyNameUnion](input.ReplyName)
 	}
 	var raw struct {
-		CommentID QzoneString `json:"comment_id"`
+		CommentID message.StrNum `json:"comment_id"`
 	}
-	if err := client.Call(ctx, ActionCommentQzone, req, &raw); err != nil {
+	response, err := client.CommentQzone(ctx, req)
+	if err != nil {
 		return "", err
+	}
+	if err := sonic.Unmarshal(response.Raw, &raw); err != nil {
+		return "", fmt.Errorf("解析 QQ 空间评论回执失败: %w", err)
 	}
 	return string(raw.CommentID), nil
 }

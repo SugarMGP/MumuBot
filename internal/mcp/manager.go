@@ -7,6 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"mumu-bot/internal/refstore"
+	"mumu-bot/internal/version"
+
 	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -40,14 +43,16 @@ type ServerStatus struct {
 // Manager MCP 客户端管理器
 type Manager struct {
 	clients  []*client.Client
+	cancels  []context.CancelFunc
+	refs     *refstore.Store
 	tools    []tool.BaseTool
 	statuses []ServerStatus
 	mu       sync.RWMutex
 }
 
 // NewMCPManager 创建 MCP 管理器
-func NewMCPManager() *Manager {
-	return &Manager{}
+func NewMCPManager(refs *refstore.Store) *Manager {
+	return &Manager{refs: refs}
 }
 
 // Load 连接指定的 MCP 服务器；单个失败只让该服务不可用，不阻断其它能力
@@ -82,6 +87,17 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 	var cli *client.Client
 	var err error
 	const initTimeout = 30 * time.Second
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	initCtx, cancelInit := context.WithTimeout(ctx, initTimeout)
+	defer cancelInit()
+	stopInitWatch := context.AfterFunc(initCtx, cancelConnection)
+	defer stopInitWatch()
+	connected := false
+	defer func() {
+		if !connected {
+			cancelConnection()
+		}
+	}()
 
 	switch cfg.Type {
 	case "sse":
@@ -99,7 +115,7 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 	}
 
 	// 启动客户端
-	if err := cli.Start(ctx); err != nil {
+	if err := cli.Start(connectionCtx); err != nil {
 		_ = cli.Close()
 		return 0, fmt.Errorf("启动 MCP 客户端失败: %w", err)
 	}
@@ -109,11 +125,9 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
 		Name:    "mumu-bot",
-		Version: "2.0.0",
+		Version: version.String(),
 	}
 
-	initCtx, cancelInit := context.WithTimeout(ctx, initTimeout)
-	defer cancelInit()
 	if _, err := cli.Initialize(initCtx, initRequest); err != nil {
 		_ = cli.Close()
 		return 0, fmt.Errorf("初始化 MCP 连接失败: %w", err)
@@ -121,8 +135,9 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 
 	// 获取工具 - 使用 MCPClient 接口
 	mcpToolCfg := &mcptool.Config{
-		Cli:          cli,
-		ToolNameList: cfg.ToolNameList,
+		Cli:                   cli,
+		ToolNameList:          cfg.ToolNameList,
+		ToolCallResultHandler: m.saveResultImages,
 	}
 
 	baseTools, err := mcptool.GetTools(initCtx, mcpToolCfg)
@@ -137,7 +152,9 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 		return 0, err
 	}
 	m.clients = append(m.clients, cli)
+	m.cancels = append(m.cancels, cancelConnection)
 	m.tools = append(m.tools, renamed...)
+	connected = true
 
 	zap.L().Info("已加载 MCP 工具",
 		zap.String("server", cfg.Name),
@@ -245,6 +262,9 @@ func (m *Manager) GetTools() []tool.BaseTool {
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, cancel := range m.cancels {
+		cancel()
+	}
 
 	for _, cli := range m.clients {
 		if err := cli.Close(); err != nil {
@@ -253,6 +273,7 @@ func (m *Manager) Close() {
 	}
 
 	m.clients = nil
+	m.cancels = nil
 	m.tools = nil
 	m.statuses = nil
 }

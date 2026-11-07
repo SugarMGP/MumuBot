@@ -12,17 +12,15 @@ import { Card } from "@/components/ui/card";
 import { clampPercent, formatDateTime } from "@/lib/format";
 
 const metrics = [
-  { key: "groups", icon: "groups", tone: "bg-info/10" },
+  { key: "conversations", icon: "conversations", tone: "bg-info/10" },
   { key: "memories", icon: "memories", tone: "bg-primary/10" },
-  { key: "members", icon: "members", tone: "bg-warning/10" },
-  { key: "activeMemories", icon: "jargons", tone: "bg-secondary/10" },
-  { key: "topics", icon: "style-cards", tone: "bg-accent/10" },
-  { key: "stickers", icon: "stickers", tone: "bg-warning/10" },
+  { key: "topics", icon: "topics", tone: "bg-secondary/10" },
+  { key: "workers", icon: "tools", tone: "bg-accent/10" },
 ] as const;
 
 export default function DashboardPage() {
   const { t } = useTranslation();
-  const query = useQuery({ queryKey: ["dashboard"], queryFn: dashboardApi.get });
+  const query = useQuery({ queryKey: ["dashboard"], queryFn: dashboardApi.get, refetchInterval: 15_000 });
   const [showAllEmotions, setShowAllEmotions] = useState(false);
 
   if (query.isPending) return <PageSkeleton />;
@@ -35,13 +33,11 @@ export default function DashboardPage() {
   const visibleEmotions = showAllEmotions
     ? data.emotions
     : data.emotions.slice(0, 3);
-  const values: Record<string, number> = {
-    groups: data.enabled_group_count,
-    memories: data.counts.memories,
-    members: data.counts.members,
-    activeMemories: data.counts.active_memories,
-    topics: data.counts.topics,
-    stickers: data.counts.stickers,
+  const values: Record<string, number | string> = {
+    conversations: data.counts.active_conversations,
+    memories: data.counts.active_memories,
+    topics: data.counts.active_topics,
+    workers: `${data.counts.running_workers} / ${data.counts.worker_count}`,
   };
 
   return (
@@ -51,14 +47,14 @@ export default function DashboardPage() {
         subtitle={t("dashboard.subtitle")}
       />
 
-      <section className="grid grid-cols-3 gap-4 min-[1360px]:grid-cols-6">
+      <section className="grid grid-cols-4 gap-4">
         {metrics.map((metric) => (
           <Card key={metric.key}>
             <div className="admin-card-pad-compact flex items-center gap-3">
               <span
-                className={`admin-icon-tile size-10 text-foreground/75 ${metric.tone}`}
+                className={`admin-icon-tile size-8 shrink-0 text-foreground/75 ${metric.tone}`}
               >
-                <AdminIcon name={metric.icon} className="size-5" />
+                <AdminIcon name={metric.icon} className="size-4" />
               </span>
               <div>
                 <div className="admin-caption-text text-muted-foreground">
@@ -77,7 +73,7 @@ export default function DashboardPage() {
         <SectionCard
           title={t("dashboard.currentEmotions")}
           description={t("dashboard.emotionsHint")}
-          actions={<Badge>{t("dashboard.live")}</Badge>}
+          actions={<Badge>{query.isFetching ? t("common.refreshing") : t("dashboard.live")}</Badge>}
         >
           <div className="space-y-4">
             {data.mood ? (

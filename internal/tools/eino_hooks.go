@@ -152,7 +152,7 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				}
 				id, existing, resumed, beginErr := tc.Session.BeginToolTranscript(ctx, tc.RunID, input.Name, input.CallID, input.Arguments)
 				if beginErr != nil {
-					return nil, beginErr
+					return nil, NewTerminalToolError(beginErr)
 				}
 				if resumed {
 					return &compose.ToolOutput{Result: existing}, nil
@@ -171,7 +171,7 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				}
 				display, _, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, nil, "")
 				if finishErr != nil {
-					return nil, finishErr
+					return nil, NewTerminalToolError(finishErr)
 				}
 				if output != nil {
 					output.Result = display
@@ -191,7 +191,7 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				}
 				id, existing, resumed, beginErr := tc.Session.BeginToolTranscript(ctx, tc.RunID, input.Name, input.CallID, input.Arguments)
 				if beginErr != nil {
-					return nil, beginErr
+					return nil, NewTerminalToolError(beginErr)
 				}
 				if resumed {
 					return &compose.EnhancedInvokableToolOutput{Result: &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: existing}}}}, nil
@@ -205,6 +205,8 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				if err != nil {
 					status = "failed"
 					result = err.Error()
+				} else if !toolOutputSucceeded(&compose.ToolOutput{Result: result}) {
+					status = "failed"
 				}
 				var enhanced *schema.ToolResult
 				if output != nil {
@@ -212,7 +214,7 @@ func ToolTranscriptMiddleware() compose.ToolMiddleware {
 				}
 				displayText, displayEnhanced, finishErr := tc.Session.FinishToolTranscript(ctx, id, status, result, enhanced, "")
 				if finishErr != nil {
-					return nil, finishErr
+					return nil, NewTerminalToolError(finishErr)
 				}
 				if output != nil {
 					if displayEnhanced != nil {
@@ -250,24 +252,43 @@ func toolResultText(result *schema.ToolResult) string {
 }
 
 // ToolErrorMiddleware 将可恢复工具错误转成 JSON 结果，让 Eino 继续循环
-func ToolErrorMiddleware() compose.InvokableToolMiddleware {
-	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
-		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-			output, err := next(ctx, input)
-			if err == nil {
-				return output, nil
+func ToolErrorMiddleware() compose.ToolMiddleware {
+	return compose.ToolMiddleware{
+		Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
+			return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+				output, err := next(ctx, input)
+				if err == nil {
+					return output, nil
+				}
+				result, encodeErr := recoverableToolError(ctx, err)
+				if encodeErr != nil {
+					return nil, encodeErr
+				}
+				return &compose.ToolOutput{Result: result}, nil
 			}
-			var terminal *TerminalToolError
-			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, memory.ErrSnapshotChanged) || errors.Is(err, memory.ErrConversationUnavailable) || errors.As(err, &terminal) {
-				return nil, err
+		},
+		EnhancedInvokable: func(next compose.EnhancedInvokableToolEndpoint) compose.EnhancedInvokableToolEndpoint {
+			return func(ctx context.Context, input *compose.ToolInput) (*compose.EnhancedInvokableToolOutput, error) {
+				output, err := next(ctx, input)
+				if err == nil {
+					return output, nil
+				}
+				result, encodeErr := recoverableToolError(ctx, err)
+				if encodeErr != nil {
+					return nil, encodeErr
+				}
+				return &compose.EnhancedInvokableToolOutput{Result: &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: result}}}}, nil
 			}
-			result, encodeErr := sonic.MarshalString(&toolErrorOutput{Message: err.Error()})
-			if encodeErr != nil {
-				return nil, encodeErr
-			}
-			return &compose.ToolOutput{Result: result}, nil
-		}
+		},
 	}
+}
+
+func recoverableToolError(ctx context.Context, err error) (string, error) {
+	var terminal *TerminalToolError
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, memory.ErrSnapshotChanged) || errors.Is(err, memory.ErrConversationUnavailable) || errors.As(err, &terminal) {
+		return "", err
+	}
+	return sonic.MarshalString(&toolErrorOutput{Message: err.Error()})
 }
 
 func toolOutputSucceeded(output *compose.ToolOutput) bool {

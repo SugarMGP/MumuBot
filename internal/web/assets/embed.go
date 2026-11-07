@@ -23,7 +23,11 @@ func Open(name string) ([]byte, error) {
 }
 
 func Handler() http.Handler {
-	fileServer := http.FileServer(http.FS(fileSystem()))
+	assets, err := fs.Sub(fileSystem(), "assets")
+	if err != nil {
+		panic(err)
+	}
+	fileServer := http.FileServer(http.FS(assets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 该处理器只挂载在 /assets/ 下，Vite 产物文件名带内容哈希，可长期缓存
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")

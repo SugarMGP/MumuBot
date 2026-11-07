@@ -32,6 +32,9 @@ type LifeState struct {
 	ContextThroughID uint            `gorm:"column:context_through_id;not null;default:0" json:"context_through_id"`
 	LastErrorCode    string          `gorm:"column:last_error_code;type:text;not null;default:''" json:"last_error_code"`
 	LastError        string          `gorm:"column:last_error;type:text;not null;default:''" json:"last_error"`
+	RetryCount       int             `gorm:"column:retry_count;not null;default:0" json:"retry_count"`
+	RetryAt          *time.Time      `gorm:"column:retry_at" json:"retry_at,omitempty"`
+	RetryExhausted   bool            `gorm:"column:retry_exhausted;not null;default:false" json:"retry_exhausted"`
 	UpdatedAt        time.Time       `gorm:"column:updated_at;not null;default:now()" json:"updated_at"`
 }
 
@@ -63,12 +66,53 @@ func (m *Manager) GetLifeState(ctx context.Context) (*LifeState, error) {
 
 // SetLifeError 记录可本地化的错误码和原始细节，空 code 表示清除
 func (m *Manager) SetLifeError(ctx context.Context, code, detail string) error {
-	return m.db.WithContext(ctx).Model(&LifeState{}).Where("id=?", LifeTargetID).
-		Updates(map[string]any{
-			"last_error_code": strings.TrimSpace(code),
-			"last_error":      strings.TrimSpace(detail),
-			"updated_at":      time.Now(),
-		}).Error
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var state LifeState
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", LifeTargetID).Take(&state).Error; err != nil {
+			return err
+		}
+		state.LastErrorCode, state.LastError = code, detail
+		state.RetryAt = nil
+		state.RetryExhausted = code != "" && state.RetryCount >= 2
+		if code == "" {
+			state.RetryCount = 0
+		} else if state.Awake && state.RetryCount < 2 {
+			state.RetryCount++
+			next := time.Now().Add(5 * time.Minute)
+			state.RetryAt = &next
+		}
+		state.UpdatedAt = time.Now()
+		return tx.Save(&state).Error
+	})
+}
+
+// ResetLifeRetryTx 在新的明确输入或主动睡眠时结算上一轮失败
+func ResetLifeRetryTx(tx *gorm.DB) error {
+	return tx.Model(&LifeState{}).Where("id=?", LifeTargetID).Updates(map[string]any{
+		"retry_count": 0, "retry_at": nil, "retry_exhausted": false, "last_error_code": "", "last_error": "",
+	}).Error
+}
+
+// DeliverLifeRetry 在同一事务中消费重试时点并留下可恢复的内部输入
+func (m *Manager) DeliverLifeRetry(ctx context.Context, now time.Time, text string, build func(*SessionMessage) (json.RawMessage, error)) (*SessionMessage, *TranscriptEntry, error) {
+	var message *SessionMessage
+	var entry *TranscriptEntry
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var state LifeState
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", LifeTargetID).Take(&state).Error; err != nil {
+			return err
+		}
+		if !state.Awake || state.RetryAt == nil || state.RetryAt.After(now) {
+			return nil
+		}
+		var err error
+		message, entry, err = m.enqueueSessionMessageTx(tx, ConversationKindLife, LifeTargetID, ConversationKindLife, LifeTargetID, text, build, nil)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&LifeState{}).Where("id=?", LifeTargetID).Update("retry_at", nil).Error
+	})
+	return message, entry, err
 }
 
 // PlanLife 在同一次事务里更新当前活动并替换 life_next 槽位
@@ -115,6 +159,9 @@ func (m *Manager) SleepLife(ctx context.Context, until time.Time, note string) e
 			return err
 		}
 		updates := map[string]any{"awake": false, "woke_at": nil, "activity_text": "", "activity_since": nil, "updated_at": now}
+		if err := ResetLifeRetryTx(tx); err != nil {
+			return err
+		}
 		if state.Awake || state.SleepStartedAt == nil {
 			updates["sleep_started_at"] = now
 		}

@@ -71,12 +71,6 @@ func (a *Agent) SyncWorkers(desired int) error {
 		if err := a.memory.SetWorkerTargetActive(a.ctx, entry.worker.ID, true); err != nil {
 			return err
 		}
-		if err := a.memory.SetWorkerStatus(a.ctx, entry.worker.ID, memory.WorkerStatusIdle, "", entry.worker.ModelName); err != nil {
-			return err
-		}
-		if err := a.memory.UpdateWorkerTitle(a.ctx, entry.worker.ID, "空闲"); err != nil {
-			return err
-		}
 		active = append(active, entry)
 		zap.L().Info("worker 已重新加入池", zap.Uint("worker_id", entry.worker.ID))
 	}

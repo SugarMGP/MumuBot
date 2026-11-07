@@ -34,16 +34,34 @@ func (a *Agent) scheduleLifeThink() {
 }
 
 // thinkLife 复用主模型、ReAct 和 transcript，只把工具表换成生活主线；
-// 成功回合结束后继续消费新到达的 actionable 输入，失败不自动重试
+// 成功回合结束后继续消费新输入，失败由生活时钟按持久状态有限补试
 func (a *Agent) thinkLife(targetID int64) {
+	var failure error
+	completedRun := false
+	failureCode := "life_run_failed"
+	defer func() {
+		if a.ctx.Err() != nil {
+			return
+		}
+		ctx := context.WithoutCancel(a.ctx)
+		if failure != nil {
+			a.recordLifeError(ctx, failureCode, failure.Error())
+		} else if completedRun {
+			if err := a.memory.SetLifeError(ctx, "", ""); err != nil {
+				zap.L().Warn("清除 life 运行问题失败", zap.Error(err))
+			}
+		}
+	}()
 	generation := a.acquireGeneration()
 	if generation == nil {
+		failure = fmt.Errorf("模型未就绪")
 		return
 	}
 	defer generation.wg.Done()
 	state, err := newRunState("life")
 	if err != nil {
 		zap.L().Warn("加载 life 本轮配置失败", zap.Error(err))
+		failure = err
 		return
 	}
 	session := a.sessions.get(memory.ConversationKindLife, targetID)
@@ -64,6 +82,7 @@ func (a *Agent) thinkLife(targetID int64) {
 		ctx, err = a.buildLifeToolContext(ctx, session)
 		if err != nil {
 			zap.L().Warn("构建 life 工具上下文失败", zap.Error(err))
+			failure = err
 			return
 		}
 		tc := tools.GetToolContext(ctx)
@@ -72,25 +91,31 @@ func (a *Agent) thinkLife(targetID int64) {
 
 		if state.steps.Remaining() <= 0 {
 			zap.L().Warn("life 本轮步数已用完")
+			failure = fmt.Errorf("本轮步数用完")
 			return
 		}
 		lifeAgent, agentErr := a.newLifeAgent(ctx, generation, generation.lifeTools, state.steps.Remaining())
 		if agentErr != nil {
 			zap.L().Warn("构建 life 运行态失败", zap.Error(agentErr))
+			failure = agentErr
 			return
 		}
 		messages, assembleErr := a.assembleLifeMessages(ctx, session)
 		if assembleErr != nil {
 			zap.L().Warn("装配 life 上下文失败", zap.Error(assembleErr))
-			a.recordLifeError(context.WithoutCancel(ctx), "life_context_failed", assembleErr.Error())
+			failure, failureCode = assembleErr, "life_context_failed"
 			return
 		}
 		if runErr := a.runAgent(ctx, lifeAgent, messages); runErr != nil {
 			zap.L().Error("life 回合失败", zap.Error(runErr))
-			a.recordLifeError(context.WithoutCancel(ctx), "life_run_failed", runErr.Error())
+			failure = runErr
 			return
 		}
-		a.finishLifeTurn(ctx, session, tc, &selfChecked)
+		completedRun = true
+		if err := a.finishLifeTurn(ctx, session, tc, &selfChecked); err != nil {
+			failure = err
+			return
+		}
 	}
 }
 
@@ -145,16 +170,13 @@ func (a *Agent) injectLifeMaintenanceHint(ctx context.Context, session *Session)
 }
 
 // finishLifeTurn 在一轮正常结束后核对是否留下了下一次安排，没有就如实记下
-func (a *Agent) finishLifeTurn(ctx context.Context, session *Session, tc *tools.ToolContext, selfChecked *bool) {
+func (a *Agent) finishLifeTurn(ctx context.Context, session *Session, tc *tools.ToolContext, selfChecked *bool) error {
 	checkCtx := context.WithoutCancel(ctx)
 	hasNext, err := a.memory.LifeHasFutureSchedule(checkCtx)
 	switch {
 	case err != nil:
-		zap.L().Warn("核对 life 下一次安排失败", zap.Error(err))
+		return fmt.Errorf("核对 life 下一次安排失败: %w", err)
 	case !hasNext:
-		if err := a.memory.SetLifeError(checkCtx, "", ""); err != nil {
-			zap.L().Warn("清除 life 运行问题失败", zap.Error(err))
-		}
 		if budget := runStateFrom(ctx); budget != nil && budget.steps != nil && budget.steps.Remaining() <= 0 {
 			zap.L().Info("life 本轮步数已用完，不再追加无安排自检")
 			break
@@ -163,22 +185,19 @@ func (a *Agent) finishLifeTurn(ctx context.Context, session *Session, tc *tools.
 			*selfChecked = true
 			nudge := "你这一轮成功结束了，但还没有启用的未来安排。现在确认一下：确实想暂停、不再安排下一次，还是漏了安排？想继续就用 planNext 或 manageSchedule；确实想暂停就不必额外补计划，这一轮之后不会再追问。"
 			if appendErr := session.AppendLifeSelfCheck(checkCtx, a.memory, nudge); appendErr != nil {
-				zap.L().Warn("写入 life 无安排自检失败", zap.Error(appendErr))
+				return fmt.Errorf("写入 life 无安排自检失败: %w", appendErr)
 			}
 			break
 		}
 		zap.L().Info("life 已经过自检，仍没有未来安排；尊重这个选择")
-	default:
-		if err := a.memory.SetLifeError(checkCtx, "", ""); err != nil {
-			zap.L().Warn("清除 life 运行问题失败", zap.Error(err))
-		}
 	}
 	if tc != nil && session != nil {
 		session.CompleteTurn(tc.MemoryMaintained, false)
 	}
+	return nil
 }
 
-// recordLifeError 暴露真实的运行问题，不做默认补位计划
+// recordLifeError 保存真实问题与有次数上限的补试，不代替 life 安排生活
 func (a *Agent) recordLifeError(ctx context.Context, code, detail string) {
 	if err := a.memory.SetLifeError(ctx, code, detail); err != nil {
 		zap.L().Warn("写入 life 运行问题失败", zap.Error(err))
@@ -395,6 +414,13 @@ func (a *Agent) RequestLifeRun(ctx context.Context, note string) error {
 
 // bootstrapLife 首次启动给一句开放处境；已有待处理输入时只请求一次运行
 func (a *Agent) bootstrapLife(ctx context.Context) error {
+	state, err := a.memory.GetLifeState(ctx)
+	if err != nil {
+		return err
+	}
+	if state.RetryAt != nil || state.RetryExhausted {
+		return nil
+	}
 	session := a.sessions.get(memory.ConversationKindLife, memory.LifeTargetID)
 	count, err := a.memory.CountTranscript(ctx, memory.ConversationKindLife, memory.LifeTargetID)
 	if err != nil {

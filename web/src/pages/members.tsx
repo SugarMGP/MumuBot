@@ -84,7 +84,7 @@ export default function MembersPage() {
       ) : query.data.items.length === 0 ? (
         <EmptyState message={t("members.empty")} />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {query.data.items.map((member) => {
             const name = primaryName(member);
             const visibleNames = member.names.slice(0, 2);
@@ -97,7 +97,7 @@ export default function MembersPage() {
                       {initial(member)}
                     </div>
                     <div className="min-w-0">
-                      <h2 className="break-words admin-card-title text-foreground">
+                      <h2 className="break-words admin-card-title-compact text-foreground">
                         {name}
                       </h2>
                       <p className="admin-number mt-1 text-xs text-muted-foreground">

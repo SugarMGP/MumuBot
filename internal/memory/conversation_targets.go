@@ -83,25 +83,6 @@ func (m *Manager) ListConversationTargets(ctx context.Context, kind string, acti
 	return m.ListConversationTargetsAt(ctx, kind, activeOnly, time.Time{})
 }
 
-// ListConversationTargetsAfter 按 active、target_id 顺序读取游标之后的一页会话
-func (m *Manager) ListConversationTargetsAfter(ctx context.Context, kind string, activeOnly bool, snapshot time.Time, lastActive bool, lastID int64, limit int) ([]ConversationTarget, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	var rows []ConversationTarget
-	q := m.db.WithContext(ctx).Where("conversation_kind=?", kind).Order("active DESC, target_id").Limit(limit)
-	if activeOnly {
-		q = q.Where("active=true")
-	}
-	if !snapshot.IsZero() {
-		q = q.Where("updated_at<=?", snapshot)
-	}
-	if lastID > 0 {
-		q = q.Where("(active < ? OR (active = ? AND target_id > ?))", lastActive, lastActive, lastID)
-	}
-	return rows, q.Find(&rows).Error
-}
-
 // ListConversationTargetsAt 读取游标快照边界内的会话，避免翻页时新增联系人挤动结果。
 func (m *Manager) ListConversationTargetsAt(ctx context.Context, kind string, activeOnly bool, snapshot time.Time) ([]ConversationTarget, error) {
 	var rows []ConversationTarget

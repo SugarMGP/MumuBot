@@ -7,7 +7,7 @@
 - `client.go`：SDK 连接与自动重连、强类型事件分流和消息回调。
 - `client_parse.go`：消息段解析、基础展示文本、回复 ID、图片和转发内容解析。
 - `client_api.go`：发送群聊/私聊消息、戳一戳、群信息、群成员、公告和精华相关 API。
-- `client_files.go`/`client_file_api.go`：文件原始字段、下载和上传；`client_profile.go`：自身资料；`client_qzone.go`：Qzone 窄封装。
+- `client_files.go`/`client_file_api.go`：强类型文件字段与 SDK 未覆盖的定位扩展、下载和上传；`client_profile.go`：自身资料；`client_qzone.go`：Qzone 强类型 API 与业务投影。
 - `client_contacts.go`：联系人（群聊/好友）同步 API。
 - `client_types.go`：消息段、会话消息和动态 API 解析结果类型。
 
@@ -24,12 +24,12 @@
 - 消息段解析应优先填结构化列表，例如 `AtList`、图片、文件、卡片、转发；需要判断是否存在时直接看列表是否为空。
 - 不要在解析层猜测未知字段名；OneBot 字段不确定时先查协议或保留解析失败日志。
 - 解析失败不应制造文本占位污染原始内容；最多进入展示上下文。
-- JSON 解析和序列化复用 Sonic 并保留整数精度；生成类型保留的原始联合字段（`Raw json.RawMessage`）解码后再校验。
-- OneBot API 优先使用 SDK 生成的强类型方法（`api.Client`）；只有已证实 SDK 缺失的群/私文件 URL 扩展参数、Qzone 读写/互动 action 才在 `internal/onebot` 内做具名窄封装并复用 `Client.Call`，不扩展为任意 action/map 工具。
-- 文件消息必须同时保留强类型 `FileData.FileID` 和原始事件的 `file`、`file_size`、`file_hash`、`busid`；临时下载地址只在当前调用中使用。
+- JSON 解析和序列化复用 Sonic 并保留整数精度；SDK v1.1.1 已覆盖的 ID 直接使用 `message.ID`，只有真实联合字段保留 `Raw json.RawMessage`。
+- 跨后端能力优先使用 SDK 根包统一方法，例如 `MarkMessageRead`、`GetMessageReactions`；其余 API 使用生成的强类型方法（`api.Client`）。仅群文件 URL 的 `busid`、私聊文件 URL 的 `file_hash` 尚未覆盖，携带这些参数时才使用具名窄封装调用 `Client.Call`，不扩展为任意 action/map 工具。
+- 文件消息从 `message.FileData` 读取标识、名称、大小与哈希；原始事件只补 SDK 未覆盖的 `busid` 和 `file_md5`，整数不能经由 float64 中转。临时下载地址只在当前调用中使用。
 - QQ 文件/图片的下载结果必须与已知声明大小核对；pending 首次固定失败时保留待取状态和真实原因，短响应不能发布成不可变原件。
 - Qzone 发布沿用账号当前可见范围，底层接口固定使用公开参数，工具和后台不增加单条可见范围选择。头像和说说图片上传只接收 image ref，不把 home 路径作为第二套上传来源。
-- 合并转发内容由 SDK 归一化管线按方言补拉（`ForwardData.Content`），Adapter 不再做二次兜底拉取；补拉失败保留占位展示。
+- 顶层合并转发由 SDK 归一化管线按方言补拉（`ForwardData.Content`），空结果或失败不再二次请求；Adapter 仅补 SDK 尚未处理的嵌套层，遵守当前连接取消与三层上限；Generic 方言不发起扩展补拉。
 
 ## 修改注意
 

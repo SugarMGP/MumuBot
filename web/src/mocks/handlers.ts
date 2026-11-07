@@ -208,7 +208,7 @@ const topicDetails = new Map<number, TopicDetailData>(
           messageIndex === 4
             ? "这条消息已经被撤回，用来检查撤回样式。"
             : `第 ${messageIndex + 1} 条关联消息，按时间顺序排列。`,
-        message_time: iso(index * 90 + messageIndex),
+        message_time: iso(index * 90 + 5 - messageIndex),
         recalled: messageIndex === 4,
         anchor: messageIndex === 1,
         source: messageIndex < 3,
@@ -439,8 +439,15 @@ const lifeSeed: LifeData = {
     last_error: "",
     last_error_code: "",
     running: false,
+    retry_count: 0,
+    retry_exhausted: false,
     updated_at: iso(5),
   },
+  workers: emptySeed ? [] : [
+    { id: 1, title: "整理资料与配图", status: "running", active: true, last_error: "", updated_at: iso(1) },
+    { id: 2, title: "教程笔记", status: "idle", active: true, last_error: "", updated_at: iso(25) },
+    { id: 3, title: "下载课程材料", status: "failed", active: true, last_error: "上游请求返回 HTTP 504，材料尚未下载完成", updated_at: iso(40) },
+  ],
   schedules: [
     {
       id: 1,
@@ -461,16 +468,6 @@ const lifeSeed: LifeData = {
       purpose: "commitment",
       created_at: iso(600),
       updated_at: iso(120),
-    },
-    {
-      id: 3,
-      at: new Date(now - 2 * 60 * 60_000).toISOString(),
-      next_run_at: new Date(now - 2 * 60 * 60_000).toISOString(),
-      text: "把昨天的结果发给那个群",
-      enabled: false,
-      purpose: "commitment",
-      created_at: iso(900),
-      updated_at: iso(180),
     },
   ],
 };
@@ -610,13 +607,12 @@ export const handlers = [
 
   http.get("/api/v1/dashboard", () =>
     ok({
-      enabled_group_count: conversations.filter((item) => item.kind === "group" && item.active).length,
       counts: {
-        memories: memories.length,
-        members: members.length,
+        active_conversations: conversations.filter((item) => item.active && !item.blocked).length,
         active_memories: memories.filter((item) => item.status === "active").length,
-        topics: topics.length,
-        stickers: stickers.length,
+        active_topics: topics.filter((item) => item.status === "active").length,
+        running_workers: lifeData.workers.filter((item) => item.active && item.status === "running").length,
+        worker_count: lifeData.workers.filter((item) => item.active).length,
       },
       runtime: { connected: true, self_id: 3889000000, mcp_tool_count: 4 },
       mood: {
@@ -1215,6 +1211,23 @@ export const handlers = [
     }),
   ),
 
+  http.get("/api/v1/life/workers/:id/history", ({ request }) => {
+    const before = Number(new URL(request.url).searchParams.get("before_id") || "0");
+    const entries = Array.from({ length: 25 }, (_, index) => ({
+      id: 25 - index, at: iso(index * 2), role: index % 2 ? "assistant" : "tool",
+      text: index % 2 ? "已检查材料，继续整理结果。" : "命令执行完成，输出与文件已经保存。",
+      tool_name: index % 2 ? undefined : "bash",
+      tool_status: index % 2 ? undefined : "succeeded",
+    })).filter((entry) => !before || entry.id < before);
+    const page = entries.slice(0, 20);
+    return ok({ entries: page, running_tools: [], pending_entries: [{ id: 30, at: iso(0), role: "agent_message", text: "请继续整理，完成后把结论发回生活会话。" }], has_more: entries.length > page.length, next_before_id: page.at(-1)?.id });
+  }),
+  http.get("/api/v1/life/workers/:id/entries/:entryID", ({ request, params }) => {
+    const offset = Number(new URL(request.url).searchParams.get("offset") || "0");
+    const full = Number(params.entryID) === 30 ? "请继续整理，完成后把结论发回生活会话。" : "这是一段已保存的完整运行输出，用来查看材料处理结果与后续步骤。\n".repeat(400);
+    const next = Math.min(offset + 8000, full.length);
+    return ok({ text: full.slice(offset, next), total: full.length, complete: next >= full.length, next_offset: next, arguments: Number(params.entryID) === 30 ? undefined : '{"command":"cat notes.txt"}' });
+  }),
   http.get("/api/v1/life", () => ok(lifePayload())),
   http.post("/api/v1/life/run", async () => {
     await delay(120);

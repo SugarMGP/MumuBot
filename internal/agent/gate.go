@@ -113,6 +113,9 @@ func (w *gateState) threshold(now time.Time, frequency float64) float64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.prune(now)
+	if frequency <= 0 {
+		return math.Inf(1)
+	}
 
 	expectedProactive := 0.0
 	expectedForced := 0.0
@@ -134,6 +137,9 @@ func (w *gateState) threshold(now time.Time, frequency float64) float64 {
 	// 实际发言多于目标时收紧保留比例，只收紧不放宽
 	if excess := float64(len(w.replies)) - target; excess > 0 && target > 0 {
 		keep *= clampFloat(1-excess/target, 0, 1)
+	}
+	if keep == 0 {
+		return math.Inf(1)
 	}
 	if len(scores) < gateMinSamples {
 		return staticGateThreshold(keep)
@@ -185,11 +191,11 @@ func (a *Agent) gateAllow(groupID int64, session *Session, pending []*sessionUse
 		return false
 	}
 	now := time.Now()
-	probability := a.gateProbability(session, pending)
 	if forced {
 		a.gates.window(groupID).record(now, 1, true)
 		return true
 	}
+	probability := a.gateProbability(session, pending)
 	window := a.gates.window(groupID)
 	threshold := window.threshold(now, a.gateFrequency(groupID))
 	probability *= a.gateDecay(groupID)
@@ -258,7 +264,7 @@ func (a *Agent) gateProbability(session *Session, pending []*sessionUser) float6
 		if content != "" {
 			textSeen = true
 		}
-		if strings.Contains(content, "@") {
+		if user.AtOther {
 			atOther = true
 		}
 		if strings.ContainsAny(content, "?？") {

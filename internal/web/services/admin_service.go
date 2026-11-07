@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -74,7 +75,13 @@ type AdminService struct {
 	stickerDir string
 }
 
-type OverviewStats struct{ MemoryCount, MemberCount, ActiveCount, TopicCount, StickerCount int64 }
+type OverviewStats struct {
+	ActiveConversations int64
+	ActiveMemories      int64
+	ActiveTopics        int64
+	RunningWorkers      int64
+	WorkerCount         int64
+}
 
 func NewAdminService(memoryManager *memory.Manager, stickerDir string) *AdminService {
 	return &AdminService{db: memoryManager.GetDB(), memory: memoryManager, stickerDir: stickerDir}
@@ -134,24 +141,29 @@ func order(q *gorm.DB, key, direction string, columns map[string]string) *gorm.D
 	return q.Order(column + " DESC").Order("id DESC")
 }
 
-func (s *AdminService) OverviewStats() (OverviewStats, error) {
+func (s *AdminService) OverviewStats(ctx context.Context, selfID int64) (OverviewStats, error) {
 	var out OverviewStats
-	items := []struct {
-		model any
-		count *int64
-	}{
-		{&memory.KnowledgeRecord{}, &out.MemoryCount}, {&memory.MemberProfile{}, &out.MemberCount},
-		{&memory.TopicThreadRow{}, &out.TopicCount}, {&memory.Sticker{}, &out.StickerCount},
-	}
-	for _, item := range items {
-		if err := s.db.Model(item.model).Count(item.count).Error; err != nil {
-			return out, err
-		}
-	}
-	if err := s.db.Model(&memory.KnowledgeRecord{}).Where("status = ?", "active").Count(&out.ActiveCount).Error; err != nil {
-		return out, err
-	}
-	return out, nil
+	now := time.Now()
+	err := s.db.WithContext(ctx).Raw(`WITH workers AS (
+		SELECT COUNT(*) AS worker_count, COUNT(*) FILTER (WHERE w.status='running') AS running_workers
+		FROM worker_sessions w JOIN conversation_targets ct
+			ON ct.conversation_kind='worker' AND ct.target_id=w.id
+		WHERE ct.active=true AND ct.blocked=false
+	)
+	SELECT (
+		SELECT COUNT(DISTINCT (ml.conversation_kind,ml.target_id))
+		FROM message_logs ml JOIN conversation_targets ct
+			ON ct.conversation_kind=ml.conversation_kind AND ct.target_id=ml.target_id
+		WHERE ct.active=true AND ct.blocked=false AND ml.user_id<>?
+			AND ml.message_time>=? AND ml.message_time<=?
+	) AS active_conversations, (
+		SELECT COUNT(*) FROM knowledge_items
+		WHERE status='active' AND (pinned=true OR forget_at IS NULL OR forget_at>?)
+	) AS active_memories, (
+		SELECT COUNT(*) FROM topic_threads
+		WHERE status='active' AND forgotten_at IS NULL AND forget_at>?
+	) AS active_topics, workers.running_workers, workers.worker_count FROM workers`, selfID, now.Add(-24*time.Hour), now, now, now).Scan(&out).Error
+	return out, err
 }
 
 func paginate[T any](q *gorm.DB, page, size int, items *[]T) (Page[T], error) {
@@ -360,7 +372,8 @@ func (s *AdminService) ListMemberProfiles(f ListFilter) (Page[MemberProfileView]
 	if err := q.Count(&total).Error; err != nil {
 		return Page[MemberProfileView]{}, err
 	}
-	q = order(q, f.Sort, f.Order, map[string]string{"updated": "updated_at", "default": "updated_at"})
+	_, direction := NormalizeMemberSort(f.Sort, f.Order)
+	q = q.Order("updated_at " + direction).Order("user_id " + direction)
 	var profiles []memory.MemberProfile
 	if err := q.Offset((page - 1) * size).Limit(size).Find(&profiles).Error; err != nil {
 		return Page[MemberProfileView]{}, err
@@ -409,10 +422,6 @@ func (s *AdminService) ListStickers(f ListFilter) (Page[memory.Sticker], error) 
 	}
 	q = order(q, f.Sort, f.Order, map[string]string{"use": "use_count", "updated": "updated_at", "created": "created_at", "default": "use_count"})
 	return paginate(q, f.Page, f.PageSize, &items)
-}
-func (s *AdminService) GetSticker(id uint) (memory.Sticker, error) {
-	var v memory.Sticker
-	return v, s.db.First(&v, id).Error
 }
 
 func stringIDs(ids []int64) []string {

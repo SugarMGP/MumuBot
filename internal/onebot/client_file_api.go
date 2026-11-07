@@ -33,28 +33,38 @@ func (c *Client) ResolveFileURL(ctx context.Context, kind string, targetID int64
 	}
 	switch kind {
 	case "group":
-		req := groupFileURLRequest{GetGroupFileURLRequest: api.GetGroupFileURLRequest{
+		req := api.GetGroupFileURLRequest{
 			GroupID: message.ID(targetID), FileID: ref.FileID,
-		}, BusID: ref.BusID}
-		var resp api.GetGroupFileURLResponse
-		if err := client.Call(ctx, string(api.ActionGetGroupFileURL), req, &resp); err != nil {
+		}
+		var resp *api.GetGroupFileURLResponse
+		if ref.BusID == nil {
+			resp, err = client.GetGroupFileURL(ctx, req)
+		} else {
+			// SDK 的生成请求尚未覆盖 busid，保留原消息给出的定位信息
+			resp = &api.GetGroupFileURLResponse{}
+			err = client.Call(ctx, string(api.ActionGetGroupFileURL), groupFileURLRequest{GetGroupFileURLRequest: req, BusID: ref.BusID}, resp)
+		}
+		if err != nil {
 			return "", err
 		}
-		if resp.URL == nil || strings.TrimSpace(*resp.URL) == "" {
+		if resp == nil || resp.URL == nil || strings.TrimSpace(*resp.URL) == "" {
 			return "", fmt.Errorf("后端没有返回群文件下载地址")
 		}
 		return *resp.URL, nil
 	case "private":
-		req := privateFileURLRequest{GetPrivateFileURLRequest: api.GetPrivateFileURLRequest{FileID: ref.FileID}}
-		if strings.TrimSpace(ref.FileHash) != "" {
-			hash := ref.FileHash
-			req.FileHash = &hash
+		req := api.GetPrivateFileURLRequest{FileID: ref.FileID}
+		var resp *api.GetPrivateFileURLResponse
+		if ref.FileHash == "" {
+			resp, err = client.GetPrivateFileURL(ctx, req)
+		} else {
+			// SDK 的生成请求尚未覆盖 file_hash，不能在首次取文件时丢弃
+			resp = &api.GetPrivateFileURLResponse{}
+			err = client.Call(ctx, string(api.ActionGetPrivateFileURL), privateFileURLRequest{GetPrivateFileURLRequest: req, FileHash: &ref.FileHash}, resp)
 		}
-		var resp api.GetPrivateFileURLResponse
-		if err := client.Call(ctx, string(api.ActionGetPrivateFileURL), req, &resp); err != nil {
+		if err != nil {
 			return "", err
 		}
-		if resp.URL == nil || strings.TrimSpace(*resp.URL) == "" {
+		if resp == nil || resp.URL == nil || strings.TrimSpace(*resp.URL) == "" {
 			return "", fmt.Errorf("后端没有返回私聊文件下载地址")
 		}
 		return *resp.URL, nil

@@ -26,6 +26,9 @@ type lifeStateDTO struct {
 	LastErrorCode  string     `json:"last_error_code"`
 	Running        bool       `json:"running"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	RetryCount     int        `json:"retry_count"`
+	RetryAt        *time.Time `json:"retry_at,omitempty"`
+	RetryExhausted bool       `json:"retry_exhausted"`
 }
 
 type lifeScheduleDTO struct {
@@ -43,6 +46,16 @@ type lifeScheduleDTO struct {
 type lifeResponse struct {
 	State     lifeStateDTO      `json:"state"`
 	Schedules []lifeScheduleDTO `json:"schedules"`
+	Workers   []lifeWorkerDTO   `json:"workers"`
+}
+
+type lifeWorkerDTO struct {
+	ID        uint      `json:"id"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"`
+	Active    bool      `json:"active"`
+	LastError string    `json:"last_error"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // loadLifeData 读取唯一 life 的当前状态和全部日程
@@ -56,6 +69,18 @@ func (a *App) loadLifeData(r *http.Request) (lifeResponse, error) {
 	if err != nil {
 		return lifeResponse{}, err
 	}
+	workers, err := a.memMgr.ListWorkerSessions(ctx)
+	if err != nil {
+		return lifeResponse{}, err
+	}
+	targets, err := a.memMgr.ListConversationTargets(ctx, memory.ConversationKindWorker, false)
+	if err != nil {
+		return lifeResponse{}, err
+	}
+	active := map[int64]bool{}
+	for _, target := range targets {
+		active[target.TargetID] = target.Active
+	}
 	running := false
 	if agent := a.currentAgent(); agent != nil {
 		running = agent.Running(memory.ConversationKindLife, memory.LifeTargetID)
@@ -66,8 +91,16 @@ func (a *App) loadLifeData(r *http.Request) (lifeResponse, error) {
 			ActivitySince: state.ActivitySince, SleepStartedAt: state.SleepStartedAt,
 			WokeAt: state.WokeAt, LastError: state.LastError, LastErrorCode: state.LastErrorCode,
 			UpdatedAt: state.UpdatedAt, Running: running,
+			RetryCount: state.RetryCount, RetryAt: state.RetryAt, RetryExhausted: state.RetryExhausted,
 		},
 		Schedules: make([]lifeScheduleDTO, 0, len(rows)),
+		Workers:   make([]lifeWorkerDTO, 0, len(workers)),
+	}
+	for _, worker := range workers {
+		data.Workers = append(data.Workers, lifeWorkerDTO{
+			ID: worker.ID, Title: worker.Title, Status: worker.Status,
+			Active: active[int64(worker.ID)], LastError: worker.LastError, UpdatedAt: worker.UpdatedAt,
+		})
 	}
 	for _, row := range rows {
 		data.Schedules = append(data.Schedules, lifeScheduleDTO{

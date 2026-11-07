@@ -228,6 +228,9 @@ func initializeV17Schema(db *gorm.DB) error {
 			context_through_id BIGINT NOT NULL DEFAULT 0,
 			last_error TEXT NOT NULL DEFAULT '',
 			last_error_code TEXT NOT NULL DEFAULT '',
+			retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count BETWEEN 0 AND 2),
+			retry_at TIMESTAMPTZ,
+			retry_exhausted BOOLEAN NOT NULL DEFAULT false,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
 		`INSERT INTO life_state(id,awake,activity_text) VALUES(1,true,'')`,

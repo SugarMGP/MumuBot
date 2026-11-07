@@ -72,6 +72,11 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 	if tc == nil || tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("会话历史能力未初始化"))
 	}
+	return ReadSessionHistory(ctx, tc.MemoryMgr, input)
+}
+
+// ReadSessionHistory 共用会话工具与后台的只读历史投影
+func ReadSessionHistory(ctx context.Context, mem *memory.Manager, input *ReadSessionHistoryInput) (*ReadSessionHistoryOutput, error) {
 	if input == nil {
 		return nil, fmt.Errorf("需要 session_id")
 	}
@@ -86,7 +91,7 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 	if limit > 50 {
 		limit = 50
 	}
-	target, err := tc.MemoryMgr.GetConversationTarget(ctx, kind, targetID)
+	target, err := mem.GetConversationTarget(ctx, kind, targetID)
 	if err != nil {
 		return nil, fmt.Errorf("读取会话失败: %w", err)
 	}
@@ -94,7 +99,7 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 	if name == "" {
 		name = fmt.Sprintf("%s:%d", kind, targetID)
 	}
-	pending, err := tc.MemoryMgr.PendingInputs(ctx, kind, targetID)
+	pending, err := mem.PendingInputs(ctx, kind, targetID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +109,7 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 	for _, row := range pending {
 		pendingIDs[row.ID] = true
 		pendingEntries = append(pendingEntries, SessionHistoryPendingEntry{
-			ID: row.ID, At: row.CreatedAt, Role: historyRole(row.EntryKind),
+			ID: row.ID, At: row.CreatedAt, Role: row.EntryKind,
 			Text: truncateHistoryText(decodeTranscriptText(row.Payload)), InputSeq: row.InputSeq,
 		})
 	}
@@ -112,7 +117,7 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 	if err != nil {
 		return nil, err
 	}
-	recent, err := tc.MemoryMgr.RecentVisibleTranscript(ctx, kind, targetID, input.BeforeID, from, until, limit+1)
+	recent, err := mem.RecentVisibleTranscript(ctx, kind, targetID, input.BeforeID, from, until, limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +134,7 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 		seenEntries[row.ID] = true
 		entries = append(entries, historyEntryFor(row))
 	}
-	runningRows, err := tc.MemoryMgr.RunningToolTranscripts(ctx, kind, targetID, 20)
+	runningRows, err := mem.RunningToolTranscripts(ctx, kind, targetID, 20)
 	if err != nil {
 		return nil, err
 	}
@@ -150,17 +155,6 @@ func readSessionHistory(ctx context.Context, input *ReadSessionHistoryInput) (*R
 		out.NextBeforeID = entries[len(entries)-1].ID
 	}
 	return out, nil
-}
-
-func historyRole(entryKind string) string {
-	switch entryKind {
-	case "agent_message":
-		return "agent_message"
-	case "system_note":
-		return "system_note"
-	default:
-		return entryKind
-	}
 }
 
 func truncateHistoryText(text string) string {
@@ -185,14 +179,15 @@ func historyText(text string) (string, string, int, bool) {
 
 // historyEntryFor 把 transcript 行投影成可供 life 判断进度的摘要
 func historyEntryFor(row memory.TranscriptEntry) SessionHistoryEntry {
+	files, images := refCounts(row.Payload)
 	preview, tail, total, truncated := historyText(decodeTranscriptText(row.Payload))
 	entry := SessionHistoryEntry{
 		ID: row.ID, At: row.CreatedAt, StartedAt: row.CreatedAt,
-		Role: historyRole(row.EntryKind), RunID: row.RunID,
+		Role: row.EntryKind, RunID: row.RunID,
 		Text: preview, TextTail: tail, TextLength: total, Truncated: truncated,
 		ToolName: row.ToolName, ToolStatus: row.ToolStatus,
 		CallID: row.ToolCallID, Arguments: truncateHistoryArgs(transcriptToolArguments(row.Payload)),
-		ImageCount: imageCount(row.Payload), FileCount: fileCount(row.Payload), ResultRef: row.ResultRef,
+		ImageCount: images, FileCount: files, ResultRef: row.ResultRef,
 	}
 	if row.EntryKind == "assistant" {
 		entry.ToolCalls = transcriptToolCalls(row.Payload)
@@ -247,17 +242,6 @@ func transcriptCompletedAt(payload []byte) *time.Time {
 		return nil
 	}
 	return &completed
-}
-
-func imageCount(payload []byte) int {
-	files, images := refCounts(payload)
-	_ = files
-	return images
-}
-
-func fileCount(payload []byte) int {
-	files, _ := refCounts(payload)
-	return files
 }
 
 func refCounts(payload []byte) (int, int) {
@@ -341,6 +325,11 @@ func readSessionEntry(ctx context.Context, input *ReadSessionEntryInput) (*ReadS
 	if tc == nil || tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("会话历史能力未初始化"))
 	}
+	return ReadSessionEntry(ctx, tc.MemoryMgr, input)
+}
+
+// ReadSessionEntry 共用会话工具与后台的只读正文窗口
+func ReadSessionEntry(ctx context.Context, mem *memory.Manager, input *ReadSessionEntryInput) (*ReadSessionEntryOutput, error) {
 	if input == nil || input.EntryID == 0 {
 		return nil, fmt.Errorf("需要 entry_id")
 	}
@@ -348,7 +337,7 @@ func readSessionEntry(ctx context.Context, input *ReadSessionEntryInput) (*ReadS
 	if err != nil {
 		return nil, err
 	}
-	row, err := tc.MemoryMgr.GetTranscript(ctx, input.EntryID)
+	row, err := mem.GetTranscript(ctx, input.EntryID)
 	if err != nil {
 		return nil, fmt.Errorf("读取条目失败: %w", err)
 	}
@@ -381,12 +370,13 @@ func readSessionEntry(ctx context.Context, input *ReadSessionEntryInput) (*ReadS
 	if completed != nil && row.EntryKind == "tool" {
 		at = *completed
 	}
+	files, images := refCounts(row.Payload)
 	out := &ReadSessionEntryOutput{
 		Success: true, SessionID: input.SessionID, EntryID: row.ID, Kind: row.EntryKind,
 		At: at, StartedAt: row.CreatedAt, CompletedAt: completed, RunID: row.RunID,
 		ToolName: row.ToolName, ToolStatus: row.ToolStatus, CallID: row.ToolCallID,
 		Arguments:  transcriptToolArguments(row.Payload),
-		ImageCount: imageCount(row.Payload), FileCount: fileCount(row.Payload), ResultRef: row.ResultRef,
+		ImageCount: images, FileCount: files, ResultRef: row.ResultRef,
 		Text: string(runes[offset:end]), Total: total, Complete: end >= total,
 	}
 	if !out.Complete {

@@ -11,13 +11,12 @@ export interface RuntimeInfo {
 }
 
 export interface DashboardData {
-  enabled_group_count: number;
   counts: {
-    memories: number;
-    members: number;
+    active_conversations: number;
     active_memories: number;
-    topics: number;
-    stickers: number;
+    active_topics: number;
+    running_workers: number;
+    worker_count: number;
   };
   runtime: RuntimeInfo;
   mood: {
@@ -489,6 +488,9 @@ export interface LifeState {
   last_error_code: string;
   running: boolean;
   updated_at: string;
+  retry_count: number;
+  retry_at?: string;
+  retry_exhausted: boolean;
 }
 
 export interface LifeSchedule {
@@ -506,6 +508,44 @@ export interface LifeSchedule {
 export interface LifeData {
   state: LifeState;
   schedules: LifeSchedule[];
+  workers: LifeWorker[];
+}
+
+export interface LifeWorker {
+  id: number;
+  title: string;
+  status: string;
+  active: boolean;
+  last_error: string;
+  updated_at: string;
+}
+
+export interface WorkerHistoryEntry {
+  id: number;
+  at: string;
+  role: string;
+  text: string;
+  tool_name?: string;
+  tool_status?: string;
+  tool_calls?: { name: string; arguments: string }[];
+  arguments?: string;
+}
+
+export interface WorkerHistoryData {
+  entries: WorkerHistoryEntry[];
+  running_tools: WorkerHistoryEntry[];
+  pending_entries: WorkerHistoryEntry[];
+  has_more: boolean;
+  next_before_id?: number;
+}
+
+export interface WorkerEntryData {
+  text: string;
+  total: number;
+  complete: boolean;
+  next_offset?: number;
+  arguments?: string;
+  tool_calls?: { name: string; arguments: string }[];
 }
 
 export interface DiaryEntry {

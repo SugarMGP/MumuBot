@@ -108,6 +108,8 @@ func (a *App) routes() http.Handler {
 			protected.Patch("/memories/{id}", a.handleMemoryUpdate)
 			protected.Get("/members", a.handleMembers)
 			protected.Get("/life", a.handleLife)
+			protected.Get("/life/workers/{id}/history", a.handleWorkerHistory)
+			protected.Get("/life/workers/{id}/entries/{entryID}", a.handleWorkerEntry)
 			protected.Post("/life/schedules", a.handleLifeScheduleCreate)
 			protected.Patch("/life/schedules/{id}", a.handleLifeScheduleUpdate)
 			protected.Post("/life/wake", a.handleLifeWake)

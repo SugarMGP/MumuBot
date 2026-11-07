@@ -106,7 +106,6 @@ export default function DiariesPage() {
       <div className="grid items-start gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)]">
         <SectionCard
           title={t("diaries.calendarTitle")}
-          description={t("diaries.calendarHint")}
         >
           <div className="flex items-center justify-between gap-2">
             <Button

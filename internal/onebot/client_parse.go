@@ -50,7 +50,7 @@ func (c *Client) parseConversationMessage(msg *ConversationMessage, eventTime in
 	msg.UserID = userID
 	msg.Nickname = nickname
 	msg.GroupCard = groupCard
-	parseMessageSegments(chain, msg, rawFileSegments(raw))
+	parseMessageSegments(chain, msg, rawFileExtensions(raw))
 	selfID := c.GetSelfID()
 	for _, atID := range msg.AtList {
 		if selfID > 0 && atID == selfID {
@@ -65,12 +65,12 @@ func (c *Client) resolveNestedForwards(chain message.Chain) {
 	c.connMu.RLock()
 	sdk := c.sdk
 	c.connMu.RUnlock()
-	if sdk == nil {
+	if sdk == nil || !sdk.Dialect(c.transportCtx).ForwardFetch {
 		return
 	}
 
 	cache := make(map[string]forwardFetchResult)
-	resolveForwardChain(sdk, chain, cache, 1)
+	resolveForwardChain(c.transportCtx, sdk, chain, cache, 1)
 }
 
 type forwardFetchResult struct {
@@ -82,7 +82,7 @@ type forwardContentFetcher interface {
 	GetForwardContent(context.Context, string) ([]message.ForwardNode, error)
 }
 
-func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache map[string]forwardFetchResult, depth int) {
+func resolveForwardChain(ctx context.Context, sdk forwardContentFetcher, chain message.Chain, cache map[string]forwardFetchResult, depth int) {
 	for i, seg := range chain {
 		data, ok := seg.Data.(message.ForwardData)
 		if !ok {
@@ -95,11 +95,12 @@ func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache m
 			zap.L().Warn("合并转发嵌套层级过深", zap.Int("depth", depth), zap.String("forward_id", data.ID))
 			continue
 		}
-		if len(data.Content) == 0 && data.FetchErr == nil && strings.TrimSpace(data.ID) != "" {
+		// 顶层由 SDK 管线补拉，空结果也不再重复请求；这里只补嵌套层
+		if depth > 1 && len(data.Content) == 0 && data.FetchErr == nil && strings.TrimSpace(data.ID) != "" {
 			result, exists := cache[data.ID]
 			if !exists {
-				ctx, cancel := context.WithTimeout(context.Background(), nestedForwardFetchTimeout)
-				content, err := sdk.GetForwardContent(ctx, data.ID)
+				fetchCtx, cancel := context.WithTimeout(ctx, nestedForwardFetchTimeout)
+				content, err := sdk.GetForwardContent(fetchCtx, data.ID)
 				cancel()
 				result = forwardFetchResult{content: content, err: err}
 				cache[data.ID] = result
@@ -116,7 +117,7 @@ func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache m
 			for j := range data.Content {
 				node := &data.Content[j]
 				node.Message = slices.Clone(node.Message)
-				resolveForwardChain(sdk, node.Message, cache, depth+1)
+				resolveForwardChain(ctx, sdk, node.Message, cache, depth+1)
 			}
 		}
 		chain[i].Data = data
@@ -124,7 +125,7 @@ func resolveForwardChain(sdk forwardContentFetcher, chain message.Chain, cache m
 }
 
 // parseMessageSegments 解析强类型消息段，填充消息各字段
-func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFiles []map[string]any) {
+func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFiles []rawFileExtension) {
 	var textParts []string
 
 	for index, seg := range chain {
@@ -158,18 +159,14 @@ func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFile
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "face", Index: len(msg.Faces) - 1})
 
 		case message.ReplyData:
-			msg.Reply = &ReplyInfo{MessageID: int64(data.ID)}
+			msg.Reply = &ReplyInfo{MessageID: int64(data.ID), SenderID: int64(data.QQ), Content: data.Message.Text()}
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "reply"})
 
 		case message.ImageData:
 			if data.URL == "" && data.File == "" {
 				continue
 			}
-			img := ImageInfo{URL: data.URL, File: data.File}
-			if subType, ok := parseStrNum(data.SubType); ok {
-				img.SubType = int(subType)
-			}
-			msg.Images = append(msg.Images, img)
+			msg.Images = append(msg.Images, ImageInfoFromData(data))
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 
 		case message.MFaceData: // 商城表情/魔法表情
@@ -189,8 +186,11 @@ func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFile
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "video", Index: len(msg.Videos) - 1})
 
 		case message.FileData: // 文件
-			ref := fileRefFromRaw(rawFileAt(rawFiles, index))
-			ref.FileID = data.FileID
+			extra := rawFileExtension{}
+			if index < len(rawFiles) {
+				extra = rawFiles[index]
+			}
+			ref := fileRefFromSegment(data, extra)
 			msg.Files = append(msg.Files, ref)
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "file", Index: len(msg.Files) - 1})
 
@@ -349,13 +349,4 @@ func newGroupMemberInfoCache() *ttlcache.Cache[string, *GroupMemberInfo] {
 
 func groupMemberCacheKey(groupID, userID int64) string {
 	return strconv.FormatInt(groupID, 10) + ":" + strconv.FormatInt(userID, 10)
-}
-
-// ParseIDFromRaw 从生成代码保留的原始联合字段中解析整数 ID
-func ParseIDFromRaw(raw []byte) int64 {
-	var id int64
-	if err := sonic.Unmarshal(raw, &id); err != nil {
-		return 0
-	}
-	return id
 }

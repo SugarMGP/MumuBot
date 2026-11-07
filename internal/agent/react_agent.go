@@ -118,9 +118,6 @@ func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.St
 	a.lifeConcurrency = NewThinkConcurrency(a.ctx, 1, a.thinkLife)
 	a.groupCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("group_id", targetID) })
 	a.privateCommits = newCommitQueueSet(a.commitOne, func(targetID int64) zap.Field { return zap.Int64("target_id", targetID) })
-	if err := mem.FailRunningWorkerSessions(context.Background()); err != nil {
-		return nil, fmt.Errorf("恢复 worker 状态失败: %w", err)
-	}
 	if err := mem.EnsureLife(context.Background()); err != nil {
 		return nil, fmt.Errorf("初始化 life 会话失败: %w", err)
 	}
@@ -129,6 +126,13 @@ func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.St
 		return nil, fmt.Errorf("读取 life 状态失败: %w", err)
 	}
 	a.lifeAsleep.Store(!lifeState.Awake)
+	interrupted, err := mem.FailRunningWorkerSessions(a.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("恢复 worker 状态失败: %w", err)
+	}
+	for _, worker := range interrupted {
+		a.notifyLifeWorkerFailure(a.ctx, worker.ID, worker.LastError)
+	}
 	if err := a.SyncWorkers(cfg.Agent.WorkerCount); err != nil {
 		return nil, fmt.Errorf("同步 worker 池失败: %w", err)
 	}
@@ -263,9 +267,6 @@ func (a *Agent) MCPStatuses() []mcp.ServerStatus {
 }
 
 // Ready 返回是否已构建 generation
-// BotName 返回机器人账号昵称，供后台展示
-func (a *Agent) BotName() string { return a.botName() }
-
 func (a *Agent) Ready() bool {
 	return a.currentGeneration() != nil
 }

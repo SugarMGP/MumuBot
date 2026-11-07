@@ -1,104 +1,63 @@
 package onebot
 
 import (
-	"bytes"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"mumu-bot/internal/filemeta"
 
 	"github.com/bytedance/sonic"
+	"github.com/zjutjh/onebot-sdk/message"
 )
 
-// rawFileSegments 按消息段顺序提取原始文件段，强类型 FileData 只保留 file_id
-func rawFileSegments(raw []byte) []map[string]any {
-	if len(raw) == 0 {
-		return nil
-	}
+// rawFileExtension 只承接 SDK FileData 尚未覆盖的入向字段
+type rawFileExtension struct {
+	BusID   *message.ID `json:"busid"`
+	FileMD5 string      `json:"file_md5"`
+}
+
+// rawFileExtensions 与强类型消息段保持相同下标，不再从 map 重读已支持的文件字段
+func rawFileExtensions(raw []byte) []rawFileExtension {
 	var envelope struct {
 		Message json.RawMessage `json:"message"`
 	}
-	if err := sonic.Unmarshal(raw, &envelope); err != nil {
-		return nil
-	}
-	payload := bytes.TrimSpace(envelope.Message)
-	if len(payload) == 0 || payload[0] != '[' {
+	if sonic.Unmarshal(raw, &envelope) != nil || len(envelope.Message) == 0 || envelope.Message[0] != '[' {
 		return nil
 	}
 	var segments []struct {
-		Type string         `json:"type"`
-		Data map[string]any `json:"data"`
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
 	}
-	if err := sonic.Unmarshal(payload, &segments); err != nil {
+	if sonic.Unmarshal(envelope.Message, &segments) != nil {
 		return nil
 	}
-	result := make([]map[string]any, len(segments))
+	result := make([]rawFileExtension, len(segments))
 	for index, segment := range segments {
 		if segment.Type == "file" {
-			result[index] = segment.Data
+			_ = sonic.Unmarshal(segment.Data, &result[index])
 		}
 	}
 	return result
 }
 
-func rawFileAt(rawFiles []map[string]any, index int) map[string]any {
-	if index < 0 || index >= len(rawFiles) {
-		return nil
-	}
-	return rawFiles[index]
-}
-
-// fileRefFromRaw 读取后端在普通消息段上给出的文件定位字段
-func fileRefFromRaw(data map[string]any) filemeta.Ref {
-	if data == nil {
-		return filemeta.Ref{}
-	}
+func fileRefFromSegment(data message.FileData, extra rawFileExtension) filemeta.Ref {
 	ref := filemeta.Ref{
-		FileID:   rawString(data["file_id"]),
-		Name:     rawString(data["file"]),
-		FileHash: rawString(data["file_hash"]),
+		FileID: data.FileID, Name: strings.TrimSpace(data.Name), FileHash: data.FileHash,
+	}
+	if ref.Name == "" {
+		ref.Name = data.File
 	}
 	if ref.FileHash == "" {
-		ref.FileHash = rawString(data["file_md5"])
+		ref.FileHash = extra.FileMD5
 	}
-	ref.Size = rawInt64Ptr(data["file_size"])
-	ref.BusID = rawInt64Ptr(data["busid"])
+	if size, ok := parseStrNum(data.FileSize); ok {
+		ref.Size = &size
+	} else if data.Size > 0 {
+		ref.Size = &data.Size
+	}
+	if extra.BusID != nil {
+		busID := int64(*extra.BusID)
+		ref.BusID = &busID
+	}
 	return ref
-}
-
-func rawString(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	case float64:
-		return strconv.FormatInt(int64(typed), 10)
-	case int64:
-		return strconv.FormatInt(typed, 10)
-	case int:
-		return strconv.Itoa(typed)
-	default:
-		return ""
-	}
-}
-
-func rawInt64Ptr(value any) *int64 {
-	var number int64
-	switch typed := value.(type) {
-	case string:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
-		if err != nil {
-			return nil
-		}
-		number = parsed
-	case float64:
-		number = int64(typed)
-	case int64:
-		number = typed
-	case int:
-		number = int64(typed)
-	default:
-		return nil
-	}
-	return &number
 }

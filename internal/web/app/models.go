@@ -60,7 +60,7 @@ func (a *App) ensureModelCapacity(ctx context.Context, window int) ([]string, bo
 			if configErr != nil {
 				zap.L().Warn("读取 MCP 配置失败，容量检查只计内置工具", zap.Error(configErr))
 			} else if len(configs) > 0 {
-				mcpManager = mcp.NewMCPManager()
+				mcpManager = mcp.NewMCPManager(a.memMgr.RefStore())
 				_ = mcpManager.Load(ctx, configs)
 				defer mcpManager.Close()
 			}

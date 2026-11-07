@@ -254,8 +254,8 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 				Tools: available, ExecuteSequentially: true,
 				UnknownToolsHandler: tools.UnknownToolHandler,
 				ToolCallMiddlewares: []compose.ToolMiddleware{
-					{Invokable: tools.ToolErrorMiddleware()},
 					tools.ToolResultPreviewMiddleware(a.memory),
+					tools.ToolErrorMiddleware(),
 				},
 			},
 			ReturnDirectly: map[string]bool{"finishCompaction": true},

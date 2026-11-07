@@ -55,6 +55,7 @@ const icons: Record<string, LucideIcon> = {
   "group-config": Users,
   groups: Users,
   sessions: MessagesSquare,
+  conversations: MessagesSquare,
   system: Activity,
   settings: Settings,
   sort: ArrowUpDown,
@@ -93,15 +94,3 @@ export function AdminIcon({
   const Icon = icons[name] ?? CircleQuestionMark;
   return <Icon aria-hidden="true" className={className} />;
 }
-
-export const navIconNames: Record<string, string> = {
-  "/admin": "overview",
-  "/admin/memories": "memories",
-  "/admin/topics": "topics",
-  "/admin/members": "members",
-  "/admin/conversations": "sessions",
-  "/admin/stickers": "stickers",
-  "/admin/personas": "persona",
-  "/admin/settings": "settings",
-  "/admin/system": "system",
-};

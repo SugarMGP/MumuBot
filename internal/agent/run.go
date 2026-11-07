@@ -122,14 +122,6 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 		return ctx, state, adk.ErrExceedMaxIterations
 	}
 	tc.ModelRequested = true
-	if len(pending) == 0 {
-		return ctx, state, nil
-	}
-	if session, ok := tc.Session.(*Session); ok && session != nil {
-		if order := maxActionablePendingOrder(pending); order > 0 {
-			session.RecordRequestBoundary(order)
-		}
-	}
 	messages := make([]*schema.AgenticMessage, 0, len(pending))
 	observed := tc.ThinkStartArrivalSeq
 	for _, item := range pending {
@@ -138,6 +130,9 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 		observed = max(observed, item.ArrivalSeq)
 	}
 	state.Messages = append(state.Messages, messages...)
+	if session, ok := tc.Session.(*Session); ok {
+		session.RecordRequestBoundary(state.Messages)
+	}
 	tc.ObservedThroughSeq = max(tc.ObservedThroughSeq, observed)
 	if observed > tc.InjectedArrivalSeq {
 		tc.InjectedArrivalSeq = observed

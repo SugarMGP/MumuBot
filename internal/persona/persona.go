@@ -22,8 +22,6 @@ const (
 
 // Persona 是当前生效的人格预设，按模式预先裁好静态文本
 type Persona struct {
-	id          uint
-	name        string
 	groupText   string
 	privateText string
 	lifeText    string
@@ -46,8 +44,6 @@ func NewPersona(cfg *config.PersonaConfig, identity config.IdentityConfig) (*Per
 	life := assembleCommon(card, simulation) + "\n\n" + lifePrompt
 	values := IdentityFromConfig(identity)
 	return &Persona{
-		id:          cfg.PresetID,
-		name:        cfg.PresetName,
 		groupText:   Render(assemble(card, simulation, markerGroup), values),
 		privateText: Render(assemble(card, simulation, markerPrivate), values),
 		lifeText:    Render(life, values),

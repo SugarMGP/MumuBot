@@ -25,7 +25,7 @@ type KnowledgeConversation struct {
 func (s *AdminService) KnowledgeConversations(ctx context.Context) ([]KnowledgeConversation, error) {
 	var rows []KnowledgeConversation
 	err := s.db.WithContext(ctx).Raw(`SELECT c.conversation_kind AS kind,c.target_id AS target_id,COALESCE(ct.name,'') AS name
-		FROM (SELECT conversation_kind,target_id FROM topic_threads) c
+		FROM (SELECT DISTINCT conversation_kind,target_id FROM topic_threads) c
 		LEFT JOIN conversation_targets ct ON ct.conversation_kind=c.conversation_kind AND ct.target_id=c.target_id
 		ORDER BY c.conversation_kind,c.target_id`).Scan(&rows).Error
 	return rows, err

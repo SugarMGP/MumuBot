@@ -174,6 +174,15 @@ func (a *Agent) readForward(ctx context.Context, id string, index int) (any, err
 		return nil, fmt.Errorf("合并转发 %s 一共 %d 条消息", id, len(nodes))
 	}
 	node := nodes[index]
+	// 转发原图随父原文保留，只有实际读取时才建立由工具轨迹保活的快照
+	a.ensureIncomingImageRefs(ctx, node.Images)
+	for _, picture := range node.Images {
+		replacement := "[图片不可用]"
+		if picture.ImageRef != "" {
+			replacement = "[图片:" + picture.ImageRef + "]"
+		}
+		node.Content = strings.ReplaceAll(node.Content, "[图片:"+picture.Hash+"]", replacement)
+	}
 	return &tools.ReadForwardOutput{
 		Success: true,
 		ID:      id,

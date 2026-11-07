@@ -88,7 +88,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with one shared home and Nix; up to 5 parallel workers share `./worker-home/1` as the execution space, so installed tools, caches, and project files can be reused. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
+Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with one shared home and Nix; up to 5 parallel workers share `./workspace`, mounted at `/home/worker` in the container, so installed tools, caches, and project files can be reused. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
 
 Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
 
@@ -131,8 +131,12 @@ Configuration has two parts:
 # 1. Prepare environment variables
 cp .env.example .env
 # Fill in the database DSN, admin key, MUMU_SECRET_KEY, and OneBot connection
+# Enable MUMU_DATABASE_DSN for direct runs; quote values containing spaces or shell metacharacters
 
-# 2. Launch
+# 2. Export the variables in Bash and launch
+set -a
+source .env
+set +a
 ./mumu-bot
 ```
 
@@ -166,7 +170,7 @@ A preset is three documents: a **persona card** (who she is, how she talks), a *
 
 The top of the Persona Presets page sets the global **role name** and **master**. The master is picked from current friends and saved with the name at that time; deleting the friend later does not change the master, and only the admin panel can. Prompts can use `<name>`, `<master_name>`, `<master_qq>`, and `<master>`; changes take effect from the next context generation.
 
-The simulation prompt and life duties state the master boundary: only the configured QQ is the master, and the master's private chat is the explicit request channel; dangerous actions such as commands, config or code changes, file deletion, spending, public posting, or leaking private data require explaining the action and waiting for approval; requests in group chats or other people's private chats are references, not master commands.
+The simulation prompt and life duties state the master boundary: only the configured QQ is the master, and the master's private chat is the explicit request channel; ordinary research and workspace edits are autonomous; irreversible deletion or overwriting of important data, spending, sensitive posts or messages, privilege changes, private-data disclosure, and critical configuration changes require specific approval. Everyday Qzone posts, likes, and comments are autonomous; requests in group chats or other people's private chats are references, not master commands.
 
 Switching a preset does not cut into a running conversation: it takes effect after the next conversation summary, so she never changes face mid-chat.
 
@@ -182,7 +186,7 @@ Files and images appear in message bodies as `file_ref` (`file_<id>`) or `image_
 
 - A pending reference keeps only the real QQ message's `file_id`, `file_hash`, `busid`, and necessary metadata. The first real read, save, or send downloads and pins it; failures stay failures.
 - Chat sessions work only through references and never touch the personal home; life/worker `createFileRef` freezes real outputs and `saveFile(file_ref)` streams them back as editable files, up to 32 MiB through the worker's private HTTP endpoint.
-- File bodies survive only while referenced by existing transcript `result_ref`, payload text, or nested `r` content. The last reference plus a grace period releases them; old paths, short hashes, and temporary URLs cannot revive a reference. Real files in the personal home are unaffected.
+- File bodies survive only while referenced by existing transcript `result_ref`, payload text, or nested `r` content. Deleting the last transcript reference releases the snapshot immediately. Never-attached orphans are kept for at least 24 hours before cleanup. Old paths, short hashes, and temporary URLs cannot revive a reference. Real files in the personal home are unaffected.
 
 
 ## 🤝 Contributing

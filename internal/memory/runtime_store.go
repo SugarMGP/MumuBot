@@ -24,12 +24,6 @@ func (m *Manager) AllocateInputSeq(tx *gorm.DB, kind string, targetID int64) (ui
 	return end, err
 }
 
-// AllocateVisibleSeq 为一个即将进入模型的条目分配可见序号
-func (m *Manager) AllocateVisibleSeq(tx *gorm.DB, kind string, targetID int64) (uint64, error) {
-	_, end, err := allocateSequenceRange(tx, kind, targetID, "next_visible_seq", 1)
-	return end, err
-}
-
 // allocateSequenceRange 一次推进会话序号并返回本次分配的连续区间
 func allocateSequenceRange(tx *gorm.DB, kind string, targetID int64, column string, count uint64) (uint64, uint64, error) {
 	if count == 0 {

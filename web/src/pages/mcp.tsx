@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { mcpApi } from "@/api/client-endpoints";
+import { mcpApi, systemApi } from "@/api/client-endpoints";
 import type { MCPServerSummary } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { EditPanel } from "@/components/admin/edit-panel";
@@ -94,6 +94,7 @@ export default function McpPage() {
   const panelOpen = params.has("edit");
   const editMode = editID > 0;
   const list = useQuery({ queryKey: ["mcp-servers"], queryFn: mcpApi.list });
+  const runtime = useQuery({ queryKey: ["system"], queryFn: systemApi.get, refetchInterval: 15_000 });
   const detail = useQuery({
     queryKey: ["mcp-server", editID],
     queryFn: () => mcpApi.get(editID),
@@ -246,7 +247,7 @@ export default function McpPage() {
   };
 
   if (list.isPending) return <PageSkeleton />;
-  if (list.isError || !list.data) {
+  if (!list.data) {
     return (
       <p className="text-sm text-muted-foreground">{t("common.loadFailed")}</p>
     );
@@ -254,10 +255,10 @@ export default function McpPage() {
 
   return (
     <div className="space-y-6">
+      {list.isRefetchError ? <p role="alert" className="text-sm text-destructive">{t("common.refreshFailed")}</p> : null}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <PageHeader
           title={t("mcp.title")}
-          subtitle={t("mcp.subtitle")}
           actions={
             <Button onClick={() => update({ edit: "new" })}>
               {t("mcp.add")}
@@ -273,7 +274,7 @@ export default function McpPage() {
         </div>
       ) : null}
 
-      <SectionCard title={t("mcp.list")} description={t("mcp.listHint")}>
+      <SectionCard title={t("mcp.list")}>
         {list.data.items.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
             {t("mcp.empty")}
@@ -285,12 +286,13 @@ export default function McpPage() {
                 <TableHead>{t("mcp.name")}</TableHead>
                 <TableHead>{t("mcp.protocol")}</TableHead>
                 <TableHead>{t("common.status")}</TableHead>
-                <TableHead>{t("mcp.versionLabel")}</TableHead>
                 <TableHead className="text-right">{t("common.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {list.data.items.map((server) => (
+              {list.data.items.map((server) => {
+                const status = runtime.data?.model.mcp_statuses?.find((item) => item.name === server.name);
+                return (
                 <TableRow key={server.id}>
                   <TableCell>
                     <p className="font-medium">{server.name}</p>
@@ -303,9 +305,11 @@ export default function McpPage() {
                     <Badge variant={server.enabled ? "success" : "ghost"}>
                       {server.enabled ? t("mcp.enabled") : t("mcp.disabled")}
                     </Badge>
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {t("mcp.version", { version: server.version })}
+                    {server.enabled ? <p className="mt-1 max-w-md whitespace-pre-wrap break-words text-xs text-muted-foreground">{runtime.isError
+                      ? t("common.loadFailed")
+                      : !status ? t("mcp.runtimePending")
+                      : status.connected ? t("system.status.mcpConnected", { count: status.tool_count })
+                      : t("system.status.mcpFailure", { reason: status.error || t("system.status.mcpUnknown") })}</p> : null}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex gap-1">
@@ -327,7 +331,8 @@ export default function McpPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -337,7 +342,6 @@ export default function McpPage() {
         open={panelOpen}
         onOpenChange={requestClose}
         title={editMode ? t("mcp.edit") : t("mcp.create")}
-        description={t("mcp.panelHint")}
         footer={
           <>
             <Button
@@ -366,7 +370,7 @@ export default function McpPage() {
       >
         {editMode && detail.isPending ? (
           <PageSkeleton />
-        ) : editMode && detail.isError ? (
+        ) : editMode && detail.isError && !detail.data ? (
           <div className="space-y-3 py-10 text-center">
             <p className="text-sm text-muted-foreground">
               {t("mcp.detailFailed")}

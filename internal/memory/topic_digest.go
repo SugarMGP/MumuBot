@@ -121,5 +121,8 @@ func renderContextDigest(overview string, summaries []TopicSummary, topicIDs []u
 			sections = append(sections, block)
 		}
 	}
+	if omitted > 0 {
+		sections = append(sections, fmt.Sprintf("另有 %d 个活跃话题未展开，可用 searchTopics/readTopic 按需查看。", omitted))
+	}
 	return strings.Join(sections, "\n\n")
 }

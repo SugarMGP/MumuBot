@@ -50,7 +50,7 @@ func (m *Manager) CreateSchedule(ctx context.Context, row *Schedule) error {
 	return m.db.WithContext(ctx).Create(row).Error
 }
 
-// ListSchedules 返回目标会话的全部日程，含已停用的历史记录
+// ListSchedules 返回目标会话仍保留的日程
 func (m *Manager) ListSchedules(ctx context.Context, kind string, targetID int64) ([]Schedule, error) {
 	var rows []Schedule
 	err := m.db.WithContext(ctx).Where("target_kind=? AND target_id=?", kind, targetID).
@@ -118,6 +118,11 @@ func (m *Manager) DueSchedules(ctx context.Context, now time.Time, limit int) ([
 	return rows, err
 }
 
+// CleanupExpiredSchedules 删除已经过期的停用一次性安排，投递失败的启用项继续保留
+func (m *Manager) CleanupExpiredSchedules(ctx context.Context, now time.Time) error {
+	return m.db.WithContext(ctx).Where("run_at IS NOT NULL AND enabled=false AND next_run_at<=?", now).Delete(&Schedule{}).Error
+}
+
 // ScheduleDelivery 是一次到期投递的持久结果
 type ScheduleDelivery struct {
 	Schedule *Schedule
@@ -152,14 +157,25 @@ func (m *Manager) DeliverDueSchedule(ctx context.Context, id uint, now time.Time
 			}
 			delivery.WokeLife = woke
 		}
+		if row.TargetKind == ConversationKindLife {
+			if err := ResetLifeRetryTx(tx); err != nil {
+				return err
+			}
+		}
 		msg, entry, err := m.enqueueSessionMessageTx(tx, ConversationKindLife, int64(LifeTargetID), row.TargetKind, row.TargetID, text, build, nil)
 		if err != nil {
 			return err
 		}
-		if err := tx.Model(&Schedule{}).Where("id=?", row.ID).Updates(map[string]any{
-			"next_run_at": nextAt, "enabled": enabled, "updated_at": now,
-		}).Error; err != nil {
-			return err
+		if row.RunAt != nil {
+			if err := tx.Delete(&row).Error; err != nil {
+				return err
+			}
+		} else {
+			if err := tx.Model(&Schedule{}).Where("id=?", row.ID).Updates(map[string]any{
+				"next_run_at": nextAt, "enabled": enabled, "updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
 		}
 		row.NextRunAt, row.Enabled = nextAt, enabled
 		delivery.Schedule, delivery.Message, delivery.Entry = &row, msg, entry

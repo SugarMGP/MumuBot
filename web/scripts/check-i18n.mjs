@@ -3,8 +3,9 @@
 // 注释会被剥离，用户数据与日志内容不经过这里
 import { readdir, readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const sourceRoot = join(root, "src");
 const allowedDirs = [join(sourceRoot, "locales"), join(sourceRoot, "mocks")];
 const allowedFiles = new Set([join(sourceRoot, "lib", "persona-marker.ts")]);

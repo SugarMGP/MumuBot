@@ -77,7 +77,7 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 	if err != nil {
 		return nil, err
 	}
-	mcpManager := mcp.NewMCPManager()
+	mcpManager := mcp.NewMCPManager(a.memory.RefStore())
 	if err := mcpManager.Load(a.ctx, servers); err != nil {
 		mcpManager.Close()
 		return nil, err
@@ -185,8 +185,8 @@ func (a *Agent) newTypedChatAgent(generation *Generation, chatTools []tool.BaseT
 				UnknownToolsHandler:  tools.UnknownToolHandler,
 				ToolArgumentsHandler: argumentsHandler,
 				ToolCallMiddlewares: []compose.ToolMiddleware{
-					{Invokable: tools.ToolErrorMiddleware()},
 					tools.ToolTranscriptMiddleware(),
+					tools.ToolErrorMiddleware(),
 				},
 			},
 			ReturnDirectly: returnDirectly,

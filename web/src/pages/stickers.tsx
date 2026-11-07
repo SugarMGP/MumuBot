@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, Input } from "@/components/ui/form-controls";
 import { useQueryParams } from "@/hooks/use-query-params";
-import { formatDateTime, truncateMiddle } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 
 function previewText(description: string): string {
   const text = description.trim();
@@ -186,12 +186,6 @@ export default function StickersPage() {
                   >
                     {title}
                   </h2>
-                  <p
-                    className="truncate text-xs text-muted-foreground"
-                    title={sticker.file_name}
-                  >
-                    {truncateMiddle(sticker.file_name, 28, 8)}
-                  </p>
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>
                       {t("stickers.useCount", { count: sticker.use_count })}

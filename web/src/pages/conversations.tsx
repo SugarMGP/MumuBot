@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { conversationApi } from "@/api/client-endpoints";
 import type { Conversation, ConversationsData } from "@/api/types";
@@ -13,22 +13,44 @@ import { Spinner } from "@/components/ui/spinner";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/form-controls";
 import { formatDateTime } from "@/lib/format";
+import { ConfirmDialog } from "@/components/admin/confirm-dialog";
+import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
 
 function ConversationRow({
   conversation,
   busy,
   onBlockedChange,
   onPromptSaved,
+  onDirtyChange,
 }: {
   conversation: Conversation;
   busy: boolean;
   onBlockedChange: (blocked: boolean) => void;
   onPromptSaved: (prompt: string) => Promise<boolean>;
+  onDirtyChange: (key: string, dirty: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [prompt, setPrompt] = useState(conversation.extra_prompt);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const dirty = editing && prompt !== conversation.extra_prompt;
+  const key = `${conversation.kind}:${conversation.target_id}`;
+  useEffect(() => {
+    onDirtyChange(key, dirty);
+    return () => onDirtyChange(key, false);
+  }, [dirty, key, onDirtyChange]);
+  const closeEditor = () => {
+    setPrompt(conversation.extra_prompt);
+    setEditing(false);
+    setSaveFailed(false);
+  };
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty) setDiscardOpen(true);
+    else closeEditor();
+  };
 
   const label = conversation.name || conversation.remote_remark || "";
 
@@ -64,7 +86,11 @@ function ConversationRow({
             <Button
               variant="ghost"
               size="xs"
-              onClick={() => setEditing((value) => !value)}
+              disabled={saving}
+              onClick={() => {
+                if (editing) requestClose();
+                else { setPrompt(conversation.extra_prompt); setEditing(true); }
+              }}
             >
               {t("contacts.editPrompt")}
             </Button>
@@ -80,14 +106,13 @@ function ConversationRow({
               placeholder={t("contacts.extraPromptPlaceholder")}
               onChange={(event) => setPrompt(event.target.value)}
             />
+            {saveFailed ? <p role="alert" className="text-xs text-destructive">{t("contacts.saveFailed")}</p> : null}
             <div className="flex justify-end gap-2">
               <Button
                 variant="ghost"
                 size="xs"
-                onClick={() => {
-                  setPrompt(conversation.extra_prompt);
-                  setEditing(false);
-                }}
+                disabled={saving}
+                onClick={requestClose}
               >
                 {t("common.cancel")}
               </Button>
@@ -98,6 +123,7 @@ function ConversationRow({
                   setSaving(true);
                   const saved = await onPromptSaved(prompt);
                   setSaving(false);
+                  setSaveFailed(!saved);
                   if (saved) setEditing(false);
                 }}
               >
@@ -116,6 +142,7 @@ function ConversationRow({
           </p>
         )
       ) : null}
+      <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title={t("common.unsavedTitle")} description={t("common.unsavedBody")} confirmLabel={t("common.leave")} destructive={false} onConfirm={() => { setDiscardOpen(false); closeEditor(); }} />
     </div>
   );
 }
@@ -123,6 +150,11 @@ function ConversationRow({
 export default function ConversationsPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const [dirtyRows, setDirtyRows] = useState<Record<string, boolean>>({});
+  const blocker = useDirtyGuard(Object.values(dirtyRows).some(Boolean));
+  const onDirtyChange = useCallback((key: string, dirty: boolean) => {
+    setDirtyRows((current) => current[key] === dirty || (!current[key] && !dirty) ? current : { ...current, [key]: dirty });
+  }, []);
   const query = useQuery({
     queryKey: ["conversations"],
     queryFn: conversationApi.list,
@@ -181,7 +213,7 @@ export default function ConversationsPage() {
   });
 
   if (query.isPending) return <PageSkeleton />;
-  if (query.isError || !query.data) {
+  if (!query.data) {
     return (
       <EmptyState message={t("common.loadFailed")} />
     );
@@ -206,6 +238,7 @@ export default function ConversationsPage() {
                 key={`${conversation.kind}-${conversation.target_id}`}
                 conversation={conversation}
                 busy={mutation.isPending}
+                onDirtyChange={onDirtyChange}
                 onBlockedChange={(blocked) =>
                   mutation.mutate({
                     kind: conversation.kind,
@@ -235,6 +268,8 @@ export default function ConversationsPage() {
 
   return (
     <div className="space-y-6">
+      {query.isRefetchError ? <p role="alert" className="text-sm text-destructive">{t("common.refreshFailed")}</p> : null}
+      <DirtyGuardDialog blocker={blocker} />
       <PageHeader
         title={t("contacts.title")}
         subtitle={t("contacts.subtitle")}

@@ -36,7 +36,7 @@ func (c *Client) GetSelfProfile(ctx context.Context) (*SelfProfile, error) {
 	profile := &SelfProfile{UserID: int64(login.UserID), Nickname: login.Nickname}
 	info, infoErr := client.GetStrangerInfo(ctx, api.GetStrangerInfoRequest{
 		UserID:  message.ID(profile.UserID),
-		NoCache: api.GetStrangerInfoRequestNoCacheUnion{Raw: []byte("true")},
+		NoCache: rawUnion[api.GetStrangerInfoRequestNoCacheUnion](true),
 	})
 	if infoErr != nil {
 		profile.Warning = infoErr.Error()

@@ -60,7 +60,7 @@ services:
       HOME: /home/worker
       TZ: Asia/Shanghai
     volumes:
-      - ./worker-home/1:/home/worker
+      - ./workspace:/home/worker
       - nix-store:/nix
     networks:
       - worker

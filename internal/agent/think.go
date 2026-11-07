@@ -181,7 +181,7 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 	forced := a.hasStrongInteraction(pending)
-	if !forced && !a.gateAllow(groupID, session, pending, false) {
+	if !a.gateAllow(groupID, session, pending, forced) {
 		return
 	}
 

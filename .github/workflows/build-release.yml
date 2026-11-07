@@ -42,8 +42,7 @@ jobs:
     - name: Prepare build directory
       run: |
         mkdir -p dist
-        cp README.md dist/
-        cp LICENSE dist/
+        cp README.md README.en.md LICENSE .env.example docker-compose.yml dist/
 
     - name: Upload prepared assets
       uses: actions/upload-artifact@v4
@@ -52,6 +51,7 @@ jobs:
         path: |
           dist
           internal/web/assets/dist
+        include-hidden-files: true
         retention-days: 1
 
   build:
@@ -75,7 +75,7 @@ jobs:
             output_name: mumu-bot.exe
             asset_name: mumu-bot-windows-amd64
             archive_ext: .zip
-          - os: macos-13
+          - os: macos-15-intel
             goos: darwin
             goarch: amd64
             output_name: mumu-bot
@@ -158,11 +158,12 @@ jobs:
       run: Compress-Archive -Path dist/* -DestinationPath ${{ matrix.asset_name }}${{ matrix.archive_ext }}
 
     - name: Upload Release Asset
-      uses: softprops/action-gh-release@v3
+      uses: actions/upload-artifact@v4
       with:
-        files: ${{ matrix.asset_name }}${{ matrix.archive_ext }}
-        draft: true
-        fail_on_unmatched_files: true
+        name: ${{ matrix.asset_name }}
+        path: ${{ matrix.asset_name }}${{ matrix.archive_ext }}
+        if-no-files-found: error
+        retention-days: 1
 
   container:
     name: Publish Container Image
@@ -258,9 +259,9 @@ jobs:
           cache-from: type=gha,scope=worker-container
           cache-to: type=gha,mode=max,scope=worker-container
 
-  prepare-release:
-    name: Prepare Release
-    needs: [container, worker-container]
+  release:
+    name: Publish Release
+    needs: [build, container, worker-container]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -318,21 +319,19 @@ jobs:
 
           printf '%s\n' "$release_notes" > release-notes.md
 
-      - name: Create draft Release
-        uses: softprops/action-gh-release@v3
+      - name: Download release archives
+        uses: actions/download-artifact@v4
         with:
-          body_path: release-notes.md
-          draft: true
-          prerelease: false
+          pattern: mumu-bot-*
+          merge-multiple: true
+          path: release-archives
 
-  release:
-    name: Release
-    needs: [build, prepare-release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
       - name: Publish Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: release-notes.md
+          files: release-archives/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
           make_latest: true
