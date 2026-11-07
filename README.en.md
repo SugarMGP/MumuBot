@@ -94,10 +94,10 @@ Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign
 
 ### Using Release Packages
 
-GitHub Releases provide pre-built packages for Linux, Windows, and macOS. Each archive contains:
+GitHub Releases provide pre-built packages for Linux and Windows. Each archive contains:
 
 - Executable binary
-- `README.md` and `LICENSE`
+- Chinese and English READMEs, `LICENSE`, `.env.example`, and `docker-compose.yml`
 
 No separate frontend deployment is needed — admin dashboard assets are embedded in the binary. The dashboard supports light/dark themes and Chinese/English, with preferences stored per browser.
 
@@ -118,7 +118,7 @@ cd ..
 go build -o mumu-bot .
 ```
 
-Image transcoding uses cgo to link against libwebp. The Linux and Windows release packages are fully statically linked, so no runtime libraries need to be installed after downloading. macOS's system linker does not support fully static linking, so the artifacts dynamically depend on libwebp; run `brew install webp` before running them.
+Image transcoding uses cgo to link against libwebp. The Linux and Windows release packages are fully statically linked, so no runtime libraries need to be installed after downloading.
 
 ### Configuration and Launch
 

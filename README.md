@@ -127,10 +127,10 @@ Compose 会直接拉取 GHCR 上的 `latest` 镜像，并额外启动一个 work
 
 ### 使用发布包
 
-GitHub Release 提供 Linux、Windows、macOS 的打包产物。归档内包含：
+GitHub Release 提供 Linux、Windows 的打包产物。归档内包含：
 
 - 可执行文件
-- `README.md` 和 `LICENSE`
+- 中英文 README、`LICENSE`、`.env.example` 和 `docker-compose.yml`
 
 运行发布包时不需要额外部署前端静态文件，管理后台所需资源已经内嵌进二进制。管理后台支持浅色/深色两种主题与中文/英文两种语言，偏好保存在当前浏览器。
 
@@ -149,14 +149,12 @@ cd ..
 
 # 3. 安装图片转码依赖
 #   Debian/Ubuntu: sudo apt-get install -y libwebp-dev
-#   macOS:         brew install webp pkgconf
 
 # 4. 编译
 go build -o mumu-bot .
 ```
 
-图片转码走 cgo 链接 libwebp。Linux 与 Windows 的发布包整份静态链接，下载后不需要再装任何运行库；
-macOS 的系统链接器不支持全静态，产物动态依赖 libwebp，运行前先 `brew install webp`。
+图片转码走 cgo 链接 libwebp。Linux 与 Windows 的发布包整份静态链接，下载后不需要再装任何运行库。
 
 ### 配置与启动
 
