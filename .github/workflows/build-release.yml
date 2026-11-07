@@ -115,7 +115,13 @@ jobs:
 
     - name: Install libwebp (macOS)
       if: runner.os == 'macOS'
-      run: brew install webp pkgconf
+      run: |
+        brew install webp pkgconf
+        WEBP_PREFIX="$(brew --prefix webp)"
+        WEBP_STATIC="$RUNNER_TEMP/webp-static"
+        mkdir -p "$WEBP_STATIC"
+        cp "$WEBP_PREFIX/lib/libwebp.a" "$WEBP_PREFIX/lib/libsharpyuv.a" "$WEBP_STATIC/"
+        echo "CGO_LDFLAGS=-Wl,-search_paths_first -L$WEBP_STATIC -lwebp -lsharpyuv" >> $GITHUB_ENV
 
     - name: Install MSYS2 and libwebp (Windows)
       if: runner.os == 'Windows'
@@ -147,6 +153,15 @@ jobs:
         CGO_ENABLED: 1
       run: |
         go build -v -trimpath -ldflags "-s -w -X mumu-bot/internal/version.Build=${{ env.VERSION }}" -o dist/${{ matrix.output_name }} .
+
+    - name: Verify macOS system dependencies
+      if: runner.os == 'macOS'
+      run: |
+        otool -L dist/${{ matrix.output_name }}
+        if otool -L dist/${{ matrix.output_name }} | awk 'NR > 1 {print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)'; then
+          echo "Release binary depends on a non-system library"
+          exit 1
+        fi
 
     - name: Archive (Unix)
       if: runner.os != 'Windows'
