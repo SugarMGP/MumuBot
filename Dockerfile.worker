@@ -61,8 +61,8 @@ RUN mkdir -p /etc/nix && \
     printf 'experimental-features = nix-command flakes\nsandbox = false\ntrusted-users = root worker\n' >> /etc/nix/nix.conf
 
 RUN groupadd -f nix-users \
-    && groupadd -g 1000 worker \
-    && useradd -m -u 1000 -g worker -s /bin/bash worker \
+    && groupmod -n worker ubuntu \
+    && usermod -l worker -d /home/worker -m -s /bin/bash ubuntu \
     && usermod -aG nix-users worker \
     && echo '%worker ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/worker \
     && chmod 440 /etc/sudoers.d/worker \

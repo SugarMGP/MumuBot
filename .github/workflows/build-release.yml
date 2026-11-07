@@ -61,6 +61,7 @@ jobs:
     permissions:
       contents: write
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -109,7 +110,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libwebp-dev
         # libwebp-dev 带 libwebp.a 与 libsharpyuv.a，整份静态链进去，产物不依赖任何系统库
-        echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv" >> $GITHUB_ENV
+        echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv -lm" >> $GITHUB_ENV
+        echo "GOFLAGS=-tags=netgo,osusergo" >> $GITHUB_ENV
 
     - name: Install libwebp (macOS)
       if: runner.os == 'macOS'
@@ -135,7 +137,7 @@ jobs:
         echo "PKG_CONFIG_PATH=$env:MSYS2_LOCATION\mingw64\lib\pkgconfig" >> $env:GITHUB_ENV
         echo "$env:MSYS2_LOCATION\mingw64\bin" >> $env:GITHUB_PATH
         # -static 让链接器只找 .a，MSYS2 的 libwebp 与 libsharpyuv 都带静态库
-        echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv" >> $env:GITHUB_ENV
+        echo "CGO_LDFLAGS=-static -lwebp -lsharpyuv -lm" >> $env:GITHUB_ENV
 
     - name: Build
       env:

@@ -20,8 +20,8 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 # 整份静态链接，产物不依赖任何系统动态库
-ENV CGO_LDFLAGS="-static -lwebp -lsharpyuv"
-RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X mumu-bot/internal/version.Build=${VERSION}" -o /out/mumu-bot .
+ENV CGO_LDFLAGS="-static -lwebp -lsharpyuv -lm"
+RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags=netgo,osusergo -trimpath -ldflags="-s -w -X mumu-bot/internal/version.Build=${VERSION}" -o /out/mumu-bot .
 
 FROM alpine:3.23
 ENV TZ=Asia/Shanghai
