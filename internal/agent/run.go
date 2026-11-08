@@ -36,6 +36,9 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 	}
 	task := "react"
 	if tc := tools.GetToolContext(ctx); tc != nil {
+		if generation != nil {
+			modelName = generation.forKind(tc.ConversationKind).modelName
+		}
 		ctx = logger.WithSession(ctx, tc.ConversationKind, tc.TargetID, tc.RunID, cfg.Debug.LogAgentContent)
 		switch tc.ConversationKind {
 		case memory.ConversationKindWorker:

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -26,7 +25,13 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 	if profiles == nil {
 		profiles = []modelprofiles.Profile{}
 	}
+	selection, err := a.modelStore.Selection(r.Context())
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
 	respondData(w, http.StatusOK, modelsResponse{
+		Selection:        selection,
 		Items:            profiles,
 		SecretConfigured: secrets.Configured(),
 	}, nil)
@@ -37,14 +42,13 @@ type modelInput struct {
 	BaseURL         string `json:"base_url"`
 	ModelName       string `json:"model_name"`
 	ContextWindow   int    `json:"context_window"`
-	ThinkingType    string `json:"thinking_type"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	APIKey          string `json:"api_key"`
 	Version         int64  `json:"version"`
 }
 
 // ensureModelCapacity 在切换或缩小当前模型窗口前检查真实工作集
-func (a *App) ensureModelCapacity(ctx context.Context, window int) ([]string, bool) {
+func (a *App) ensureModelCapacity(ctx context.Context, window int, role string) ([]string, bool) {
 	if window <= 0 {
 		return nil, true
 	}
@@ -52,7 +56,7 @@ func (a *App) ensureModelCapacity(ctx context.Context, window int) ([]string, bo
 	var affected []string
 	var err error
 	if currentAgent != nil && currentAgent.HasGeneration() {
-		affected, err = currentAgent.ContextCapacity(ctx, window)
+		affected, err = currentAgent.ContextCapacity(ctx, window, role)
 	} else {
 		var mcpManager *mcp.Manager
 		if a.mcpStore != nil {
@@ -65,7 +69,7 @@ func (a *App) ensureModelCapacity(ctx context.Context, window int) ([]string, bo
 				defer mcpManager.Close()
 			}
 		}
-		affected, err = agent.ContextCapacityFor(ctx, a.memMgr, window, mcpManager)
+		affected, err = agent.ContextCapacityFor(ctx, a.memMgr, window, role, mcpManager)
 	}
 	if err != nil {
 		zap.L().Warn("检查模型上下文容量失败", zap.Error(err))
@@ -93,7 +97,6 @@ func (a *App) handleModelCreate(w http.ResponseWriter, r *http.Request) {
 		BaseURL:         strings.TrimSpace(body.BaseURL),
 		ModelName:       strings.TrimSpace(body.ModelName),
 		ContextWindow:   body.ContextWindow,
-		ThinkingType:    strings.TrimSpace(body.ThinkingType),
 		ReasoningEffort: strings.TrimSpace(body.ReasoningEffort),
 	}, body.APIKey)
 	if err != nil {
@@ -118,11 +121,25 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "请求格式不正确。")
 		return
 	}
-	current, currentErr := a.modelStore.Active(r.Context())
-	if currentErr == nil && current.ID == id && body.ContextWindow > 0 && body.ContextWindow < current.ContextWindow {
-		if affected, ok := a.ensureModelCapacity(r.Context(), body.ContextWindow); !ok || len(affected) > 0 {
-			respondError(w, http.StatusBadRequest, "model_context_too_small", "当前工作集无法装入新的上下文窗口，请先整理上下文。", map[string]any{"sessions": affected})
-			return
+	selection, err := a.modelStore.Selection(r.Context())
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	current, currentErr := a.modelStore.Get(r.Context(), id)
+	if currentErr != nil {
+		a.failFromError(w, r, currentErr)
+		return
+	}
+	if body.ContextWindow > 0 && body.ContextWindow < current.ContextWindow {
+		for _, role := range []string{"qq", "life", "worker"} {
+			if selection.ID(role) != id {
+				continue
+			}
+			if affected, ok := a.ensureModelCapacity(r.Context(), body.ContextWindow, role); !ok || len(affected) > 0 {
+				respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
+				return
+			}
 		}
 	}
 	updated, err := a.modelStore.Update(r.Context(), modelprofiles.Profile{
@@ -131,7 +148,6 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		BaseURL:         strings.TrimSpace(body.BaseURL),
 		ModelName:       strings.TrimSpace(body.ModelName),
 		ContextWindow:   body.ContextWindow,
-		ThinkingType:    strings.TrimSpace(body.ThinkingType),
 		ReasoningEffort: strings.TrimSpace(body.ReasoningEffort),
 		Version:         body.Version,
 	}, body.APIKey)
@@ -140,7 +156,7 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var warning *warningPayload
-	if updated.Active {
+	if selection.Uses(updated.ID) {
 		if agent := a.currentAgent(); agent != nil {
 			if err := agent.Reload(); err != nil {
 				zap.L().Warn("模型已保存但运行态应用失败", zap.Error(err))
@@ -165,43 +181,63 @@ func (a *App) handleModelDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) handleModelActivate(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUintParam(chi.URLParam(r, "id"))
-	if err != nil || id == 0 {
-		respondError(w, http.StatusBadRequest, "validation_failed", "模型编号无效。", nil)
+func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
+	var body modelprofiles.Selection
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "")
 		return
 	}
-	target, targetErr := a.modelStore.Get(r.Context(), id)
-	if targetErr != nil {
-		a.failFromError(w, r, targetErr)
+	if body.QQ == 0 || body.Life == 0 || body.Worker == 0 {
+		a.failFromError(w, r, modelprofiles.ErrInvalidModel)
 		return
 	}
-	if affected, ok := a.ensureModelCapacity(r.Context(), target.ContextWindow); !ok || len(affected) > 0 {
-		respondError(w, http.StatusBadRequest, "model_context_too_small", "当前工作集无法装入目标模型的上下文窗口，请先整理上下文。", map[string]any{"sessions": affected})
+	old, err := a.modelStore.Selection(r.Context())
+	if err != nil {
+		a.failFromError(w, r, err)
 		return
 	}
-	old, oldErr := a.modelStore.Active(r.Context())
-	if oldErr != nil && !errors.Is(oldErr, modelprofiles.ErrNotFound) {
-		a.failFromError(w, r, oldErr)
+	if body.Version != old.Version {
+		a.failFromError(w, r, modelprofiles.ErrVersionConflict)
 		return
 	}
-	if err := a.modelStore.SetActive(r.Context(), id); err != nil {
+	for _, role := range []string{"qq", "life", "worker"} {
+		target, err := a.modelStore.Get(r.Context(), body.ID(role))
+		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+		if target.ID == old.ID(role) {
+			continue
+		}
+		if affected, ok := a.ensureModelCapacity(r.Context(), target.ContextWindow, role); !ok || len(affected) > 0 {
+			respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
+			return
+		}
+	}
+	saved, err := a.modelStore.Select(r.Context(), body)
+	if err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
 	if agent := a.currentAgent(); agent != nil {
 		if err := agent.Reload(); err != nil {
-			if oldErr == nil {
-				_ = a.modelStore.SetActive(context.Background(), old.ID)
+			var rollbackErr error
+			rollbackCtx := context.WithoutCancel(r.Context())
+			if old.Version == 0 {
+				rollbackErr = a.modelStore.ClearSelection(rollbackCtx, saved.Version)
 			} else {
-				_ = a.modelStore.ClearActive(context.Background(), id)
+				old.Version = saved.Version
+				_, rollbackErr = a.modelStore.Select(rollbackCtx, old)
 			}
-			zap.L().Warn("模型切换失败，已回滚", zap.Error(err))
-			respondError(w, http.StatusBadRequest, "model_activate_failed", "模型切换失败，已继续使用旧配置。", nil)
+			if rollbackErr != nil {
+				zap.L().Error("回滚场合模型失败", zap.Error(rollbackErr))
+			}
+			zap.L().Warn("场合模型切换失败", zap.Error(err))
+			respondError(w, http.StatusBadRequest, "model_activate_failed", "", nil)
 			return
 		}
 	}
-	respondData(w, http.StatusOK, map[string]bool{"ok": true}, nil)
+	a.handleModels(w, r)
 }
 
 func (a *App) handleModelTest(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +262,6 @@ func (a *App) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		APIKey:          key,
 		BaseURL:         row.BaseURL,
 		Model:           row.ModelName,
-		ThinkingType:    row.ThinkingType,
 		ReasoningEffort: row.ReasoningEffort,
 	}); err != nil {
 		respondError(w, http.StatusBadRequest, "model_test_failed", "模型连接测试失败", map[string]any{

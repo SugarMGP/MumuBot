@@ -351,10 +351,10 @@ const models: ModelProfile[] = emptySeed
         base_url: "https://api.example.com/v1",
         model_name: "gpt-5",
         context_window: 400000,
-        thinking_type: "enabled",
+
         reasoning_effort: "medium",
         api_key_hint: "sk-…9f2a",
-        active: true,
+
         version: 4,
         created_at: iso(5000),
         updated_at: iso(120),
@@ -366,10 +366,10 @@ const models: ModelProfile[] = emptySeed
         base_url: "https://api.example.com/v1",
         model_name: "gpt-5-mini",
         context_window: 200000,
-        thinking_type: "",
+
         reasoning_effort: "",
         api_key_hint: "sk-…1c3d",
-        active: false,
+
         version: 2,
         created_at: iso(4000),
         updated_at: iso(400),
@@ -412,6 +412,8 @@ const mcpServers: MCPServerDetail[] = emptySeed
         tool_names: ["search"],
       },
     ];
+
+let modelSelection = { qq: models[0]?.id ?? 0, life: models[0]?.id ?? 0, worker: models[0]?.id ?? 0, version: 0 };
 
 let authenticated = import.meta.env.VITE_MOCK_AUTH === "1";
 let logSeq = 1;
@@ -1016,7 +1018,13 @@ export const handlers = [
     return ok(settings);
   }),
 
-  http.get("/api/v1/models", () => ok({ items: models, secret_configured: true })),
+  http.get("/api/v1/models", () => ok({ items: models, selection: modelSelection, secret_configured: true })),
+  http.put("/api/v1/models/selection", async ({ request }) => {
+    const body = await request.json() as typeof modelSelection;
+    if (body.version !== modelSelection.version) return fail(409, "version_conflict", "内容已被修改");
+    modelSelection = { ...body, version: body.version + 1 };
+    return ok({ items: models, selection: modelSelection, secret_configured: true });
+  }),
   http.post("/api/v1/models", async ({ request }) => {
     const body = (await request.json()) as any;
     const created: ModelProfile = {
@@ -1026,10 +1034,10 @@ export const handlers = [
       base_url: body.base_url,
       model_name: body.model_name,
       context_window: body.context_window,
-      thinking_type: body.thinking_type,
+
       reasoning_effort: body.reasoning_effort,
       api_key_hint: body.api_key ? "sk-…mock" : "",
-      active: false,
+
       version: 1,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -1047,7 +1055,7 @@ export const handlers = [
       base_url: body.base_url,
       model_name: body.model_name,
       context_window: body.context_window,
-      thinking_type: body.thinking_type,
+
       reasoning_effort: body.reasoning_effort,
       api_key_hint: body.api_key ? "sk-…mock" : model.api_key_hint,
       updated_at: new Date().toISOString(),
@@ -1058,17 +1066,9 @@ export const handlers = [
   http.delete("/api/v1/models/:id", ({ params }) => {
     const index = models.findIndex((item) => item.id === Number(params.id));
     if (index < 0) return fail(404, "not_found", "模型不存在");
-    if (models[index].active) return fail(400, "model_active", "当前模型不能删除");
+    if ([modelSelection.qq, modelSelection.life, modelSelection.worker].includes(models[index].id)) return fail(400, "model_active", "当前模型不能删除");
     models.splice(index, 1);
     return new HttpResponse(null, { status: 204 });
-  }),
-  http.post("/api/v1/models/:id/activate", ({ params }) => {
-    const model = models.find((item) => item.id === Number(params.id));
-    if (!model) return fail(404, "not_found", "模型不存在");
-    models.forEach((item) => {
-      item.active = item.id === model.id;
-    });
-    return ok({ ok: true });
   }),
   http.post("/api/v1/models/:id/test", () => ok({ ok: true })),
 
@@ -1152,19 +1152,12 @@ export const handlers = [
         compactor: settings.config.compactor,
       },
       model: {
-        active: {
-          name: "主力模型",
-          base_url: "https://api.example.com/v1",
-          model_name: "gpt-5",
-          thinking_type: "enabled",
-          reasoning_effort: "medium",
-        },
+        profiles: Object.fromEntries((["qq", "life", "worker"] as const).map((role) => [role, models.find((profile) => profile.id === modelSelection[role])])),
         mcp_tool_count: 4,
         mcp_statuses: [
           { name: "weather", enabled: true, connected: true, tool_count: 2 },
           { name: "search", enabled: true, connected: false, tool_count: 0, error: "连接超时" },
         ],
-        context_window: 400000,
       },
       runtime: {
         connected: true,

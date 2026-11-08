@@ -199,7 +199,7 @@ func (a *App) reloadMCPWarning(ctx context.Context) *warningPayload {
 	if agent == nil {
 		return nil
 	}
-	if _, err := a.modelStore.Active(ctx); err != nil {
+	if _, err := a.modelStore.ForRole(ctx, "qq"); err != nil {
 		if errors.Is(err, modelprofiles.ErrNotFound) {
 			return nil
 		}

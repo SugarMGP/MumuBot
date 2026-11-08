@@ -21,7 +21,6 @@ type ModelConfig struct {
 	APIKey          string
 	BaseURL         string
 	Model           string
-	ThinkingType    string
 	ReasoningEffort string
 }
 
@@ -39,22 +38,17 @@ func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
 	transport.TLSHandshakeTimeout = handshakeTimeout
 	httpClient := &http.Client{Transport: transport}
 
-	extraFields := map[string]any{}
-	if thinking := strings.TrimSpace(cfg.ThinkingType); thinking != "" {
-		extraFields["thinking"] = map[string]any{"type": thinking}
-	}
 	var reasoning *responses.ReasoningParam
 	if effort := strings.TrimSpace(cfg.ReasoningEffort); effort != "" {
 		reasoning = &responses.ReasoningParam{Effort: responses.ReasoningEffort(effort)}
 	}
 
 	client, err := agenticopenai.NewResponsesModel(context.Background(), &agenticopenai.ResponsesConfig{
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
-		Model:       modelName,
-		HTTPClient:  httpClient,
-		ExtraFields: extraFields,
-		Reasoning:   reasoning,
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		Model:      modelName,
+		HTTPClient: httpClient,
+		Reasoning:  reasoning,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建主模型失败: %w", err)

@@ -9,7 +9,6 @@ import (
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/media"
-	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/tools"
 
 	"github.com/cloudwego/eino/adk"
@@ -21,20 +20,39 @@ import (
 
 var ErrNoModel = fmt.Errorf("尚未配置模型")
 
-// Generation 是一次可替换的模型、工具和 MCP 快照；ADK Agent 在每次 think 按当前步数构造
+type roleModel struct {
+	model          model.AgenticModel
+	modelName      string
+	contextWindow  int
+	profileID      uint
+	profileVersion int64
+}
+
+// Generation 是一次可替换的场合模型、工具和 MCP 快照
 type Generation struct {
-	model         model.AgenticModel
-	modelName     string
-	contextWindow int
-	groupTools    []tool.BaseTool
-	privateTools  []tool.BaseTool
-	workerTools   []tool.BaseTool
-	lifeTools     []tool.BaseTool
-	mcp           *mcp.Manager
-	media         *media.Manager
+	roleModel
+	lifeModel    roleModel
+	workerModel  roleModel
+	groupTools   []tool.BaseTool
+	privateTools []tool.BaseTool
+	workerTools  []tool.BaseTool
+	lifeTools    []tool.BaseTool
+	mcp          *mcp.Manager
+	media        *media.Manager
 
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+}
+
+func (g *Generation) forKind(kind string) roleModel {
+	switch kind {
+	case "life":
+		return g.lifeModel
+	case "worker":
+		return g.workerModel
+	default:
+		return g.roleModel
+	}
 }
 
 func (g *Generation) close() {
@@ -51,24 +69,43 @@ func (g *Generation) close() {
 // buildGeneration 使用当前数据库模型和 MCP 配置构造完整运行态
 func (a *Agent) buildGeneration() (*Generation, error) {
 	cfg := config.Snapshot()
-	profile, err := a.modelStore.Active(a.ctx)
+	selection, err := a.modelStore.Selection(a.ctx)
 	if err != nil {
-		if err == modelprofiles.ErrNotFound {
-			return nil, ErrNoModel
-		}
 		return nil, err
 	}
-	apiKey, err := a.modelStore.DecryptKey(profile)
-	if err != nil {
-		return nil, fmt.Errorf("解密模型密钥失败: %w", err)
+	loaded := map[uint]roleModel{}
+	load := func(id uint) (roleModel, error) {
+		if id == 0 {
+			return roleModel{}, ErrNoModel
+		}
+		if existing, ok := loaded[id]; ok {
+			return existing, nil
+		}
+		profile, err := a.modelStore.Get(a.ctx, id)
+		if err != nil {
+			return roleModel{}, err
+		}
+		apiKey, err := a.modelStore.DecryptKey(profile)
+		if err != nil {
+			return roleModel{}, err
+		}
+		client, err := llm.NewClient(llm.ModelConfig{APIKey: apiKey, BaseURL: profile.BaseURL, Model: profile.ModelName, ReasoningEffort: profile.ReasoningEffort})
+		if err != nil {
+			return roleModel{}, err
+		}
+		item := roleModel{model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: id, profileVersion: profile.Version}
+		loaded[id] = item
+		return item, nil
 	}
-	chatModel, err := llm.NewClient(llm.ModelConfig{
-		APIKey:          apiKey,
-		BaseURL:         profile.BaseURL,
-		Model:           profile.ModelName,
-		ThinkingType:    profile.ThinkingType,
-		ReasoningEffort: profile.ReasoningEffort,
-	})
+	qqModel, err := load(selection.QQ)
+	if err != nil {
+		return nil, err
+	}
+	lifeModel, err := load(selection.Life)
+	if err != nil {
+		return nil, err
+	}
+	workerModel, err := load(selection.Worker)
 	if err != nil {
 		return nil, err
 	}
@@ -101,15 +138,13 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 		return nil, err
 	}
 	generation := &Generation{
-		model:         chatModel,
-		modelName:     profile.ModelName,
-		contextWindow: profile.ContextWindow,
-		groupTools:    groupTools,
-		privateTools:  privateTools,
-		workerTools:   workerTools,
-		lifeTools:     lifeTools,
-		mcp:           mcpManager,
-		media:         mediaManager,
+		roleModel: qqModel, lifeModel: lifeModel, workerModel: workerModel,
+		groupTools:   groupTools,
+		privateTools: privateTools,
+		workerTools:  workerTools,
+		lifeTools:    lifeTools,
+		mcp:          mcpManager,
+		media:        mediaManager,
 	}
 	return generation, nil
 }
@@ -123,7 +158,7 @@ func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool, 
 		&sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a},
 		&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
 	}
-	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, map[string]bool{"stayQuiet": true})
+	return a.newTypedChatAgent(generation.roleModel, chatTools, maxStep, handlers, map[string]bool{"stayQuiet": true})
 }
 
 // newWorkerAgent 复用共同人格与规则，只挂执行工具和工作摘要，不接 QQ 聊天职责/压缩器
@@ -145,10 +180,10 @@ func (a *Agent) newWorkerAgent(ctx context.Context, generation *Generation, chat
 	handlers = append(handlers,
 		&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
 	)
-	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, nil)
+	return a.newTypedChatAgent(generation.workerModel, chatTools, maxStep, handlers, nil)
 }
 
-// newLifeAgent 复用主模型和摘要中间件；睡眠工具是收尾动作，直接结束本轮
+// newLifeAgent 使用生活档案和摘要中间件；睡眠成功后直接收尾
 func (a *Agent) newLifeAgent(ctx context.Context, generation *Generation, chatTools []tool.BaseTool, maxStep int) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	if maxStep <= 0 {
 		return nil, fmt.Errorf("生活单轮步数无效")
@@ -167,16 +202,16 @@ func (a *Agent) newLifeAgent(ctx context.Context, generation *Generation, chatTo
 	handlers = append(handlers,
 		&sessionPersister{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}},
 	)
-	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, nil)
+	return a.newTypedChatAgent(generation.lifeModel, chatTools, maxStep, handlers, nil)
 }
 
-func (a *Agent) newTypedChatAgent(generation *Generation, chatTools []tool.BaseTool, maxStep int, handlers []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], returnDirectly map[string]bool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
+func (a *Agent) newTypedChatAgent(selected roleModel, chatTools []tool.BaseTool, maxStep int, handlers []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], returnDirectly map[string]bool) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	argumentsHandler, err := tools.NewToolArgumentsHandler(a.ctx, chatTools)
 	if err != nil {
 		return nil, err
 	}
 	return adk.NewTypedChatModelAgent[*schema.AgenticMessage](a.ctx, &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
-		Model:         generation.model,
+		Model:         selected.model,
 		GenModelInput: a.passthroughModelInput,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{

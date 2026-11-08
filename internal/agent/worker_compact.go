@@ -18,20 +18,20 @@ import (
 )
 
 func (a *Agent) newWorkerSummarizer(ctx context.Context, generation *Generation) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
-	if generation == nil || generation.contextWindow <= 0 {
+	if generation == nil || generation.workerModel.contextWindow <= 0 {
 		return nil, nil
 	}
 	ratio := configFor(ctx).Compactor.TriggerRatio
 	if ratio <= 0 {
 		return nil, nil
 	}
-	triggerTokens := int(float64(generation.contextWindow) * ratio)
+	triggerTokens := int(float64(generation.workerModel.contextWindow) * ratio)
 	if triggerTokens <= 0 {
 		return nil, nil
 	}
 	var pendingHead []*schema.AgenticMessage
 	return summarization.NewTyped(a.ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
-		Model: generation.model,
+		Model: generation.workerModel.model,
 		Trigger: &summarization.TriggerCondition{
 			ContextTokens: triggerTokens,
 		},

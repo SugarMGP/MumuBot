@@ -343,16 +343,22 @@ export interface ModelProfile {
   base_url: string;
   model_name: string;
   context_window: number;
-  thinking_type: string;
   reasoning_effort: string;
   api_key_hint: string;
-  active: boolean;
   version: number;
   created_at: string;
   updated_at: string;
 }
 
+export interface ModelSelection {
+  qq: number;
+  life: number;
+  worker: number;
+  version: number;
+}
+
 export interface ModelsData {
+  selection: ModelSelection;
   items: ModelProfile[];
   secret_configured: boolean;
 }
@@ -402,16 +408,9 @@ export interface SystemData {
     compactor: RuntimeConfig["compactor"];
   };
   model: {
-    active: {
-      name: string;
-      base_url: string;
-      model_name: string;
-      thinking_type: string;
-      reasoning_effort: string;
-    } | null;
+    profiles: Record<string, { name: string; model_name: string; reasoning_effort: string; base_url: string; context_window: number }>;
     mcp_tool_count: number;
     mcp_statuses?: { name: string; enabled: boolean; connected: boolean; tool_count: number; error?: string }[];
-    context_window: number;
   };
   runtime: {
     connected: boolean;

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { modelApi } from "@/api/client-endpoints";
-import type { ModelProfile } from "@/api/types";
+import type { ModelProfile, ModelSelection } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
@@ -36,7 +36,6 @@ const emptyForm = {
   base_url: "",
   model_name: "",
   context_window: 200000,
-  thinking_type: "",
   reasoning_effort: "",
   api_key: "",
 };
@@ -97,7 +96,6 @@ export default function ModelsPage() {
           base_url: current.base_url,
           model_name: current.model_name,
           context_window: current.context_window,
-          thinking_type: current.thinking_type,
           reasoning_effort: current.reasoning_effort,
           api_key: "",
         }
@@ -155,13 +153,14 @@ export default function ModelsPage() {
     await invalidate();
   };
 
-  const activate = useMutation({
-    mutationFn: (id: number) => modelApi.activate(id),
-    onSuccess: async () => {
-      await invalidate();
-      toastSuccess(t("models.activated"));
+  const selectModel = useMutation({
+    mutationFn: (selection: ModelSelection) => modelApi.select(selection),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["models"], result.data);
+      if (result.warning) toastWarningCode(result.warning.code);
+      else toastSuccess(t("models.selectionSaved"));
     },
-    onError: (error) => toastApiError(error),
+    onError: (error) => { toastApiError(error); void invalidate(); },
   });
 
   const test = async (id: number) => {
@@ -218,6 +217,34 @@ export default function ModelsPage() {
         </div>
       ) : null}
 
+      <SectionCard title={t("models.selectionTitle")}>
+        <div className="grid grid-cols-3 gap-4">
+          {(["qq", "life", "worker"] as const).map((role) => (
+            <Field key={role} label={t(`models.roles.${role}`)}>
+              <div className="flex items-center gap-2">
+                <NativeSelect
+                  aria-label={t(`models.roles.${role}`)}
+                  disabled={selectModel.isPending || query.data.items.length === 0}
+                  value={query.data.selection[role]}
+                  onChange={(event) => {
+                    const id = Number(event.target.value);
+                    const current = query.data.selection;
+                    const next = current.qq === 0
+                      ? { qq: id, life: id, worker: id, version: current.version }
+                      : { ...current, [role]: id };
+                    selectModel.mutate(next);
+                  }}
+                >
+                  <option value={0} disabled>{t("models.choose")}</option>
+                  {query.data.items.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                </NativeSelect>
+                {selectModel.isPending ? <Spinner /> : null}
+              </div>
+            </Field>
+          ))}
+        </div>
+      </SectionCard>
+
       <SectionCard title={t("models.list")}>
         {query.data.items.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
@@ -230,7 +257,8 @@ export default function ModelsPage() {
                 <TableHead>{t("models.fields.name")}</TableHead>
                 <TableHead>{t("models.fields.modelName")}</TableHead>
                 <TableHead>{t("models.fields.contextWindow")}</TableHead>
-                <TableHead>{t("common.status")}</TableHead>
+                <TableHead>{t("models.fields.reasoningEffort")}</TableHead>
+                <TableHead>{t("models.usage")}</TableHead>
                 <TableHead className="text-right">
                   {t("common.actions")}
                 </TableHead>
@@ -254,11 +282,10 @@ export default function ModelsPage() {
                   <TableCell className="admin-number text-xs">
                     {profile.context_window}
                   </TableCell>
+                  <TableCell className="text-xs">{profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")}</TableCell>
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-1">
-                      {profile.active ? (
-                        <Badge>{t("models.active")}</Badge>
-                      ) : null}
+                      {(["qq", "life", "worker"] as const).filter((role) => query.data.selection[role] === profile.id).map((role) => <Badge key={role}>{t(`models.roles.${role}`)}</Badge>)}
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
@@ -269,14 +296,6 @@ export default function ModelsPage() {
                         onClick={() => update({ edit: profile.id })}
                       >
                         {t("models.edit")}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        disabled={profile.active || activate.isPending}
-                        onClick={() => activate.mutate(profile.id)}
-                      >
-                        {t("models.activate")}
                       </Button>
                       <Button
                         variant="ghost"
@@ -293,7 +312,7 @@ export default function ModelsPage() {
                         variant="ghost"
                         size="xs"
                         className="text-destructive hover:bg-destructive/10"
-                        disabled={profile.active}
+                        disabled={Object.values({ qq: query.data.selection.qq, life: query.data.selection.life, worker: query.data.selection.worker }).includes(profile.id) || selectModel.isPending}
                         onClick={() => setDeleting(profile)}
                       >
                         {t("models.delete")}
@@ -429,25 +448,6 @@ export default function ModelsPage() {
                   }
                 />
               </Field>
-              <Field label={t("models.fields.thinkingType")}>
-                <NativeSelect
-                  value={form.thinking_type}
-                  onChange={(event) =>
-                    setForm((value) => ({
-                      ...value,
-                      thinking_type: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">{t("models.fields.thinkingNone")}</option>
-                  <option value="enabled">
-                    {t("models.fields.thinkingEnabled")}
-                  </option>
-                  <option value="disabled">
-                    {t("models.fields.thinkingDisabled")}
-                  </option>
-                </NativeSelect>
-              </Field>
               <Field label={t("models.fields.reasoningEffort")}>
                 <NativeSelect
                   value={form.reasoning_effort}
@@ -459,7 +459,7 @@ export default function ModelsPage() {
                   }
                 >
                   <option value="">{t("models.fields.effortNone")}</option>
-                  {["low", "medium", "high", "xhigh", "max"].map((value) => (
+                  {["none", "low", "medium", "high", "xhigh", "max"].map((value) => (
                     <option key={value} value={value}>
                       {enumLabel(t, "reasoningEffort", value)}
                     </option>

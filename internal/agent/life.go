@@ -283,10 +283,10 @@ func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*
 	return messages, nil
 }
 
-// newLifeSummarizer 复用当前模型的 Eino 摘要；检查点只保存摘要正文，
+// newLifeSummarizer 使用生活模型的 Eino 摘要；检查点只保存摘要正文，
 // 代头在 Finalize 里装入当前请求，换代后不留旧人格
 func (a *Agent) newLifeSummarizer(ctx context.Context, generation *Generation) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
-	if generation == nil || generation.contextWindow <= 0 {
+	if generation == nil || generation.lifeModel.contextWindow <= 0 {
 		return nil, nil
 	}
 	cfg := configFor(ctx)
@@ -294,13 +294,13 @@ func (a *Agent) newLifeSummarizer(ctx context.Context, generation *Generation) (
 	if ratio <= 0 {
 		return nil, nil
 	}
-	triggerTokens := int(float64(generation.contextWindow) * ratio)
+	triggerTokens := int(float64(generation.lifeModel.contextWindow) * ratio)
 	if triggerTokens <= 0 {
 		return nil, nil
 	}
 	var pendingHead []*schema.AgenticMessage
 	return summarization.NewTyped(a.ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
-		Model:           generation.model,
+		Model:           generation.lifeModel.model,
 		Trigger:         &summarization.TriggerCondition{ContextTokens: triggerTokens},
 		UserInstruction: persona.Render(lifeSummaryInstruction, persona.IdentityFromConfig(cfg.Identity)),
 		Finalize: func(ctx context.Context, _ []*schema.AgenticMessage, summary *schema.AgenticMessage) ([]*schema.AgenticMessage, error) {

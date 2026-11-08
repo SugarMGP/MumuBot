@@ -176,9 +176,9 @@ go vet ./...
 
 ## 核心架构约束
 
-- 主聊天和同步话题压缩共用当前模型；可添加多个模型档案并切换，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
+- QQ 聊天和同步话题压缩共用 QQ 档案；life 和 worker 分别选择自己的档案并用于运行与摘要，可添加同名模型不同推理强度的档案，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
 - 对话模型只走 OpenAI Responses 端点（`/responses`）；当前模型的上下文窗口用于输入预算和压缩触发，设置 `max_output_tokens` 或固定输出预留不是本项目行为。
-- 模型档案只开放 `thinking.type` 和 `reasoning.effort` 两个推理参数；API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
+- 模型档案只开放 `reasoning.effort`，支持省略或 none/low/medium/high/xhigh/max；API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
 - 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
 - 强提及和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
@@ -249,7 +249,7 @@ go vet ./...
 - 话题用 active/dormant 表示工作状态，所有话题都按同一条指数遗忘曲线计时，另用 `forgotten_at` 表示已遗忘；置顶只适用于记忆。摘要不可变且按版本保存，消息来源用 `is_anchor` 标记关键消息，来源行另存 OneBot 消息 ID 与事件时间；撤回不改写、不使话题失效。
 - `context_compaction_checkpoints.active_topic_versions` 保持稳定顺序；dormant 话题不进入当前摘要块但始终可搜索。话题是否继续保留由遗忘曲线决定，未完成事项不再享受永久保护；程序不把 open_loops 机械搬进 overview 续命，压缩模型只按真实状态保留有意义的未完事项。
 - `overview` 是会话级滚动概览，不是新 Agent；压缩器必须写结论、不确定性、纠正、边界、动作结果和未完成事项，程序不静默截断摘要。
-- v17 空库初始化；已是当前 v17 时校验表、字段和版本后直接复用，更早的 schema 明确拒绝；不保留旧迁移、旧证据、关系或学习水位表，也不回填伪造的旧 assistant/tool 轨迹。
+- 空库初始化到 v18；当前 v17 按显式事务升级到 v18 并保留数据，当前 v18 校验后复用，更早的 schema 明确拒绝；不保留旧迁移、旧证据、关系或学习水位表，也不回填伪造的旧 assistant/tool 轨迹。
 - 跨会话检索允许用于记忆、话题和历史；记忆正文不保存来源，历史/话题结果必须带群聊或好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
 - 人格内容统一走 `persona_presets`（人格 + 共同规则 + QQ 聊天 + 生活职责 + 工作职责），内置预设由代码文本在启动时同步；不再保留 `app_config` 里的人格模板和别名、兴趣字段。
 - 人格保留统一身份、性格、价值观与自然表达；共同规则统一事实、隐私、主人授权和协作边界。三个场合职责各写自己的工作，不复制共用工具手册；文本保留嘱托式语气，不改成机械命令清单。
@@ -267,9 +267,9 @@ go vet ./...
 - 长期记忆检索支持 `mode=exact|fuzzy`：exact 用 `content/label/subject_target` 精确子串，fuzzy 用 `pg_trgm` 召回并按 similarity 排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
 - Agent 历史查询使用不透明 cursor 和全局 OneBot message ID；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。历史/话题/记忆工具的时间范围统一走 `internal/schedule.ParseRange`：纯日期上界包含结束日，内部归一到次日零点；单条 transcript 全文用 `readSessionEntry`。
 - 持久化使用 PostgreSQL 18；先打开数据库、完成 schema 迁移、动态配置、人格预设和管理后台，再异步等待 OneBot 取得 `self_id` 并创建 Agent；QQ 未登录时后台仍可配置，首次配置模型且 Agent 激活前事件门保持关闭。
-- schema 由 `schema_migrations` 记录并为 v17；空库初始化，已是当前版本时校验后复用，更早的 schema 明确拒绝，不自动迁移或 DROP。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
+- schema 由 `schema_migrations` 记录并为 v18；空库初始化，当前 v17 显式事务升级并保留业务数据，已是 v18 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
-- 切换或缩小当前模型上下文窗口前，必须按现有装配和 token 估算检查全部持久工作集；检查是只读操作，不能创建/改写代头、追加群说明、裁剪内存或触发压缩。QQ 离线、Agent 尚未激活和 generation 尚未建立也必须检查，有工作集放不下就拒绝并保持旧配置，不静默截断或丢掉会话。
+- 切换或缩小当前模型上下文窗口前，必须按现有装配和 token 估算检查受影响场合的全部持久工作集；检查是只读操作，不能创建/改写代头、追加群说明、裁剪内存或触发压缩。QQ 离线、Agent 尚未激活和 generation 尚未建立也必须检查，有工作集放不下就拒绝并保持旧配置，不静默截断或丢掉会话。
 - 管理后台日志与模型统计口径保持现有约束。`message_logs`、合并转发和聊天媒体默认保留 180 天，实际最低期限由后台 `history_days` 决定；仍在 transcript 直接引用的过期原文延后删除，正常压缩解除引用后再清理。摘要、记忆、日记和收藏表情有各自的保留含义，不等同于原文清理。
 - 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。
 - PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符。

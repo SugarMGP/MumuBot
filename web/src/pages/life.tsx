@@ -117,6 +117,7 @@ export default function LifePage() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<ScheduleForm | null>(null);
   const [wakeOpen, setWakeOpen] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
   const [formBaseline, setFormBaseline] = useState("");
   const [discardOpen, setDiscardOpen] = useState(false);
   const [formError, setFormError] = useState("");
@@ -147,6 +148,7 @@ export default function LifePage() {
     mutationFn: () => lifeApi.run(),
     onSuccess: (result) => {
       applyData(result.data);
+      setRunOpen(false);
       toastSuccess(t("life.runSubmitted"));
     },
     onError: toastApiError,
@@ -272,7 +274,7 @@ export default function LifePage() {
             </Button>
             <Button
               disabled={runMutation.isPending}
-              onClick={() => runMutation.mutate()}
+              onClick={() => setRunOpen(true)}
             >
               {runMutation.isPending ? <Spinner /> : null}
               {t("life.runNow")}
@@ -580,6 +582,17 @@ export default function LifePage() {
 
       <DirtyGuardDialog blocker={blocker} />
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title={t("common.unsavedTitle")} description={t("common.unsavedBody")} confirmLabel={t("common.leave")} destructive={false} onConfirm={() => { setDiscardOpen(false); setForm(null); }} />
+
+      <ConfirmDialog
+        open={runOpen}
+        onOpenChange={setRunOpen}
+        title={t("life.runNow")}
+        description={t("life.runBody")}
+        confirmLabel={t("life.runNow")}
+        loading={runMutation.isPending}
+        destructive={false}
+        onConfirm={() => runMutation.mutate()}
+      />
 
       <ConfirmDialog
         open={wakeOpen}

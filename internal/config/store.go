@@ -76,6 +76,9 @@ func reload() error {
 	cfg := DefaultRuntime()
 	versions := make(map[string]int64)
 	for _, row := range rows {
+		if row.ConfigKey == "model_selection" {
+			continue
+		}
 		versions[row.ConfigKey] = row.Version
 		if err := applySection(&cfg, row.ConfigKey, row.ConfigValue); err != nil {
 			zap.L().Warn("动态配置项无效，使用默认值", zap.String("key", row.ConfigKey), zap.Error(err))

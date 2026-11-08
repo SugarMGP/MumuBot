@@ -26,17 +26,17 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var activeModel *modelProfileDTO
-	contextWindow := 0
-	if profile, err := a.modelStore.Active(r.Context()); err == nil {
-		activeModel = &modelProfileDTO{
-			Name:            profile.Name,
-			BaseURL:         profile.BaseURL,
-			ModelName:       profile.ModelName,
-			ThinkingType:    profile.ThinkingType,
-			ReasoningEffort: profile.ReasoningEffort,
+	profiles := map[string]modelProfileDTO{}
+	selection, selectionErr := a.modelStore.Selection(r.Context())
+	if selectionErr == nil {
+		for _, role := range []string{"qq", "life", "worker"} {
+			profile, err := a.modelStore.Get(r.Context(), selection.ID(role))
+			if err != nil {
+				continue
+			}
+			item := modelProfileDTO{Name: profile.Name, BaseURL: profile.BaseURL, ModelName: profile.ModelName, ReasoningEffort: profile.ReasoningEffort, ContextWindow: profile.ContextWindow}
+			profiles[role] = item
 		}
-		contextWindow = profile.ContextWindow
 	}
 
 	respondData(w, http.StatusOK, systemResponse{
@@ -66,10 +66,9 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 		Model: systemModelDTO{
-			Active:        activeModel,
-			MCPToolCount:  snapshot.MCPToolCount,
-			MCPStatuses:   snapshot.MCPStatuses,
-			ContextWindow: contextWindow,
+			Profiles:     profiles,
+			MCPToolCount: snapshot.MCPToolCount,
+			MCPStatuses:  snapshot.MCPStatuses,
 		},
 		Runtime: systemRuntimeDTO{
 			Connected:           snapshot.Connected,

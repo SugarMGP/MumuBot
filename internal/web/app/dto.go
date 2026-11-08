@@ -216,6 +216,7 @@ type settingsResponse struct {
 }
 
 type modelsResponse struct {
+	Selection        modelprofiles.Selection `json:"selection"`
 	Items            []modelprofiles.Profile `json:"items"`
 	SecretConfigured bool                    `json:"secret_configured"`
 }
@@ -276,17 +277,16 @@ type systemContextDTO struct {
 }
 
 type systemModelDTO struct {
-	Active        *modelProfileDTO   `json:"active"`
-	MCPToolCount  int                `json:"mcp_tool_count"`
-	MCPStatuses   []mcp.ServerStatus `json:"mcp_statuses,omitempty"`
-	ContextWindow int                `json:"context_window"`
+	Profiles     map[string]modelProfileDTO `json:"profiles"`
+	MCPToolCount int                        `json:"mcp_tool_count"`
+	MCPStatuses  []mcp.ServerStatus         `json:"mcp_statuses,omitempty"`
 }
 
 type modelProfileDTO struct {
+	ContextWindow   int    `json:"context_window"`
 	Name            string `json:"name"`
 	BaseURL         string `json:"base_url"`
 	ModelName       string `json:"model_name"`
-	ThinkingType    string `json:"thinking_type"`
 	ReasoningEffort string `json:"reasoning_effort"`
 }
 

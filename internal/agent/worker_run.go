@@ -45,7 +45,7 @@ func (a *Agent) thinkWorker(workerID int64) {
 		}
 		runCtx, cancel := context.WithCancel(a.ctx)
 		epoch := a.beginWorkerRun(id, cancel)
-		if !a.setWorkerStatusIfCurrent(runCtx, id, epoch, memory.WorkerStatusRunning, "", generation.modelName) {
+		if !a.setWorkerStatusIfCurrent(runCtx, id, epoch, memory.WorkerStatusRunning, "", generation.workerModel.modelName) {
 			a.finishWorkerRun(id, epoch)
 			cancel()
 			return
@@ -85,7 +85,7 @@ func (a *Agent) thinkWorker(workerID int64) {
 			return
 		}
 		if a.workerRunCanceled(id, epoch) {
-			a.setWorkerStatusIfCurrent(context.WithoutCancel(ctx), id, epoch, memory.WorkerStatusCancelled, "", generation.modelName)
+			a.setWorkerStatusIfCurrent(context.WithoutCancel(ctx), id, epoch, memory.WorkerStatusCancelled, "", generation.workerModel.modelName)
 			a.finishWorkerRun(id, epoch)
 			cancel()
 			return
@@ -97,7 +97,7 @@ func (a *Agent) thinkWorker(workerID int64) {
 			return
 		}
 		if !hasActionableMessage(session.PendingMessages()) {
-			a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.modelName)
+			a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.workerModel.modelName)
 			a.finishWorkerRun(id, epoch)
 			cancel()
 			return

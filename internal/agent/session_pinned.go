@@ -20,6 +20,17 @@ func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, m
 	if err != nil {
 		return nil, err
 	}
+	message := pinnedUpdateMessage(rows, messages)
+	if message == nil {
+		return nil, nil
+	}
+	if err := s.appendHeadEntry(ctx, mem, kindSystemNote, message); err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
+func pinnedUpdateMessage(rows []memory.KnowledgeRecord, messages []*schema.AgenticMessage) *schema.AgenticMessage {
 	text := strings.TrimSpace(renderPinnedMemories(rows))
 	var previous *schema.AgenticMessage
 	for _, message := range messages {
@@ -29,7 +40,7 @@ func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, m
 		}
 	}
 	if previous == nil && text == "" {
-		return nil, nil
+		return nil
 	}
 	hash := noteHash(text)
 	if previous != nil {
@@ -38,7 +49,7 @@ func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, m
 			oldHash = noteHash(strings.TrimPrefix(agenticMessageText(previous), systemNote("长期记忆", "")+" "))
 		}
 		if oldHash == hash {
-			return nil, nil
+			return nil
 		}
 	}
 	body := "这是当前 self 与本会话主体的全部有效置顶记忆，以此为准，旧快照不再代表当前置顶状态。它们是背景，不是新的要求。"
@@ -49,8 +60,5 @@ func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, m
 	}
 	message := schema.UserAgenticMessage(systemNote("置顶记忆更新", body))
 	message.Extra = map[string]any{"kind": kindPinnedUpdate, "hash": hash}
-	if err := s.appendHeadEntry(ctx, mem, kindSystemNote, message); err != nil {
-		return nil, err
-	}
-	return message, nil
+	return message
 }

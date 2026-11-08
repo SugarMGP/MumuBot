@@ -71,7 +71,7 @@ type ManageScheduleInput struct {
 	Text         string `json:"text,omitempty" jsonschema:"description=这条时间事项的说明，到点时给未来自己看"`
 	At           string `json:"at,omitempty" jsonschema:"description=一次性时间，RFC3339 或 2006-01-02 15:04:05"`
 	AfterMinutes int    `json:"after_minutes,omitempty" jsonschema:"description=多少分钟后，与 at 二选一"`
-	Cron         string `json:"cron,omitempty" jsonschema:"description=标准五段重复规则，按 Asia/Shanghai 计算；与 at/after_minutes 二选一"`
+	Cron         string `json:"cron,omitempty" jsonschema:"description=五段重复规则：分 时 日 月 周；如每天 9 点=0 9 * * *，周一 9 点=0 9 * * 1。Asia/Shanghai，到期自动推进；与 at/after_minutes 二选一"`
 	Enabled      *bool  `json:"enabled,omitempty" jsonschema:"description=update 时可选，false 表示停用"`
 }
 
@@ -323,11 +323,11 @@ func wakeUp(ctx context.Context, _ *WakeUpInput) (*WakeUpOutput, error) {
 }
 
 func NewPlanNextTool() (tool.InvokableTool, error) {
-	return utils.InferTool("planNext", "安排自己的生活：更新当前活动，并设置或替换下一次回来看的时间。", planNext)
+	return utils.InferTool("planNext", "更新当前活动，并设置或替换下一次回来看的单次时间；只管下一次，不会自动重复。固定重复事项用 manageSchedule 的 cron。", planNext)
 }
 
 func NewManageScheduleTool() (tool.InvokableTool, error) {
-	return utils.InferTool("manageSchedule", "管理自己的时间安排：列出、创建、修改或取消日程。purpose 为 next 的是下一次查看（planNext 的固定槽位），wake 是睡眠中的起床安排，commitment 是独立事项；允许统一修改固定槽位，修改或取消后用途会随醒睡状态重新派生。", manageSchedule)
+	return utils.InferTool("manageSchedule", "管理独立约定或重复事项：一次性用 at/after_minutes，每天或每周等固定事项用 cron，一次建立后自动推进，不必每回再建。列出、创建、修改或取消日程。purpose 为 next 的是下一次查看（planNext 的固定槽位），wake 是睡眠中的起床安排，commitment 是独立事项；允许统一修改固定槽位，修改或取消后用途会随醒睡状态重新派生。", manageSchedule)
 }
 
 func NewSleepUntilTool() (tool.InvokableTool, error) {

@@ -16,8 +16,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// ContextCapacity 检查当前 generation 工具下全部持久工作集能否装入目标窗口
-func (a *Agent) ContextCapacity(ctx context.Context, contextWindow int) ([]string, error) {
+// ContextCapacity 只检查目标场合的持久工作集能否装入新模型窗口
+func (a *Agent) ContextCapacity(ctx context.Context, contextWindow int, role string) ([]string, error) {
 	if a == nil {
 		return nil, fmt.Errorf("Agent 未初始化")
 	}
@@ -32,11 +32,11 @@ func (a *Agent) ContextCapacity(ctx context.Context, contextWindow int) ([]strin
 	if generation := a.currentGeneration(); generation != nil {
 		groupTools, privateTools, lifeTools, workerTools = generation.groupTools, generation.privateTools, generation.lifeTools, generation.workerTools
 	}
-	return capacityForWindow(ctx, a.memory, contextWindow, groupTools, privateTools, lifeTools, workerTools)
+	return capacityForWindow(ctx, a.memory, contextWindow, role, groupTools, privateTools, lifeTools, workerTools)
 }
 
 // ContextCapacityFor 供 Agent 尚未创建时做只读容量检查
-func ContextCapacityFor(ctx context.Context, mem *memory.Manager, contextWindow int, mcpManager *mcp.Manager) ([]string, error) {
+func ContextCapacityFor(ctx context.Context, mem *memory.Manager, contextWindow int, role string, mcpManager *mcp.Manager) ([]string, error) {
 	groupTools, privateTools, lifeTools, err := buildToolLists(mcpManager)
 	if err != nil {
 		return nil, err
@@ -45,10 +45,10 @@ func ContextCapacityFor(ctx context.Context, mem *memory.Manager, contextWindow 
 	if err != nil {
 		return nil, err
 	}
-	return capacityForWindow(ctx, mem, contextWindow, groupTools, privateTools, lifeTools, workerTools)
+	return capacityForWindow(ctx, mem, contextWindow, role, groupTools, privateTools, lifeTools, workerTools)
 }
 
-func capacityForWindow(ctx context.Context, mem *memory.Manager, contextWindow int, groupTools, privateTools, lifeTools, workerTools []tool.BaseTool) ([]string, error) {
+func capacityForWindow(ctx context.Context, mem *memory.Manager, contextWindow int, role string, groupTools, privateTools, lifeTools, workerTools []tool.BaseTool) ([]string, error) {
 	if mem == nil {
 		return nil, fmt.Errorf("记忆系统未初始化")
 	}
@@ -61,52 +61,58 @@ func capacityForWindow(ctx context.Context, mem *memory.Manager, contextWindow i
 		return nil, fmt.Errorf("加载人格失败: %w", err)
 	}
 	affected := make([]string, 0)
-	previewCtx := withGeneration(ctx, &Generation{contextWindow: contextWindow})
-	groupIDs, err := mem.ListActiveGroupIDs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, groupID := range groupIDs {
-		messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindGroup, groupID)
-		if buildErr != nil {
-			return nil, buildErr
+	previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: contextWindow}})
+	if role == "qq" {
+		groupIDs, err := mem.ListActiveGroupIDs(ctx)
+		if err != nil {
+			return nil, err
 		}
-		if requestTokens(messages, modelToolInfos(ctx, groupTools)) > contextWindow {
-			affected = append(affected, sessionKey(memory.ConversationKindGroup, groupID))
+		for _, groupID := range groupIDs {
+			messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindGroup, groupID)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			if requestTokens(messages, modelToolInfos(ctx, groupTools)) > contextWindow {
+				affected = append(affected, sessionKey(memory.ConversationKindGroup, groupID))
+			}
 		}
-	}
-	privateTargets, err := mem.ListConversationTargets(ctx, memory.ConversationKindPrivate, true)
-	if err != nil {
-		return nil, err
-	}
-	for _, target := range privateTargets {
-		messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindPrivate, target.TargetID)
-		if buildErr != nil {
-			return nil, buildErr
+		privateTargets, err := mem.ListConversationTargets(ctx, memory.ConversationKindPrivate, true)
+		if err != nil {
+			return nil, err
 		}
-		if requestTokens(messages, modelToolInfos(ctx, privateTools)) > contextWindow {
-			affected = append(affected, sessionKey(memory.ConversationKindPrivate, target.TargetID))
-		}
-	}
-	workers, err := mem.ListWorkerSessions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, worker := range workers {
-		messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindWorker, int64(worker.ID))
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		if requestTokens(messages, modelToolInfos(ctx, workerTools)) > contextWindow {
-			affected = append(affected, sessionKey(memory.ConversationKindWorker, int64(worker.ID)))
+		for _, target := range privateTargets {
+			messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindPrivate, target.TargetID)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			if requestTokens(messages, modelToolInfos(ctx, privateTools)) > contextWindow {
+				affected = append(affected, sessionKey(memory.ConversationKindPrivate, target.TargetID))
+			}
 		}
 	}
-	lifeMessages, err := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindLife, memory.LifeTargetID)
-	if err != nil {
-		return nil, err
+	if role == "worker" {
+		workers, err := mem.ListWorkerSessions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, worker := range workers {
+			messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindWorker, int64(worker.ID))
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			if requestTokens(messages, modelToolInfos(ctx, workerTools)) > contextWindow {
+				affected = append(affected, sessionKey(memory.ConversationKindWorker, int64(worker.ID)))
+			}
+		}
 	}
-	if requestTokens(lifeMessages, modelToolInfos(ctx, lifeTools)) > contextWindow {
-		affected = append(affected, sessionKey(memory.ConversationKindLife, memory.LifeTargetID))
+	if role == "life" {
+		lifeMessages, err := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindLife, memory.LifeTargetID)
+		if err != nil {
+			return nil, err
+		}
+		if requestTokens(lifeMessages, modelToolInfos(ctx, lifeTools)) > contextWindow {
+			affected = append(affected, sessionKey(memory.ConversationKindLife, memory.LifeTargetID))
+		}
 	}
 	sort.Strings(affected)
 	return affected, nil
@@ -177,18 +183,19 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	if !hasSystem {
 		head = append(head, previewSystemMessage(p, kind, targetID))
 	}
+	var currentPinned []memory.KnowledgeRecord
 	if kind == memory.ConversationKindGroup || kind == memory.ConversationKindPrivate {
-		pinnedText := ""
+		var pinnedErr error
+		currentPinned, pinnedErr = mem.PinnedMemoriesForConversation(ctx, kind, targetID)
+		if pinnedErr != nil {
+			return nil, pinnedErr
+		}
+		pinnedText := renderPinnedMemories(currentPinned)
 		if !hasDigest {
 			digest, digestErr := mem.LoadContextDigest(ctx, kind, targetID)
 			if digestErr != nil {
 				return nil, digestErr
 			}
-			pinned, pinnedErr := mem.PinnedMemoriesForConversation(ctx, kind, targetID)
-			if pinnedErr != nil {
-				return nil, pinnedErr
-			}
-			pinnedText = renderPinnedMemories(pinned)
 			session := &Session{kind: kind, targetID: targetID, memory: mem}
 			digestText, _ := renderBoundedDigest(ctx, session, digest, pinnedText)
 			if strings.TrimSpace(digestText) == "" && checkpoint != nil {
@@ -201,13 +208,6 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 			}
 		}
 		if !hasPinned {
-			if pinnedText == "" {
-				pinned, pinnedErr := mem.PinnedMemoriesForConversation(ctx, kind, targetID)
-				if pinnedErr != nil {
-					return nil, pinnedErr
-				}
-				pinnedText = renderPinnedMemories(pinned)
-			}
 			if strings.TrimSpace(pinnedText) != "" {
 				note := schema.UserAgenticMessage(systemNote("长期记忆", pinnedText))
 				note.Extra = map[string]any{"kind": kindPinnedMemory}
@@ -259,6 +259,11 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 			return nil, fmt.Errorf("解析 %s:%d 待处理输入失败: %w", kind, targetID, err)
 		}
 		messages = append(messages, &msg)
+	}
+	if kind == memory.ConversationKindGroup || kind == memory.ConversationKindPrivate {
+		if update := pinnedUpdateMessage(currentPinned, messages); update != nil {
+			messages = append(messages, update)
+		}
 	}
 	return messages, nil
 }

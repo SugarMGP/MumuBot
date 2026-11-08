@@ -25,7 +25,7 @@
 - 自然平复补扫必须遍历全部未结束条目或由数据库直接筛出到期项，不能只看固定前 500 条；`ended_at` 使用实际跨阈值时间，不能先把小数小时截成整数。
 - `pinned.go` 只返回 active pinned，置顶记忆不按 token 裁剪；情感与状态交给 `getCurrentStatus` 查询。
 - 原文、合并转发和聊天媒体按 `history_days` 保留最低期限，到期且不再被 transcript 直接引用的原文才删除；同媒体仍被其他保留原文引用时不删，收藏表情副本独立保留。工具结果文件和文件/图片快照只由现存 transcript 中对话/执行轨迹行的引用闭包（`result_ref`、payload 文本、`r` 嵌套内容）保活，代头、摘要、系统提醒、记忆和日记里的裸 ref 不保活，压缩即时释放不再引用的候选，孤儿按启动/每日补扫清理。不恢复 Embedding 补全、后台学习水位、知识证据强制或向量检索。
-- 迁移定义在 `internal/migration/`；v17 空库初始化，已是当前 v17 时校验后复用，更早的 schema 明确拒绝，不自动迁移或 DROP；不使用 AutoMigrate。
+- 迁移定义在 `internal/migration/`；空库初始化到 v18，当前 v17 按显式事务保留数据升级，v18 校验后复用，更早的 schema 明确拒绝；不使用 AutoMigrate。
 - `Manager.WithContext` 只能替换数据库句柄，必须原样携带同一个 RefStore、MediaDir 及其它共享单例；工具使用轻量 Manager 不能丢失文件快照、pending 锁或 GC 锁。
 - `Raw` 查询返回的字段必须通过 SQL alias 或明确的 GORM column 映射到接收字段；不能因为 `ID` 自动映射就假定 `context_summary/context_start_id/context_through_id` 也会映射。
 - 删除 transcript 时先在原事务中收集本批 `result_ref`/`file_ref`/`image_ref` 候选，并在删除 `r` 全文前展开其嵌套引用；提交后按完整引用闭包即时释放失根候选。全库孤儿扫描只用于启动/每日补扫，宽限至少 24 小时。

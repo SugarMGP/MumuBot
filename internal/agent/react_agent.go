@@ -308,7 +308,7 @@ func (a *Agent) Reload() error {
 	old := a.currentGeneration()
 	first := old == nil
 	a.setGeneration(generation)
-	if old != nil && (old.modelName != generation.modelName || old.contextWindow != generation.contextWindow) {
+	if old != nil && (old.profileID != generation.profileID || old.profileVersion != generation.profileVersion || old.lifeModel.profileID != generation.lifeModel.profileID || old.lifeModel.profileVersion != generation.lifeModel.profileVersion || old.workerModel.profileID != generation.workerModel.profileID || old.workerModel.profileVersion != generation.workerModel.profileVersion) {
 		a.sessions.resetCalibration()
 	}
 	if first {

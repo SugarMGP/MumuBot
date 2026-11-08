@@ -140,9 +140,9 @@ set +a
 ./mumu-bot
 ```
 
-Visit `/admin` after startup. The dashboard remains available when no model is configured; add and activate a model under Settings → Models. Settings changes do not require a process restart.
+Visit `/admin` after startup. The dashboard remains available when no model is configured; add profiles and select models for QQ, life, and worker under Settings → Models. Settings changes do not require a process restart.
 
-Model profiles expose only two reasoning controls: `thinking.type` (omit/enabled/disabled) and `reasoning.effort` (omit/low/medium/high/xhigh/max).
+QQ chat (groups and DMs), life, and worker each select an existing model profile. Profiles may use the same model name with different reasoning effort. The list stays in creation order. Only `reasoning.effort` is sent: omit, none, low, medium, high, xhigh, or max. `thinking.type` is removed; available effort levels depend on the provider.
 
 Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Before switching to a smaller model context window, the current working set is checked and the switch is rejected if any session cannot fit, keeping the old runtime intact.
 
@@ -150,17 +150,19 @@ Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-This release uses the v17 semantic schema: an empty database is initialized, and a current v17 database is validated and reused. Older schemas are rejected explicitly; no automatic migration or deletion is performed. Back up the database and media directory before upgrading.
+This release uses schema v18. Empty databases are initialized; a current v17 database upgrades in one transaction while preserving profiles, keys, memories, and history. The previously active profile becomes the selection for all three roles. A prior `thinking.type=disabled` becomes `reasoning.effort=none`. Older or incompatible structures are rejected without deleting business data. Back up the database and media before upgrading.
 
 The service listens on port `7468` by default (configurable via `MUMU_SERVER_PORT`).
 
 Visit `/admin` to access the admin dashboard. The dashboard stays disabled until an admin key is configured.
 
-QQ, life, and worker runs log full input context, tool arguments and results, and model output at INFO by default, linked by `session` and `run_id`. Binary media is represented by metadata. This filtering only affects logs; reasoning and tool results are still sent back to the model unchanged. Turn off content logging under Settings → Debug to keep only status, duration, and errors. Treat full logs as private conversation data.
+INFO logs include dynamic text context at the start of a think, newly added input, final text output, and tool activity, linked by `session` and `run_id`. Static persona text, full request bodies, tool definitions, and reasoning are excluded from logs; actual model requests and persisted traces remain complete. Binary media is represented by metadata. Content logging can be turned off under Settings → Debug. Treat logs as private conversation data.
+
+The Life page's “Review and plan” button sends one request to check the time and current state, then decide what to do next. It can run during sleep without directly changing the awake state. `planNext` and `sleepUntil` schedule only the next check-in or wake time. Use `manageSchedule` with `cron` for recurring commitments; the program advances them automatically.
 
 ## 🧠 Context and Topics
 
-The main chat and synchronous topic compaction share the current model. Chat, life, and worker step limits are configured separately and read when the next think begins; the compactor has its own step budget. Model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions; only transcript working-set rows covered by the new summaries are deleted. Originals and chat media are kept for the configured minimum retention (180 days by default); originals still in the working set are deferred, while summaries, memories, and diaries follow their own retention rules.
+QQ chat and synchronous topic compaction share the QQ profile. Life and worker each use their selected profile for execution and context summaries. Chat, life, and worker step limits are configured separately and read when the next think begins; the compactor has its own step budget. Model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions; only transcript working-set rows covered by the new summaries are deleted. Originals and chat media are kept for the configured minimum retention (180 days by default); originals still in the working set are deferred, while summaries, memories, and diaries follow their own retention rules.
 
 Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around a OneBot message ID. Topics also fade on the shared exponential curve and become unreadable to the agent after `forgotten_at`; pinned memories are the only retention exemption.
 

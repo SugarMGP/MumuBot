@@ -125,35 +125,15 @@ export default function SystemStatusPage() {
   ];
 
   const modelFields = [
-    {
-      label: t("system.status.mainModel"),
-      value:
-        data.model.active?.model_name || t("system.status.notConfigured"),
-    },
-    ...(data.model.active
-      ? [
-          {
-            label: t("models.fields.baseUrl"),
-            value: data.model.active.base_url,
-          },
-          ...(data.model.active.thinking_type
-            ? [
-                {
-                  label: t("models.fields.thinkingType"),
-                  value: enumLabel(t, "thinkingType", data.model.active.thinking_type),
-                },
-              ]
-            : []),
-          ...(data.model.active.reasoning_effort
-            ? [
-                {
-                  label: t("models.fields.reasoningEffort"),
-                  value: enumLabel(t, "reasoningEffort", data.model.active.reasoning_effort),
-                },
-              ]
-            : []),
-        ]
-      : []),
+    ...(["qq", "life", "worker"] as const).map((role) => {
+      const profile = data.model.profiles[role];
+      return {
+        label: t(`models.roles.${role}`),
+        value: profile
+          ? `${profile.name} · ${profile.model_name} · ${profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")} · ${t("system.status.tokens", { count: profile.context_window })}`
+          : t("system.status.notConfigured"),
+      };
+    }),
     {
       label: t("system.status.retrieval"),
       value: t("system.status.retrievalValue"),
@@ -178,16 +158,7 @@ export default function SystemStatusPage() {
               }),
         }))
       : []),
-    ...(data.model.context_window > 0
-      ? [
-          {
-            label: t("system.status.contextWindow"),
-            value: t("system.status.tokens", {
-              count: data.model.context_window,
-            }),
-          },
-        ]
-      : []),
+
   ];
 
   const runtimeFields = [

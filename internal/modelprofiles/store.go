@@ -20,13 +20,11 @@ type Profile struct {
 	BaseURL          string    `gorm:"column:base_url" json:"base_url"`
 	ModelName        string    `gorm:"column:model_name" json:"model_name"`
 	ContextWindow    int       `gorm:"column:context_window" json:"context_window"`
-	ThinkingType     string    `gorm:"column:thinking_type" json:"thinking_type"`
 	ReasoningEffort  string    `gorm:"column:reasoning_effort" json:"reasoning_effort"`
 	APIKeyCiphertext []byte    `gorm:"column:api_key_ciphertext" json:"-"`
 	APIKeyNonce      []byte    `gorm:"column:api_key_nonce" json:"-"`
 	APIKeyKeyVersion int       `gorm:"column:api_key_key_version" json:"-"`
 	APIKeyHint       string    `gorm:"column:api_key_hint" json:"api_key_hint"`
-	Active           bool      `gorm:"column:active" json:"active"`
 	Version          int64     `gorm:"column:version" json:"version"`
 	CreatedAt        time.Time `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt        time.Time `gorm:"column:updated_at" json:"updated_at"`
@@ -39,8 +37,7 @@ var (
 	ErrActiveModel     = errors.New("当前模型不能删除")
 	ErrInvalidModel    = errors.New("模型配置无效")
 	ErrVersionConflict = errors.New("模型已被其他页面修改，请刷新后重试")
-	thinkingTypes      = map[string]bool{"": true, "enabled": true, "disabled": true}
-	reasoningEfforts   = map[string]bool{"": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+	reasoningEfforts   = map[string]bool{"": true, "none": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 )
 
 // Store 管理模型档案
@@ -56,7 +53,7 @@ func (s *Store) List(ctx context.Context) ([]Profile, error) {
 		return nil, fmt.Errorf("模型存储未初始化")
 	}
 	var rows []Profile
-	if err := s.db.WithContext(ctx).Order("active DESC, id ASC").Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Order("id ASC").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("读取模型列表失败: %w", err)
 	}
 	return rows, nil
@@ -75,20 +72,7 @@ func (s *Store) Get(ctx context.Context, id uint) (Profile, error) {
 	return row, nil
 }
 
-// Active 返回当前模型
-func (s *Store) Active(ctx context.Context) (Profile, error) {
-	var row Profile
-	err := s.db.WithContext(ctx).Where("active").First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return row, ErrNotFound
-	}
-	if err != nil {
-		return row, fmt.Errorf("读取当前模型失败: %w", err)
-	}
-	return row, nil
-}
-
-// Create 新建模型档案，默认不激活
+// Create 新建尚未分配给场合的模型档案
 func (s *Store) Create(ctx context.Context, row Profile, apiKey string) (Profile, error) {
 	if err := validate(row, apiKey, true); err != nil {
 		return row, err
@@ -102,7 +86,6 @@ func (s *Store) Create(ctx context.Context, row Profile, apiKey string) (Profile
 	row.APIKeyNonce = nonce
 	row.APIKeyKeyVersion = version
 	row.APIKeyHint = keyHint(apiKey)
-	row.Active = false
 	row.Version = 1
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return row, fmt.Errorf("创建模型失败: %w", err)
@@ -123,7 +106,6 @@ func (s *Store) Update(ctx context.Context, row Profile, apiKey string) (Profile
 		"base_url":         strings.TrimSpace(row.BaseURL),
 		"model_name":       strings.TrimSpace(row.ModelName),
 		"context_window":   row.ContextWindow,
-		"thinking_type":    row.ThinkingType,
 		"reasoning_effort": row.ReasoningEffort,
 		"version":          gorm.Expr("version + 1"),
 		"updated_at":       gorm.Expr("now()"),
@@ -150,43 +132,20 @@ func (s *Store) Update(ctx context.Context, row Profile, apiKey string) (Profile
 	return s.Get(ctx, row.ID)
 }
 
-// SetActive 将模型设为当前模型
-func (s *Store) SetActive(ctx context.Context, id uint) error {
-	if id == 0 {
-		return ErrInvalidModel
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if _, err := s.Get(ctx, id); err != nil {
-			return err
-		}
-		if err := tx.Model(&Profile{}).Where("active").Updates(map[string]any{
-			"active": false, "version": gorm.Expr("version + 1"), "updated_at": gorm.Expr("now()"),
-		}).Error; err != nil {
-			return fmt.Errorf("取消旧当前模型失败: %w", err)
-		}
-		result := tx.Model(&Profile{}).Where("id = ?", id).Updates(map[string]any{
-			"active": true, "version": gorm.Expr("version + 1"), "updated_at": gorm.Expr("now()"),
-		})
-		if result.Error != nil {
-			return fmt.Errorf("切换当前模型失败: %w", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return ErrNotFound
-		}
-		return nil
-	})
-}
-
-// Delete 删除非当前模型
+// Delete 删除未被任何场合使用的模型
 func (s *Store) Delete(ctx context.Context, id uint, expectedVersion int64) error {
 	row, err := s.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	if row.Active {
+	selection, err := s.Selection(ctx)
+	if err != nil {
+		return err
+	}
+	if selection.Uses(row.ID) {
 		return ErrActiveModel
 	}
-	result := s.db.WithContext(ctx).Where("id = ? AND version = ? AND NOT active", id, expectedVersion).Delete(&Profile{})
+	result := s.db.WithContext(ctx).Where("id = ? AND version = ?", id, expectedVersion).Delete(&Profile{})
 	if result.Error != nil {
 		return fmt.Errorf("删除模型失败: %w", result.Error)
 	}
@@ -214,9 +173,6 @@ func validate(row Profile, apiKey string, requireKey bool) error {
 	if row.ContextWindow <= 0 {
 		return fmt.Errorf("%w: 上下文窗口必须大于 0", ErrInvalidModel)
 	}
-	if !thinkingTypes[row.ThinkingType] {
-		return fmt.Errorf("%w: thinking.type 无效", ErrInvalidModel)
-	}
 	if !reasoningEfforts[row.ReasoningEffort] {
 		return fmt.Errorf("%w: reasoning.effort 无效", ErrInvalidModel)
 	}
@@ -232,11 +188,4 @@ func keyHint(apiKey string) string {
 		return "••••"
 	}
 	return "••••" + apiKey[len(apiKey)-4:]
-}
-
-// ClearActive 取消当前模型，用于切换失败回滚
-func (s *Store) ClearActive(ctx context.Context, id uint) error {
-	return s.db.WithContext(ctx).Model(&Profile{}).Where("id = ? AND active", id).Updates(map[string]any{
-		"active": false, "version": gorm.Expr("version + 1"), "updated_at": gorm.Expr("now()"),
-	}).Error
 }

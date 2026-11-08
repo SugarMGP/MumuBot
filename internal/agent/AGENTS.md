@@ -24,7 +24,7 @@
 
 ## 编排边界
 
-- 主聊天和压缩共用当前模型；不要恢复 low、后台 Learner、Embedding 或独立压缩模型。
+- QQ 聊天和压缩共用 QQ 档案，life 与 worker 各自的运行和摘要使用独立所选档案；不要恢复 low、后台 Learner、Embedding 或独立压缩模型。
 - 主聊天是单次 ReAct，不拆 Planner/Replyer；是否发言最终由模型和工具决定，门控只做前置过滤。
 - 每群/每好友只允许一个 think 运行；life 单并发且不占 worker 名额；运行期间新消息进入会话，不创建 rerun，后续正常调度继续消费。
 - 思考从会话起始到达序号开始；`BeforeModelRewriteState` 在新消息到达时注入，同一批消息不合并。聊天首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。
@@ -49,7 +49,7 @@
 - worker 程序故障回报 life；failed/cancelled 不因周期扫描自动重跑，等 life 明确投来新指令。所有 worker 共用唯一账号和 `/home/worker`，只是并行子 Agent；运行态并发跟启用数量热更新，0 通过 active 停用，不能把并发组件的 0 当成禁用。
 - 工具中间件只保留 `ToolTranscriptMiddleware`、`ToolErrorMiddleware`、Unknown handler、参数规范和顺序执行；不要恢复全局 ToolAction/ToolDedup 或消费水位。
 - 压缩只在一轮 think 完整结束后、最后一条 assistant 的实际用量达到窗口 90% 时触发，不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
-- 模型、人格、MCP 和运行态使用 generation 快照；模型/人格/MCP 等需要热切换的内容替换 generation，并发数与三种单轮步数在下一个 think 生效且不重启进程。每次 think 只取一次配置快照，构造 runner 和连续子步骤都复用它。切换或缩小模型窗口前用只读容量预览检查全部持久工作集，放不下就拒绝并保留旧 generation。
+- 模型、人格、MCP 和运行态使用 generation 快照；模型/人格/MCP 等需要热切换的内容替换 generation，并发数与三种单轮步数在下一个 think 生效且不重启进程。每次 think 只取一次配置快照，构造 runner 和连续子步骤都复用它。切换或缩小模型窗口前用只读容量预览检查受影响场合的持久工作集，放不下就拒绝并保留旧 generation。
 - 压缩候选只包含完整、已可见、协议闭合的旧交互段，保护当前批次、活动工具链、未闭合 CallID 和最近尾部。
 - 压缩器只能读当前会话并使用 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和 `finishCompaction`；不提供 `readHistory`，不能写记忆、情感、便签或外部系统。
 - 压缩失败、覆盖遗漏、预算超限、数据库失败和结果不明都不能删除 transcript；参数不可用按可修正输入错误处理，失败后退避 60 秒；需要压缩却失败时先阻止主模型，冷却后重试压缩，成功才继续。

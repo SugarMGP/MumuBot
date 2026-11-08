@@ -8,12 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 17
+const latestSchemaVersion = 18
 
 // LatestSchemaVersion 返回当前程序支持的数据结构版本。
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
-// RunMigrations 初始化空库，已初始化的当前库只做校验后复用；旧 schema 不自动迁移或删除。
+// RunMigrations 初始化空库或将当前 v17 原子升级到 v18，不删除业务数据
 func RunMigrations(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("PostgreSQL 未初始化")
@@ -29,20 +29,33 @@ func RunMigrations(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		if len(tables) > 0 {
-			// 已是当前 schema 时允许直接重启复用；任何前置版本或结构缺失都要求清库
-			if validateErr := validateV17Schema(tx); validateErr != nil {
-				return fmt.Errorf("当前数据库不兼容本版本 v17 schema，请备份后删除旧数据库并重新初始化: %w", validateErr)
+		if len(tables) == 0 {
+			if err := initializeV17Schema(tx); err != nil {
+				return err
 			}
-			return nil
+			if err := recordSchemaVersion(tx, 17, v17BaseName); err != nil {
+				return err
+			}
 		}
-		if err := initializeV17Schema(tx); err != nil {
+		var version int
+		if err := tx.Model(&memory.SchemaMigration{}).Select("COALESCE(max(version),0)").Scan(&version).Error; err != nil {
 			return err
 		}
-		if err := recordSchemaVersion(tx, latestSchemaVersion, v17BaseName); err != nil {
+		if version != 17 && version != 18 {
+			return fmt.Errorf("不支持 schema v%d，请先备份并使用受支持的数据库", version)
+		}
+		if err := validateSchema(tx, version); err != nil {
 			return err
 		}
-		return validateV17Schema(tx)
+		if version == 17 {
+			if err := upgradeV18(tx); err != nil {
+				return err
+			}
+			if err := recordSchemaVersion(tx, 18, "independent_session_models"); err != nil {
+				return err
+			}
+		}
+		return validateSchema(tx, 18)
 	})
 }
 
@@ -69,7 +82,7 @@ func recordSchemaVersion(db *gorm.DB, version int, name string) error {
 	return db.Exec(`INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,now())`, version, name).Error
 }
 
-func validateV17Schema(db *gorm.DB) error {
+func validateSchema(db *gorm.DB, expectedVersion int) error {
 	for _, column := range []struct{ table, name string }{
 		{"persona_presets", "simulation_prompt"},
 		{"worker_sessions", "user_name"},
@@ -103,7 +116,6 @@ func validateV17Schema(db *gorm.DB) error {
 		{"knowledge_items", "pinned"},
 		{"topic_summary_sources", "is_anchor"},
 		{"app_config", "config_key"},
-		{"model_profiles", "thinking_type"},
 		{"model_profiles", "reasoning_effort"},
 		{"mcp_servers", "config_ciphertext"},
 		{"worker_sessions", "context_start_id"},
@@ -175,12 +187,18 @@ func validateV17Schema(db *gorm.DB) error {
 			return fmt.Errorf("v17 结构不兼容：%s.%s 已废弃", column.table, column.name)
 		}
 	}
+	if expectedVersion == 17 && !db.Migrator().HasColumn("model_profiles", "thinking_type") {
+		return fmt.Errorf("v17 缺少 model_profiles.thinking_type")
+	}
+	if expectedVersion == 18 && (db.Migrator().HasColumn("model_profiles", "thinking_type") || db.Migrator().HasColumn("model_profiles", "active")) {
+		return fmt.Errorf("v18 仍含已移除的模型配置字段")
+	}
 	var version int
 	if err := db.Model(&memory.SchemaMigration{}).Select("COALESCE(max(version),0)").Scan(&version).Error; err != nil {
 		return err
 	}
-	if version != latestSchemaVersion {
-		return fmt.Errorf("v17 schema 版本记录为 %d，期望 %d", version, latestSchemaVersion)
+	if version != expectedVersion {
+		return fmt.Errorf("schema 版本记录为 %d，期望 %d", version, expectedVersion)
 	}
 	return nil
 }

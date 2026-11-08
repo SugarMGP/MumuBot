@@ -16,6 +16,7 @@ import type {
   ModelProfile,
   ModelStatsData,
   ModelsData,
+  ModelSelection,
   PersonaDetail,
   PersonaTemplate,
   PersonaTexts,
@@ -168,7 +169,6 @@ export interface ModelInput {
   base_url: string;
   model_name: string;
   context_window: number;
-  thinking_type: string;
   reasoning_effort: string;
   api_key?: string;
 }
@@ -181,8 +181,7 @@ export const modelApi = {
     apiMutate<ModelProfile>("PATCH", `/api/v1/models/${id}`, body),
   remove: (id: number, version: number) =>
     apiMutate<void>("DELETE", `/api/v1/models/${id}?version=${version}`),
-  activate: (id: number) =>
-    apiMutate<void>("POST", `/api/v1/models/${id}/activate`),
+  select: (selection: ModelSelection) => apiMutate<ModelsData>("PUT", "/api/v1/models/selection", selection),
   test: (id: number) => apiMutate<void>("POST", `/api/v1/models/${id}/test`),
 };
 

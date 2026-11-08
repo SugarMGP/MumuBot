@@ -176,7 +176,7 @@ func main() {
 		mumuAgent = newAgent
 		agentMu.Unlock()
 		app.SetAgent(newAgent)
-		if _, activeErr := modelStore.Active(context.Background()); activeErr == nil {
+		if _, activeErr := modelStore.ForRole(context.Background(), "qq"); activeErr == nil {
 			if err := newAgent.Activate(); err != nil {
 				zap.L().Warn("首次模型激活失败，等待后台修正", zap.Error(err))
 			}

@@ -138,7 +138,7 @@ func (a *App) routes() http.Handler {
 			protected.Post("/models", a.handleModelCreate)
 			protected.Patch("/models/{id}", a.handleModelUpdate)
 			protected.Delete("/models/{id}", a.handleModelDelete)
-			protected.Post("/models/{id}/activate", a.handleModelActivate)
+			protected.Put("/models/selection", a.handleModelSelection)
 			protected.Post("/models/{id}/test", a.handleModelTest)
 			protected.Get("/mcp-servers", a.handleMCPServers)
 			protected.Get("/mcp-servers/{id}", a.handleMCPServerDetail)
