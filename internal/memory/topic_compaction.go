@@ -160,6 +160,11 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
+			if len(topicInput.Messages) == 0 && hasLatest {
+				if err := copyTopicSources(tx, latest.ID, row.ID); err != nil {
+					return err
+				}
+			}
 			latestByTopic[topicInput.TopicID] = row
 			for _, ref := range topicInput.Messages {
 				message, ok := messageByOneBot[ref.MessageID]
@@ -351,6 +356,9 @@ func parseTopicIDRef(ref string) uint {
 func validateTopicMessages(input CompactionCommit, messageByOneBot map[int64]MessageLog) error {
 	seen := map[int64]bool{}
 	for _, topic := range input.Topics {
+		if topic.TopicID == 0 && parseTopicIDRef(topic.Ref) == 0 && len(topic.Messages) == 0 {
+			return compactionInputErrorf("新建话题 %s 至少需要关联一条真实消息", topic.Ref)
+		}
 		for _, ref := range topic.Messages {
 			if ref.MessageID == 0 {
 				return compactionInputErrorf("话题 message_id 不能为空")

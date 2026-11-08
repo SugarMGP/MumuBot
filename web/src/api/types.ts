@@ -585,3 +585,8 @@ export interface LifeScheduleUpdate {
   after_minutes?: number;
   cron?: string;
 }
+export interface LogField {
+  name: string;
+  value: string;
+  formatted_value?: string;
+}

@@ -73,6 +73,12 @@ export interface ConversationUpdate {
 
 export const conversationApi = {
   list: () => apiGet<ConversationsData>("/api/v1/conversations"),
+  setBlocked: (kind: string, targetIDs: number[], blocked: boolean) =>
+    apiMutate<ConversationsData>("PATCH", "/api/v1/conversations/blocked", {
+      kind,
+      target_ids: targetIDs,
+      blocked,
+    }),
   update: (kind: string, targetId: number, body: ConversationUpdate) =>
     apiMutate<ConversationsData>(
       "PATCH",

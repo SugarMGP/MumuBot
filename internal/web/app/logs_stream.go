@@ -71,7 +71,7 @@ func logSnapshot(result logger.QueryResult) logSnapshotDTO {
 	for _, line := range result.Lines {
 		fields := make([]logFieldDTO, 0, len(line.Fields))
 		for _, field := range line.Fields {
-			fields = append(fields, logFieldDTO{Name: field.Name, Value: field.Value})
+			fields = append(fields, logFieldDTO{Name: field.Name, Value: field.Value, FormattedValue: field.FormattedValue})
 		}
 		lines = append(lines, logLineDTO{
 			Seq:     line.Seq,

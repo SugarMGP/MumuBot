@@ -715,7 +715,7 @@
   }
 
   .admin-log-formatted .admin-log-fields {
-    grid-column: 3;
+    grid-column: 1 / -1;
     display: grid;
     gap: 0.2rem;
     padding-top: 0.2rem;
@@ -725,6 +725,7 @@
 
   .admin-log-formatted .admin-log-field {
     display: grid;
+    align-items: start;
     grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
     gap: 0.6rem;
     color: var(--console-field);

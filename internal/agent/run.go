@@ -128,7 +128,6 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	if budget := runStateFrom(ctx); budget != nil && budget.steps != nil && !budget.steps.Consume() {
 		return ctx, state, adk.ErrExceedMaxIterations
 	}
-	tc.ModelRequested = true
 	messages := make([]*schema.AgenticMessage, 0, len(pending))
 	observed := tc.ThinkStartArrivalSeq
 	for _, item := range pending {
@@ -138,8 +137,16 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	}
 	state.Messages = append(state.Messages, messages...)
 	if session, ok := tc.Session.(*Session); ok {
+		update, err := session.syncPinnedMemories(ctx, h.agent.memory, state.Messages)
+		if err != nil {
+			return ctx, state, err
+		}
+		if update != nil {
+			state.Messages = append(state.Messages, update)
+		}
 		session.RecordRequestBoundary(state.Messages)
 	}
+	tc.ModelRequested = true
 	tc.ObservedThroughSeq = max(tc.ObservedThroughSeq, observed)
 	if observed > tc.InjectedArrivalSeq {
 		tc.InjectedArrivalSeq = observed

@@ -38,7 +38,7 @@ func ContentEnabled(ctx context.Context) bool {
 }
 
 // Payload 记录完整文本和媒体元信息，不改变真正传给模型的消息
-func Payload(value any) string {
+func Payload(value any) any {
 	var decoded any
 	if text, ok := value.(string); ok {
 		if !sonic.ValidString(text) {
@@ -57,18 +57,14 @@ func Payload(value any) string {
 		}
 	}
 	stripBinary(decoded, "")
-	raw, err := sonic.MarshalString(decoded)
-	if err != nil {
-		return fmt.Sprintf("[日志内容编码失败: %v]", err)
-	}
-	return raw
+	return decoded
 }
 
 func stripBinary(value any, field string) {
 	switch value := value.(type) {
 	case map[string]any:
 		for key, item := range value {
-			if text, ok := item.(string); ok && (key == "base64data" || key == "base64_data" || (key == "signature" && field == "assistant_gen_reasoning") || key == "encrypted_content" || ((key == "url" || key == "image_url") && strings.HasPrefix(text, "data:"))) {
+			if text, ok := item.(string); ok && (key == "base64data" || key == "base64_data" || (key == "signature" && field == "reasoning") || key == "encrypted_content" || ((key == "url" || key == "image_url") && strings.HasPrefix(text, "data:"))) {
 				value[key] = fmt.Sprintf("[二进制/加密内容，%d 字符]", len(text))
 				continue
 			}

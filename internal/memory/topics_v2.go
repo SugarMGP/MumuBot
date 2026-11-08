@@ -78,8 +78,8 @@ type TopicDetail struct {
 }
 
 type TopicMessageRef struct {
-	MessageID int64 `json:"message_id"`
-	IsAnchor  bool  `json:"is_anchor"`
+	MessageID int64 `json:"message_id" jsonschema:"description=当前会话真实 OneBot 消息 ID，可为负数；不能用 transcript 条目号替代"`
+	IsAnchor  bool  `json:"is_anchor" jsonschema:"description=是否为关键原文依据：能直接支撑话题结论、决定、约定、纠正或重要转折才填 true；普通背景、寒暄和重复内容填 false。用于在 searchTopics/readTopic 返回关键消息 ID，供按原文核对，也在后台标记关键消息；不代表置顶，不改变遗忘或原文保留期。不凑数量，没有关键依据可以全为 false"`
 }
 
 type CompactionTopicInput struct {

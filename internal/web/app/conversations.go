@@ -74,7 +74,7 @@ func (a *App) handleConversationUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Blocked != nil {
-		if err := a.admin.SetConversationBlocked(r.Context(), kind, int64(targetID), *body.Blocked); err != nil {
+		if err := a.admin.SetConversationsBlocked(r.Context(), kind, []int64{int64(targetID)}, *body.Blocked); err != nil {
 			a.failFromError(w, r, err)
 			return
 		}
@@ -84,6 +84,40 @@ func (a *App) handleConversationUpdate(w http.ResponseWriter, r *http.Request) {
 			a.failFromError(w, r, err)
 			return
 		}
+	}
+	data, err := a.loadConversations(r)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusOK, data, nil)
+}
+
+func (a *App) handleConversationsBlocked(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Kind      string  `json:"kind"`
+		TargetIDs []int64 `json:"target_ids"`
+		Blocked   *bool   `json:"blocked"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.Blocked == nil || len(body.TargetIDs) == 0 || (body.Kind != memory.ConversationKindGroup && body.Kind != memory.ConversationKindPrivate) {
+		respondError(w, http.StatusBadRequest, "validation_failed", "", nil)
+		return
+	}
+	ids := make([]int64, 0, len(body.TargetIDs))
+	seen := make(map[int64]bool, len(body.TargetIDs))
+	for _, id := range body.TargetIDs {
+		if id <= 0 {
+			respondError(w, http.StatusBadRequest, "validation_failed", "", nil)
+			return
+		}
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	if err := a.admin.SetConversationsBlocked(r.Context(), body.Kind, ids, *body.Blocked); err != nil {
+		a.failFromError(w, r, err)
+		return
 	}
 	data, err := a.loadConversations(r)
 	if err != nil {

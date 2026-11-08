@@ -48,7 +48,7 @@ func (b *logBuffer) Snapshot() ([]string, uint64) {
 }
 
 var recentLogs = newLogBuffer(300)
-var logJSONAPI = sonic.Config{UseNumber: true}.Froze()
+var logJSONAPI = sonic.Config{UseNumber: true, SortMapKeys: true}.Froze()
 
 // Init 初始化日志系统
 func Init(level string, debug bool) {
@@ -114,8 +114,9 @@ type Line struct {
 }
 
 type Field struct {
-	Name  string
-	Value string
+	Name           string
+	Value          string
+	FormattedValue string
 }
 
 func Query(keyword, minimumLevel string) QueryResult {
@@ -161,8 +162,12 @@ func formatLogLine(fields map[string]any) Line {
 	logFields := make([]Field, 0, len(keys))
 	fieldParts := make([]string, 0, len(keys))
 	for _, key := range keys {
-		value := fmt.Sprint(fields[key])
-		logFields = append(logFields, Field{Name: key, Value: value})
+		value := logFieldText(fields[key])
+		formatted := readableLogValue(fields[key])
+		if formatted == value {
+			formatted = ""
+		}
+		logFields = append(logFields, Field{Name: key, Value: value, FormattedValue: formatted})
 		fieldParts = append(fieldParts, key+"="+value)
 	}
 	fieldText := strings.Join(fieldParts, " ")

@@ -22,7 +22,7 @@ func modelLogHandler(task, modelName string) callbacks.Handler {
 			if input != nil {
 				log = log.With(zap.Int("message_count", len(input.Messages)), zap.Int("tool_count", len(input.Tools)))
 				if logger.ContentEnabled(ctx) {
-					log = log.With(zap.String("input", logger.Payload(input.Messages)), zap.String("tools", logger.Payload(input.Tools)))
+					log = log.With(zap.Any("input", logger.Payload(input.Messages)), zap.Any("tools", logger.Payload(input.Tools)))
 				}
 			}
 			log.Info("模型请求开始")
@@ -33,7 +33,7 @@ func modelLogHandler(task, modelName string) callbacks.Handler {
 			if output != nil {
 				log = log.With(zap.Any("usage", output.TokenUsage))
 				if logger.ContentEnabled(ctx) {
-					log = log.With(zap.String("output", logger.Payload(output.Message)))
+					log = log.With(zap.Any("output", logger.Payload(output.Message)))
 				}
 			}
 			log.Info("模型请求完成")

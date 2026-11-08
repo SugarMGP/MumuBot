@@ -37,6 +37,12 @@ func (m *Manager) UpdateTopic(ctx context.Context, kind string, targetID int64, 
 	if input.TopicID == 0 && input.Summary == nil {
 		return nil, fmt.Errorf("新建话题必须提供摘要")
 	}
+	if input.TopicID == 0 && len(input.Messages) == 0 {
+		return nil, fmt.Errorf("新建话题至少需要关联一条本会话的真实消息")
+	}
+	if len(input.Messages) > 0 && input.Summary == nil {
+		return nil, fmt.Errorf("更新消息归属时必须同时提供话题摘要")
+	}
 	if input.TopicID != 0 && input.Summary == nil && status == "" {
 		return nil, fmt.Errorf("至少需要摘要、消息归属或状态变更")
 	}
@@ -97,12 +103,14 @@ func (m *Manager) UpdateTopic(ctx context.Context, kind string, targetID int64, 
 			if err := tx.Create(&summaryRow).Error; err != nil {
 				return err
 			}
+			if len(input.Messages) == 0 && latest.ID != 0 {
+				if err := copyTopicSources(tx, latest.ID, summaryRow.ID); err != nil {
+					return err
+				}
+			}
 			result.SummaryVersion = nextVersion
 		}
 		if len(input.Messages) > 0 {
-			if summaryRow.ID == 0 {
-				return fmt.Errorf("更新消息归属时必须同时提供话题摘要")
-			}
 			ids := make([]int64, 0, len(input.Messages))
 			for _, ref := range input.Messages {
 				if ref.MessageID == 0 {
@@ -161,9 +169,6 @@ func (m *Manager) UpdateTopic(ctx context.Context, kind string, targetID int64, 
 			}
 			result.AssignedCount = len(assignments)
 		}
-		if input.Summary == nil && status == "" {
-			return nil
-		}
 		return tx.Model(&TopicThreadRow{}).Where("id=?", topic.ID).Update("updated_at", time.Now()).Error
 	})
 	if err != nil {
@@ -173,4 +178,9 @@ func (m *Manager) UpdateTopic(ctx context.Context, kind string, targetID int64, 
 		result.Status = status
 	}
 	return result, nil
+}
+
+func copyTopicSources(tx *gorm.DB, fromID, toID uint) error {
+	return tx.Exec(`INSERT INTO topic_summary_sources(summary_id,message_log_id,one_bot_message_id,message_time,is_anchor)
+		SELECT ?,message_log_id,one_bot_message_id,message_time,is_anchor FROM topic_summary_sources WHERE summary_id=?`, toID, fromID).Error
 }

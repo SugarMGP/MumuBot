@@ -384,6 +384,13 @@ const enUS: typeof zhCN = {
     knowledge: "Memories",
   },
   contacts: {
+    batchBlock: "Block selected",
+    batchRestore: "Unblock selected",
+    selectAll: "Select all {{kind}}",
+    selectConversation: "Select conversation: {{name}}",
+    selected: "{{count}} / {{total}} selected",
+    blockedCount: "{{count}} conversations set to blocked",
+    restoredCount: "{{count}} conversations unblocked",
     saveFailed: "Save failed. Your draft is kept; try again.",
     title: "Conversations",
     subtitle: "Review groups and friends, and control whether she responds.",
@@ -763,6 +770,7 @@ const enUS: typeof zhCN = {
       schema: "v{{current}} / v{{latest}}",
     },
     logs: {
+      connecting: "Loading recent logs…",
       title: "Recent activity",
       hint: "Refreshes every second with the latest in-process logs.",
       live: "Live",

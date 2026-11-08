@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { LogField } from "@/api/types";
 
 export interface LogStreamState {
   lines: Array<{
@@ -6,7 +7,7 @@ export interface LogStreamState {
     time: string;
     level: string;
     message: string;
-    fields: Array<{ name: string; value: string }>;
+    fields: LogField[];
     text: string;
   }>;
   total: number;
@@ -66,9 +67,6 @@ export function useLogStream(keyword: string, level: string) {
         if (!response.ok || !response.body) {
           throw new Error("stream failed");
         }
-        retryRef.current = 1000;
-        setState((previous) => ({ ...previous, status: "live" }));
-
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -106,6 +104,7 @@ export function useLogStream(keyword: string, level: string) {
           total: number;
           filtered: number;
         };
+        retryRef.current = 1000;
         setState({ ...payload, status: "live" });
       } catch {
         // 忽略单帧解析失败，等待下一帧

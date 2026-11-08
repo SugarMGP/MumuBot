@@ -10,8 +10,8 @@ func (s *AdminService) ListConversationTargets(ctx context.Context, kind string)
 	return s.memory.ListConversationTargets(ctx, kind, false)
 }
 
-func (s *AdminService) SetConversationBlocked(ctx context.Context, kind string, targetID int64, blocked bool) error {
-	return s.memory.SetConversationBlocked(ctx, kind, targetID, blocked)
+func (s *AdminService) SetConversationsBlocked(ctx context.Context, kind string, targetIDs []int64, blocked bool) error {
+	return s.memory.SetConversationsBlocked(ctx, kind, targetIDs, blocked)
 }
 
 func (s *AdminService) SetConversationExtraPrompt(ctx context.Context, targetID int64, prompt string) error {

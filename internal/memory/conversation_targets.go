@@ -140,11 +140,19 @@ func (m *Manager) GetGroupExtraPrompt(ctx context.Context, groupID int64) (strin
 	return row.ExtraPrompt, nil
 }
 
-func (m *Manager) SetConversationBlocked(ctx context.Context, kind string, targetID int64, blocked bool) error {
-	result := m.db.WithContext(ctx).Model(&ConversationTarget{}).
-		Where("conversation_kind=? AND target_id=?", kind, targetID).
-		Updates(map[string]any{"blocked": blocked, "updated_at": time.Now()}).Error
-	return result
+func (m *Manager) SetConversationsBlocked(ctx context.Context, kind string, targetIDs []int64, blocked bool) error {
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&ConversationTarget{}).
+			Where("conversation_kind=? AND target_id IN ?", kind, targetIDs).
+			Updates(map[string]any{"blocked": blocked, "updated_at": time.Now()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(targetIDs)) {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (m *Manager) SetConversationExtraPrompt(ctx context.Context, targetID int64, prompt string) error {

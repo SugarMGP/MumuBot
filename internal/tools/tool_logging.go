@@ -46,7 +46,7 @@ func startToolLog(ctx context.Context, input *compose.ToolInput) func(any, bool,
 	log := logger.FromContext(ctx).With(zap.String("tool", input.Name), zap.String("call_id", input.CallID))
 	content := logger.ContentEnabled(ctx)
 	if content {
-		log.Info("工具调用开始", zap.String("arguments", logger.Payload(input.Arguments)))
+		log.Info("工具调用开始", zap.Any("arguments", logger.Payload(input.Arguments)))
 	} else {
 		log.Info("工具调用开始")
 	}
@@ -54,7 +54,7 @@ func startToolLog(ctx context.Context, input *compose.ToolInput) func(any, bool,
 	return func(result any, success bool, err error) {
 		fields := []zap.Field{zap.Duration("duration", time.Since(started)), zap.Bool("success", success)}
 		if content {
-			fields = append(fields, zap.String("result", logger.Payload(result)))
+			fields = append(fields, zap.Any("result", logger.Payload(result)))
 		}
 		if err != nil {
 			fields = append(fields, zap.Error(err))

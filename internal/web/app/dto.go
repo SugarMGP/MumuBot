@@ -316,8 +316,9 @@ type modelStatsResponse struct {
 }
 
 type logFieldDTO struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name           string `json:"name"`
+	Value          string `json:"value"`
+	FormattedValue string `json:"formatted_value,omitempty"`
 }
 
 type logLineDTO struct {

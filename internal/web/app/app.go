@@ -117,6 +117,7 @@ func (a *App) routes() http.Handler {
 			protected.Get("/diaries", a.handleDiaryMonth)
 			protected.Get("/diaries/{date}", a.handleDiaryDay)
 			protected.Get("/conversations", a.handleConversations)
+			protected.Patch("/conversations/blocked", a.handleConversationsBlocked)
 			protected.Patch("/conversations/{kind}/{targetID}", a.handleConversationUpdate)
 			protected.Get("/identity", a.handleIdentity)
 			protected.Get("/identity/friends", a.handleIdentityFriends)

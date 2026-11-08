@@ -6,6 +6,7 @@ import {
   ArrowUpNarrowWide,
   BookOpenText,
   ChartColumn,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,7 @@ import {
   LogOut,
   MessageSquareText,
   MessagesSquare,
+  Minus,
   Network,
   NotebookPen,
   Pencil,
@@ -82,6 +84,8 @@ const icons: Record<string, LucideIcon> = {
   "arrow-right": ArrowRight,
   pencil: Pencil,
   lock: Lock,
+  check: Check,
+  minus: Minus,
 };
 
 export function AdminIcon({

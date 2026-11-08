@@ -3,6 +3,7 @@ import type {
   Conversation,
   LifeData,
   LifeSchedule,
+  LogField,
   MemoryItem,
   ModelProfile,
   MCPServerDetail,
@@ -429,7 +430,8 @@ const sampleLogs = () => {
       fields: [
         { name: "session", value: `group:${90001 + (index % 2)}` },
         { name: "step", value: String(index % 6) },
-      ],
+        ...(index % 10 === 0 ? [{ name: "input", value: '[{"role":"user","text":"你好\\n第二行"}]', formatted_value: '- role: user\n  text: |-\n    你好\n    第二行' }] : []),
+      ] as LogField[],
       text: "",
     });
   }
@@ -737,6 +739,16 @@ export const handlers = [
       groups: conversations.filter((item) => item.kind === "group"),
       friends: conversations.filter((item) => item.kind === "private"),
     });
+  }),
+
+  http.patch("/api/v1/conversations/blocked", async ({ request }) => {
+    const body = (await request.json()) as { kind: string; target_ids: number[]; blocked: boolean };
+    const targets = body.target_ids.map((id) => conversations.find((item) => item.kind === body.kind && item.target_id === id));
+    if (targets.some((item) => !item)) return fail(404, "not_found", "会话不存在");
+    for (const item of targets) {
+      if (item) { item.blocked = body.blocked; item.updated_at = new Date().toISOString(); }
+    }
+    return ok({ groups: conversations.filter((item) => item.kind === "group"), friends: conversations.filter((item) => item.kind === "private") });
   }),
 
   http.get("/api/v1/memories", async ({ request }) => {

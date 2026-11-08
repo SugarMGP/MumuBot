@@ -378,6 +378,13 @@ const zhCN = {
     knowledge: "记忆",
   },
   contacts: {
+    batchBlock: "批量拉黑",
+    batchRestore: "批量恢复",
+    selectAll: "全选{{kind}}",
+    selectConversation: "选择会话：{{name}}",
+    selected: "已选 {{count}} / {{total}}",
+    blockedCount: "已将 {{count}} 个会话设为拉黑",
+    restoredCount: "已解除 {{count}} 个会话的拉黑",
     saveFailed: "保存失败，草稿已保留，请重试。",
     title: "会话管理",
     subtitle: "查看群聊与好友会话，控制机器人是否响应。",
@@ -745,6 +752,7 @@ const zhCN = {
       schema: "v{{current}} / v{{latest}}",
     },
     logs: {
+      connecting: "正在读取最近日志…",
       title: "最近运行记录",
       hint: "每秒刷新，展示当前进程内最近日志。",
       live: "实时",

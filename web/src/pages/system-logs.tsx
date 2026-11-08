@@ -6,6 +6,7 @@ import { SystemTabs } from "@/components/admin/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Field,
   Input,
@@ -110,7 +111,9 @@ export default function SystemLogsPage() {
               <span className="size-2 rounded-full bg-current" />
               {stream.status === "live"
                 ? t("system.logs.live")
-                : t("system.logs.reconnecting")}
+                : stream.status === "connecting"
+                  ? t("system.logs.connecting")
+                  : t("system.logs.reconnecting")}
             </Badge>
           </div>
 
@@ -156,9 +159,13 @@ export default function SystemLogsPage() {
                 : null}
             </div>
             <div id="admin-log-count" className="admin-log-count">
-              {t("system.logs.filtered", { count: stream.filtered })}
-              <span />
-              {t("system.logs.buffer", { count: stream.total })}
+              {stream.status === "connecting" ? t("common.loading") : (
+                <>
+                  {t("system.logs.filtered", { count: stream.filtered })}
+                  <span />
+                  {t("system.logs.buffer", { count: stream.total })}
+                </>
+              )}
             </div>
           </div>
 
@@ -170,7 +177,12 @@ export default function SystemLogsPage() {
               role="log"
               aria-live="off"
             >
-              {stream.lines.length === 0 ? (
+              {stream.status === "connecting" ? (
+                <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
+                  <Spinner />
+                  {t("system.logs.connecting")}
+                </div>
+              ) : stream.lines.length === 0 ? (
                 <p className="px-4 py-6 text-sm text-muted-foreground">
                   {t("system.logs.empty")}
                 </p>
@@ -193,7 +205,7 @@ export default function SystemLogsPage() {
                             className="admin-log-field"
                           >
                             <b>{field.name}</b>
-                            <span>{field.value}</span>
+                            <span>{formatted ? (field.formatted_value ?? field.value) : field.value}</span>
                           </span>
                         ))}
                       </span>
