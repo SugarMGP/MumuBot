@@ -19,12 +19,13 @@ import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
 import { useQueryParams } from "@/hooks/use-query-params";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/format";
+const personaTextLimit = 8000;
 const personaDocs = [
-  { key: "persona_card", label: "personaCard", limit: 10000 },
-  { key: "common_rules", label: "commonRules", limit: 5000 },
-  { key: "qq_prompt", label: "qqPrompt", limit: 5000 },
-  { key: "life_prompt", label: "lifePrompt", limit: 12000 },
-  { key: "worker_prompt", label: "workerPrompt", limit: 8000 },
+  { key: "persona_card", label: "personaCard", limit: personaTextLimit },
+  { key: "common_rules", label: "commonRules", limit: personaTextLimit },
+  { key: "qq_prompt", label: "qqPrompt", limit: personaTextLimit },
+  { key: "life_prompt", label: "lifePrompt", limit: personaTextLimit },
+  { key: "worker_prompt", label: "workerPrompt", limit: personaTextLimit },
 ] as const;
 
 const emptyTexts: PersonaTexts = {

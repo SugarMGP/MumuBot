@@ -6,13 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	PersonaCardLimit   = 10000
-	PersonaRulesLimit  = 5000
-	PersonaQQLimit     = 5000
-	PersonaLifeLimit   = 12000
-	PersonaWorkerLimit = 8000
-)
+const PersonaTextLimit = 8000
 
 // PersonaTexts 是一份预设共同保存和切换的五段文本
 type PersonaTexts struct {
@@ -27,19 +21,18 @@ type PersonaTexts struct {
 func (p PersonaTexts) Validate() error {
 	for _, field := range []struct {
 		name, text string
-		limit      int
 	}{
-		{"persona_card", p.PersonaCard, PersonaCardLimit},
-		{"common_rules", p.CommonRules, PersonaRulesLimit},
-		{"qq_prompt", p.QQPrompt, PersonaQQLimit},
-		{"life_prompt", p.LifePrompt, PersonaLifeLimit},
-		{"worker_prompt", p.WorkerPrompt, PersonaWorkerLimit},
+		{"persona_card", p.PersonaCard},
+		{"common_rules", p.CommonRules},
+		{"qq_prompt", p.QQPrompt},
+		{"life_prompt", p.LifePrompt},
+		{"worker_prompt", p.WorkerPrompt},
 	} {
 		if strings.TrimSpace(field.text) == "" {
 			return fmt.Errorf("%s is required", field.name)
 		}
-		if utf8.RuneCountInString(field.text) > field.limit {
-			return fmt.Errorf("%s exceeds %d characters", field.name, field.limit)
+		if utf8.RuneCountInString(field.text) > PersonaTextLimit {
+			return fmt.Errorf("%s exceeds %d characters", field.name, PersonaTextLimit)
 		}
 	}
 	return nil
