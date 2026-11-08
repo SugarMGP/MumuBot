@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { ApiError } from "@/api/client";
 import { identityApi, personaApi } from "@/api/client-endpoints";
-import type { PersonaDetail, PersonaTemplate } from "@/api/types";
+import type { PersonaDetail, PersonaSessionMode, PersonaTexts } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
@@ -19,175 +19,23 @@ import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
 import { useQueryParams } from "@/hooks/use-query-params";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/format";
-import {
-  parsePersonaMode,
-  personaMarkerPattern,
-  personaMarkerToken,
-  type PersonaMode,
-} from "@/lib/persona-marker";
+const personaDocs = [
+  { key: "persona_card", label: "personaCard", limit: 10000 },
+  { key: "common_rules", label: "commonRules", limit: 5000 },
+  { key: "qq_prompt", label: "qqPrompt", limit: 5000 },
+  { key: "life_prompt", label: "lifePrompt", limit: 12000 },
+  { key: "worker_prompt", label: "workerPrompt", limit: 8000 },
+] as const;
 
-const CARD_LIMIT = 10000;
-const SIM_LIMIT = 5000;
-const LIFE_LIMIT = 12000;
+const emptyTexts: PersonaTexts = {
+  persona_card: "", common_rules: "", qq_prompt: "", life_prompt: "", worker_prompt: "",
+};
 
-interface PersonaBlock {
-  mode: PersonaMode;
-  startLine: number;
-  markerLine: number;
-  rest: string;
-  lines: string[];
-}
-
-function parseBlocks(text: string): PersonaBlock[] {
-  const lines = text.split("\n");
-  const blocks: PersonaBlock[] = [];
-  let current: PersonaBlock = {
-    mode: "common",
-    startLine: 0,
-    markerLine: -1,
-    rest: "",
-    lines: [],
+function promptTexts(source: PersonaTexts): PersonaTexts {
+  return {
+    persona_card: source.persona_card, common_rules: source.common_rules,
+    qq_prompt: source.qq_prompt, life_prompt: source.life_prompt, worker_prompt: source.worker_prompt,
   };
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    const marker = trimmed.match(personaMarkerPattern);
-    if (marker) {
-      if (
-        current.lines.length > 0 ||
-        current.rest !== "" ||
-        current.markerLine >= 0
-      ) {
-        blocks.push(current);
-      }
-      current = {
-        mode: parsePersonaMode(marker[1]),
-        startLine: index,
-        markerLine: index,
-        rest: marker[2].trim(),
-        lines: [],
-      };
-      return;
-    }
-    if (/^## /.test(trimmed)) {
-      if (
-        current.lines.length > 0 ||
-        current.rest !== "" ||
-        current.markerLine >= 0
-      ) {
-        blocks.push(current);
-      }
-      current = {
-        mode: "common",
-        startLine: index,
-        markerLine: -1,
-        rest: "",
-        lines: [line],
-      };
-      return;
-    }
-    if (current.lines.length === 0) current.startLine = index;
-    current.lines.push(line);
-  });
-  if (current.lines.length > 0 || current.markerLine >= 0) {
-    blocks.push(current);
-  }
-  return blocks;
-}
-
-function setBlockMode(
-  text: string,
-  block: PersonaBlock,
-  mode: PersonaMode,
-): string {
-  const lines = text.split("\n");
-  const marker = `[${personaMarkerToken[mode]}]`;
-  if (block.markerLine >= 0) {
-    lines[block.markerLine] = block.rest
-      ? `${marker} ${block.rest}`
-      : marker;
-  } else {
-    const afterHeading = /^## /.test(block.lines[0]?.trim() ?? "");
-    lines.splice(block.startLine + (afterHeading ? 1 : 0), 0, marker);
-  }
-  return lines.join("\n");
-}
-
-function BlockPreview({
-  text,
-  onModeChange,
-  readOnly,
-}: {
-  text: string;
-  onModeChange: (next: string) => void;
-  readOnly?: boolean;
-}) {
-  const { t } = useTranslation();
-  const blocks = useMemo(() => parseBlocks(text), [text]);
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h3 className="admin-card-title-compact text-foreground">
-          {t("personas.preview.title")}
-        </h3>
-        <p className="text-xs text-muted-foreground">
-          {t("personas.preview.hint")}
-        </p>
-      </div>
-      {blocks.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
-          {t("personas.preview.empty")}
-        </p>
-      ) : (
-        <div className="space-y-2">
-          {blocks.map((block, index) => (
-            <div
-              key={`${block.startLine}-${index}`}
-              className="rounded-lg border border-border bg-muted/40 p-3"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <Badge
-                  variant={
-                    block.mode === "group"
-                      ? "info"
-                      : block.mode === "private"
-                        ? "accent"
-                        : "ghost"
-                  }
-                >
-                  {t(`personas.preview.${block.mode}`)}
-                </Badge>
-                {block.rest.trim() || block.lines.some((line) => line.trim() && !/^## /.test(line.trim())) ? <div className="flex gap-1">
-                  {(["group", "private", "common"] as PersonaMode[]).map((mode) => (
-                    <Button
-                      key={mode}
-                      variant="ghost"
-                      size="xs"
-                      className={cn(
-                        "text-xs",
-                        block.mode === mode && "text-primary",
-                      )}
-                      onClick={() => onModeChange(setBlockMode(text, block, mode))}
-                      disabled={readOnly}
-                    >
-                      {t(`personas.preview.${mode}`)}
-                    </Button>
-                  ))}
-                </div> : null}
-              </div>
-              {block.rest ? (
-                <p className="mt-2 text-xs text-foreground/75">{block.rest}</p>
-              ) : null}
-              {block.lines.length > 0 ? (
-                <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-xs leading-5 text-foreground/75">
-                  {block.lines.join("\n")}
-                </pre>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export default function PersonasPage() {
@@ -200,28 +48,19 @@ export default function PersonasPage() {
   const creating = params.get("new") === "1";
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [personaCard, setPersonaCard] = useState("");
-  const [simulationPrompt, setSimulationPrompt] = useState("");
-  const [lifePrompt, setLifePrompt] = useState("");
+  const [texts, setTexts] = useState<PersonaTexts>(emptyTexts);
   const [identityName, setIdentityName] = useState("");
   const [masterID, setMasterID] = useState(0);
   const [identityVersion, setIdentityVersion] = useState(0);
   const [identityBaselineName, setIdentityBaselineName] = useState("");
   const [identityBaselineMaster, setIdentityBaselineMaster] = useState(0);
-  const [personaBaseline, setPersonaBaseline] = useState({
-    name: "",
-    description: "",
-    personaCard: "",
-    simulationPrompt: "",
-    lifePrompt: "",
-  });
+  const [personaBaseline, setPersonaBaseline] = useState({ name: "", description: "", texts: emptyTexts });
   const [draftVersion, setDraftVersion] = useState(0);
   const [leaveTarget, setLeaveTarget] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [identityEditing, setIdentityEditing] = useState(false);
-  const [activeDoc, setActiveDoc] = useState<"card" | "simulation" | "life">(
-    "card",
-  );
+  const [activeDoc, setActiveDoc] = useState<(typeof personaDocs)[number]["key"]>("persona_card");
+  const [previewMode, setPreviewMode] = useState<PersonaSessionMode>("group");
   const [previewing, setPreviewing] = useState(false);
   const [busyAction, setBusyAction] = useState("");
   const loadedKey = useRef("");
@@ -269,50 +108,31 @@ export default function PersonasPage() {
   }, [identity.data, identityEditing]);
 
   useLayoutEffect(() => {
-    if (creating) {
-      const source: PersonaTemplate | undefined = template.data;
-      if (!source || loadedKey.current === "new") return;
-      loadedKey.current = "new";
-      setName("");
-      setDescription("");
-      setPersonaCard(source.persona_card);
-      setSimulationPrompt(source.simulation_prompt);
-      setLifePrompt(source.life_prompt);
-      setPersonaBaseline({
-        name: "",
-        description: "",
-        personaCard: source.persona_card,
-        simulationPrompt: source.simulation_prompt,
-        lifePrompt: source.life_prompt,
-      });
-      setDraftVersion(0);
-      return;
-    }
-    if (!detail.data) return;
-    const key = `id:${detail.data.id}`;
-    if (loadedKey.current === key) return;
+    const source = creating ? template.data : detail.data;
+    const key = creating ? "new" : `id:${selectedID}`;
+    if (!source || loadedKey.current === key) return;
     loadedKey.current = key;
-    setName(detail.data.name);
-    setDescription(detail.data.description);
-    setPersonaCard(detail.data.persona_card);
-    setSimulationPrompt(detail.data.simulation_prompt);
-    setLifePrompt(detail.data.life_prompt);
-    setPersonaBaseline({
-      name: detail.data.name,
-      description: detail.data.description,
-      personaCard: detail.data.persona_card,
-      simulationPrompt: detail.data.simulation_prompt,
-      lifePrompt: detail.data.life_prompt,
-    });
-    setDraftVersion(detail.data.version);
-  }, [creating, detail.data, template.data]);
+    const nextTexts = promptTexts(source);
+    const nextName = creating ? "" : detail.data!.name;
+    const nextDescription = creating ? "" : detail.data!.description;
+    setName(nextName);
+    setDescription(nextDescription);
+    setTexts(nextTexts);
+    setPersonaBaseline({ name: nextName, description: nextDescription, texts: nextTexts });
+    setDraftVersion(creating ? 0 : detail.data!.version);
+  }, [creating, selectedID, detail.data, template.data]);
 
-  const personaDirty =
-    name !== personaBaseline.name ||
-    description !== personaBaseline.description ||
-    personaCard !== personaBaseline.personaCard ||
-    simulationPrompt !== personaBaseline.simulationPrompt ||
-    lifePrompt !== personaBaseline.lifePrompt;
+  const personaDirty = name !== personaBaseline.name || description !== personaBaseline.description ||
+    personaDocs.some(({ key }) => texts[key] !== personaBaseline.texts[key]);
+  const promptsValid = personaDocs.every(({ key, limit }) => texts[key].trim() && Array.from(texts[key]).length <= limit);
+  const preview = useQuery({
+    queryKey: ["persona-preview", previewMode, texts, identity.data?.version],
+    queryFn: async () => (await personaApi.preview({ ...texts, mode: previewMode })).data,
+    enabled: previewing && promptsValid,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: 0,
+  });
   const identityDirty =
     identityEditing &&
     (identityName !== identityBaselineName || masterID !== identityBaselineMaster);
@@ -352,9 +172,7 @@ export default function PersonasPage() {
       const payload = {
         name: name.trim(),
         description: description.trim(),
-        persona_card: personaCard,
-        simulation_prompt: simulationPrompt,
-        life_prompt: lifePrompt,
+        ...texts,
       };
       if (creating) return personaApi.create(payload);
       return personaApi.update(selectedID, {
@@ -369,7 +187,9 @@ export default function PersonasPage() {
           creating ? t("personas.editor.created") : t("personas.editor.saved"),
         );
       await queryClient.invalidateQueries({ queryKey: ["personas"] });
-      setPersonaBaseline({ name, description, personaCard, simulationPrompt, lifePrompt });
+      setName(name.trim());
+      setDescription(description.trim());
+      setPersonaBaseline({ name: name.trim(), description: description.trim(), texts });
       setDraftVersion(result.data.version);
       if (creating) {
         setLeaveTarget(`/admin/personas?id=${result.data.id}`);
@@ -444,9 +264,8 @@ export default function PersonasPage() {
   const selected = detail.data as PersonaDetail | undefined;
   const isBuiltin = selected?.builtin ?? false;
   const isActive = selected?.active ?? false;
-  const cardChars = Array.from(personaCard).length;
-  const simChars = Array.from(simulationPrompt).length;
-  const lifeChars = Array.from(lifePrompt).length;
+  const activeDocument = personaDocs.find(({ key }) => key === activeDoc)!;
+  const activeChars = Array.from(texts[activeDoc]).length;
   const busy = save.isPending || busyAction !== "";
   const friendItems = friends.data?.items ?? [];
   const currentMaster = identity.data?.master_user_id ?? 0;
@@ -677,7 +496,7 @@ export default function PersonasPage() {
                       </span>
                       <span className="flex shrink-0 items-center gap-1">
                         {preset.active ? (
-                          <Badge>{t("personas.inUse")}</Badge>
+                          <Badge variant="success">{t("personas.inUse")}</Badge>
                         ) : null}
                         {preset.builtin ? (
                           <Badge variant="ghost">
@@ -735,27 +554,21 @@ export default function PersonasPage() {
                     <Input
                       value={name}
                       onChange={(event) => setName(event.target.value)}
-                      disabled={isBuiltin}
+                      disabled={isBuiltin || save.isPending}
                     />
                   </Field>
                   <Field label={t("personas.editor.description")}>
                     <Input
                       value={description}
                       onChange={(event) => setDescription(event.target.value)}
-                      disabled={isBuiltin}
+                      disabled={isBuiltin || save.isPending}
                     />
                   </Field>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
                   <div className="flex flex-wrap gap-1">
-                    {(
-                      [
-                        ["card", t("personas.editor.personaCard")],
-                        ["simulation", t("personas.editor.simulationPrompt")],
-                        ["life", t("personas.editor.lifePrompt")],
-                      ] as const
-                    ).map(([key, label]) => (
+                    {!previewing ? personaDocs.map(({ key, label }) => (
                       <button
                         key={key}
                         type="button"
@@ -778,9 +591,9 @@ export default function PersonasPage() {
                             }}
                           />
                         ) : null}
-                        <span className="relative">{label}</span>
+                        <span className="relative">{t(`personas.editor.${label}`)}</span>
                       </button>
-                    ))}
+                    )) : <span className="text-sm font-medium">{t("personas.editor.preview")}</span>}
                   </div>
                   <div className="flex gap-1">
                     <Button
@@ -794,6 +607,7 @@ export default function PersonasPage() {
                       variant={previewing ? "outline" : "ghost"}
                       size="sm"
                       onClick={() => setPreviewing(true)}
+                      disabled={!promptsValid}
                     >
                       {t("personas.editor.preview")}
                     </Button>
@@ -801,107 +615,34 @@ export default function PersonasPage() {
                 </div>
 
                 {previewing ? (
-                  activeDoc === "life" ? (
-                    <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 p-4 font-sans text-sm leading-6 text-foreground/80">
-                      {lifePrompt.trim() || t("personas.preview.empty")}
-                    </pre>
-                  ) : (
-                    <BlockPreview
-                      text={activeDoc === "card" ? personaCard : simulationPrompt}
-                      onModeChange={
-                        activeDoc === "card"
-                          ? setPersonaCard
-                          : setSimulationPrompt
-                      }
-                      readOnly={isBuiltin}
-                    />
-                  )
-                ) : activeDoc === "card" ? (
-                  <>
-                    <Field
-                      label={t("personas.editor.personaCard")}
-                      hint={t("personas.editor.cardHint")}
-                    >
-                      <Textarea
-                        rows={16}
-                        value={personaCard}
-                        onChange={(event) => setPersonaCard(event.target.value)}
-                        disabled={isBuiltin}
-                        className="font-mono text-xs"
-                      />
-                    </Field>
-                    <p
-                      className={cn(
-                        "text-right text-xs",
-                        cardChars > CARD_LIMIT
-                          ? "text-destructive"
-                          : "text-muted-foreground",
-                      )}
-                    >
-                      {t("personas.editor.charCount", {
-                        current: cardChars,
-                        limit: CARD_LIMIT,
-                      })}
-                    </p>
-                  </>
-                ) : activeDoc === "simulation" ? (
-                  <>
-                    <Field
-                      label={t("personas.editor.simulationPrompt")}
-                      hint={t("personas.editor.simHint")}
-                    >
-                      <Textarea
-                        rows={16}
-                        value={simulationPrompt}
-                        onChange={(event) =>
-                          setSimulationPrompt(event.target.value)
-                        }
-                        disabled={isBuiltin}
-                        className="font-mono text-xs"
-                      />
-                    </Field>
-                    <p
-                      className={cn(
-                        "text-right text-xs",
-                        simChars > SIM_LIMIT
-                          ? "text-destructive"
-                          : "text-muted-foreground",
-                      )}
-                    >
-                      {t("personas.editor.charCount", {
-                        current: simChars,
-                        limit: SIM_LIMIT,
-                      })}
-                    </p>
-                  </>
+                  <div className="space-y-4">
+                    <NativeSelect aria-label={t("personas.preview.mode")} value={previewMode} onChange={(event) => setPreviewMode(event.target.value as PersonaSessionMode)}>
+                      {(["group", "private", "life", "worker"] as const).map((mode) => <option key={mode} value={mode}>{t(`personas.preview.${mode}`)}</option>)}
+                    </NativeSelect>
+                    {preview.isFetching ? <PageSkeleton /> : preview.isError ? (
+                      <div role="alert" className="space-y-3 text-sm text-destructive">
+                        <p>{t("personas.preview.failed")}</p>
+                        <Button variant="outline" onClick={() => void preview.refetch()}>{t("common.retry")}</Button>
+                      </div>
+                    ) : (
+                      <pre tabIndex={0} aria-label={t("personas.editor.preview")} className="min-h-96 max-h-[65vh] overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/30 p-4 font-sans text-sm leading-relaxed text-foreground/75">{preview.data?.text || t("personas.preview.empty")}</pre>
+                    )}
+                  </div>
                 ) : (
-                  <>
-                    <Field
-                      label={t("personas.editor.lifePrompt")}
-                      hint={t("personas.editor.lifeHint")}
-                    >
-                      <Textarea
-                        rows={16}
-                        value={lifePrompt}
-                        onChange={(event) => setLifePrompt(event.target.value)}
-                        disabled={isBuiltin}
-                        className="font-mono text-xs"
-                      />
-                    </Field>
-                    <p
-                      className={cn(
-                        "text-right text-xs",
-                        lifeChars > LIFE_LIMIT
-                          ? "text-destructive"
-                          : "text-muted-foreground",
-                      )}
-                    >
-                      {t("personas.editor.charCount", {
-                        current: lifeChars,
-                        limit: LIFE_LIMIT,
-                      })}
+                  <div className="space-y-2">
+                    <Textarea
+                      rows={20}
+                      aria-label={t(`personas.editor.${activeDocument.label}`)}
+                      value={texts[activeDoc]}
+                      onChange={(event) => setTexts((before) => ({ ...before, [activeDoc]: event.target.value }))}
+                      readOnly={isBuiltin}
+                      disabled={save.isPending}
+                      className="min-h-96 font-sans text-sm leading-relaxed"
+                    />
+                    <p className={cn("text-right text-xs", activeChars > activeDocument.limit ? "text-destructive" : "text-muted-foreground")}>
+                      {t("personas.editor.charCount", { current: activeChars, limit: activeDocument.limit })}
                     </p>
-                  </>
+                  </div>
                 )}
 
                 <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -912,7 +653,7 @@ export default function PersonasPage() {
                       versionConflict ||
                       isBuiltin ||
                       !name.trim() ||
-                      !lifePrompt.trim()
+                      !promptsValid
                     }
                   >
                     {save.isPending ? <Spinner /> : null}
@@ -925,14 +666,14 @@ export default function PersonasPage() {
                       <Button
                         variant="outline"
                         onClick={() => runAction("activate")}
-                        disabled={busy || isActive}
+                        disabled={busy || personaDirty || isActive}
                       >
                         {t("personas.editor.activate")}
                       </Button>
                       <Button
                         variant="outline"
                         onClick={() => runAction("clone")}
-                        disabled={busy}
+                        disabled={busy || personaDirty}
                       >
                         {t("personas.editor.clone")}
                       </Button>
@@ -940,7 +681,7 @@ export default function PersonasPage() {
                         variant="ghost"
                         className="ml-auto text-destructive hover:bg-destructive/10"
                         onClick={() => setDeleteOpen(true)}
-                        disabled={busy || isBuiltin || isActive}
+                        disabled={busy || personaDirty || isBuiltin || isActive}
                       >
                         {t("personas.editor.delete")}
                       </Button>

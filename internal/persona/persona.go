@@ -7,149 +7,50 @@ import (
 	"mumu-bot/internal/config"
 )
 
-// 会话模式，决定装配时保留哪些段落
 const (
 	ModeGroup   = "group"
 	ModePrivate = "private"
 	ModeLife    = "life"
+	ModeWorker  = "worker"
 )
 
-const (
-	markerGroup   = "群"
-	markerPrivate = "私"
-	markerCommon  = "通用"
-)
-
-// Persona 是当前生效的人格预设，按模式预先裁好静态文本
+// Persona 把共同人格和场合职责装成固定文本，正文不含配置语法
 type Persona struct {
-	groupText   string
-	privateText string
-	lifeText    string
+	qqText     string
+	lifeText   string
+	workerText string
 }
 
-// NewPersona 用配置里的两份文本构造人格，构造时完成按模式切块
+// NewPersona 使用已经在入口校验的预设和全局身份装配提示词
 func NewPersona(cfg *config.PersonaConfig, identity config.IdentityConfig) (*Persona, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("人格预设未初始化")
 	}
-	card := strings.TrimSpace(cfg.PersonaCard)
-	simulation := strings.TrimSpace(cfg.Simulation)
-	if card == "" || simulation == "" {
-		return nil, fmt.Errorf("人格卡与仿真提示词不能为空")
-	}
-	lifePrompt := strings.TrimSpace(cfg.LifePrompt)
-	if lifePrompt == "" {
-		lifePrompt = config.BuiltinLifePrompt()
-	}
-	life := assembleCommon(card, simulation) + "\n\n" + lifePrompt
+	common := strings.TrimSpace(cfg.PersonaCard) + "\n\n" + strings.TrimSpace(cfg.CommonRules)
 	values := IdentityFromConfig(identity)
 	return &Persona{
-		groupText:   Render(assemble(card, simulation, markerGroup), values),
-		privateText: Render(assemble(card, simulation, markerPrivate), values),
-		lifeText:    Render(life, values),
+		qqText:     Render(common+"\n\n"+strings.TrimSpace(cfg.QQPrompt), values),
+		lifeText:   Render(common+"\n\n"+strings.TrimSpace(cfg.LifePrompt), values),
+		workerText: Render(common+"\n\n"+strings.TrimSpace(cfg.WorkerPrompt), values),
 	}, nil
 }
 
-// Instruction 返回某个模式的系统提示词，同一模式恒定不变
+// Instruction 返回场合文本；会话身份是程序提供的事实，不从正文猜测
 func (p *Persona) Instruction(mode string) string {
 	if p == nil {
 		return ""
 	}
 	switch mode {
-	case ModePrivate:
-		return p.privateText
 	case ModeLife:
 		return p.lifeText
+	case ModeWorker:
+		return p.workerText
 	default:
-		return p.groupText
+		return p.qqText
 	}
 }
 
-// assemble 把人格卡与仿真提示词按模式裁好并拼接
-func assemble(card, simulation, mode string) string {
-	return strings.TrimSpace(sliceDoc(card, mode)) + "\n\n" + strings.TrimSpace(sliceDoc(simulation, mode))
-}
-
-// assembleCommon 只取通用段落，供生活主线复用身份和说话风格；
-// 不新增 [生活] 标记，群/私聊专属段落不会混进来
-func assembleCommon(card, simulation string) string {
-	return strings.TrimSpace(sliceCommon(card)) + "\n\n" + strings.TrimSpace(sliceCommon(simulation))
-}
-
-// modeNone 永远不匹配任何标记，只保留通用段落
-const modeNone = "\x00"
-
-func sliceCommon(text string) string {
-	return sliceByMode(text, modeNone)
-}
-
-// sliceDoc 只保留通用段和目标模式段；目标范围没有正文时保持为空
-func sliceDoc(text, mode string) string {
-	return sliceByMode(text, mode)
-}
-
-// sliceByMode 按行首标记切出通用段与目标模式的段落
-func sliceByMode(text, mode string) string {
-	lines := strings.Split(text, "\n")
-	kept := make([]string, 0, len(lines))
-	current := markerCommon
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// 二级标题是块的天然边界，回到通用
-		if strings.HasPrefix(trimmed, "## ") {
-			current = markerCommon
-		}
-		if marker, rest, ok := parseMarker(trimmed); ok {
-			current = marker
-			if rest != "" {
-				if current == markerCommon || current == mode {
-					kept = append(kept, rest)
-				}
-			}
-			continue
-		}
-		if current != markerCommon && current != mode {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return collapseBlank(strings.Join(kept, "\n"))
-}
-
-// parseMarker 识别行首 [群] / [私] / [通用] 标记，返回模式与标记后的剩余正文
-func parseMarker(line string) (string, string, bool) {
-	if len(line) < 3 || line[0] != '[' {
-		return "", "", false
-	}
-	end := strings.IndexByte(line, ']')
-	if end < 0 {
-		return "", "", false
-	}
-	inner := strings.TrimSpace(line[1:end])
-	switch inner {
-	case markerGroup, markerPrivate, markerCommon:
-		return inner, strings.TrimSpace(line[end+1:]), true
-	default:
-		return "", "", false
-	}
-}
-
-// collapseBlank 压掉连续空行，保证装配结果稳定
-func collapseBlank(text string) string {
-	lines := strings.Split(text, "\n")
-	out := make([]string, 0, len(lines))
-	blank := 0
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			blank++
-			if blank > 1 {
-				continue
-			}
-			out = append(out, "")
-			continue
-		}
-		blank = 0
-		out = append(out, line)
-	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+// SessionInstruction 为当前会话的固定提示补充真实身份
+func (p *Persona) SessionInstruction(kind string, targetID int64) string {
+	return p.Instruction(kind) + fmt.Sprintf("\n\n当前会话：%s:%d", kind, targetID)
 }

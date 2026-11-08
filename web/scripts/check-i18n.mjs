@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const sourceRoot = join(root, "src");
 const allowedDirs = [join(sourceRoot, "locales"), join(sourceRoot, "mocks")];
-const allowedFiles = new Set([join(sourceRoot, "lib", "persona-marker.ts")]);
+const allowedFiles = new Set();
 
 const extensions = new Set([".ts", ".tsx"]);
 const violations = [];

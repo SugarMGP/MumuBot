@@ -205,27 +205,30 @@ export interface PersonaSummary {
   active: boolean;
   version: number;
   card_chars: number;
-  sim_chars: number;
+  rules_chars: number;
+  qq_chars: number;
+  worker_chars: number;
   life_chars: number;
   updated_at: string;
 }
 
-export interface PersonaDetail extends PersonaSummary {
+export interface PersonaTexts {
   persona_card: string;
-  simulation_prompt: string;
+  common_rules: string;
+  qq_prompt: string;
   life_prompt: string;
+  worker_prompt: string;
 }
+
+export interface PersonaDetail extends PersonaSummary, PersonaTexts {}
 
 export interface PersonasData {
   items: PersonaSummary[];
   active_id: number;
 }
 
-export interface PersonaTemplate {
-  persona_card: string;
-  simulation_prompt: string;
-  life_prompt: string;
-}
+export type PersonaTemplate = PersonaTexts;
+export type PersonaSessionMode = "group" | "private" | "life" | "worker";
 
 export interface IdentityData {
   name: string;
@@ -266,11 +269,9 @@ export interface TimeRuleConfig {
 }
 
 export interface RuntimeConfig {
-  persona: {
+  persona: PersonaTexts & {
     preset_id: number;
     preset_name: string;
-    persona_card: string;
-    simulation_prompt: string;
   };
   agent: {
     think_interval: number;
@@ -385,7 +386,10 @@ export interface SystemData {
   persona: {
     preset_name: string;
     card_chars: number;
-    sim_chars: number;
+    rules_chars: number;
+    qq_chars: number;
+    life_chars: number;
+    worker_chars: number;
   };
   context: {
     enabled_group_count: number;

@@ -25,7 +25,7 @@ type LifeViewImageInput struct {
 
 // NewLifeViewImageTool 返回 life 专用看图工具，额外支持个人目录路径
 func NewLifeViewImageTool() (tool.EnhancedInvokableTool, error) {
-	plain, err := utils.InferTool("viewImage", "查看一张图片。hash 查看旧 QQ 图片或表情包，image_ref 查看引用，path 查看个人目录；三者恰选一个。", lifeViewImageFunc)
+	plain, err := utils.InferTool("viewImage", "实际查看一张支持的位图，图像内容会进入上下文。image_ref 读快照，path 读 /home/worker 中的相对路径，hash 仅指已登记的旧 QQ 媒体；三者恰选一个，最大10 MiB。拿到引用或文件名还不算看过图片。", lifeViewImageFunc)
 	if err != nil {
 		return nil, err
 	}

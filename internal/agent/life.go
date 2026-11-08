@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
@@ -206,11 +205,7 @@ func (a *Agent) recordLifeError(ctx context.Context, code, detail string) {
 
 // lifeInstructionText 把通用人格内容和生活职责拼成本代固定系统提示
 func (a *Agent) lifeInstructionText(ctx context.Context) string {
-	personaText := strings.TrimSpace(a.personaFor(ctx).Instruction("life"))
-	if personaText == "" {
-		return persona.RenderFor(config.BuiltinLifePrompt(), configFor(ctx))
-	}
-	return personaText
+	return a.personaFor(ctx).SessionInstruction(persona.ModeLife, memory.LifeTargetID)
 }
 
 // assembleLifeMessages 装配代头 + 摘要检查点 + 检查点之后的 transcript 与待处理输入

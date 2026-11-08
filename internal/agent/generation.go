@@ -126,7 +126,7 @@ func (a *Agent) newChatAgent(generation *Generation, chatTools []tool.BaseTool, 
 	return a.newTypedChatAgent(generation, chatTools, maxStep, handlers, map[string]bool{"stayQuiet": true})
 }
 
-// newWorkerAgent 只挂 worker 工具和 eino 摘要，不接 QQ 会话的人设/压缩器
+// newWorkerAgent 复用共同人格与规则，只挂执行工具和工作摘要，不接 QQ 聊天职责/压缩器
 func (a *Agent) newWorkerAgent(ctx context.Context, generation *Generation, chatTools []tool.BaseTool, maxStep int) (*adk.TypedChatModelAgent[*schema.AgenticMessage], error) {
 	if maxStep <= 0 {
 		return nil, fmt.Errorf("工作单轮步数无效")

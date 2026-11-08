@@ -230,7 +230,6 @@ func main() {
 
 // bootstrapPersonaPresets 用代码内置文本维护内置预设，空库时它同时是当前预设
 func bootstrapPersonaPresets(ctx context.Context, mgr *memory.Manager) error {
-	card, simulation, lifePrompt := config.BuiltinPersonaTexts()
-	_, err := mgr.EnsureBuiltinPersonaPreset(ctx, card, simulation, lifePrompt)
+	_, err := mgr.EnsureBuiltinPersonaPreset(ctx, config.BuiltinPersonaTexts())
 	return err
 }

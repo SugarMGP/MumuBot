@@ -18,6 +18,8 @@ import type {
   ModelsData,
   PersonaDetail,
   PersonaTemplate,
+  PersonaTexts,
+  PersonaSessionMode,
   IdentityData,
   IdentityFriendsData,
   IdentityInput,
@@ -117,6 +119,8 @@ export const personaApi = {
   list: () => apiGet<PersonasData>("/api/v1/personas"),
   get: (id: number) => apiGet<PersonaDetail>(`/api/v1/personas/${id}`),
   template: () => apiGet<PersonaTemplate>("/api/v1/personas/template"),
+  preview: (body: PersonaTexts & { mode: PersonaSessionMode }) =>
+    apiMutate<{ text: string }>("POST", "/api/v1/personas/preview", body),
   create: (body: PersonaInput) =>
     apiMutate<PersonaDetail>("POST", "/api/v1/personas", body),
   update: (id: number, body: PersonaInput & { version: number }) =>
@@ -128,12 +132,9 @@ export const personaApi = {
     apiMutate<PersonaDetail>("POST", `/api/v1/personas/${id}/clone`),
 };
 
-export interface PersonaInput {
+export interface PersonaInput extends PersonaTexts {
   name: string;
   description: string;
-  persona_card: string;
-  simulation_prompt: string;
-  life_prompt: string;
 }
 
 export const identityApi = {

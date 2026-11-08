@@ -239,7 +239,7 @@ func createFileRef(ctx context.Context, input *CreateFileRefInput) (*CreateFileR
 }
 
 func NewCreateFileRefTool() (tool.InvokableTool, error) {
-	return utils.InferTool("createFileRef", "把个人目录中的真实文件冻结成不可变 file_ref；图片额外给出 image_ref，不修改原文件。", createFileRef)
+	return utils.InferTool("createFileRef", "把 /home/worker 中的真实文件冻结成不可变 file_ref；path 用相对路径，图片另给 image_ref。原文件后续修改不影响快照。交接时同时说清内容和验证；ref 可随轨迹清理失效，需要长期保留的普通文件仍留在 home。", createFileRef)
 }
 
 func NewListFilesTool() (tool.InvokableTool, error) {
@@ -255,7 +255,7 @@ func NewWriteFileTool() (tool.InvokableTool, error) {
 }
 
 func NewSaveFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveFile", "把 HTTP(S) 文件或一条真实 file_ref 流式保存到个人目录；url 与 file_ref 必须且只能提供一个，overwrite 默认 false。", savePersonalFile)
+	return utils.InferTool("saveFile", "把 HTTP(S) URL 或真实 file_ref/image_ref 的字节保存为 /home/worker 内的普通文件；path 是相对路径，url 与 file_ref 恰选一个，overwrite 默认 false。待取 QQ 引用会首次下载，失败不会伪装成已保存；副本不会随 ref 回收删除。", savePersonalFile)
 }
 
 type WorkerSaveFileInput struct {
@@ -291,5 +291,5 @@ func workerSaveFile(ctx context.Context, input *WorkerSaveFileInput) (*WorkerSav
 }
 
 func NewWorkerSaveFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveFile", "把 file_ref/image_ref 的真实字节导入个人目录，生成普通可编辑副本；不访问 QQ。", workerSaveFile)
+	return utils.InferTool("saveFile", "把 file_ref/image_ref 导入 /home/worker 的相对 path，生成普通可编辑副本；overwrite 默认 false。待取 QQ 引用由主服务解析，不给 worker QQ 凭据；快照和副本各自保留，不要自己拼 Base64。", workerSaveFile)
 }

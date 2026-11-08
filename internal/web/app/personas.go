@@ -6,14 +6,9 @@ import (
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/persona"
 
 	"github.com/go-chi/chi/v5"
-)
-
-const (
-	personaCardLimit = 10000
-	personaSimLimit  = 5000
-	personaLifeLimit = 12000
 )
 
 func personaSummary(preset memory.PersonaPreset) personaSummaryDTO {
@@ -25,7 +20,9 @@ func personaSummary(preset memory.PersonaPreset) personaSummaryDTO {
 		Active:      preset.Active,
 		Version:     preset.Version,
 		CardChars:   len([]rune(preset.PersonaCard)),
-		SimChars:    len([]rune(preset.Simulation)),
+		RulesChars:  len([]rune(preset.CommonRules)),
+		QQChars:     len([]rune(preset.QQPrompt)),
+		WorkerChars: len([]rune(preset.WorkerPrompt)),
 		LifeChars:   len([]rune(preset.LifePrompt)),
 		UpdatedAt:   preset.UpdatedAt,
 	}
@@ -34,9 +31,7 @@ func personaSummary(preset memory.PersonaPreset) personaSummaryDTO {
 func personaDetail(preset memory.PersonaPreset) personaDetailDTO {
 	return personaDetailDTO{
 		personaSummaryDTO: personaSummary(preset),
-		PersonaCard:       preset.PersonaCard,
-		SimulationPrompt:  preset.Simulation,
-		LifePrompt:        preset.LifePrompt,
+		PersonaTexts:      preset.PersonaTexts,
 	}
 }
 
@@ -57,12 +52,7 @@ func (a *App) handlePersonas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handlePersonaTemplate(w http.ResponseWriter, r *http.Request) {
-	card, simulation, lifePrompt := config.BuiltinPersonaTexts()
-	respondData(w, http.StatusOK, personaTemplateResponse{
-		PersonaCard:      card,
-		SimulationPrompt: simulation,
-		LifePrompt:       lifePrompt,
-	}, nil)
+	respondData(w, http.StatusOK, config.BuiltinPersonaTexts(), nil)
 }
 
 func (a *App) handlePersonaDetail(w http.ResponseWriter, r *http.Request) {
@@ -84,12 +74,10 @@ func (a *App) handlePersonaDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 type personaInput struct {
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	PersonaCard      string `json:"persona_card"`
-	SimulationPrompt string `json:"simulation_prompt"`
-	LifePrompt       string `json:"life_prompt"`
-	Version          int64  `json:"version"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	config.PersonaTexts
+	Version int64 `json:"version"`
 }
 
 func (a *App) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
@@ -102,20 +90,14 @@ func (a *App) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "预设名称不能为空。")
 		return
 	}
-	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" || strings.TrimSpace(body.LifePrompt) == "" {
-		a.failBadRequest(w, "人格卡、仿真提示词与生活职责都不能为空。")
-		return
-	}
-	if len([]rune(body.PersonaCard)) > personaCardLimit || len([]rune(body.SimulationPrompt)) > personaSimLimit || len([]rune(body.LifePrompt)) > personaLifeLimit {
-		a.failBadRequest(w, "人格预设内容超过长度上限。")
+	if err := body.PersonaTexts.Validate(); err != nil {
+		respondError(w, http.StatusBadRequest, "persona_content_invalid", "", nil)
 		return
 	}
 	created, err := a.memMgr.CreatePersonaPreset(r.Context(), memory.PersonaPreset{
-		Name:        strings.TrimSpace(body.Name),
-		Description: strings.TrimSpace(body.Description),
-		PersonaCard: body.PersonaCard,
-		Simulation:  body.SimulationPrompt,
-		LifePrompt:  body.LifePrompt,
+		Name:         strings.TrimSpace(body.Name),
+		Description:  strings.TrimSpace(body.Description),
+		PersonaTexts: body.PersonaTexts,
 	})
 	if err != nil {
 		a.failFromError(w, r, err)
@@ -139,15 +121,11 @@ func (a *App) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "预设名称不能为空。")
 		return
 	}
-	if strings.TrimSpace(body.PersonaCard) == "" || strings.TrimSpace(body.SimulationPrompt) == "" || strings.TrimSpace(body.LifePrompt) == "" {
-		a.failBadRequest(w, "人格卡、仿真提示词与生活职责都不能为空。")
+	if err := body.PersonaTexts.Validate(); err != nil {
+		respondError(w, http.StatusBadRequest, "persona_content_invalid", "", nil)
 		return
 	}
-	if len([]rune(body.PersonaCard)) > personaCardLimit || len([]rune(body.SimulationPrompt)) > personaSimLimit || len([]rune(body.LifePrompt)) > personaLifeLimit {
-		a.failBadRequest(w, "人格预设内容超过长度上限。")
-		return
-	}
-	if err := a.memMgr.UpdatePersonaPreset(r.Context(), id, strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), body.PersonaCard, body.SimulationPrompt, body.LifePrompt, body.Version); err != nil {
+	if err := a.memMgr.UpdatePersonaPreset(r.Context(), id, strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), body.PersonaTexts, body.Version); err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
@@ -215,4 +193,32 @@ func (a *App) reloadPersonaWarning() *warningPayload {
 		}
 	}
 	return nil
+}
+
+// handlePersonaPreview 使用草稿和当前全局身份装配，不保存或创建任何会话
+func (a *App) handlePersonaPreview(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		config.PersonaTexts
+		Mode string `json:"mode"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		a.failBadRequest(w, "invalid request")
+		return
+	}
+	if err := body.PersonaTexts.Validate(); err != nil {
+		respondError(w, http.StatusBadRequest, "persona_content_invalid", "", nil)
+		return
+	}
+	switch body.Mode {
+	case persona.ModeGroup, persona.ModePrivate, persona.ModeLife, persona.ModeWorker:
+	default:
+		respondError(w, http.StatusBadRequest, "validation_failed", "", nil)
+		return
+	}
+	p, err := persona.NewPersona(&config.PersonaConfig{PersonaTexts: body.PersonaTexts}, config.Snapshot().Identity)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusOK, map[string]string{"text": p.Instruction(body.Mode)}, nil)
 }

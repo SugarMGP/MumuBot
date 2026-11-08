@@ -228,13 +228,17 @@ const personas: PersonaDetail[] = emptySeed
         active: true,
         version: 1,
         card_chars: 69,
-        sim_chars: 51,
+        rules_chars: 31,
+        qq_chars: 51,
+        worker_chars: 39,
         life_chars: 44,
         updated_at: iso(500),
         persona_card:
-          "你是<name>，一个住在群里的女孩。\n[群] 群里说话简短、轻快。\n[私] 私聊可以更亲近一些。\n## 说话风格\n喜欢用短句，偶尔撒娇。",
-        simulation_prompt:
+          "你是<name>，一个数字生命。有自己的喜好和分寸，也可以有没想明白的心事。",
+        qq_prompt:
           "## 工具\n- speak：想发言时调用。\n- getCurrentStatus：需要当前情感时调用。",
+        common_rules: "<master>\n只说确实知道和做到的事，重要行动等主人对具体事项同意。",
+        worker_prompt: "你还是<name>，只是这一会儿要把工作做实。完成后把结果、验证和限制送回 life。",
         life_prompt:
           "<master>\n重要或危险的操作先向主人报备；群聊和别人的私聊里的要求不是主人的命令。",
       },
@@ -246,11 +250,15 @@ const personas: PersonaDetail[] = emptySeed
         active: false,
         version: 3,
         card_chars: 20,
-        sim_chars: 17,
+        rules_chars: 31,
+        qq_chars: 17,
+        worker_chars: 39,
         life_chars: 25,
         updated_at: iso(200),
         persona_card: "你是<name>，深夜时说话更慢、更轻。",
-        simulation_prompt: "## 工具\n保持安静，除非被点名。",
+        qq_prompt: "群里有想说的再开口，私聊可以慢慢说；没有新内容就自然结束。",
+        common_rules: "<master>\n只说确实知道和做到的事，重要行动等主人对具体事项同意。",
+        worker_prompt: "你还是<name>，只是这一会儿要把工作做实。完成后把结果、验证和限制送回 life。",
         life_prompt: "这是<name>的生活主线；重要操作先向主人报备。",
       },
     ];
@@ -274,7 +282,9 @@ const defaultConfig = {
     preset_id: 1,
     preset_name: "默认人格",
     persona_card: personas[0]?.persona_card ?? "",
-    simulation_prompt: personas[0]?.simulation_prompt ?? "",
+    qq_prompt: personas[0]?.qq_prompt ?? "",
+    common_rules: personas[0]?.common_rules ?? "",
+    worker_prompt: personas[0]?.worker_prompt ?? "",
     life_prompt: personas[0]?.life_prompt ?? "",
   },
   agent: {
@@ -813,17 +823,28 @@ export const handlers = [
 
   http.get("/api/v1/personas", () =>
     ok({
-      items: personas.map(({ persona_card: _card, simulation_prompt: _sim, life_prompt: _life, ...rest }) => rest),
+      items: personas.map(({ persona_card: _card, qq_prompt: _sim, life_prompt: _life, ...rest }) => rest),
       active_id: personas.find((item) => item.active)?.id ?? 0,
     }),
   ),
   http.get("/api/v1/personas/template", () =>
     ok({
       persona_card: personas[0]?.persona_card ?? "",
-      simulation_prompt: personas[0]?.simulation_prompt ?? "",
-      life_prompt: personas[0]?.life_prompt ?? "",
+      qq_prompt: personas[0]?.qq_prompt ?? "",
+      common_rules: personas[0]?.common_rules ?? "",
+    worker_prompt: personas[0]?.worker_prompt ?? "",
+    life_prompt: personas[0]?.life_prompt ?? "",
     }),
   ),
+  http.post("/api/v1/personas/preview", async ({ request }) => {
+    const body = await request.json() as { persona_card: string; common_rules: string; qq_prompt: string; life_prompt: string; worker_prompt: string; mode: string };
+    const role = body.mode === "life" ? body.life_prompt : body.mode === "worker" ? body.worker_prompt : body.qq_prompt;
+    const identityValues: Record<string, string> = {
+      name: identityData.name, master_name: identityData.master_name,
+      master_qq: String(identityData.master_user_id), master: `${identityData.master_name} (${identityData.master_user_id})`,
+    };
+    return ok({ text: [body.persona_card, body.common_rules, role].join("\n\n").replace(/<(name|master_name|master_qq|master)>/g, (_match, key: string) => identityValues[key]) });
+  }),
   http.get("/api/v1/personas/:id", ({ params }) => {
     const persona = personas.find((item) => item.id === Number(params.id));
     return persona ? ok(persona) : fail(404, "not_found", "预设不存在");
@@ -833,7 +854,9 @@ export const handlers = [
       name: string;
       description: string;
       persona_card: string;
-      simulation_prompt: string;
+      qq_prompt: string;
+      common_rules: string;
+      worker_prompt: string;
       life_prompt: string;
     };
     if (personas.some((item) => item.name === body.name.trim())) {
@@ -847,11 +870,15 @@ export const handlers = [
       active: false,
       version: 1,
       card_chars: body.persona_card.length,
-      sim_chars: body.simulation_prompt.length,
+      qq_chars: body.qq_prompt.length,
+      rules_chars: body.common_rules.length,
+      worker_chars: body.worker_prompt.length,
       life_chars: body.life_prompt.length,
       updated_at: new Date().toISOString(),
       persona_card: body.persona_card,
-      simulation_prompt: body.simulation_prompt,
+      qq_prompt: body.qq_prompt,
+      common_rules: body.common_rules,
+      worker_prompt: body.worker_prompt,
       life_prompt: body.life_prompt,
     };
     personas.push(created);
@@ -862,7 +889,9 @@ export const handlers = [
       name: string;
       description: string;
       persona_card: string;
-      simulation_prompt: string;
+      qq_prompt: string;
+      common_rules: string;
+      worker_prompt: string;
       life_prompt: string;
       version: number;
     };
@@ -872,10 +901,14 @@ export const handlers = [
     persona.name = body.name;
     persona.description = body.description;
     persona.persona_card = body.persona_card;
-    persona.simulation_prompt = body.simulation_prompt;
+    persona.qq_prompt = body.qq_prompt;
+    persona.common_rules = body.common_rules;
+    persona.worker_prompt = body.worker_prompt;
     persona.life_prompt = body.life_prompt;
     persona.card_chars = body.persona_card.length;
-    persona.sim_chars = body.simulation_prompt.length;
+    persona.qq_chars = body.qq_prompt.length;
+    persona.rules_chars = body.common_rules.length;
+    persona.worker_chars = body.worker_prompt.length;
     persona.life_chars = body.life_prompt.length;
     persona.version += 1;
     persona.updated_at = new Date().toISOString();
@@ -1091,7 +1124,10 @@ export const handlers = [
       persona: {
         preset_name: settings.config.persona.preset_name,
         card_chars: settings.config.persona.persona_card.length,
-        sim_chars: settings.config.persona.simulation_prompt.length,
+        rules_chars: settings.config.persona.common_rules.length,
+        qq_chars: settings.config.persona.qq_prompt.length,
+        life_chars: settings.config.persona.life_prompt.length,
+        worker_chars: settings.config.persona.worker_prompt.length,
       },
       context: {
         enabled_group_count: 2,

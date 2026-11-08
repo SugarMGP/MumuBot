@@ -41,9 +41,12 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 	respondData(w, http.StatusOK, systemResponse{
 		Persona: systemPersonaDTO{
-			PresetName: cfg.Persona.PresetName,
-			CardChars:  len([]rune(cfg.Persona.PersonaCard)),
-			SimChars:   len([]rune(cfg.Persona.Simulation)),
+			PresetName:  cfg.Persona.PresetName,
+			CardChars:   len([]rune(cfg.Persona.PersonaCard)),
+			RulesChars:  len([]rune(cfg.Persona.CommonRules)),
+			QQChars:     len([]rune(cfg.Persona.QQPrompt)),
+			LifeChars:   len([]rune(cfg.Persona.LifePrompt)),
+			WorkerChars: len([]rune(cfg.Persona.WorkerPrompt)),
 		},
 		Context: systemContextDTO{
 			EnabledGroupCount: len(groupIDs),

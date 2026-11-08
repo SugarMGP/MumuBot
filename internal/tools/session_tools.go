@@ -214,7 +214,7 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 }
 
 func NewSendSessionMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendSessionMessage", "向另一个会话投递一条消息；聊天会话可以把执行需求交给 life:1，worker 只能向 life 回报，life 可以投给任意会话。life 派 worker 时可用 context_mode=continue 或 new。成功返回目标 transcript 条目编号，不是 QQ 消息 ID。", sendSessionMessage)
+	return utils.InferTool("sendSessionMessage", "向另一个会话持久投信；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只回 life，life 可投任意可用会话。交事带目标、来源、材料、完成条件，回报带结果、验证、限制和产物 ref，别来回发送无新内容的确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
 }
 
 type UpdateWorkerTitleInput struct {

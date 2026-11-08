@@ -122,6 +122,7 @@ func (a *App) routes() http.Handler {
 			protected.Get("/identity/friends", a.handleIdentityFriends)
 			protected.Patch("/identity", a.handleIdentityUpdate)
 			protected.Get("/personas", a.handlePersonas)
+			protected.Post("/personas/preview", a.handlePersonaPreview)
 			protected.Get("/personas/template", a.handlePersonaTemplate)
 			protected.Get("/personas/{id}", a.handlePersonaDetail)
 			protected.Post("/personas", a.handlePersonaCreate)

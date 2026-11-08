@@ -21,11 +21,9 @@ type RuntimeConfig struct {
 
 // PersonaConfig 是当前生效的人格预设，内容来自 persona_presets 表
 type PersonaConfig struct {
-	PresetID    uint   `json:"preset_id"`
-	PresetName  string `json:"preset_name"`
-	PersonaCard string `json:"persona_card"`
-	Simulation  string `json:"simulation_prompt"`
-	LifePrompt  string `json:"life_prompt"`
+	PresetID   uint   `json:"preset_id"`
+	PresetName string `json:"preset_name"`
+	PersonaTexts
 }
 
 // IdentityConfig 是全局角色身份与主人，与人格预设分开
@@ -152,17 +150,11 @@ func validationError(message string) error {
 // Validate 校验动态配置并返回补齐后的副本
 func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 	cfg := c
-	if strings.TrimSpace(cfg.Persona.PersonaCard) == "" {
-		return cfg, validationError("人格卡不能为空")
-	}
-	if strings.TrimSpace(cfg.Persona.Simulation) == "" {
-		return cfg, validationError("仿真提示词不能为空")
+	if err := cfg.Persona.PersonaTexts.Validate(); err != nil {
+		return cfg, err
 	}
 	if strings.TrimSpace(cfg.Persona.PresetName) == "" {
 		cfg.Persona.PresetName = PersonaPresetFallbackName
-	}
-	if strings.TrimSpace(cfg.Persona.LifePrompt) == "" {
-		cfg.Persona.LifePrompt = builtinLifePrompt
 	}
 	cfg.Identity.Name = strings.TrimSpace(cfg.Identity.Name)
 	if cfg.Identity.Name == "" {

@@ -162,7 +162,7 @@ func chatSendFile(ctx context.Context, input *ChatSendFileInput) (*ChatSendFileO
 }
 
 func NewChatSendFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendFile", "把当前会话收到的 file_ref/image_ref 的原文件发回当前会话；目标只能是当前会话，不接受路径或跨会话目标。", chatSendFile)
+	return utils.InferTool("sendFile", "把可用的 file_ref/image_ref 作为文件发到当前 QQ 会话，也可以发送 life 转来的 worker 产物；不接受路径或跨会话目标。首次使用待取引用会真实下载，成功回执只有 file_id，不能伪造 QQ 消息 ID。", chatSendFile)
 }
 
 // refImageBytes 读取并验证图片资格，file_ref 也不能绕过实际位图检查

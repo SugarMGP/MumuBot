@@ -190,12 +190,6 @@ func (m *Manager) WakeLife(ctx context.Context, at time.Time) error {
 	})
 }
 
-// HeadEntry 是一次换代要写入的代头行
-type HeadEntry struct {
-	Kind    string
-	Payload json.RawMessage
-}
-
 // CommitLifeCheckpoint 在同一事务里给真实输入分配可见序号、保存摘要边界、删除旧代头并写入新代头
 func (m *Manager) CommitLifeCheckpoint(ctx context.Context, summary json.RawMessage, throughID uint, visibleIDs []uint, heads []HeadEntry) (map[uint]uint64, []uint, TranscriptCandidates, error) {
 	seqs := map[uint]uint64{}
@@ -217,28 +211,9 @@ func (m *Manager) CommitLifeCheckpoint(ctx context.Context, summary json.RawMess
 		}).Error; err != nil {
 			return err
 		}
-		if throughID > 0 {
-			condition := "conversation_kind=? AND target_id=? AND id<=? AND entry_kind IN ('system_prompt','group_note','context_digest','pinned_memory')"
-			args := []any{ConversationKindLife, int64(LifeTargetID), throughID}
-			candidates, err := transcriptCandidates(tx, condition, args...)
-			if err != nil {
-				return err
-			}
-			released.ToolRefs = append(released.ToolRefs, candidates.ToolRefs...)
-			released.SnapshotRefs = append(released.SnapshotRefs, candidates.SnapshotRefs...)
-			if err := tx.Where(condition, args...).Delete(&TranscriptEntry{}).Error; err != nil {
-				return err
-			}
-		}
-		for _, head := range heads {
-			entry := &TranscriptEntry{
-				ConversationKind: ConversationKindLife, TargetID: LifeTargetID,
-				EntryKind: head.Kind, Payload: head.Payload,
-			}
-			if err := tx.Create(entry).Error; err != nil {
-				return err
-			}
-			headIDs = append(headIDs, entry.ID)
+		headIDs, released, err = m.replaceCheckpointHeads(tx, ConversationKindLife, int64(LifeTargetID), heads)
+		if err != nil {
+			return err
 		}
 		return nil
 	})

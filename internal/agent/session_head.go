@@ -23,6 +23,7 @@ const (
 	kindGroupNote     = "group_note"
 	kindSystemNote    = "system_note"
 	kindLifeSummary   = "life_summary"
+	kindWorkerSummary = "worker_summary"
 
 	systemMessagePrefix = "[系统消息："
 )
@@ -42,7 +43,7 @@ func (a *Agent) assembleMessages(ctx context.Context, session *Session) ([]*sche
 			extra = note
 		}
 	}
-	return session.Assemble(ctx, a.memory, a.personaFor(ctx).Instruction(mode), extra)
+	return session.Assemble(ctx, a.memory, a.personaFor(ctx).SessionInstruction(mode, session.targetID), extra)
 }
 
 // headPriority 决定代头行在上下文里的固定位置，非代头返回 -1

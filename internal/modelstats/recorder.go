@@ -209,7 +209,9 @@ type Snapshot struct {
 }
 
 func Query(ctx context.Context, db *gorm.DB, since time.Time) (Snapshot, error) {
-	var snapshot Snapshot
+	snapshot := Snapshot{
+		ByTask: []AggregateRow{}, ByModel: []AggregateRow{}, Series: []SeriesRow{},
+	}
 	base := `FROM model_call_hourly`
 	args := []any{}
 	if !since.IsZero() {

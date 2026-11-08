@@ -16,7 +16,6 @@ import (
 var ErrVersionConflict = errors.New("配置已被其他页面修改，请刷新后重试")
 
 const (
-	SectionPersona     = "persona"
 	SectionIdentity    = "identity"
 	SectionAgent       = "agent"
 	SectionChat        = "chat"
@@ -78,10 +77,6 @@ func reload() error {
 	versions := make(map[string]int64)
 	for _, row := range rows {
 		versions[row.ConfigKey] = row.Version
-		// 旧版人格配置已改由 persona_presets 管理，这里的残留行在启动时导入一次后忽略
-		if row.ConfigKey == SectionPersona {
-			continue
-		}
 		if err := applySection(&cfg, row.ConfigKey, row.ConfigValue); err != nil {
 			zap.L().Warn("动态配置项无效，使用默认值", zap.String("key", row.ConfigKey), zap.Error(err))
 			continue

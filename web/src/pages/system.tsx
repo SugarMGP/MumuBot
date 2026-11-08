@@ -44,10 +44,10 @@ export default function SystemStatusPage() {
       label: t("system.status.cardChars"),
       value: t("system.status.chars", { count: data.persona.card_chars }),
     },
-    {
-      label: t("system.status.simChars"),
-      value: t("system.status.chars", { count: data.persona.sim_chars }),
-    },
+    ...(["rules", "qq", "life", "worker"] as const).map((kind) => ({
+      label: t(`system.status.${kind}Chars`),
+      value: t("system.status.chars", { count: data.persona[`${kind}_chars`] }),
+    })),
   ];
 
   const contextFields = [

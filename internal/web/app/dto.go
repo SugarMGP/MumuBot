@@ -191,27 +191,21 @@ type personaSummaryDTO struct {
 	Active      bool      `json:"active"`
 	Version     int64     `json:"version"`
 	CardChars   int       `json:"card_chars"`
-	SimChars    int       `json:"sim_chars"`
+	RulesChars  int       `json:"rules_chars"`
+	QQChars     int       `json:"qq_chars"`
+	WorkerChars int       `json:"worker_chars"`
 	LifeChars   int       `json:"life_chars"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type personaDetailDTO struct {
 	personaSummaryDTO
-	PersonaCard      string `json:"persona_card"`
-	SimulationPrompt string `json:"simulation_prompt"`
-	LifePrompt       string `json:"life_prompt"`
+	config.PersonaTexts
 }
 
 type personasResponse struct {
 	Items    []personaSummaryDTO `json:"items"`
 	ActiveID uint                `json:"active_id"`
-}
-
-type personaTemplateResponse struct {
-	PersonaCard      string `json:"persona_card"`
-	SimulationPrompt string `json:"simulation_prompt"`
-	LifePrompt       string `json:"life_prompt"`
 }
 
 type settingsResponse struct {
@@ -262,9 +256,12 @@ type compactorDTO struct {
 }
 
 type systemPersonaDTO struct {
-	PresetName string `json:"preset_name"`
-	CardChars  int    `json:"card_chars"`
-	SimChars   int    `json:"sim_chars"`
+	PresetName  string `json:"preset_name"`
+	CardChars   int    `json:"card_chars"`
+	RulesChars  int    `json:"rules_chars"`
+	QQChars     int    `json:"qq_chars"`
+	LifeChars   int    `json:"life_chars"`
+	WorkerChars int    `json:"worker_chars"`
 }
 
 type systemContextDTO struct {

@@ -175,7 +175,7 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	}
 	head := make([]*schema.AgenticMessage, 0, 6)
 	if !hasSystem {
-		head = append(head, previewSystemMessage(p, kind))
+		head = append(head, previewSystemMessage(p, kind, targetID))
 	}
 	if kind == memory.ConversationKindGroup || kind == memory.ConversationKindPrivate {
 		pinnedText := ""
@@ -263,26 +263,10 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	return messages, nil
 }
 
-func previewSystemMessage(p *persona.Persona, kind string) *schema.AgenticMessage {
-	var text string
-	switch kind {
-	case memory.ConversationKindLife:
-		text = p.Instruction(persona.ModeLife)
-	case memory.ConversationKindWorker:
-		text = persona.Render(workerInstruction, persona.IdentityFromConfig(config.Snapshot().Identity))
-	default:
-		text = p.Instruction(previewPersonaMode(kind))
-	}
-	system := schema.SystemAgenticMessage(text)
+func previewSystemMessage(p *persona.Persona, kind string, targetID int64) *schema.AgenticMessage {
+	system := schema.SystemAgenticMessage(p.SessionInstruction(kind, targetID))
 	system.Extra = map[string]any{"kind": kindSystemPrompt}
 	return system
-}
-
-func previewPersonaMode(kind string) string {
-	if kind == memory.ConversationKindPrivate {
-		return persona.ModePrivate
-	}
-	return persona.ModeGroup
 }
 
 func capacitySummaryValid(raw []byte) bool {

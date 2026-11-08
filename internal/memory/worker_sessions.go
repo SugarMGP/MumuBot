@@ -141,24 +141,30 @@ func (m *Manager) UpdateWorkerTitle(ctx context.Context, id uint, title string) 
 }
 
 // CommitWorkerCheckpoint 在同一事务里给真实输入分配可见序号并保存检查点
-func (m *Manager) CommitWorkerCheckpoint(ctx context.Context, id uint, summary json.RawMessage, throughID uint, visibleIDs []uint) (map[uint]uint64, error) {
+func (m *Manager) CommitWorkerCheckpoint(ctx context.Context, id uint, summary json.RawMessage, throughID uint, visibleIDs []uint, heads []HeadEntry) (map[uint]uint64, []uint, TranscriptCandidates, error) {
 	if len(summary) == 0 {
 		summary = json.RawMessage(`[]`)
 	}
 	seqs := map[uint]uint64{}
+	var headIDs []uint
+	var released TranscriptCandidates
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
 		seqs, err = markVisibleTx(tx, ConversationKindWorker, int64(id), visibleIDs)
 		if err != nil {
 			return err
 		}
-		return tx.Model(&WorkerSession{}).Where("id=?", id).Updates(map[string]any{
+		if err := tx.Model(&WorkerSession{}).Where("id=?", id).Updates(map[string]any{
 			"context_summary":    summary,
 			"context_through_id": throughID,
 			"updated_at":         time.Now(),
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		headIDs, released, err = m.replaceCheckpointHeads(tx, ConversationKindWorker, int64(id), heads)
+		return err
 	})
-	return seqs, err
+	return seqs, headIDs, released, err
 }
 
 // FailRunningWorkerSessions 在进程重启时把中断的 worker 标成失败

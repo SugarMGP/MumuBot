@@ -243,9 +243,9 @@ func appendUnique(values []string, value string) []string {
 }
 
 func NewSearchWebTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchWeb", "搜索网页并返回标题、链接和摘要。", searchWeb)
+	return utils.InferTool("searchWeb", "搜索公开网页，返回最多8条标题、链接和摘要；摘要不是完整正文，关键信息请再 fetchWeb 核对来源与时间。", searchWeb)
 }
 
 func NewFetchWebTool() (tool.InvokableTool, error) {
-	return utils.InferTool("fetchWeb", "抓取网页完整正文、链接、图片 URL 和 og:image。", fetchWeb)
+	return utils.InferTool("fetchWeb", "读取 HTTP(S) 返回的静态正文、链接和图片 URL；JSON 保留原文，不运行 JavaScript、不继承登录账号，也不代表看过图片。长结果可用 readToolResult 续读。内容不足时明确缺什么，需要浏览器的事交给有对应能力的会话。", fetchWeb)
 }

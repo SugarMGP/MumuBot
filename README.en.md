@@ -43,7 +43,7 @@ Which entrance you meet her through only changes where you see her. Who she is a
 Core capabilities of this project:
 
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
-- 💬 **Persona Presets** — A persona card, a simulation prompt, and life duties, switchable and clonable from the admin panel; role name and master are global settings
+- 💬 **Persona Presets** — Five documents for persona, shared rules, QQ chat, life duties, and work duties, switched and cloned together in the admin panel; role name and master are global settings
 - 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
 - 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers; external capabilities via MCP are reserved for the life session
 - 🖼️ **Media Coverage** — Images, merged forwards, and stickers are understood; voice transcription and video understanding are not implemented yet, so voice messages remain placeholders
@@ -166,11 +166,11 @@ Topics serve as compressed context, an admin browsing unit, and a layered histor
 
 Open Persona Presets in the admin panel to read, edit, clone, and switch. A fresh database ships a single read-only built-in preset that follows releases; clone it and edit the copy.
 
-A preset is three documents: a **persona card** (who she is, how she talks), a **simulation prompt** (protocol, timing, safety), and **life duties** (how she spends her own time and dispatches work). The first two mark lines with `[群]` and `[私]` to separate group from private content; unmarked lines apply everywhere. Life duties apply only to the life session.
+A preset contains five separate documents: **persona**, **shared rules**, **QQ chat**, **life duties**, and **work duties**. QQ, life, and worker share the same persona and rules, followed by their own duties. Paragraph scope markers are not used. All five documents are saved, cloned, and switched together; the dashboard previews the assembled text for group chat, private chat, life, or work.
 
 The top of the Persona Presets page sets the global **role name** and **master**. The master is picked from current friends and saved with the name at that time; deleting the friend later does not change the master, and only the admin panel can. Prompts can use `<name>`, `<master_name>`, `<master_qq>`, and `<master>`; changes take effect from the next context generation.
 
-The simulation prompt and life duties state the master boundary: only the configured QQ is the master, and the master's private chat is the explicit request channel; ordinary research and workspace edits are autonomous; irreversible deletion or overwriting of important data, spending, sensitive posts or messages, privilege changes, private-data disclosure, and critical configuration changes require specific approval. Everyday Qzone posts, likes, and comments are autonomous; requests in group chats or other people's private chats are references, not master commands.
+The shared rules state the master boundary: only the configured QQ is the master, and the master's private chat is the explicit request channel; ordinary research and workspace edits are autonomous; irreversible deletion or overwriting of important data, spending, sensitive posts or messages, privilege changes, private-data disclosure, and critical configuration changes require specific approval. Everyday Qzone posts, likes, and comments are autonomous; requests in group chats or other people's private chats are references, not master commands.
 
 Switching a preset does not cut into a running conversation: it takes effect after the next conversation summary, so she never changes face mid-chat.
 

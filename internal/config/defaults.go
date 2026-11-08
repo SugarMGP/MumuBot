@@ -4,10 +4,8 @@ package config
 func DefaultRuntime() RuntimeConfig {
 	return RuntimeConfig{
 		Persona: PersonaConfig{
-			PresetName:  PersonaPresetFallbackName,
-			PersonaCard: builtinPersonaCard,
-			Simulation:  builtinSimulationPrompt,
-			LifePrompt:  builtinLifePrompt,
+			PresetName:   PersonaPresetFallbackName,
+			PersonaTexts: BuiltinPersonaTexts(),
 		},
 		Identity: IdentityConfig{Name: "沐沐"},
 		Agent: AgentConfig{

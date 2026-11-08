@@ -98,9 +98,9 @@ func lifeUpdateMoodFunc(ctx context.Context, input *LifeUpdateMoodInput) (any, e
 }
 
 func NewUpdateMoodTool() (tool.InvokableTool, error) {
-	return utils.InferTool("updateMood", "更新具体情感。情感必须说明对象、原因和强度；不确定时不要更新。精力和交流意愿由 life 统一维护，这个场合不能修改。", updateMoodFunc)
+	return utils.InferTool("updateMood", "更新具体情感。有真实变化再维护，fact 写已知经过，reason 写意义和不确定处；同一感受先从 getCurrentStatus(include_emotions=true) 取当前 id/version，平复也说明原因。名称可同名、感受可矛盾，不为整理强行清空。精力和交流意愿由 life 统一维护，这个场合不能修改。", updateMoodFunc)
 }
 
 func NewLifeUpdateMoodTool() (tool.InvokableTool, error) {
-	return utils.InferTool("updateMood", "更新具体情感、精力和交流意愿。情感必须说明对象、原因和强度；精力和交流意愿是你统一维护的共享状态，不确定时不要更新。", lifeUpdateMoodFunc)
+	return utils.InferTool("updateMood", "更新具体情感、精力和交流意愿。情感的 fact 写已知经过、reason 写意义与不确定处；已有感受先用 getCurrentStatus(include_emotions=true) 取 id/version，平复仍说明原因。精力和交流意愿由你统一维护，没有变化就不必更新。", lifeUpdateMoodFunc)
 }

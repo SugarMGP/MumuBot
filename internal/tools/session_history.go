@@ -410,5 +410,5 @@ func NewReadSessionEntryTool() (tool.InvokableTool, error) {
 }
 
 func NewReadSessionHistoryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readSessionHistory", "读取指定会话的 transcript 记录，可用 from/to 限定条目时间；pending_entries 是当前全部已入队但尚未处理的消息，running_tools 单独列出尚未结束的长任务；entries 返回 assistant 工具调用、CallID、run_id、正文长度/截断状态、图片数量和 started/completed；终态工具按 completed_at 计活动时间，长输出同时给 text_tail 保留尾部错误；工具参数在列表里截断，完整参数和全文用 readSessionEntry；大工具结果的 result_ref 可直接交给 readToolResult。", readSessionHistory)
+	return utils.InferTool("readSessionHistory", "读取指定会话尚在保留期内的输入和执行轨迹，QQ 原文历史另用 searchHistory/readHistory。entries 是预览，pending_entries 是已入队未处理消息，running_tools 只是尚无回执的工具调用，不代表全部 tmux 任务。参数或正文不完整时用 readSessionEntry，result_ref 用 readToolResult；next_before_id 向前翻页，from/to 限条目时间。别把旧轨迹或排队消息当成需要重新投递的新任务。", readSessionHistory)
 }

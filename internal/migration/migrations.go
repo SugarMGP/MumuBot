@@ -71,11 +71,12 @@ func recordSchemaVersion(db *gorm.DB, version int, name string) error {
 
 func validateV17Schema(db *gorm.DB) error {
 	for _, column := range []struct{ table, name string }{
+		{"persona_presets", "simulation_prompt"},
 		{"worker_sessions", "user_name"},
 		{"worker_sessions", "home_dir"},
 	} {
 		if db.Migrator().HasColumn(column.table, column.name) {
-			return fmt.Errorf("v17 schema 含已移除的 %s.%s；请确认这是旧版多账号结构后再手工迁移", column.table, column.name)
+			return fmt.Errorf("v17 schema 含已移除的 %s.%s；请备份并使用当前结构重新初始化", column.table, column.name)
 		}
 	}
 	if db.Migrator().HasTable("session_messages") {
@@ -122,6 +123,10 @@ func validateV17Schema(db *gorm.DB) error {
 		{"diaries", "updated_at"},
 		{"emotion_states", "fact"},
 		{"emotion_revisions", "snapshot"},
+		{"persona_presets", "persona_card"},
+		{"persona_presets", "common_rules"},
+		{"persona_presets", "qq_prompt"},
+		{"persona_presets", "worker_prompt"},
 		{"persona_presets", "life_prompt"},
 		{"knowledge_items", "stability_days"},
 		{"knowledge_items", "recall_anchor_at"},
