@@ -133,7 +133,7 @@ type MediaConfig struct {
 
 // DebugConfig 调试配置
 type DebugConfig struct {
-	ShowToolCalls bool `json:"show_tool_calls"`
+	LogAgentContent bool `json:"log_agent_content"`
 }
 
 // ValidationError 是配置校验错误
@@ -270,6 +270,6 @@ func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 	if cfg.Media.NarrowEdge <= 0 {
 		return cfg, validationError("图片窄边必须大于 0")
 	}
-	cfg.Chat.TimeRules = append([]TimeRuleConfig(nil), cfg.Chat.TimeRules...)
+	cfg.Chat.TimeRules = append([]TimeRuleConfig{}, cfg.Chat.TimeRules...)
 	return cfg, nil
 }

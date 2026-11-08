@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -117,4 +118,42 @@ func NewSendStickerTool() (tool.InvokableTool, error) {
 		"发送一个已保存的表情包。",
 		sendStickerFunc,
 	)
+}
+
+// ==================== 维护表情包工具 ====================
+
+type ManageStickerInput struct {
+	Action      string  `json:"action" jsonschema:"description=update 修改备注，delete 删除收藏"`
+	StickerID   uint    `json:"sticker_id" jsonschema:"description=searchStickers 或 saveSticker 返回的表情包 ID"`
+	Description *string `json:"description,omitempty" jsonschema:"description=update 必填，空字符串清空备注；delete 省略"`
+}
+
+func manageSticker(ctx context.Context, input *ManageStickerInput) (any, error) {
+	tc := GetToolContext(ctx)
+	if tc == nil || tc.MemoryMgr == nil {
+		return nil, NewTerminalToolError(fmt.Errorf("表情包管理能力未初始化"))
+	}
+	if input == nil || input.StickerID == 0 {
+		return nil, fmt.Errorf("请提供表情包 ID")
+	}
+	var err error
+	switch input.Action {
+	case "update":
+		if input.Description == nil {
+			return nil, fmt.Errorf("修改备注时请提供 description")
+		}
+		err = tc.MemoryMgr.UpdateStickerDescription(ctx, input.StickerID, strings.TrimSpace(*input.Description))
+	case "delete":
+		err = tc.MemoryMgr.DeleteSticker(ctx, input.StickerID, tc.StickerDir)
+	default:
+		return nil, fmt.Errorf("action 只能是 update 或 delete")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"success": true, "sticker_id": input.StickerID, "action": input.Action}, nil
+}
+
+func NewManageStickerTool() (tool.InvokableTool, error) {
+	return utils.InferTool("manageSticker", "修改已收藏表情包的备注或删除收藏；只操作收藏库，不删除聊天原图。", manageSticker)
 }

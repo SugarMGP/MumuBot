@@ -198,6 +198,7 @@ func (a *Agent) finishLifeTurn(ctx context.Context, session *Session, tc *tools.
 
 // recordLifeError 保存真实问题与有次数上限的补试，不代替 life 安排生活
 func (a *Agent) recordLifeError(ctx context.Context, code, detail string) {
+	zap.L().Error("life 运行失败", zap.String("session", "life:1"), zap.String("code", code), zap.String("error", detail))
 	if err := a.memory.SetLifeError(ctx, code, detail); err != nil {
 		zap.L().Warn("写入 life 运行问题失败", zap.Error(err))
 	}

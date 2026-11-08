@@ -41,9 +41,9 @@ type ManageMemoryInputV2 struct {
 type MemoryChangeInput struct {
 	Action        string `json:"action" jsonschema:"description=create/update/archive；归档后不可恢复"`
 	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=update/archive 必填，须先在本轮 readMemory；create 省略"`
-	SubjectType   string `json:"subject_type,omitempty" jsonschema:"description=group/user/self/object"`
-	SubjectTarget string `json:"subject_target,omitempty" jsonschema:"description=user 填 QQ 号，group 填群号，object 填名称，self 固定为 self"`
-	MemoryType    string `json:"memory_type,omitempty" jsonschema:"description=profile 是稳定身份和偏好，experience 是具体经历"`
+	SubjectType   string `json:"subject_type,omitempty" jsonschema:"description=create 必填；update 可纠正主体类型，省略沿用；group/user/self/object"`
+	SubjectTarget string `json:"subject_target,omitempty" jsonschema:"description=create 必填；update 可纠正归属，改变主体类型时同时填写；user 填 QQ，group 填群号，object 填名称，self 固定 self"`
+	MemoryType    string `json:"memory_type,omitempty" jsonschema:"description=create 必填；update 可纠正类型，省略沿用；profile 是稳定身份和偏好，experience 是具体经历"`
 	Label         string `json:"label,omitempty" jsonschema:"description=简短标题；update 省略沿用旧值"`
 	Content       string `json:"content,omitempty" jsonschema:"description=create 必填，最多8000字符；update 仅修订同一事实的措辞，省略沿用；新语义用 create"`
 	Pinned        *bool  `json:"pinned,omitempty" jsonschema:"description=是否常驻上下文并免于自然遗忘；create 默认 false，update 省略沿用"`
@@ -476,7 +476,7 @@ func NewReadMemoryToolV2() (tool.InvokableTool, error) {
 }
 
 func NewManageMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆，全部成功或全部回滚。update/archive 必须先在本轮 readMemory；搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞与置顶可修订；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
+	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆，全部成功或全部回滚。update/archive 必须先在本轮 readMemory；搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
 }
 
 func NewSearchTopicsTool() (tool.InvokableTool, error) {

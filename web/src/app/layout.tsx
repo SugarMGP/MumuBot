@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -192,20 +192,16 @@ export function AdminLayout() {
       </aside>
       <div className="min-w-0">
         <main id="admin-main" className="admin-page">
-          <AppErrorBoundary>
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={location.pathname}
-                initial={reducedMotion ? false : { opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
-                transition={{ duration: reducedMotion ? 0 : 0.15, ease: "easeOut" }}
-              >
-                <Suspense fallback={<PageSkeleton />}>
-                  <Outlet />
-                </Suspense>
-              </motion.div>
-            </AnimatePresence>
+          <AppErrorBoundary key={location.pathname}>
+            <motion.div
+              initial={reducedMotion ? false : { opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reducedMotion ? 0 : 0.15, ease: "easeOut" }}
+            >
+              <Suspense fallback={<PageSkeleton />}>
+                <Outlet />
+              </Suspense>
+            </motion.div>
           </AppErrorBoundary>
         </main>
       </div>

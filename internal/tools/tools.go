@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/refstore"
@@ -16,7 +15,6 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/schema"
-	"go.uber.org/zap"
 )
 
 // SpeakCallback 发言回调函数类型
@@ -178,7 +176,6 @@ func (tc *ToolContext) MarkTopicRecall(id uint) {
 type ctxKey string
 
 const toolContextKey ctxKey = "tool_context"
-const toolLogMaxLen = 1000
 
 // WithToolContext 将工具上下文放入 context
 func WithToolContext(ctx context.Context, tc *ToolContext) context.Context {
@@ -232,20 +229,6 @@ func (tc *ToolContext) MemoryVersion(id uint) (uint64, bool) {
 	defer tc.memoryMu.Unlock()
 	version, ok := tc.MemoryReadVersions[id]
 	return version, ok
-}
-
-// LogToolCall 记录工具调用
-func LogToolCall(toolName string, inputJSON string, outputJSON string, err error) {
-	cfg := config.Snapshot()
-	if cfg != nil && cfg.Debug.ShowToolCalls {
-		inputJSON = truncateToolLogString(inputJSON, toolLogMaxLen)
-		outputJSON = truncateToolLogString(outputJSON, toolLogMaxLen)
-		if err != nil {
-			zap.L().Debug("工具调用", zap.String("tool", toolName), zap.String("input", inputJSON), zap.String("output", outputJSON), zap.Error(err))
-		} else {
-			zap.L().Debug("工具调用", zap.String("tool", toolName), zap.String("input", inputJSON), zap.String("output", outputJSON))
-		}
-	}
 }
 
 // ==================== 获取群成员详情工具 ====================

@@ -12,6 +12,7 @@ import (
 
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/llm"
+	"mumu-bot/internal/logger"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
 
@@ -217,6 +218,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		CurrentConversationOnly: true,
 	}
 	compactionCtx := tools.WithToolContext(ctx, tc)
+	compactionCtx = logger.WithSession(compactionCtx, tc.ConversationKind, tc.TargetID, tc.RunID, cfg.Debug.LogAgentContent)
 	compactionCtx = llm.WithTask(compactionCtx, "compaction", generation.modelName)
 
 	var finish *FinishCompactionInput
@@ -255,6 +257,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 				UnknownToolsHandler: tools.UnknownToolHandler,
 				ToolCallMiddlewares: []compose.ToolMiddleware{
 					tools.ToolResultPreviewMiddleware(a.memory),
+					tools.ToolLogMiddleware(),
 					tools.ToolErrorMiddleware(),
 				},
 			},

@@ -66,8 +66,8 @@ function numberValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function rulesToText(rules: TimeRuleConfig[]): string {
-  return rules
+function rulesToText(rules: TimeRuleConfig[] | null): string {
+  return (rules ?? [])
     .map((rule) => `${rule.time_range},${rule.group_id},${rule.talk_value}`)
     .join("\n");
 }
@@ -295,6 +295,7 @@ export default function SettingsPage() {
         return next;
       });
       applySettings(result.data, section);
+      queryClient.setQueryData(["settings"], result.data);
       if (result.warning) toastWarningCode(result.warning.code);
       else toastSuccess(t("settings.saved"));
     } catch (error) {
@@ -345,6 +346,7 @@ export default function SettingsPage() {
         return next;
       });
       applySettings(result.data, resetSection);
+      queryClient.setQueryData(["settings"], result.data);
       if (result.warning) toastWarningCode(result.warning.code);
       else toastSuccess(t("settings.resetDone"));
     } catch (error) {
@@ -1015,11 +1017,11 @@ export default function SettingsPage() {
           description={t("settings.debug.hint")}
         >
           <CheckboxRow
-            checked={config.debug.show_tool_calls}
+            checked={config.debug.log_agent_content}
             onCheckedChange={(checked) =>
-              update("debug", { show_tool_calls: checked })
+              update("debug", { log_agent_content: checked })
             }
-            label={t("settings.debug.showToolCalls")}
+            label={t("settings.debug.logAgentContent")}
           />
           <SaveButtons
             busy={busy === "debug"}

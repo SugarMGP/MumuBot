@@ -186,6 +186,7 @@ func (a *Agent) newTypedChatAgent(generation *Generation, chatTools []tool.BaseT
 				ToolArgumentsHandler: argumentsHandler,
 				ToolCallMiddlewares: []compose.ToolMiddleware{
 					tools.ToolTranscriptMiddleware(),
+					tools.ToolLogMiddleware(),
 					tools.ToolErrorMiddleware(),
 				},
 			},
@@ -325,6 +326,7 @@ func sharedToolBuilders(private bool) []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewSearchStickersTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendStickerTool() },
 		func() (tool.BaseTool, error) { return tools.NewSaveStickerTool() },
+		func() (tool.BaseTool, error) { return tools.NewManageStickerTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemeTool() },

@@ -3,8 +3,10 @@ package memory
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -13,6 +15,7 @@ func (m *Manager) SaveSticker(sticker *Sticker) (bool, error) {
 	var existing Sticker
 	err := m.db.Where("file_hash = ?", sticker.FileHash).First(&existing).Error
 	if err == nil {
+		*sticker = existing
 		return true, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -35,7 +38,11 @@ func (m *Manager) GetStickerByID(id uint) (*Sticker, error) {
 	return &sticker, nil
 }
 
-func (m *Manager) DeleteSticker(ctx context.Context, id uint) (*Sticker, error) {
+func (m *Manager) UpdateStickerDescription(ctx context.Context, id uint, description string) error {
+	return requireAffected(m.db.WithContext(ctx).Model(&Sticker{}).Where("id=?", id).Update("description", description))
+}
+
+func (m *Manager) DeleteSticker(ctx context.Context, id uint, directory string) error {
 	var sticker Sticker
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.First(&sticker, id).Error; err != nil {
@@ -44,9 +51,18 @@ func (m *Manager) DeleteSticker(ctx context.Context, id uint) (*Sticker, error) 
 		return requireAffected(tx.Delete(&sticker))
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &sticker, nil
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		zap.L().Warn("表情包记录已删除，但目录无法打开", zap.String("file_name", sticker.FileName), zap.Error(err))
+		return nil
+	}
+	defer root.Close()
+	if err := root.Remove(sticker.FileName); err != nil && !errors.Is(err, os.ErrNotExist) {
+		zap.L().Warn("清理已删除表情包文件失败", zap.String("file_name", sticker.FileName), zap.Error(err))
+	}
+	return nil
 }
 
 // CollectedStickerHashes 查询哪些表情哈希已经在收藏库

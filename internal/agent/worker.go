@@ -174,6 +174,7 @@ func (a *Agent) failWorker(ctx context.Context, workerID uint, epoch uint64, ses
 	if !a.setWorkerStatusIfCurrent(ctx, workerID, epoch, memory.WorkerStatusFailed, message, "") {
 		return
 	}
+	zap.L().Error("worker 运行失败", zap.String("session", fmt.Sprintf("worker:%d", workerID)), zap.Error(err))
 	a.notifyLifeWorkerFailure(ctx, workerID, message)
 	if session == nil {
 		return

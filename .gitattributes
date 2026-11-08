@@ -1,1 +1,2 @@
 *.sh text eol=lf
+internal/config/persona_builtin_*.md text eol=lf

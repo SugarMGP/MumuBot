@@ -170,8 +170,9 @@ type SaveStickerInput struct {
 
 // SaveStickerOutput 收藏表情包的结果
 type SaveStickerOutput struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	StickerID uint   `json:"sticker_id"`
 }
 
 // NewSaveStickerTool 返回收藏表情包的工具，只接受消息里的表情
@@ -248,9 +249,9 @@ func saveStickerFunc(ctx context.Context, input *SaveStickerInput) (*SaveSticker
 		return nil, err
 	}
 	if isDuplicate {
-		return &SaveStickerOutput{Success: true, Message: "表情已收藏过，备注未变"}, nil
+		return &SaveStickerOutput{Success: true, Message: "表情已收藏过，备注未变", StickerID: sticker.ID}, nil
 	}
-	return &SaveStickerOutput{Success: true, Message: "已收藏表情"}, nil
+	return &SaveStickerOutput{Success: true, Message: "已收藏表情", StickerID: sticker.ID}, nil
 }
 
 // storeStickerFile 把媒体复制进表情包库目录

@@ -46,5 +46,6 @@ func DefaultRuntime() RuntimeConfig {
 			ImageQuality: 75,
 			NarrowEdge:   1080,
 		},
+		Debug: DebugConfig{LogAgentContent: true},
 	}
 }

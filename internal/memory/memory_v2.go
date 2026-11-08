@@ -468,6 +468,30 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 	}
 	switch change.Action {
 	case "update":
+		if subjectType := strings.ToLower(strings.TrimSpace(change.SubjectType)); subjectType != "" {
+			if subjectType != item.SubjectType && subjectType != SubjectSelf && strings.TrimSpace(change.SubjectTarget) == "" {
+				return MemoryChangeResult{}, fmt.Errorf("改变主体类型时请同时提供 subject_target")
+			}
+			item.SubjectType = subjectType
+		}
+		if change.SubjectType != "" || change.SubjectTarget != "" {
+			target := item.SubjectTarget
+			if change.SubjectTarget != "" {
+				target = change.SubjectTarget
+			}
+			var err error
+			item.SubjectTarget, err = NormalizeSubjectTarget(item.SubjectType, target)
+			if err != nil {
+				return MemoryChangeResult{}, err
+			}
+		}
+		if change.MemoryType != "" {
+			var err error
+			item.MemoryType, err = ValidateMemoryType(change.MemoryType)
+			if err != nil {
+				return MemoryChangeResult{}, err
+			}
+		}
 		if content := strings.TrimSpace(change.Content); content != "" {
 			item.Content = content
 		}
@@ -500,6 +524,9 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 	item.Content = content
 	item.ContentHash = memoryContentHash(item.SubjectType, item.SubjectTarget, item.MemoryType, item.Content)
 	if change.Action == "update" {
+		if _, err := settleExpiredMemoryHashTx(tx, item.SubjectType, item.SubjectTarget, item.MemoryType, item.ContentHash, time.Now()); err != nil {
+			return MemoryChangeResult{}, err
+		}
 		var duplicate int64
 		if err := tx.Model(&KnowledgeRecord{}).Where("subject_type=? AND subject_target=? AND memory_type=? AND content_hash=? AND status='active' AND id<>?", item.SubjectType, item.SubjectTarget, item.MemoryType, item.ContentHash, item.ID).Count(&duplicate).Error; err != nil {
 			return MemoryChangeResult{}, err
@@ -511,10 +538,14 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 	if err := tx.Save(&item).Error; err != nil {
 		return MemoryChangeResult{}, err
 	}
+	reason := change.Reason
+	if item.SubjectType != before.SubjectType || item.SubjectTarget != before.SubjectTarget || item.MemoryType != before.MemoryType {
+		reason = fmt.Sprintf("归属与类型：%s:%s / %s → %s:%s / %s\n%s", before.SubjectType, before.SubjectTarget, before.MemoryType, item.SubjectType, item.SubjectTarget, item.MemoryType, reason)
+	}
 	if err := tx.Create(&KnowledgeRevision{
 		ItemID: item.ID, Version: item.Version, BeforeContent: before.Content, AfterContent: item.Content,
 		BeforeStatus: before.Status, AfterStatus: item.Status, BeforePinned: before.Pinned,
-		AfterPinned: item.Pinned, Reason: change.Reason,
+		AfterPinned: item.Pinned, Reason: reason,
 	}).Error; err != nil {
 		return MemoryChangeResult{}, err
 	}

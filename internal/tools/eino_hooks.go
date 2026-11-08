@@ -10,19 +10,11 @@ import (
 	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
-	cb "github.com/cloudwego/eino/callbacks"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
-	callbacktpl "github.com/cloudwego/eino/utils/callbacks"
 	"github.com/eino-contrib/jsonschema"
 )
-
-type toolLogStateKey struct{}
-
-type toolLogState struct {
-	Input string
-}
 
 type toolErrorOutput struct {
 	Success bool   `json:"success"`
@@ -302,44 +294,4 @@ func toolOutputSucceeded(output *compose.ToolOutput) bool {
 		return true
 	}
 	return *result.Success
-}
-
-// NewToolLogHandler 创建统一的工具调用日志回调
-func NewToolLogHandler() cb.Handler {
-	return callbacktpl.NewHandlerHelper().
-		Tool(&callbacktpl.ToolCallbackHandler{
-			OnStart: func(ctx context.Context, info *cb.RunInfo, input *einotool.CallbackInput) context.Context {
-				if input == nil {
-					return ctx
-				}
-				return context.WithValue(ctx, toolLogStateKey{}, &toolLogState{
-					Input: input.ArgumentsInJSON,
-				})
-			},
-			OnEnd: func(ctx context.Context, info *cb.RunInfo, output *einotool.CallbackOutput) context.Context {
-				if info == nil || output == nil {
-					return ctx
-				}
-				state, _ := ctx.Value(toolLogStateKey{}).(*toolLogState)
-				if state != nil {
-					LogToolCall(info.Name, state.Input, output.Response, nil)
-				} else {
-					LogToolCall(info.Name, "", output.Response, nil)
-				}
-				return ctx
-			},
-			OnError: func(ctx context.Context, info *cb.RunInfo, err error) context.Context {
-				if info == nil {
-					return ctx
-				}
-				state, _ := ctx.Value(toolLogStateKey{}).(*toolLogState)
-				if state != nil {
-					LogToolCall(info.Name, state.Input, "", err)
-				} else {
-					LogToolCall(info.Name, "", "", err)
-				}
-				return ctx
-			},
-		}).
-		Handler()
 }

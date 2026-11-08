@@ -156,6 +156,8 @@ The service listens on port `7468` by default (configurable via `MUMU_SERVER_POR
 
 Visit `/admin` to access the admin dashboard. The dashboard stays disabled until an admin key is configured.
 
+QQ, life, and worker runs log full input context, tool arguments and results, and model output at INFO by default, linked by `session` and `run_id`. Binary media is represented by metadata. This filtering only affects logs; reasoning and tool results are still sent back to the model unchanged. Turn off content logging under Settings → Debug to keep only status, duration, and errors. Treat full logs as private conversation data.
+
 ## 🧠 Context and Topics
 
 The main chat and synchronous topic compaction share the current model. Chat, life, and worker step limits are configured separately and read when the next think begins; the compactor has its own step budget. Model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions; only transcript working-set rows covered by the new summaries are deleted. Originals and chat media are kept for the configured minimum retention (180 days by default); originals still in the working set are deferred, while summaries, memories, and diaries follow their own retention rules.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mumu-bot/internal/llm"
+	"mumu-bot/internal/logger"
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
@@ -17,7 +18,6 @@ import (
 	"github.com/bytedance/sonic"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
@@ -27,19 +27,16 @@ import (
 var errCompactionPending = errors.New("压缩失败或仍在退避")
 
 // runAgent 跑一轮主模型，模型产生的消息由会话收集器统一写回
-func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*schema.AgenticMessage], messages []*schema.AgenticMessage) error {
+func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*schema.AgenticMessage], messages []*schema.AgenticMessage) (runErr error) {
 	cfg := configFor(ctx)
 	generation := generationFrom(ctx)
-	extra := []callbacks.Handler(nil)
-	if cfg.Debug.ShowToolCalls {
-		extra = append(extra, tools.NewToolLogHandler())
-	}
 	modelName := ""
 	if generation != nil {
 		modelName = generation.modelName
 	}
 	task := "react"
 	if tc := tools.GetToolContext(ctx); tc != nil {
+		ctx = logger.WithSession(ctx, tc.ConversationKind, tc.TargetID, tc.RunID, cfg.Debug.LogAgentContent)
 		switch tc.ConversationKind {
 		case memory.ConversationKindWorker:
 			task = "worker"
@@ -47,7 +44,17 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 			task = "life"
 		}
 	}
-	ctx = llm.WithTask(ctx, task, modelName, extra...)
+	log := logger.FromContext(ctx).With(zap.String("task", task))
+	started := time.Now()
+	log.Info("Agent 运行开始")
+	defer func() {
+		if runErr != nil {
+			log.Error("Agent 运行失败", zap.Duration("duration", time.Since(started)), zap.Error(runErr))
+		} else {
+			log.Info("Agent 运行完成", zap.Duration("duration", time.Since(started)))
+		}
+	}()
+	ctx = llm.WithTask(ctx, task, modelName)
 	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent})
 	iter := runner.Run(ctx, messages)
 	for {

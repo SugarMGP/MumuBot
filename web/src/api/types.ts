@@ -316,7 +316,7 @@ export interface RuntimeConfig {
     narrow_edge: number;
   };
   debug: {
-    show_tool_calls: boolean;
+    log_agent_content: boolean;
   };
 }
 

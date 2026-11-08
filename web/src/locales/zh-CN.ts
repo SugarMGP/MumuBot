@@ -592,8 +592,8 @@ const zhCN = {
     },
     debug: {
       title: "调试",
-      hint: "控制工具调用日志的详细程度。",
-      showToolCalls: "记录工具调用名称、参数和结果摘要",
+      hint: "关闭正文记录后，仍记录运行状态、耗时和错误。",
+      logAgentContent: "记录完整上下文、工具参数与结果、模型输出",
     },
   },
   models: {

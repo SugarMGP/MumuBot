@@ -606,8 +606,8 @@ const enUS: typeof zhCN = {
     },
     debug: {
       title: "Debug",
-      hint: "Controls how much tool-call detail is logged.",
-      showToolCalls: "Log tool names, arguments and result summaries",
+      hint: "Run status, duration and errors remain logged when content logging is off.",
+      logAgentContent: "Log full context, tool arguments and results, and model output",
     },
   },
   models: {

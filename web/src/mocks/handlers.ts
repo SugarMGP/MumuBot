@@ -322,7 +322,7 @@ const defaultConfig = {
     history_days: 180,
   },
   media: { max_bytes_mb: 10, image_quality: 82, narrow_edge: 720 },
-  debug: { show_tool_calls: false },
+  debug: { log_agent_content: true },
 };
 
 const settings = {
