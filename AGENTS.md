@@ -126,8 +126,9 @@ go vet ./...
 - 更新日志面向使用者和维护者，描述影响和结果，不堆砌 git 提交，不写内部实现流水账。
 - 调研报告、方案讨论、审查过程、验证记录和 `AGENTS.md` 等协作说明不属于项目变更，不写入 `CHANGELOG.md`。
 - 发布新版本前，必须把 `Unreleased` 中待发布的内容移动到 `## [x.y.z] - YYYY-MM-DD` 版本区块；tag 使用 `vx.y.z`，并确保版本区块存在，否则发布流程会失败。
-- `main`/Pull Request 的持续集成与 `v*` tag 发布使用独立 workflow：前者只执行单次构建和静态检查，后者才执行完整平台矩阵、容器镜像与 GitHub Release，禁止让同一提交因 main push 和 tag push 重复跑发布矩阵。
-- `v*` tag 发布时先构建并推送 `linux/amd64`、`linux/arm64` 镜像到 GitHub Container Registry，再创建 GitHub Release；使用仓库内置 `GITHUB_TOKEN` 和 `packages: write`，不依赖额外仓库密钥。
+- `main`/Pull Request 的持续集成与 `v*` tag 主服务发布使用独立 workflow：前者只执行单次构建和静态检查，后者才执行主服务完整平台矩阵、容器镜像与 GitHub Release，禁止让同一提交因 main push 和 tag push 重复跑主服务发布矩阵。
+- `v*` tag 发布时先构建并推送主服务的 `linux/amd64`、`linux/arm64` 镜像到 GitHub Container Registry，再创建 GitHub Release；使用仓库内置 `GITHUB_TOKEN` 和 `packages: write`，不依赖额外仓库密钥。
+- worker 镜像由独立 workflow 在 `main` 的 worker 源码、镜像配方、入口脚本、Go 依赖或相关构建配置变化时发布 `linux/amd64`、`linux/arm64`，使用 `latest` 与 `sha-<完整提交 SHA>` 标签；无相关变更不发布，不跟随主服务版本 tag 构建。
 
 ## 验证
 

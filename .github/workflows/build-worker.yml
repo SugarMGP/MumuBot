@@ -1,0 +1,142 @@
+name: Worker Image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - .github/workflows/build-worker.yml
+      - .dockerignore
+      - Dockerfile.worker
+      - docker-entrypoint.worker.sh
+      - cmd/worker-exec/**
+      - internal/workerexec/**
+      - internal/workerproto/**
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  container:
+    name: Build worker image (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+            machine: x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Verify native architecture and set image name
+        run: |
+          test "$(uname -m)" = "${{ matrix.platform.machine }}"
+          echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}-worker" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: type=sha,format=long
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile.worker
+          platforms: linux/${{ matrix.platform.arch }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=image-worker-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=image-worker-${{ matrix.platform.arch }}
+
+      - name: Export image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests-worker-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-image:
+    name: Publish worker image
+    needs: container
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set image name
+        run: echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}-worker" >> "$GITHUB_ENV"
+
+      - name: Download image digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-digests-worker-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Publish multi-platform image
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=(--tag "$tag")
+          done
+          for digest in *; do
+            args+=("$IMAGE_NAME@sha256:$digest")
+          done
+          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools inspect --raw "$IMAGE_NAME:sha-$GITHUB_SHA" | jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'

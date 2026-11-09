@@ -123,6 +123,8 @@ docker compose up -d
 
 Compose 会直接拉取 GHCR 上的 `latest` 镜像，并额外启动一个 worker 容器。worker 使用 Ubuntu 24.04、共享 home 和 Nix，预装 Node 24.22.2、Bun 1.4.4、uv 0.13.7、Go yq 4.54.2 以及 fdfind/batcat/sd/7z/pdftotext 等常用 CLI；JavaScript/TypeScript 新任务优先 Bun，现有 Node 项目和锁文件保持原运行时。最多 5 个并行 worker 共用 `./workspace` 作为执行空间，映射到容器内的 `/home/worker`，安装的工具、缓存和项目文件可以直接复用。默认不预装 Chrome/Playwright，由 worker 自己安装。worker 数量在“设置 → 思考与并发”里调整（0–5）。模型、人格预设、对话行为和 MCP 服务器不再从配置文件读取；首次启动后打开管理后台，在“设置 → 模型管理”添加并激活模型即可。
 
+主服务镜像随 `v*` 版本标签发布；worker 镜像独立发布，只在 `main` 分支的 worker 源码、镜像配方、入口脚本、Go 依赖或相关构建配置变化时更新，同时提供 `latest` 和 `sha-<完整提交 SHA>` 标签。仅发布主服务新版本不会重复发布 worker。Compose 启动时两者都会检查最新镜像。
+
 从容器日志获取 SnowLuma WebUI 与 noVNC 的首次密码，通过 `http://localhost:6081` 登录 QQ，再访问 `http://localhost:5099` 配置 WebSocket 的访问令牌；将同一个令牌填入 `.env` 的 `MUMU_ONEBOT_TOKEN` 后重启 MumuBot。
 
 ### 使用发布包

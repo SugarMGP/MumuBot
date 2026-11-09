@@ -90,6 +90,8 @@ docker compose up -d
 
 Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with one shared home and Nix; up to 5 parallel workers share `./workspace`, mounted at `/home/worker` in the container, so installed tools, caches, and project files can be reused. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
 
+The main image is published with `v*` version tags. The worker image is published independently, only when its source, Dockerfile, entrypoint, Go dependencies, or related build configuration changes on `main`, with `latest` and `sha-<full commit SHA>` tags. A main release alone does not republish the worker. Compose checks for updated images for both services on startup.
+
 Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
 
 ### Using Release Packages

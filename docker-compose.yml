@@ -47,6 +47,7 @@ services:
 
   worker:
     image: ghcr.io/sugarmgp/mumubot-worker:latest
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile.worker

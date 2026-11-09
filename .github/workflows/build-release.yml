@@ -147,12 +147,11 @@ jobs:
         retention-days: 1
 
   container:
-    name: Build ${{ matrix.image }} image (${{ matrix.platform.arch }})
+    name: Build main image (${{ matrix.platform.arch }})
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
       matrix:
-        image: [main, worker]
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -170,7 +169,7 @@ jobs:
       - name: Verify native architecture and set image name
         run: |
           test "$(uname -m)" = "${{ matrix.platform.machine }}"
-          echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}${{ matrix.image == 'worker' && '-worker' || '' }}" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -193,13 +192,13 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ${{ matrix.image == 'worker' && './Dockerfile.worker' || './Dockerfile' }}
+          file: ./Dockerfile
           platforms: linux/${{ matrix.platform.arch }}
-          build-args: ${{ matrix.image == 'main' && format('VERSION={0}', github.ref_name) || '' }}
+          build-args: VERSION=${{ github.ref_name }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=image-${{ matrix.image }}-${{ matrix.platform.arch }}
-          cache-to: type=gha,mode=max,scope=image-${{ matrix.image }}-${{ matrix.platform.arch }}
+          cache-from: type=gha,scope=image-main-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=image-main-${{ matrix.platform.arch }}
 
       - name: Export image digest
         env:
@@ -211,30 +210,26 @@ jobs:
       - name: Upload image digest
         uses: actions/upload-artifact@v4
         with:
-          name: image-digests-${{ matrix.image }}-${{ matrix.platform.arch }}
+          name: image-digests-main-${{ matrix.platform.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 
   publish-images:
-    name: Publish ${{ matrix.image }} image
+    name: Publish main image
     needs: container
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        image: [main, worker]
     permissions:
       contents: read
       packages: write
     steps:
       - name: Set image name
-        run: echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}${{ matrix.image == 'worker' && '-worker' || '' }}" >> "$GITHUB_ENV"
+        run: echo "IMAGE_NAME=$REGISTRY/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Download image digests
         uses: actions/download-artifact@v4
         with:
-          pattern: image-digests-${{ matrix.image }}-*
+          pattern: image-digests-main-*
           merge-multiple: true
           path: ${{ runner.temp }}/digests
 
