@@ -63,7 +63,7 @@ func readForwardFunc(ctx context.Context, input *ReadForwardInput) (any, error) 
 func NewReadForwardTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"readForward",
-		"查看合并转发里的内容。消息里的合并转发占位带着句柄，先用 readForward 列出这份转发里有哪些消息，再带上 index 看某一条的具体内容；转发里如果还有嵌套转发，会给出新的句柄，可以继续往下翻。",
+		"查看合并转发里的内容。消息里的合并转发占位带着句柄，先用 readForward 列出这份转发里有哪些消息，再带上 index 看某一条的具体内容；转发里如果还有嵌套转发，会给出新的句柄，可以继续往下翻。具体节点的可用附件会给出 file_ref 或 image_ref，可交给现有文件或看图工具；不可取原因会明确返回。",
 		readForwardFunc,
 	)
 }

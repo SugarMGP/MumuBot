@@ -52,12 +52,17 @@ func (a *Agent) runRetentionCycle() {
 			break
 		}
 		deletedTotal += deleted
-		if len(refs) > 0 {
-			removed, mediaErr := a.memory.ReleaseMedia(ctx, refs)
+		if len(refs.Images) > 0 {
+			removed, mediaErr := a.memory.ReleaseMedia(ctx, refs.Images)
 			if mediaErr != nil {
 				zap.L().Warn("回收到期原文媒体失败", zap.Error(mediaErr))
 			}
 			removedMedia += removed
+		}
+		removed, forwardErr := a.memory.ReleaseForwardFiles(ctx, refs.ForwardFiles)
+		removedMedia += removed
+		if forwardErr != nil {
+			zap.L().Warn("回收转发原件失败", zap.Error(forwardErr))
 		}
 		if deleted < 500 {
 			break
@@ -66,6 +71,11 @@ func (a *Agent) runRetentionCycle() {
 	orphanRemoved := 0
 	if a.lastOrphanCleanup.IsZero() || now.Sub(a.lastOrphanCleanup) >= 24*time.Hour {
 		removed, err := a.memory.CleanupOrphanMedia(ctx, now)
+		if err == nil {
+			var count int
+			count, err = a.memory.CleanupOrphanForwardFiles(ctx, now)
+			removed += count
+		}
 		if err != nil {
 			zap.L().Warn("补扫孤立媒体失败", zap.Error(err))
 		} else {

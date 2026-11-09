@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -54,13 +53,7 @@ func lifeViewImageRun(ctx context.Context, argument *schema.ToolArgument) (*sche
 	if err != nil {
 		return nil, err
 	}
-	encoded := base64.StdEncoding.EncodeToString(data)
-	return &schema.ToolResult{Parts: []schema.ToolOutputPart{
-		{Type: schema.ToolPartTypeImage, Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{
-			Base64Data: &encoded,
-			MIMEType:   mime,
-		}}},
-	}}, nil
+	return imagePreviewResult(data, mime)
 }
 
 func resolveLifeImage(ctx context.Context, input *LifeViewImageInput) ([]byte, string, error) {

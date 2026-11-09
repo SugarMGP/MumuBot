@@ -29,11 +29,18 @@ func (a *App) failFromError(w http.ResponseWriter, r *http.Request, err error) {
 		errors.Is(err, mcp.ErrNotFound),
 		errors.Is(err, memory.ErrPersonaPresetNotFound):
 		respondError(w, http.StatusNotFound, "not_found", messageNotFound, nil)
-	case errors.Is(err, config.ErrVersionConflict),
+	case errors.Is(err, memory.ErrMemoryVersion),
+		errors.Is(err, config.ErrVersionConflict),
 		errors.Is(err, modelprofiles.ErrVersionConflict),
 		errors.Is(err, mcp.ErrVersionConflict),
 		errors.Is(err, memory.ErrPersonaPresetVersion):
 		respondError(w, http.StatusConflict, "version_conflict", messageVersionConflict, nil)
+	case errors.Is(err, memory.ErrMemoryNotEditable):
+		respondError(w, http.StatusConflict, "memory_not_editable", "", nil)
+	case errors.Is(err, memory.ErrMemoryDuplicate):
+		respondError(w, http.StatusConflict, "memory_duplicate", "", nil)
+	case errors.Is(err, memory.ErrMemoryDeleteActive):
+		respondError(w, http.StatusConflict, "memory_delete_active", "", nil)
 	case errors.Is(err, memory.ErrPersonaPresetDuplicateName):
 		respondError(w, http.StatusBadRequest, "preset_duplicate", "已经有同名预设了。", nil)
 	case errors.Is(err, memory.ErrPersonaPresetInvalid), errors.Is(err, mcp.ErrInvalidConfig):

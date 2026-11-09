@@ -96,12 +96,20 @@ export interface MemoryQuery extends ListQuery {
   user_id?: number;
 }
 
+export interface MemoryUpdate {
+  version: number;
+  content?: string;
+  pinned?: boolean;
+  status?: "archived";
+}
+
 export const memoryApi = {
   list: (query: MemoryQuery) =>
     apiGet<ListPayload<MemoryItem>>(`/api/v1/memories${buildQuery(query)}`),
   get: (id: number) => apiGet<MemoryDetail>(`/api/v1/memories/${id}`),
-  updateStatus: (id: number, status: string) =>
-    apiMutate<MemoryItem>("PATCH", `/api/v1/memories/${id}`, { status }),
+  update: (id: number, update: MemoryUpdate) =>
+    apiMutate<MemoryItem>("PATCH", `/api/v1/memories/${id}`, update),
+  remove: (id: number) => apiMutate<{ deleted: boolean }>("DELETE", `/api/v1/memories/${id}`),
 };
 
 export interface TopicQuery {

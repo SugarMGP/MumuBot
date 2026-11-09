@@ -17,11 +17,18 @@ func (a *Agent) buildForwardNodes(ctx context.Context, nodes []message.ForwardNo
 	draft := forwardDraft{Handle: handle, Parent: parent}
 	var drafts []forwardDraft
 	for _, node := range nodes {
-		item := memory.ForwardNode{Sender: node.Nickname}
+		item := memory.ForwardNode{Sender: node.Nickname, GroupID: int64(node.GroupID)}
 		var text strings.Builder
 		for _, seg := range node.Message {
 			var source *pendingMedia
 			switch data := seg.Data.(type) {
+			case message.FileData:
+				item.Files = append(item.Files, a.prepareForwardFile(ctx, item.GroupID, data))
+				text.WriteString(fmt.Sprintf("[文件附件:%d]", len(item.Files)-1))
+				continue
+			case message.MFaceData:
+				image := onebot.ImageInfoFromMFace(data)
+				source = &pendingMedia{URL: image.URL, File: image.File, Sticker: true}
 			case message.ImageData:
 				image := onebot.ImageInfoFromData(data)
 				source = &pendingMedia{URL: image.URL, File: image.File, Sticker: image.SubType == 1}
@@ -30,7 +37,7 @@ func (a *Agent) buildForwardNodes(ctx context.Context, nodes []message.ForwardNo
 				refs := a.cacheMedia(ctx, []pendingMedia{*source})
 				if len(refs) > 0 && refs[0].Hash != "" {
 					item.Images = append(item.Images, refs[0])
-					text.WriteString("[图片:" + refs[0].Hash + "]")
+					text.WriteString(fmt.Sprintf("[图片附件:%d]", len(item.Images)-1))
 				} else {
 					text.WriteString(renderForwardSegment(seg))
 				}

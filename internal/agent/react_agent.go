@@ -13,6 +13,7 @@ import (
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/onebot"
+	"mumu-bot/internal/tools"
 
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
@@ -49,7 +50,8 @@ type Agent struct {
 	generation   *Generation
 	applyMu      sync.Mutex
 
-	replyCache *ttlcache.Cache[string, onebot.ReplyInfo]
+	replyCache    *ttlcache.Cache[string, onebot.ReplyInfo]
+	memberRosters *ttlcache.Cache[int64, *tools.MemberRoster]
 
 	recallMu       sync.Mutex
 	pendingRecalls map[recallCommit]pendingRecall
@@ -136,6 +138,9 @@ func New(mem *memory.Manager, botClient *onebot.Client, models *modelprofiles.St
 	if err := a.SyncWorkers(cfg.Agent.WorkerCount); err != nil {
 		return nil, fmt.Errorf("同步 worker 池失败: %w", err)
 	}
+	a.memberRosters = newAgentTTLCache[int64, *tools.MemberRoster](128, 10*time.Minute)
+	a.bot.OnConnected(func() { a.memberRosters.DeleteAll() })
+	go a.memberRosters.Start()
 	go a.replyCache.Start()
 	return a, nil
 }
@@ -243,6 +248,9 @@ func newAgentTTLCache[K comparable, V any](capacity int, ttl time.Duration) *ttl
 }
 
 func (a *Agent) stopCaches() {
+	if a.memberRosters != nil {
+		a.memberRosters.Stop()
+	}
 	if a.replyCache != nil {
 		a.replyCache.Stop()
 	}

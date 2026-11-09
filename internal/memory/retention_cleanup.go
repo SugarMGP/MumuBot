@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/bytedance/sonic"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const mediaRefsGINQuery = `media_refs @> ?::jsonb`
@@ -24,47 +24,60 @@ type deletedMessage struct {
 	MediaRef []byte `gorm:"column:media_refs"`
 }
 
-// CleanupExpiredMessages 删除超过最低保留期且不再被 transcript 引用的原文，返回待回收媒体
-func (m *Manager) CleanupExpiredMessages(ctx context.Context, now time.Time, limit int) ([]media.Ref, int, error) {
+type MessageMediaCandidates struct {
+	Images       []media.Ref
+	ForwardFiles []string
+}
+
+// CleanupExpiredMessages 删除到期原文，级联删除前收集媒体与转发原件候选
+func (m *Manager) CleanupExpiredMessages(ctx context.Context, now time.Time, limit int) (MessageMediaCandidates, int, error) {
 	if limit <= 0 {
 		limit = 500
 	}
 	cutoff := now.Add(-time.Duration(CurrentRetentionPolicy().HistoryDays) * 24 * time.Hour)
 	var deleted []deletedMessage
+	candidates := MessageMediaCandidates{}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return tx.Raw(`
-			WITH due AS (
-				SELECT id FROM message_logs
-				WHERE message_time < ?
-					AND NOT EXISTS (
-						SELECT 1 FROM conversation_transcript t WHERE t.message_log_id=message_logs.id
-					)
-				ORDER BY message_time,id LIMIT ?
-				FOR UPDATE SKIP LOCKED
-			)
-			DELETE FROM message_logs
-			WHERE id IN (SELECT id FROM due)
-				AND NOT EXISTS (
-					SELECT 1 FROM conversation_transcript t WHERE t.message_log_id=message_logs.id
-				)
-			RETURNING id, media_refs`, cutoff, limit).Scan(&deleted).Error
+		var ids []uint
+		if err := tx.Model(&MessageLog{}).Select("id").Where(`message_time<? AND NOT EXISTS (SELECT 1 FROM conversation_transcript t WHERE t.message_log_id=message_logs.id)`, cutoff).
+			Order("message_time,id").Limit(limit).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).Find(&ids).Error; err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		var forwards []MessageForward
+		if err := tx.Select("nodes").Where("message_log_id IN ?", ids).Find(&forwards).Error; err != nil {
+			return err
+		}
+		for _, forward := range forwards {
+			for _, node := range forward.Nodes {
+				for _, file := range node.Files {
+					if file.CacheHash != "" {
+						candidates.ForwardFiles = append(candidates.ForwardFiles, file.CacheHash)
+					}
+				}
+			}
+		}
+		return tx.Raw(`DELETE FROM message_logs WHERE id IN ? AND NOT EXISTS (
+			SELECT 1 FROM conversation_transcript t WHERE t.message_log_id=message_logs.id
+		) RETURNING id,media_refs`, ids).Scan(&deleted).Error
 	})
 	if err != nil {
-		return nil, 0, err
+		return MessageMediaCandidates{}, 0, err
 	}
-	refs := make([]media.Ref, 0)
 	for _, row := range deleted {
 		if len(row.MediaRef) == 0 {
 			continue
 		}
-		var mediaRefs media.Refs
-		if err := json.Unmarshal(row.MediaRef, &mediaRefs); err != nil {
+		var refs media.Refs
+		if err := sonic.Unmarshal(row.MediaRef, &refs); err != nil {
 			zap.L().Warn("解析已删除原文的媒体引用失败", zap.Uint("message_log_id", row.ID), zap.Error(err))
 			continue
 		}
-		refs = append(refs, mediaRefs...)
+		candidates.Images = append(candidates.Images, refs...)
 	}
-	return refs, len(deleted), nil
+	return candidates, len(deleted), nil
 }
 
 // ReleaseMedia 在原文事务提交后回收不再被任何原文和收藏引用的聊天媒体缓存
@@ -129,10 +142,10 @@ func (m *Manager) CleanupOrphanMedia(ctx context.Context, now time.Time) (int, e
 			}
 			hash := entry.Name()
 			if !kind.sticker {
-				if filepath.Ext(hash) != ".webp" {
+				if ext := filepath.Ext(hash); ext != ".webp" && ext != ".gif" {
 					continue
 				}
-				hash = strings.TrimSuffix(hash, ".webp")
+				hash = strings.TrimSuffix(hash, filepath.Ext(hash))
 			}
 			used, err := m.mediaRefExists(ctx, media.Ref{Hash: hash, Sticker: kind.sticker})
 			if err != nil {
@@ -152,7 +165,7 @@ func (m *Manager) CleanupOrphanMedia(ctx context.Context, now time.Time) (int, e
 }
 
 func (m *Manager) mediaRefExists(ctx context.Context, ref media.Ref) (bool, error) {
-	payload, err := json.Marshal([]map[string]any{{"hash": ref.Hash, "sticker": ref.Sticker}})
+	payload, err := sonic.Marshal([]map[string]any{{"hash": ref.Hash, "sticker": ref.Sticker}})
 	if err != nil {
 		return false, err
 	}
@@ -169,6 +182,9 @@ func (m *Manager) mediaPath(ref media.Ref) string {
 		return ""
 	}
 	base := filepath.Join(m.mediaDir, "image", ref.Hash+".webp")
+	if ref.Mime == "image/gif" {
+		base = filepath.Join(m.mediaDir, "image", ref.Hash+".gif")
+	}
 	if ref.Sticker {
 		base = filepath.Join(m.mediaDir, "sticker", ref.Hash)
 	}

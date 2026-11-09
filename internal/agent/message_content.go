@@ -96,10 +96,7 @@ func (a *Agent) ensureIncomingImageRefs(ctx context.Context, refs []media.Ref) {
 		if item.Path == "" || item.ImageRef != "" {
 			continue
 		}
-		name := item.Short + ".webp"
-		if item.Sticker {
-			name = item.Short + filepath.Ext(item.Path)
-		}
+		name := item.Short + filepath.Ext(item.Path)
 		ref, err := store.CreateReadyFromFile(ctx, name, item.Path, 10*1024*1024, nil)
 		if err != nil {
 			zap.L().Warn("保存图片引用失败", zap.String("short", item.Short), zap.Error(err))

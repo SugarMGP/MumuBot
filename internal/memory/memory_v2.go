@@ -456,15 +456,15 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 		return MemoryChangeResult{}, err
 	}
 	if item.Version != change.ExpectedVersion {
-		return MemoryChangeResult{}, fmt.Errorf("记忆 %d 已被其他请求修改，请重新读取后再试", item.ID)
+		return MemoryChangeResult{}, ErrMemoryVersion
 	}
 	before := item
 	item.Version++
 	if item.Status != "active" {
-		return MemoryChangeResult{}, fmt.Errorf("记忆已归档，不能再修改")
+		return MemoryChangeResult{}, ErrMemoryNotEditable
 	}
 	if change.Action == "update" && !item.Pinned && item.ForgetAt != nil && !time.Now().Before(*item.ForgetAt) {
-		return MemoryChangeResult{}, fmt.Errorf("记忆已到期，不能再修改")
+		return MemoryChangeResult{}, ErrMemoryNotEditable
 	}
 	switch change.Action {
 	case "update":
@@ -532,7 +532,7 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 			return MemoryChangeResult{}, err
 		}
 		if duplicate > 0 {
-			return MemoryChangeResult{}, fmt.Errorf("已有相同内容的记忆，请读取现有条目后再合并")
+			return MemoryChangeResult{}, ErrMemoryDuplicate
 		}
 	}
 	if err := tx.Save(&item).Error; err != nil {

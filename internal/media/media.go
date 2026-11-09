@@ -145,12 +145,18 @@ func (m *Manager) Ensure(ctx context.Context, src Source) (Ref, error) {
 // cached 查缓存命中，普通图片落在 image 目录，表情包落在 sticker 目录
 func (m *Manager) cached(hash string, sticker bool) (Ref, bool) {
 	path := m.pathFor(hash, sticker)
+	if !sticker {
+		gifPath := filepath.Join(m.opts.Dir, imageDir, hash+".gif")
+		if _, err := os.Stat(gifPath); err == nil {
+			path = gifPath
+		}
+	}
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
 		return Ref{}, false
 	}
 	mime := webpMime
-	if sticker {
+	if sticker || filepath.Ext(path) == ".gif" {
 		mime = sniffMime(path)
 	}
 	return Ref{Hash: hash, Path: path, Mime: mime, Bytes: info.Size(), Sticker: sticker}, true
@@ -180,6 +186,17 @@ func (m *Manager) storeSticker(hash, tempPath string) (Ref, error) {
 
 // storeImage 普通图片按 EXIF 方向摆正，窄边缩到上限后转 webp
 func (m *Manager) storeImage(hash, tempPath string) (Ref, error) {
+	if sniffMime(tempPath) == "image/gif" {
+		target := filepath.Join(m.opts.Dir, imageDir, hash+".gif")
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return Ref{}, err
+		}
+		if err := os.Rename(tempPath, target); err != nil {
+			return Ref{}, err
+		}
+		ref, _ := m.cached(hash, false)
+		return ref, nil
+	}
 	img, err := decodeImage(tempPath)
 	if err != nil {
 		return Ref{}, fmt.Errorf("解析图片失败: %w", err)

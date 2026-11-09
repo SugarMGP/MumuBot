@@ -85,6 +85,7 @@ export interface ConversationsData {
 }
 
 export interface MemoryItem {
+  version: number;
   id: number;
   subject_type: string;
   subject_target: string;
@@ -278,6 +279,7 @@ export interface RuntimeConfig {
     think_debounce_ms: number;
     max_step: number;
     life_max_step: number;
+    life_daily_request_limit: number;
     worker_max_step: number;
     max_group_concurrency: number;
     max_private_concurrency: number;
@@ -508,7 +510,19 @@ export interface LifeSchedule {
   updated_at: string;
 }
 
+export interface DailyUsage {
+  date: string;
+  limit: number;
+  total: number;
+  life: number;
+  worker: number;
+  failures: number;
+  status: "disabled" | "normal" | "near" | "over";
+}
+
 export interface LifeData {
+  daily_usage: DailyUsage | null;
+  daily_usage_unavailable: boolean;
   state: LifeState;
   schedules: LifeSchedule[];
   workers: LifeWorker[];

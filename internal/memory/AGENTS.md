@@ -18,7 +18,7 @@
 - `memory_v2.go` 和 `sticker.go` 的分页使用数据库排序、keyset 条件和 LIMIT，不把匹配集全部取回 Go 再排序；检索表达式必须与 trigram 索引一致。
 - `memory_v2.go` 只用 `subject_type + subject_target + memory_type`；subject 允许 group/user/self/object，memory_type 允许 profile/experience；旧 kind 和来源字段已删除。
 - 同一主体、同类型、同内容哈希只对 active 条目精确去重；归档条目重复创建不得复活；更新、归档必须基于读取过的当前版本，恢复入口不保留。
-- `manageMemory` 的批量变更必须在一个事务内全成功或全回滚，不设条数上限；主 Agent 不物理删除，后台只诊断或归档，不能恢复。
+- `manageMemory` 的批量变更必须在一个事务内全成功或全回滚，不设条数上限；主 Agent 不物理删除；后台可版本检查后编辑有效正文与置顶、归档，已归档记录可确认后永久删除并级联清理修订，不能恢复。
 - 非置顶记忆和所有话题共用 `retention.go` 的指数曲线；检索与直接读取都只在数据库强化成功后记录，同 run 同类同 ID 一次，压缩/后台/装配不强化。到期判断始终按当前时间，分页快照只冻结内容与排序；创建记忆只结算同主体/类型/hash 的到期重复项。
 - 普通正文最多 8000 字。
 - `emotion_v2.go` 维护全局自由感受：ID 是身份，允许同名并存；按 `id+version` 事务更新，24 小时半衰期读时淡化；低于 0.001 时用实际跨阈值时间写 `ended_at`、递增版本并追加完整修订，读取前惰性结算并由维护循环补扫；`emotion_revisions` 保存完整状态快照。情感正文不是工具结果文件的生命周期根。

@@ -484,6 +484,21 @@ export default function LifePage() {
         )}
       </SectionCard>
 
+      <SectionCard title={t("life.usage.title")} description={t("life.usage.hint")}>
+        {data.daily_usage_unavailable || !data.daily_usage ? (
+          <p role="alert" className="text-sm text-destructive">{t("life.usage.unavailable")}</p>
+        ) : (
+          <div className="admin-form-grid">
+            <StatusRow label={t("life.usage.date")} value={data.daily_usage.date} />
+            <StatusRow label={t("life.usage.status")} value={<Badge variant={data.daily_usage.status === "over" ? "destructive" : data.daily_usage.status === "near" ? "accent" : "ghost"}>{t(`life.usage.${data.daily_usage.status}`)}</Badge>} />
+            <StatusRow label={t("life.usage.total")} value={data.daily_usage.total.toLocaleString()} />
+            <StatusRow label={t("life.usage.limit")} value={data.daily_usage.limit ? data.daily_usage.limit.toLocaleString() : t("life.usage.noLimit")} />
+            <StatusRow label={t("life.usage.life")} value={data.daily_usage.life.toLocaleString()} />
+            <StatusRow label={t("life.usage.worker")} value={data.daily_usage.worker.toLocaleString()} />
+          </div>
+        )}
+      </SectionCard>
+
       <LifeWorkers workers={data.workers} />
 
       <Dialog open={form !== null} onOpenChange={(open) => !open && closeForm()}>

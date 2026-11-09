@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"mumu-bot/internal/config"
+
+	"go.uber.org/zap"
 )
 
 // 门控权重来自 MaiBot 的离线拟合，作为上线起点，之后用本项目日志重新拟合
@@ -220,14 +222,25 @@ func (a *Agent) gateFrequency(groupID int64) float64 {
 			now := time.Now()
 			current := now.Hour()*60 + now.Minute()
 			if start <= end && current >= start && current < end {
-				return rule.TalkValue
+				base = rule.TalkValue
+				break
 			}
 			if start > end && (current >= start || current < end) {
-				return rule.TalkValue
+				base = rule.TalkValue
+				break
 			}
 		}
 	}
-	return base
+	ctx, cancel := a.persistenceContext()
+	defer cancel()
+	factor := 0.75
+	mood, err := a.memory.WithContext(ctx).GetMoodState()
+	if err != nil {
+		zap.L().Warn("读取群门控交流意愿失败，使用普通档位", zap.Error(err))
+	} else {
+		factor = sociabilityFactor(mood.Sociability)
+	}
+	return base * factor
 }
 
 // gateDecay 防话痨衰减，发言过多时压低意愿分
@@ -314,4 +327,15 @@ func parseTimeRange(value string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return startHour*60 + startMin, endHour*60 + endMin, true
+}
+
+func sociabilityFactor(value float64) float64 {
+	switch {
+	case value <= 0.33:
+		return 0.5
+	case value >= 0.67:
+		return 1
+	default:
+		return 0.75
+	}
 }

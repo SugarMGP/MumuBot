@@ -420,10 +420,7 @@ func historyViewFor(ctx context.Context, tc *ToolContext, row memory.MessageLog)
 			}
 		}
 		if imageRef == "" && item.Path != "" {
-			name := item.Short + ".webp"
-			if item.Sticker {
-				name = item.Short + filepath.Ext(item.Path)
-			}
+			name := item.Short + filepath.Ext(item.Path)
 			if ref, err := store.CreateReadyFromFile(ctx, name, item.Path, 10*1024*1024, nil); err == nil {
 				imageRef = ref.ImageRef()
 			}

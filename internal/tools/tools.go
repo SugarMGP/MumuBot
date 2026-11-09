@@ -111,14 +111,16 @@ type ToolContext struct {
 	SendImageBytesCallback        func(ctx context.Context, imageRef, name string, data []byte) error
 	ReadForwardCallback           func(ctx context.Context, id string, index int) (any, error)
 	// EndAfterSleep 只在 sleepUntil 成功落库后置位，下一次模型边界正常收尾
-	ModelRequested       bool
-	EndAfterSleep        bool
-	GroupInfoCallback    func(ctx context.Context) string
-	StickerDir           string
-	Session              SessionContext
-	ThinkStartArrivalSeq uint64
-	ObservedThroughSeq   uint64
-	RecallCallback       func(messageID int64, arrivalSeq uint64)
+	ModelRequested        bool
+	EndAfterSleep         bool
+	MemberRosterCallback  func(ctx context.Context, groupID int64) (*MemberRoster, error)
+	LifeDailyRequestLimit *int
+	GroupInfoCallback     func(ctx context.Context) string
+	StickerDir            string
+	Session               SessionContext
+	ThinkStartArrivalSeq  uint64
+	ObservedThroughSeq    uint64
+	RecallCallback        func(messageID int64, arrivalSeq uint64)
 
 	memoryMu           sync.Mutex
 	recallMu           sync.Mutex

@@ -15,10 +15,11 @@ import (
 
 // runState 是一轮思考固定的配置和人格快照
 type runState struct {
-	config  *config.RuntimeConfig
-	persona *persona.Persona
-	steps   *stepBudget
-	logs    *llm.LogState
+	config           *config.RuntimeConfig
+	persona          *persona.Persona
+	steps            *stepBudget
+	logs             *llm.LogState
+	lifeUsageChecked bool
 }
 
 // stepBudget 是一次 think 的共享模型步数预算，换 runner 不补充

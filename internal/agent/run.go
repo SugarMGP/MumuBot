@@ -257,6 +257,25 @@ type sessionPersister struct {
 	*adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]
 }
 
+func (h *sessionPersister) BeforeModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
+	tc := tools.GetToolContext(ctx)
+	if tc == nil || tc.ConversationKind != memory.ConversationKindLife {
+		return ctx, state, nil
+	}
+	session, ok := tc.Session.(*Session)
+	if !ok {
+		return ctx, state, nil
+	}
+	message, err := injectLifeUsageHint(ctx, session)
+	if err != nil {
+		return ctx, state, err
+	}
+	if message != nil {
+		state.Messages = append(state.Messages, message)
+	}
+	return ctx, state, nil
+}
+
 func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
 	tc := tools.GetToolContext(ctx)
 	if tc == nil || tc.Session == nil {

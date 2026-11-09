@@ -102,6 +102,7 @@ type conversationsResponse struct {
 }
 
 type memoryDTO struct {
+	Version        uint64     `json:"version"`
 	ID             uint       `json:"id"`
 	SubjectType    string     `json:"subject_type"`
 	SubjectTarget  string     `json:"subject_target"`

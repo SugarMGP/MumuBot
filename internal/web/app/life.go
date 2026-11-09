@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/schedule"
 
 	"github.com/go-chi/chi/v5"
@@ -44,9 +46,11 @@ type lifeScheduleDTO struct {
 }
 
 type lifeResponse struct {
-	State     lifeStateDTO      `json:"state"`
-	Schedules []lifeScheduleDTO `json:"schedules"`
-	Workers   []lifeWorkerDTO   `json:"workers"`
+	DailyUsage            *modelstats.DailyUsage `json:"daily_usage"`
+	DailyUsageUnavailable bool                   `json:"daily_usage_unavailable"`
+	State                 lifeStateDTO           `json:"state"`
+	Schedules             []lifeScheduleDTO      `json:"schedules"`
+	Workers               []lifeWorkerDTO        `json:"workers"`
 }
 
 type lifeWorkerDTO struct {
@@ -109,6 +113,8 @@ func (a *App) loadLifeData(r *http.Request) (lifeResponse, error) {
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		})
 	}
+	data.DailyUsage, err = modelstats.QueryDailyUsage(ctx, a.memMgr.GetDB(), time.Now(), config.Snapshot().Agent.LifeDailyRequestLimit)
+	data.DailyUsageUnavailable = err != nil
 	return data, nil
 }
 

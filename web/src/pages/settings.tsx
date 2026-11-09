@@ -483,6 +483,10 @@ export default function SettingsPage() {
                 }
               />
             </Field>
+            <Field label={t("settings.agent.dailyLimit")} hint={t("settings.agent.dailyLimitHint")}>
+              <Input type="number" min={0} step={1} value={config.agent.life_daily_request_limit}
+                onChange={(event) => update("agent", { life_daily_request_limit: numberValue(event.target.value) })} />
+            </Field>
             <Field label={t("settings.agent.workerMaxStep")}>
               <Input
                 type="number"

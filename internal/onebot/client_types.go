@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -66,6 +67,15 @@ func ImageInfoFromData(data message.ImageData) ImageInfo {
 	}
 	if data.EmojiID != "" || data.EmojiPackageID != 0 {
 		info.SubType = 1
+	}
+	return info
+}
+
+// ImageInfoFromMFace 使用 QQ 商城表情的原始 GIF 地址
+func ImageInfoFromMFace(data message.MFaceData) ImageInfo {
+	info := ImageInfo{Desc: data.Summary, SubType: 1}
+	if decoded, err := hex.DecodeString(data.EmojiID); err == nil && len(decoded) > 0 {
+		info.URL = "https://gxh.vip.qq.com/club/item/parcel/item/" + data.EmojiID[:2] + "/" + data.EmojiID + "/raw300.gif"
 	}
 	return info
 }

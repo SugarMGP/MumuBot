@@ -170,7 +170,7 @@ func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFile
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 
 		case message.MFaceData: // 商城表情/魔法表情
-			img := ImageInfo{Desc: data.Summary, SubType: 1} // 标记为表情包类型
+			img := ImageInfoFromMFace(data)
 			msg.Images = append(msg.Images, img)
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "image", Index: len(msg.Images) - 1})
 
@@ -190,7 +190,14 @@ func parseMessageSegments(chain message.Chain, msg *ConversationMessage, rawFile
 			if index < len(rawFiles) {
 				extra = rawFiles[index]
 			}
-			ref := fileRefFromSegment(data, extra)
+			ref := FileInfoFromData(data)
+			if ref.FileHash == "" {
+				ref.FileHash = extra.FileMD5
+			}
+			if extra.BusID != nil {
+				busID := int64(*extra.BusID)
+				ref.BusID = &busID
+			}
 			msg.Files = append(msg.Files, ref)
 			msg.MessageParts = append(msg.MessageParts, MessagePart{Kind: "file", Index: len(msg.Files) - 1})
 

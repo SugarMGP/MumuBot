@@ -121,6 +121,14 @@ const enUS: typeof zhCN = {
     },
   },
   life: {
+    usage: {
+      title: "Today's life and work usage",
+      hint: "Model requests by Shanghai calendar day, including failures and summaries. Updates usually lag by about ten seconds; this is a planning reference.",
+      date: "Date", status: "Status", total: "Total requests", limit: "Reference allowance",
+      life: "Life requests", worker: "Work requests", noLimit: "Not set",
+      disabled: "Reminders off", normal: "Within allowance", near: "Nearing allowance",
+      over: "Allowance reached or exceeded", unavailable: "Today's usage is unavailable. Please try again later.",
+    },
     retry: "Retry",
     retryAt: "Retry {{count}}: {{time}}",
     retryExhausted: "Both retries failed; waiting for new input",
@@ -261,6 +269,11 @@ const enUS: typeof zhCN = {
     emptyReason: "-",
   },
   memories: {
+    edit: "Edit content", editHint: "Only active memories can be edited. Up to 8,000 characters.", content: "Memory content",
+    pin: "Pin", unpin: "Unpin", saved: "Memory updated", reload: "Reload saved content", discard: "Discard changes",
+    delete: "Delete permanently", deleteTitle: "Permanently delete this memory?",
+    deleteBody: "This memory and all its revisions will be permanently deleted and cannot be restored. Existing conversations, summaries and diaries are unaffected.",
+    deleted: "Memory permanently deleted",
     title: "Memories",
     subtitle: "Review what she remembers and how it changed.",
     filters: {
@@ -534,6 +547,8 @@ const enUS: typeof zhCN = {
     unsavedLeave: "Leave",
     saved: "Settings saved",
     agent: {
+      dailyLimit: "Daily life and work request allowance",
+      dailyLimitHint: "0 disables reminders. Uses Shanghai calendar days; reminders at 80% and 100% never stop activity automatically.",
       title: "Thinking & concurrency",
       hint:
         "Step limits apply from the next turn; concurrency and worker session counts change when saved.",
@@ -830,6 +845,9 @@ const enUS: typeof zhCN = {
     },
   },
   errors: {
+    memory_not_editable: "This memory is archived or expired and cannot be edited. Reload it to check its status.",
+    memory_duplicate: "An active memory with the same content already exists. Review that entry first.",
+    memory_delete_active: "Only archived memories can be permanently deleted.",
     unauthorized: "Your session has expired. Please sign in again.",
     invalid_key: "Incorrect key",
     admin_disabled: "The admin console is not enabled yet.",
@@ -843,7 +861,7 @@ const enUS: typeof zhCN = {
     life_schedule_text_invalid:
       "The note is required and must stay under 2000 characters.",
     version_conflict:
-      "This content was changed elsewhere. The latest version is now loaded; review and retry.",
+      "This content was changed elsewhere. Reload the saved version, review it, and try again.",
     secret_unavailable:
       "The encryption key is not configured, so this cannot be saved yet.",
     preset_builtin: "Built-in presets cannot be deleted.",

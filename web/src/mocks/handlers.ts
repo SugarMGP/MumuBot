@@ -116,6 +116,7 @@ const memories: MemoryItem[] = emptySeed
   ? []
   : Array.from({ length: 16 }, (_, index) => ({
       id: index + 1,
+      version: 1,
       subject_type: ["group", "user", "self", "object"][index % 4],
       subject_target: ["90001", "10001", "self", "commute"][index % 4],
       memory_type: index % 2 === 0 ? "profile" : "experience",
@@ -132,6 +133,8 @@ const memories: MemoryItem[] = emptySeed
       created_at: iso(index * 600),
       updated_at: iso(index * 300),
     }));
+
+const memoryRevisions = new Map(memories.map((item) => [item.id, [{ id: item.id, item_id: item.id, version: 1, before_content: "", after_content: item.content, before_status: "", after_status: item.status, reason: "Initial memory", created_at: item.created_at }]]));
 
 const summary = (index: number): TopicSummary => ({
   title: `话题 ${index + 1}：周末安排`,
@@ -293,6 +296,7 @@ const defaultConfig = {
     think_debounce_ms: 800,
     max_step: 20,
     life_max_step: 20,
+    life_daily_request_limit: 0,
     worker_max_step: 30,
     max_group_concurrency: 2,
     max_private_concurrency: 2,
@@ -444,6 +448,8 @@ let liveLogs = sampleLogs();
 
 
 const lifeSeed: LifeData = {
+  daily_usage: null,
+  daily_usage_unavailable: false,
   state: {
     awake: true,
     activity: "在读昨天收藏的作曲教程",
@@ -492,6 +498,9 @@ let lifeScheduleSeq = 100;
 function lifePayload(): LifeData {
   return {
     ...lifeData,
+    daily_usage: { date: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date()), limit: settings.config.agent.life_daily_request_limit,
+      total: emptySeed ? 0 : 184, life: emptySeed ? 0 : 132, worker: emptySeed ? 0 : 52, failures: emptySeed ? 0 : 3,
+      status: settings.config.agent.life_daily_request_limit === 0 ? "disabled" : (emptySeed ? 0 : 184) >= settings.config.agent.life_daily_request_limit ? "over" : (emptySeed ? 0 : 184) >= settings.config.agent.life_daily_request_limit * 0.8 ? "near" : "normal" },
     schedules: lifeData.schedules.map((item) => ({
       ...item,
       purpose:
@@ -772,29 +781,34 @@ export const handlers = [
     if (!item) return fail(404, "not_found", "记录不存在");
     return ok({
       item,
-      revisions: [
-        {
-          id: 1,
-          item_id: item.id,
-          version: 1,
-          before_content: "",
-          after_content: item.content,
-          before_status: "",
-          after_status: item.status,
-          reason: "初次记录",
-          created_at: item.created_at,
-        },
-      ],
+      revisions: memoryRevisions.get(item.id) ?? [],
     });
   }),
   http.patch("/api/v1/memories/:id", async ({ request, params }) => {
-    const body = (await request.json()) as { status: string };
+    const body = (await request.json()) as { version: number; content?: string; pinned?: boolean; status?: string };
     const item = memories.find((entry) => entry.id === Number(params.id));
-    if (!item) return fail(404, "not_found", "记录不存在");
-    if (body.status === "archived") item.status = "archived";
-    else if (body.status === "active") item.status = "active";
-    else return fail(400, "validation_failed", "状态无效");
+    if (!item) return fail(404, "not_found", "Not found");
+    if (body.version !== item.version) return fail(409, "version_conflict", "Version conflict");
+    if (item.status !== "active") return fail(409, "memory_not_editable", "Archived");
+    if ((body.status && body.status !== "archived") || (body.status && (body.content !== undefined || body.pinned !== undefined)) || (!body.status && body.content === undefined && body.pinned === undefined) || (body.content !== undefined && (!body.content.trim() || Array.from(body.content.trim()).length > 8000))) return fail(400, "validation_failed", "Invalid content");
+    const content = body.content?.trim();
+    if (content !== undefined && memories.some((other) => other.id !== item.id && other.status === "active" && other.subject_type === item.subject_type && other.subject_target === item.subject_target && other.memory_type === item.memory_type && other.content.trim().toLowerCase() === content.toLowerCase())) return fail(409, "memory_duplicate", "Duplicate memory");
+    const before = { ...item };
+    if (body.status) item.status = "archived";
+    if (content !== undefined) item.content = content;
+    if (body.pinned !== undefined) { item.pinned = body.pinned; item.forget_at = body.pinned ? undefined : new Date(Date.now() + 30 * 86400000).toISOString(); }
+    item.version++;
+    item.updated_at = new Date().toISOString();
+    memoryRevisions.get(item.id)?.unshift({ id: item.id * 1000 + item.version, item_id: item.id, version: item.version, before_content: before.content, after_content: item.content, before_status: before.status, after_status: item.status, reason: body.status ? "Archived by administrator" : "Edited by administrator", created_at: item.updated_at });
     return ok(item);
+  }),
+  http.delete("/api/v1/memories/:id", ({ params }) => {
+    const index = memories.findIndex((item) => item.id === Number(params.id));
+    if (index < 0) return fail(404, "not_found", "Not found");
+    if (memories[index].status !== "archived") return fail(409, "memory_delete_active", "Only archived memories can be deleted");
+    memoryRevisions.delete(memories[index].id);
+    memories.splice(index, 1);
+    return ok({ deleted: true });
   }),
 
   http.get("/api/v1/topics/conversations", () => {

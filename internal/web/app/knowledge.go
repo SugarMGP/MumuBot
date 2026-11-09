@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/web/services"
@@ -66,19 +67,23 @@ func (a *App) handleMemoryUpdate(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "validation_failed", "记录编号无效。", nil)
 		return
 	}
-	var body struct {
-		Status string `json:"status"`
-	}
+	var body services.KnowledgeUpdate
 	if err := decodeJSON(r, &body); err != nil {
-		a.failBadRequest(w, "请求格式不正确。")
+		a.failBadRequest(w, "")
 		return
 	}
-	status := strings.TrimSpace(body.Status)
-	if status != "archived" {
-		a.failBadRequest(w, "记忆只能归档，不能从后台恢复。")
+	if body.Content != nil {
+		content := strings.TrimSpace(*body.Content)
+		body.Content = &content
+	}
+	if body.Version == 0 || (body.Status != "" && body.Status != "archived") ||
+		(body.Status == "archived" && (body.Content != nil || body.Pinned != nil)) ||
+		(body.Status == "" && body.Content == nil && body.Pinned == nil) ||
+		(body.Content != nil && (*body.Content == "" || utf8.RuneCountInString(*body.Content) > 8000)) {
+		a.failBadRequest(w, "")
 		return
 	}
-	if err := a.admin.UpdateKnowledgeStatus(r.Context(), id, status); err != nil {
+	if err := a.admin.UpdateKnowledge(r.Context(), id, body); err != nil {
 		a.failFromError(w, r, err)
 		return
 	}
@@ -93,6 +98,7 @@ func (a *App) handleMemoryUpdate(w http.ResponseWriter, r *http.Request) {
 func memoryItemDTO(item memory.KnowledgeRecord) memoryDTO {
 	return memoryDTO{
 		ID:             item.ID,
+		Version:        item.Version,
 		SubjectType:    item.SubjectType,
 		SubjectTarget:  item.SubjectTarget,
 		MemoryType:     item.MemoryType,
@@ -106,4 +112,17 @@ func memoryItemDTO(item memory.KnowledgeRecord) memoryDTO {
 		CreatedAt:      item.CreatedAt,
 		UpdatedAt:      item.UpdatedAt,
 	}
+}
+
+func (a *App) handleMemoryDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUintParam(chi.URLParam(r, "id"))
+	if err != nil {
+		a.failBadRequest(w, "")
+		return
+	}
+	if err := a.admin.DeleteKnowledge(r.Context(), id); err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	respondData(w, http.StatusOK, map[string]bool{"deleted": true}, nil)
 }

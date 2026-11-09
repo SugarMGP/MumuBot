@@ -40,24 +40,18 @@ func rawFileExtensions(raw []byte) []rawFileExtension {
 	return result
 }
 
-func fileRefFromSegment(data message.FileData, extra rawFileExtension) filemeta.Ref {
+// FileInfoFromData 保留普通消息和转发共用的文件定位字段
+func FileInfoFromData(data message.FileData) filemeta.Ref {
 	ref := filemeta.Ref{
 		FileID: data.FileID, Name: strings.TrimSpace(data.Name), FileHash: data.FileHash,
 	}
 	if ref.Name == "" {
 		ref.Name = data.File
 	}
-	if ref.FileHash == "" {
-		ref.FileHash = extra.FileMD5
-	}
 	if size, ok := parseStrNum(data.FileSize); ok {
 		ref.Size = &size
 	} else if data.Size > 0 {
 		ref.Size = &data.Size
-	}
-	if extra.BusID != nil {
-		busID := int64(*extra.BusID)
-		ref.BusID = &busID
 	}
 	return ref
 }

@@ -253,6 +253,7 @@ func lifeToolBuilders() []func() (tool.BaseTool, error) {
 	return []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMembersTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSearchTopicsTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadTopicTool() },
@@ -342,6 +343,7 @@ func sharedToolBuilders(private bool) []func() (tool.BaseTool, error) {
 	return []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMembersTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewSearchTopicsTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadTopicTool() },

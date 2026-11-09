@@ -117,6 +117,14 @@ const zhCN = {
     },
   },
   life: {
+    usage: {
+      title: "今日生活与工作用量",
+      hint: "按上海自然日统计模型请求，包含失败与摘要，通常约有十秒延迟；仅供安排活动参考。",
+      date: "日期", status: "当前状态", total: "合计请求", limit: "参考额度",
+      life: "生活请求", worker: "工作请求", noLimit: "未设置",
+      disabled: "提醒已关闭", normal: "用量正常", near: "接近参考额度",
+      over: "已达到或超出参考额度", unavailable: "暂时无法读取今日用量，请稍后重试。",
+    },
     retry: "失败补试",
     retryAt: "第 {{count}} 次补试：{{time}}",
     retryExhausted: "两次补试仍未完成，等待新输入",
@@ -256,6 +264,11 @@ const zhCN = {
     emptyReason: "-",
   },
   memories: {
+    edit: "修改内容", editHint: "仅可修改有效记忆，正文最多 8000 字。", content: "记忆正文",
+    pin: "置顶", unpin: "取消置顶", saved: "记忆已更新", reload: "重新读取", discard: "放弃修改",
+    delete: "永久删除", deleteTitle: "永久删除这条记忆？",
+    deleteBody: "这条记忆及全部修订记录将永久删除，无法恢复。已有聊天、摘要和日记不受影响。",
+    deleted: "记忆已永久删除",
     title: "长期记忆",
     subtitle: "查看已记住的内容和版本历史。",
     filters: {
@@ -526,6 +539,8 @@ const zhCN = {
     unsavedLeave: "离开",
     saved: "设置已保存",
     agent: {
+      dailyLimit: "每日生活与工作请求参考额度",
+      dailyLimitHint: "0 关闭提醒；按上海自然日统计，达到 80% 和 100% 时提醒，不自动停止。",
       title: "思考与并发",
       hint: "步数从下一轮生效；并发和工作会话数量保存后立即调整。",
       thinkInterval: "思考间隔（秒）",
@@ -812,6 +827,9 @@ const zhCN = {
     },
   },
   errors: {
+    memory_not_editable: "这条记忆已归档或到期，不能修改。请重新读取。",
+    memory_duplicate: "已有相同内容的有效记忆，请先查看现有条目。",
+    memory_delete_active: "只能永久删除已归档的记忆。",
     unauthorized: "登录已失效，请重新登录。",
     invalid_key: "密钥错误",
     admin_disabled: "后台未启用，请先配置管理员密钥。",
@@ -822,7 +840,7 @@ const zhCN = {
     identity_master_invalid: "只能选择当前好友列表里的好友作为主人。",
     diary_date_invalid: "日期格式不正确，应为 YYYY-MM-DD。",
     life_schedule_text_invalid: "说明不能为空，且不超过 2000 字。",
-    version_conflict: "内容已被更新，已加载最新版本，请确认后重试。",
+    version_conflict: "内容已被其他位置修改，请重新读取确认后重试。",
     secret_unavailable: "加密密钥尚未配置，暂时不能保存。",
     preset_builtin: "内置预设不能删除。",
     preset_active: "正在使用的预设不能删除。",

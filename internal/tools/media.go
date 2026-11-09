@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"crypto/md5"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,16 +96,7 @@ func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.T
 	if err != nil {
 		return nil, err
 	}
-	encoded := base64.StdEncoding.EncodeToString(data)
-	if mime == "" {
-		mime = "image/jpeg"
-	}
-	return &schema.ToolResult{Parts: []schema.ToolOutputPart{
-		{Type: schema.ToolPartTypeImage, Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{
-			Base64Data: &encoded,
-			MIMEType:   mime,
-		}}},
-	}}, nil
+	return imagePreviewResult(data, mime)
 }
 
 // resolveViewImage 同时兼容新 image_ref 与旧会话短哈希

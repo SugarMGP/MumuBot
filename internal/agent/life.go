@@ -124,7 +124,9 @@ func (a *Agent) buildLifeToolContext(ctx context.Context, session *Session) (con
 	if err != nil {
 		return ctx, fmt.Errorf("读取历史读取快照失败: %w", err)
 	}
+	limit := configFor(ctx).Agent.LifeDailyRequestLimit
 	tc := &tools.ToolContext{
+		LifeDailyRequestLimit:         &limit,
 		ConversationKind:              memory.ConversationKindLife,
 		TargetID:                      memory.LifeTargetID,
 		MemoryMgr:                     a.memory.WithContext(ctx),
@@ -133,6 +135,7 @@ func (a *Agent) buildLifeToolContext(ctx context.Context, session *Session) (con
 		SnapshotLogID:                 snapshot,
 		SnapshotLogIDSet:              true,
 		RunID:                         newRunID(),
+		MemberRosterCallback:          a.memberRoster,
 		MemoryReadVersions:            map[uint]uint64{},
 		SessionMessageCallback:        a.deliverSessionMessage,
 		SessionMessageContextCallback: a.deliverSessionMessageWithMode,

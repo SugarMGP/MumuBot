@@ -85,20 +85,36 @@ func (s *AdminService) KnowledgeDetail(ctx context.Context, id uint) (KnowledgeD
 	return d, nil
 }
 
-func (s *AdminService) UpdateKnowledgeStatus(ctx context.Context, id uint, status string) error {
-	status = strings.TrimSpace(status)
-	if status != "archived" {
-		return fmt.Errorf("记忆只能归档，不能从后台恢复")
+type KnowledgeUpdate struct {
+	Version uint64  `json:"version"`
+	Content *string `json:"content,omitempty"`
+	Pinned  *bool   `json:"pinned,omitempty"`
+	Status  string  `json:"status,omitempty"`
+}
+
+func (s *AdminService) UpdateKnowledge(ctx context.Context, id uint, update KnowledgeUpdate) error {
+	change := memory.MemoryChange{Action: "update", ItemID: id, ExpectedVersion: update.Version, Pinned: update.Pinned, Reason: "后台修订"}
+	if update.Status == "archived" {
+		change.Action = "archive"
+		change.Reason = "后台归档"
 	}
-	item, err := s.GetKnowledge(id)
-	if err != nil {
-		return err
+	if update.Content != nil {
+		change.Content = *update.Content
 	}
-	if item.Status == status {
+	_, err := s.memory.ManageMemories(ctx, []memory.MemoryChange{change})
+	return err
+}
+
+func (s *AdminService) DeleteKnowledge(ctx context.Context, id uint) error {
+	result := s.db.WithContext(ctx).Where("id=? AND status='archived'", id).Delete(&memory.KnowledgeRecord{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
 		return nil
 	}
-	_, err = s.memory.ManageMemories(ctx, []memory.MemoryChange{{
-		Action: "archive", ItemID: item.ID, ExpectedVersion: item.Version, Reason: "后台归档",
-	}})
-	return err
+	if _, err := s.GetKnowledge(id); err != nil {
+		return err
+	}
+	return memory.ErrMemoryDeleteActive
 }

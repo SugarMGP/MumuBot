@@ -99,6 +99,7 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		SnapshotLogID:          snapshot,
 		SnapshotLogIDSet:       true,
 		RunID:                  newRunID(),
+		MemberRosterCallback:   a.memberRoster,
 		MemoryReadVersions:     map[uint]uint64{},
 		SessionRunningCallback: a.sessionRunning,
 		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) error {
@@ -176,12 +177,21 @@ func (a *Agent) readForward(ctx context.Context, id string, index int) (any, err
 	node := nodes[index]
 	// 转发原图随父原文保留，只有实际读取时才建立由工具轨迹保活的快照
 	a.ensureIncomingImageRefs(ctx, node.Images)
-	for _, picture := range node.Images {
+	for index, picture := range node.Images {
 		replacement := "[图片不可用]"
 		if picture.ImageRef != "" {
 			replacement = "[图片:" + picture.ImageRef + "]"
+			if picture.Sticker {
+				replacement = "[表情包:" + picture.ImageRef + "]"
+			}
 		}
-		node.Content = strings.ReplaceAll(node.Content, "[图片:"+picture.Hash+"]", replacement)
+		node.Content = strings.ReplaceAll(node.Content, fmt.Sprintf("[图片附件:%d]", index), replacement)
+		// 旧转发节点没有位置占位，按图片原序逐个替换以保留类型
+		node.Content = strings.Replace(node.Content, "[图片:"+picture.Hash+"]", replacement, 1)
+	}
+	for index, file := range node.Files {
+		text := a.readForwardFile(ctx, node.GroupID, file)
+		node.Content = strings.ReplaceAll(node.Content, fmt.Sprintf("[文件附件:%d]", index), text)
 	}
 	return &tools.ReadForwardOutput{
 		Success: true,

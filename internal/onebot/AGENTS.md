@@ -25,7 +25,7 @@
 - 不要在解析层猜测未知字段名；OneBot 字段不确定时先查协议或保留解析失败日志。
 - 解析失败不应制造文本占位污染原始内容；最多进入展示上下文。
 - JSON 解析和序列化复用 Sonic 并保留整数精度；SDK v1.1.1 已覆盖的 ID 直接使用 `message.ID`，只有真实联合字段保留 `Raw json.RawMessage`。
-- 跨后端能力优先使用 SDK 根包统一方法，例如 `MarkMessageRead`、`GetMessageReactions`；其余 API 使用生成的强类型方法（`api.Client`）。仅群文件 URL 的 `busid`、私聊文件 URL 的 `file_hash` 尚未覆盖，携带这些参数时才使用具名窄封装调用 `Client.Call`，不扩展为任意 action/map 工具。
+- 跨后端能力优先使用 SDK 根包统一方法，例如 `MarkMessageRead`、`GetMessageReactions`；其余 API 使用生成的强类型方法（`api.Client`）。群文件 URL 的 `busid`、私聊文件 URL 的 `file_hash` 和 SDK 返回 `[]any` 的群成员名单使用具名强类型窄封装调用 `Client.Call`，不扩展为任意 action/map 工具。
 - 文件消息从 `message.FileData` 读取标识、名称、大小与哈希；原始事件只补 SDK 未覆盖的 `busid` 和 `file_md5`，整数不能经由 float64 中转。临时下载地址只在当前调用中使用。
 - QQ 文件/图片的下载结果必须与已知声明大小核对；pending 首次固定失败时保留待取状态和真实原因，短响应不能发布成不可变原件。
 - Qzone 发布沿用账号当前可见范围，底层接口固定使用公开参数，工具和后台不增加单条可见范围选择。头像和说说图片上传只接收 image ref，不把 home 路径作为第二套上传来源。

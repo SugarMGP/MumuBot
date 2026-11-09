@@ -39,6 +39,7 @@ type AgentConfig struct {
 	ThinkDebounceMS       int `json:"think_debounce_ms"`
 	MaxStep               int `json:"max_step"`
 	LifeMaxStep           int `json:"life_max_step"`
+	LifeDailyRequestLimit int `json:"life_daily_request_limit"`
 	WorkerMaxStep         int `json:"worker_max_step"`
 	MaxGroupConcurrency   int `json:"max_group_concurrency"`
 	MaxPrivateConcurrency int `json:"max_private_concurrency"`
@@ -178,6 +179,9 @@ func (c RuntimeConfig) Validate() (RuntimeConfig, error) {
 	}
 	if cfg.Agent.MaxStep <= 0 || cfg.Agent.MaxStep > 1000 {
 		return cfg, validationError("聊天单轮步数必须在 1 到 1000 之间")
+	}
+	if cfg.Agent.LifeDailyRequestLimit < 0 {
+		return cfg, validationError("每日生活与工作请求参考额度不能为负数")
 	}
 	if cfg.Agent.LifeMaxStep <= 0 || cfg.Agent.LifeMaxStep > 1000 {
 		return cfg, validationError("生活单轮步数必须在 1 到 1000 之间")

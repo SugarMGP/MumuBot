@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/config"
 	"mumu-bot/internal/memory"
+	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/schedule"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -14,17 +16,19 @@ import (
 )
 
 type GetCurrentStatusOutput struct {
-	Success          bool                    `json:"success"`
-	Time             string                  `json:"time"`
-	ConversationKind string                  `json:"conversation_kind"`
-	TargetID         int64                   `json:"target_id"`
-	Group            string                  `json:"group,omitempty"`
-	Peer             string                  `json:"peer,omitempty"`
-	Mood             string                  `json:"mood,omitempty"`
-	EmotionCount     int                     `json:"emotion_count"`
-	EmotionsIncluded bool                    `json:"emotions_included"`
-	Emotions         []memory.CurrentEmotion `json:"emotions,omitempty"`
-	Life             *LifeStatusView         `json:"life,omitempty"`
+	DailyUsage            *modelstats.DailyUsage  `json:"daily_usage,omitempty"`
+	DailyUsageUnavailable bool                    `json:"daily_usage_unavailable,omitempty"`
+	Success               bool                    `json:"success"`
+	Time                  string                  `json:"time"`
+	ConversationKind      string                  `json:"conversation_kind"`
+	TargetID              int64                   `json:"target_id"`
+	Group                 string                  `json:"group,omitempty"`
+	Peer                  string                  `json:"peer,omitempty"`
+	Mood                  string                  `json:"mood,omitempty"`
+	EmotionCount          int                     `json:"emotion_count"`
+	EmotionsIncluded      bool                    `json:"emotions_included"`
+	Emotions              []memory.CurrentEmotion `json:"emotions,omitempty"`
+	Life                  *LifeStatusView         `json:"life,omitempty"`
 }
 
 // LifeStatusView 是所有会话都能看到的共享生活状态
@@ -49,7 +53,7 @@ type GetCurrentStatusInput struct {
 }
 
 func NewGetCurrentStatusTool() (tool.InvokableTool, error) {
-	return utils.InferTool("getCurrentStatus", "读取当前时间、会话、精力、交流意愿、情绪数量和生活状态；只有 include_emotions=true 才返回全部感受正文。", getCurrentStatusFunc)
+	return utils.InferTool("getCurrentStatus", "读取当前时间、会话、精力、交流意愿、情绪数量和生活状态；只有 include_emotions=true 才返回全部感受正文；life 另返回上海当天生活与工作请求量及软提醒状态，统计失败明确标记不可用。", getCurrentStatusFunc)
 }
 
 func getCurrentStatusFunc(ctx context.Context, input *GetCurrentStatusInput) (*GetCurrentStatusOutput, error) {
@@ -83,6 +87,16 @@ func getCurrentStatusFunc(ctx context.Context, input *GetCurrentStatusInput) (*G
 	if input != nil && input.IncludeEmotions {
 		output.EmotionsIncluded = true
 		output.Emotions = emotions
+	}
+	if tc.ConversationKind == memory.ConversationKindLife {
+		limit := tc.LifeDailyRequestLimit
+		if limit == nil {
+			value := config.Snapshot().Agent.LifeDailyRequestLimit
+			limit = &value
+		}
+		usage, usageErr := modelstats.QueryDailyUsage(ctx, tc.MemoryMgr.GetDB(), now, *limit)
+		output.DailyUsage = usage
+		output.DailyUsageUnavailable = usageErr != nil
 	}
 	output.Life = loadLifeStatus(ctx, tc)
 	return output, nil

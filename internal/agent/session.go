@@ -28,7 +28,6 @@ type sessionUser struct {
 	AtOther           bool
 	SenderID          int64
 	Nickname          string
-	ReferencedIDs     []int64
 	ArrivalSeq        uint64
 	Order             uint64
 	MessageID         int64
@@ -254,14 +253,10 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 	if msg.MessageID != 0 {
 		ref = strconv.FormatInt(msg.MessageID, 10)
 	}
-	referenced := append([]int64(nil), msg.AtList...)
-	if msg.Reply != nil && msg.Reply.SenderID > 0 {
-		referenced = append(referenced, msg.Reply.SenderID)
-	}
 	user := &sessionUser{
 		LogID: logID, Ref: ref, Content: strings.TrimSpace(msg.Content), At: msg.Time,
 		ReceivedAt: msg.ReceivedAt, Mentioned: msg.IsMentioned, AtOther: len(msg.AtList) > 0 && !msg.IsMentioned, SenderID: msg.UserID,
-		Nickname: msg.Nickname, ReferencedIDs: referenced, ArrivalSeq: msg.ArrivalSeq,
+		Nickname: msg.Nickname, ArrivalSeq: msg.ArrivalSeq,
 		MessageID: msg.MessageID, IsObservation: msg.MessageID == 0, Wake: true, Order: s.nextOrderLocked(),
 	}
 	user.Text = s.renderUserText(msg, ref, mediaRefs)
@@ -289,11 +284,7 @@ func (s *Session) renderUserText(msg *onebot.ConversationMessage, ref string, _ 
 		b.WriteString(fmt.Sprintf("[观察] %s %s(%d): ", msg.Time.Format("2006-01-02 15:04:05"), displayName, msg.UserID))
 	}
 	if msg.Reply != nil {
-		if msg.Reply.MessageID != 0 {
-			b.WriteString(fmt.Sprintf("[回复消息 %d] ", msg.Reply.MessageID))
-		} else if name := resolveMessageDisplayName(msg.Reply.GroupCard, msg.Reply.Nickname); name != "" {
-			b.WriteString(fmt.Sprintf("[回复 %s(%d)] ", name, msg.Reply.SenderID))
-		}
+		b.WriteString(renderReplyHeader(msg.Reply))
 	}
 	body := strings.TrimSpace(msg.FinalContent)
 	if body == "" {
@@ -358,7 +349,7 @@ func (s *Session) PendingAfter(seq uint64) []tools.PendingMessage {
 	return list
 }
 
-// PendingAgentMessages 返回尚未被当前模型请求包含的会话间消息。
+// PendingAgentMessages 返回尚未被当前模型请求包含的会话间消息
 func (s *Session) PendingAgentMessages() []tools.PendingMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
