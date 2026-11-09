@@ -10,16 +10,7 @@ amu.exe
 # 测试
 *.test
 *_test.go
-!internal/agent/reply_header_test.go
-!internal/agent/members_test.go
-!internal/agent/life_usage_test.go
-!internal/agent/forward_files_test.go
-!internal/media/gif_test.go
-!internal/memory/features_test.go
-!internal/modelstats/daily_test.go
-!internal/tools/members_test.go
-!internal/web/app/knowledge_test.go
-!internal/web/services/knowledge_test.go
+/internal/testutil/
 
 # 输出
 *.out
