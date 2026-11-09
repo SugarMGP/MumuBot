@@ -50,6 +50,9 @@ func (a *Agent) flushPrivateThink(targetID int64, expected *pendingThink, genera
 }
 
 func (a *Agent) thinkPrivate(targetID int64) {
+	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
+	session.maintenanceMu.Lock()
+	defer session.maintenanceMu.Unlock()
 	generation := a.acquireGeneration()
 	if generation == nil {
 		return
@@ -63,9 +66,6 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	if a.qqSleeping() || !a.conversationAllowed(memory.ConversationKindPrivate, targetID) {
 		return
 	}
-	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
-	session.maintenanceMu.Lock()
-	defer session.maintenanceMu.Unlock()
 	pending := session.PendingMessages()
 	if len(pending) == 0 || !hasActionableMessage(pending) {
 		return
@@ -78,7 +78,6 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		return
 	}
 	tc := tools.GetToolContext(ctx)
-	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 	a.injectMaintenanceHint(ctx, session)
 
 	if state.steps.Remaining() <= 0 {

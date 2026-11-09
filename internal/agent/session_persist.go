@@ -34,17 +34,6 @@ func (s *Session) AppendAssistant(ctx context.Context, runID string, msg *schema
 	return entry, nil
 }
 
-// SetUserTranscriptEntry 把持久化工作集 id 关联到内存用户消息
-func (s *Session) SetUserTranscriptEntry(user *sessionUser, entry *memory.TranscriptEntry) {
-	if user == nil || entry == nil {
-		return
-	}
-	tagTranscriptEntryID(user.Msg, entry.ID)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	user.TranscriptID = entry.ID
-}
-
 func agenticMessageText(message *schema.AgenticMessage) string {
 	if message == nil {
 		return ""

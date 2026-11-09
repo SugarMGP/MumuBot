@@ -60,7 +60,6 @@ type Session struct {
 	seen                     []sessionEntry
 	pending                  []*sessionUser
 	media                    *mediaIndex
-	injected                 uint64
 	selfAt                   []time.Time
 	notes                    []string
 	nextOrder                uint64
@@ -131,13 +130,17 @@ func sessionKey(kind string, targetID int64) string {
 	return kind + ":" + strconv.FormatInt(targetID, 10)
 }
 
-func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref) *sessionUser {
-	if msg == nil {
-		return nil
-	}
+// AppendUser 在原文与输入事务提交后才发布工作集，持久化失败时保留待注入说明
+func (s *Session) AppendUser(msg *onebot.ConversationMessage, mediaRefs []media.Ref, persist func(*sessionUser) (bool, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	user := s.newUserLocked(msg, logID, mediaRefs)
+	notes := s.notes
+	user := s.newUserLocked(msg, 0, mediaRefs)
+	created, err := persist(user)
+	if err != nil || !created {
+		s.notes = notes
+		return err
+	}
 	s.pending = append(s.pending, user)
 	if !user.IsObservation {
 		if msg.ReceivedAt.After(s.lastActivityAt) {
@@ -149,7 +152,7 @@ func (s *Session) AppendUser(msg *onebot.ConversationMessage, logID uint, mediaR
 			s.idleCancel = nil
 		}
 	}
-	return user
+	return nil
 }
 
 // AppendAgentMessage 把另一个会话投递的内部消息加入待处理工作集；
@@ -328,36 +331,16 @@ func (s *Session) HasActionablePending() bool {
 	return hasActionableMessage(s.pending)
 }
 
-func (s *Session) MarkInjected(seq uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if seq > s.injected {
-		s.injected = seq
-	}
-}
-
-func (s *Session) PendingAfter(seq uint64) []tools.PendingMessage {
+// PendingAfter 只返回本轮装配边界之后的输入，真人消息和内部消息共用会话 Order
+func (s *Session) PendingAfter(order uint64) []tools.PendingMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var list []tools.PendingMessage
 	for _, user := range s.pending {
-		if user == nil || user.IsMaintenanceHint || user.ArrivalSeq <= seq || user.ArrivalSeq <= s.injected {
+		if user == nil || user.IsMaintenanceHint || user.Order <= order {
 			continue
 		}
-		list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
-	}
-	return list
-}
-
-// PendingAgentMessages 返回尚未被当前模型请求包含的会话间消息
-func (s *Session) PendingAgentMessages() []tools.PendingMessage {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	list := make([]tools.PendingMessage, 0)
-	for _, user := range s.pending {
-		if user != nil && !user.IsMaintenanceHint && user.IsAgentMessage {
-			list = append(list, tools.PendingMessage{ArrivalSeq: user.ArrivalSeq, Order: user.Order, Msg: user.Msg, TranscriptID: user.TranscriptID})
-		}
+		list = append(list, tools.PendingMessage{Order: user.Order, Msg: user.Msg})
 	}
 	return list
 }
@@ -459,22 +442,9 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction
 		}
 		tagTranscriptEntryID(user.Msg, user.TranscriptID)
 		messages = append(messages, user.Msg)
-	}
-
-	if tc := tools.GetToolContext(ctx); tc != nil {
-		if seq := maxPendingSeq(pending); seq > tc.InjectedArrivalSeq {
-			tc.InjectedArrivalSeq = seq
+		if tc := tools.GetToolContext(ctx); tc != nil {
+			tc.ObservedThroughOrder = max(tc.ObservedThroughOrder, user.Order)
 		}
 	}
 	return messages, nil
-}
-
-func maxPendingSeq(pending []*sessionUser) uint64 {
-	var seq uint64
-	for _, user := range pending {
-		if user.ArrivalSeq > seq {
-			seq = user.ArrivalSeq
-		}
-	}
-	return seq
 }

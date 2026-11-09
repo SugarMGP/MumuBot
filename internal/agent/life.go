@@ -51,6 +51,9 @@ func (a *Agent) thinkLife(targetID int64) {
 			}
 		}
 	}()
+	session := a.sessions.get(memory.ConversationKindLife, targetID)
+	session.maintenanceMu.Lock()
+	defer session.maintenanceMu.Unlock()
 	generation := a.acquireGeneration()
 	if generation == nil {
 		failure = fmt.Errorf("模型未就绪")
@@ -63,9 +66,6 @@ func (a *Agent) thinkLife(targetID int64) {
 		failure = err
 		return
 	}
-	session := a.sessions.get(memory.ConversationKindLife, targetID)
-	session.maintenanceMu.Lock()
-	defer session.maintenanceMu.Unlock()
 	selfChecked := false
 	for {
 		pending := session.PendingMessages()
@@ -85,7 +85,6 @@ func (a *Agent) thinkLife(targetID int64) {
 			return
 		}
 		tc := tools.GetToolContext(ctx)
-		tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 		a.injectLifeMaintenanceHint(ctx, session)
 
 		if state.steps.Remaining() <= 0 {
@@ -277,10 +276,8 @@ func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*
 		}
 		tagTranscriptEntryID(user.Msg, user.TranscriptID)
 		messages = append(messages, user.Msg)
-	}
-	if tc := tools.GetToolContext(ctx); tc != nil {
-		if seq := maxPendingSeq(pending); seq > tc.InjectedArrivalSeq {
-			tc.InjectedArrivalSeq = seq
+		if tc := tools.GetToolContext(ctx); tc != nil {
+			tc.ObservedThroughOrder = max(tc.ObservedThroughOrder, user.Order)
 		}
 	}
 	return messages, nil

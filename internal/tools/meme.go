@@ -149,5 +149,25 @@ func cleanMemeTerm(raw string, limit int) string {
 
 // NewSearchMemeTool 创建梗Wiki搜索工具
 func NewSearchMemeTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchMeme", "优先搜索梗Wiki中的黑话、网络梗和表情包词条；按标题、标签和正文做子串匹配，不是语义搜索；返回公开释义、标签和来源，完整正文用 fetchWeb 读取 detail_url。", searchMeme)
+	return utils.InferTool("searchMeme", "搜索梗Wiki中的黑话、网络梗和表情包词条；按标题、标签和正文做子串匹配；返回公开释义、标签和来源，完整正文用 readMeme 读取返回的 slug。", searchMeme)
+}
+
+type ReadMemeInput struct {
+	Slug string `json:"slug" jsonschema:"description=searchMeme 返回的词条 slug"`
+}
+
+func readMeme(ctx context.Context, input *ReadMemeInput) (*WebResult, error) {
+	if input == nil {
+		return nil, fmt.Errorf("请提供词条 slug")
+	}
+	slug := strings.TrimSpace(input.Slug)
+	if slug == "" || slug == "." || slug == ".." {
+		return nil, fmt.Errorf("词条 slug 无效")
+	}
+	return fetchWeb(ctx, &FetchWebInput{URL: memeAPIBaseURL + "/" + url.PathEscape(slug)})
+}
+
+// NewReadMemeTool 只读取固定梗百科来源，不接受任意网页地址
+func NewReadMemeTool() (tool.InvokableTool, error) {
+	return utils.InferTool("readMeme", "读取梗Wiki单个词条的完整正文；slug 来自 searchMeme，不接收网页 URL。长结果用 readToolResult 续读。", readMeme)
 }

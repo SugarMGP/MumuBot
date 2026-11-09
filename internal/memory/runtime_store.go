@@ -77,8 +77,8 @@ func (m *Manager) AppendTranscripts(ctx context.Context, entries []*TranscriptEn
 	})
 }
 
-// AppendUserTranscript 将已落库的真人消息加入工作集
-func (m *Manager) AppendUserTranscript(ctx context.Context, kind string, targetID int64, logID uint, payload json.RawMessage, runID string) (*TranscriptEntry, error) {
+// AppendUserTranscript 与原文写入共用事务，避免留下没有输入工作集的半条消息
+func (m *Manager) AppendUserTranscript(tx *gorm.DB, kind string, targetID int64, logID uint, payload json.RawMessage, runID string) (*TranscriptEntry, error) {
 	entryKind := "user"
 	var messageLogID *uint
 	if logID == 0 {
@@ -89,22 +89,15 @@ func (m *Manager) AppendUserTranscript(ctx context.Context, kind string, targetI
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	var entry *TranscriptEntry
-	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		inputSeq, err := m.AllocateInputSeq(tx, kind, targetID)
-		if err != nil {
-			return err
-		}
-		entry = &TranscriptEntry{
-			ConversationKind: kind, TargetID: targetID, InputSeq: &inputSeq,
-			EntryKind: entryKind, MessageLogID: messageLogID, RunID: runID, Payload: payload,
-		}
-		return tx.Create(entry).Error
-	})
+	inputSeq, err := m.AllocateInputSeq(tx, kind, targetID)
 	if err != nil {
 		return nil, err
 	}
-	return entry, nil
+	entry := &TranscriptEntry{
+		ConversationKind: kind, TargetID: targetID, InputSeq: &inputSeq,
+		EntryKind: entryKind, MessageLogID: messageLogID, RunID: runID, Payload: payload,
+	}
+	return entry, tx.Create(entry).Error
 }
 
 // PendingInputs 返回尚未进入模型的输入，包括真人消息、观察和会话间消息

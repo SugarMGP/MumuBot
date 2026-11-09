@@ -3,92 +3,28 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
-	"mumu-bot/internal/config"
-	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/persona"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 )
 
-// ContextCapacity 只检查目标场合的持久工作集能否装入新模型窗口
-func (a *Agent) ContextCapacity(ctx context.Context, contextWindow int, role string) ([]string, error) {
-	if a == nil {
-		return nil, fmt.Errorf("Agent 未初始化")
-	}
-	groupTools, privateTools, lifeTools, err := buildToolLists(nil)
-	if err != nil {
-		return nil, err
-	}
-	workerTools, err := buildTools(workerToolBuilders())
-	if err != nil {
-		return nil, err
-	}
-	if generation := a.currentGeneration(); generation != nil {
-		groupTools, privateTools, lifeTools, workerTools = generation.groupTools, generation.privateTools, generation.lifeTools, generation.workerTools
-	}
-	return capacityForWindow(ctx, a.memory, contextWindow, role, groupTools, privateTools, lifeTools, workerTools)
-}
-
-// ContextCapacityFor 供 Agent 尚未创建时做只读容量检查
-func ContextCapacityFor(ctx context.Context, mem *memory.Manager, contextWindow int, role string, mcpManager *mcp.Manager) ([]string, error) {
-	groupTools, privateTools, lifeTools, err := buildToolLists(mcpManager)
-	if err != nil {
-		return nil, err
-	}
-	workerTools, err := buildTools(workerToolBuilders())
-	if err != nil {
-		return nil, err
-	}
-	return capacityForWindow(ctx, mem, contextWindow, role, groupTools, privateTools, lifeTools, workerTools)
-}
-
-func capacityForWindow(ctx context.Context, mem *memory.Manager, contextWindow int, role string, groupTools, privateTools, lifeTools, workerTools []tool.BaseTool) ([]string, error) {
-	if mem == nil {
-		return nil, fmt.Errorf("记忆系统未初始化")
-	}
-	if contextWindow <= 0 {
-		return nil, fmt.Errorf("模型上下文窗口必须大于 0")
-	}
-	cfg := config.Snapshot()
-	p, err := persona.NewPersona(&cfg.Persona, cfg.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("加载人格失败: %w", err)
-	}
-	affected := make([]string, 0)
-	previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: contextWindow}})
+func capacityTargets(ctx context.Context, mem *memory.Manager, role string) ([]memory.ConversationTarget, error) {
+	targets := make([]memory.ConversationTarget, 0)
 	if role == "qq" {
-		groupIDs, err := mem.ListActiveGroupIDs(ctx)
+		groups, err := mem.ListConversationTargets(ctx, memory.ConversationKindGroup, true)
 		if err != nil {
 			return nil, err
 		}
-		for _, groupID := range groupIDs {
-			messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindGroup, groupID)
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			if requestTokens(messages, modelToolInfos(ctx, groupTools)) > contextWindow {
-				affected = append(affected, sessionKey(memory.ConversationKindGroup, groupID))
-			}
-		}
+		targets = append(targets, groups...)
 		privateTargets, err := mem.ListConversationTargets(ctx, memory.ConversationKindPrivate, true)
 		if err != nil {
 			return nil, err
 		}
-		for _, target := range privateTargets {
-			messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindPrivate, target.TargetID)
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			if requestTokens(messages, modelToolInfos(ctx, privateTools)) > contextWindow {
-				affected = append(affected, sessionKey(memory.ConversationKindPrivate, target.TargetID))
-			}
-		}
+		targets = append(targets, privateTargets...)
 	}
 	if role == "worker" {
 		workers, err := mem.ListWorkerSessions(ctx)
@@ -96,26 +32,13 @@ func capacityForWindow(ctx context.Context, mem *memory.Manager, contextWindow i
 			return nil, err
 		}
 		for _, worker := range workers {
-			messages, buildErr := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindWorker, int64(worker.ID))
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			if requestTokens(messages, modelToolInfos(ctx, workerTools)) > contextWindow {
-				affected = append(affected, sessionKey(memory.ConversationKindWorker, int64(worker.ID)))
-			}
+			targets = append(targets, memory.ConversationTarget{ConversationKind: memory.ConversationKindWorker, TargetID: int64(worker.ID)})
 		}
 	}
 	if role == "life" {
-		lifeMessages, err := previewPersistedMessages(previewCtx, mem, p, memory.ConversationKindLife, memory.LifeTargetID)
-		if err != nil {
-			return nil, err
-		}
-		if requestTokens(lifeMessages, modelToolInfos(ctx, lifeTools)) > contextWindow {
-			affected = append(affected, sessionKey(memory.ConversationKindLife, memory.LifeTargetID))
-		}
+		targets = append(targets, memory.ConversationTarget{ConversationKind: memory.ConversationKindLife, TargetID: memory.LifeTargetID})
 	}
-	sort.Strings(affected)
-	return affected, nil
+	return targets, nil
 }
 
 // previewPersistedMessages 只读拼装持久工作集，不写代头、不写群说明、不触发压缩
@@ -169,6 +92,7 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 		if err := sonic.Unmarshal(entry.Payload, &msg); err != nil {
 			return nil, fmt.Errorf("解析 %s:%d 持久工作集失败: %w", kind, targetID, err)
 		}
+		tagTranscriptEntryID(&msg, entry.ID)
 		switch messageKind(&msg) {
 		case kindSystemPrompt:
 			hasSystem = true
@@ -258,6 +182,7 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 		if err := sonic.Unmarshal(entry.Payload, &msg); err != nil {
 			return nil, fmt.Errorf("解析 %s:%d 待处理输入失败: %w", kind, targetID, err)
 		}
+		tagTranscriptEntryID(&msg, entry.ID)
 		messages = append(messages, &msg)
 	}
 	if kind == memory.ConversationKindGroup || kind == memory.ConversationKindPrivate {

@@ -107,9 +107,8 @@ func (a *Agent) runIdleCompaction(session *Session) {
 		}
 		return
 	}
-	candidate, err := session.BuildCompactionCandidate(generation.contextWindow, cfg.Compactor.RecentTailRatio)
-	if err != nil {
-		zap.L().Warn("空闲压缩没有可用候选", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
+	candidate := session.BuildCompactionCandidate(generation.contextWindow, cfg.Compactor.RecentTailRatio)
+	if candidate == nil {
 		if !session.LastActivityAt().After(last) {
 			session.MarkIdleDone()
 		}

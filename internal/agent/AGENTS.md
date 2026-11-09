@@ -18,7 +18,7 @@
 - `life.go`：唯一生活主线的运行、装配、摘要检查和首次启动处境。
 - `life_scheduler.go`：持久日程的到期投递与睡眠恢复。
 - `life_prompt.go`：生活场合的职责说明。
-- `capacity.go`：模型上下文窗口切换前的真实工作集容量检查。
+- `capacity.go` / `context_switch.go`：模型切换前的只读容量预览、原模型自动整理和容量复查。
 - `retention.go`：启动/周期清理、工具结果和文件快照引用回收。
 - `recall.go`：撤回标记、待补偿和原消息不改写。
 
@@ -30,7 +30,7 @@
 - 思考从会话起始到达序号开始；`BeforeModelRewriteState` 在新消息到达时注入，同一批消息不合并。聊天首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。
 - 失败批次的上限取自最后一次实际发出的 request state；think 入口 pending 只说明入口收到了什么，不能替代本次请求真正纳入的输入。
 - `conversation_transcript` 是唯一工作集；不要在 `runAgent` 事件流或 `AfterAgent` 另装一套 transcript。
-- user transcript 在消息落库后创建；assistant 在模型成功后保存；工具 wrapper 在调用前后保存 running/终态回执。
+- user transcript 与消息原文在同一事务创建，成功后才发布到内存；assistant 在模型成功后保存；工具 wrapper 在调用前后保存 running/终态回执。
 - 模型请求成功后才给本次请求实际包含的 transcript 行写 `visible_seq`；请求失败不推进、不回滚；聊天失败批次等新输入，life 由生活时钟按持久状态最多补试两次、间隔五分钟。
 - 模型新返回的 assistant 不在本次请求输入里，不得提前写 `visible_seq`；assistant/tool 的持久化可读性由轨迹本身保证。
 - `visible_seq` 按请求消息顺序分配，不能用数据库 ID 重排；代头在前，工具结果在请求它的 assistant 之后。
@@ -38,7 +38,7 @@
 - life/worker 的摘要提交在同一事务内完成 visible 序号、检查点边界（life 还含代头替换）；life 摘要保存在 `life_state.context_summary`，代头由 Finalize 装入当前请求。摘要正文不是 file/ref 生命周期根。
 - `sleepUntil` 只有在睡眠状态、起床安排和工具回执都成功后才允许收尾当前回合；成功回执后的终结不能依赖下一次模型节点或额外步数，失败继续让模型在剩余步数内修正。
 - `readSessionHistory` 的 entries 返回已持久化的 assistant/tool 轨迹，user/observation/agent_message 仍只算实际进入成功请求的输入；单条全文用 `readSessionEntry`。`file_refs` 随消息日志保存，历史返回附件元信息，不把临时 URL 当长期资源。
-- `agent_message` 是独立的会话间内部消息条目，不是真人 user 行；它使用会话本地 `Order` 维持待处理顺序，不占用 OneBot `ArrivalSeq`。目标空闲时启动 ReAct，运行中在下一个模型边界单独补入且不重复。`wake=false` 只保存，不触发新回合，也不作为群门控的强交互。
+- `agent_message` 是独立的会话间内部消息条目，不是真人 user 行；它与真人输入共用会话本地 `Order` 的装配/补入边界，不占用 OneBot `ArrivalSeq`。边界来自实际装配的 pending 快照，压缩重建时同步推进，不靠 ID 集合过滤重复输入。`wake=false` 只保存，不触发新回合，也不作为群门控的强交互。
 - 重启恢复必须按 transcript payload 原样恢复 user/assistant/tool/internal 消息，禁止重新渲染已固定正文。
 - 遗留 running/planned 工具改成 `unknown`，assistant 工具调用没有对应回执时补 `not_executed`，都不自动重放。
 - `run_id + call_id` 是工具回执幂等键；不同 CallID 的重复搜索、读取和多次发言不拦截。
@@ -49,15 +49,16 @@
 - worker 程序故障回报 life；failed/cancelled 不因周期扫描自动重跑，等 life 明确投来新指令。所有 worker 共用唯一账号和 `/home/worker`，只是并行子 Agent；运行态并发跟启用数量热更新，0 通过 active 停用，不能把并发组件的 0 当成禁用。
 - 工具中间件只保留 `ToolTranscriptMiddleware`、`ToolErrorMiddleware`、Unknown handler、参数规范和顺序执行；不要恢复全局 ToolAction/ToolDedup 或消费水位。
 - 压缩只在一轮 think 完整结束后、最后一条 assistant 的实际用量达到窗口 90% 时触发，不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
-- 模型、人格、MCP 和运行态使用 generation 快照；模型/人格/MCP 等需要热切换的内容替换 generation，并发数与三种单轮步数在下一个 think 生效且不重启进程。每次 think 只取一次配置快照，构造 runner 和连续子步骤都复用它。切换或缩小模型窗口前用只读容量预览检查受影响场合的持久工作集，放不下就拒绝并保留旧 generation。
+- 模型、人格、MCP 和运行态使用 generation 快照；模型/人格/MCP 等需要热切换的内容替换 generation，并发数与三种单轮步数在下一个 think 生效且不重启进程。每次 think 只取一次配置快照，构造 runner 和连续子步骤都复用它。切换模型或缩小窗口前等待受影响回合结束，按新窗口阈值用原模型整理历史，容量复查通过后再保存并替换 generation；待处理输入保持原样，失败时保留旧配置。会话取得维护锁后才获取 generation，排队回合不能继续使用切换前的模型快照。
 - 压缩候选只包含完整、已可见、协议闭合的旧交互段，保护当前批次、活动工具链、未闭合 CallID 和最近尾部。
+- 没有安全候选属于暂不压缩，不设置压缩失败前置门；主请求或模型切换仍按窗口硬上限判断。重启恢复与切换容量检查包含活跃但拉黑的群，运行许可继续独立检查。
 - 压缩器只能读当前会话并使用 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和 `finishCompaction`；不提供 `readHistory`，不能写记忆、情感、便签或外部系统。
 - 压缩失败、覆盖遗漏、预算超限、数据库失败和结果不明都不能删除 transcript；参数不可用按可修正输入错误处理，失败后退避 60 秒；需要压缩却失败时先阻止主模型，冷却后重试压缩，成功才继续。
 - provider 返回上下文溢出时允许一次强制压缩后重试主请求；仍失败则保留状态结束本轮。
 - 模型请求不设置整体超时，只限制连接和 TLS 握手 10 秒；Agent 关闭时的上下文取消仍然生效。
 - 聊天、生活、工作三种单轮步数分别配置，在下一次 think 开始时读取；压缩器步数独立配置。
 - 三种单轮步数是该次 think 的总预算；life 自检、连续消费和允许的溢出重试都在剩余预算内，换一个 runner 不重新获得完整步数。
-- 容量检查覆盖 QQ 离线、Agent/generation 尚未建立和首次激活；它只能用持久工作集与临时代头预览实际装配，不能写代头、追加群说明、修复工具、Prune 或触发压缩。
+- 容量检查覆盖 QQ 离线、Agent/generation 尚未建立和首次激活；预览只读拼装持久工作集与临时代头，自动整理阶段才复用恢复与压缩流程。life/worker 的切换摘要只覆盖最早待处理输入之前的闭合前缀，不推进检查点越过待处理输入。
 - 发言、戳一戳、贴表情、撤回等外部侧效应仍由工具自身和 OneBot API 保证真实成功，不伪造完成状态。
 - 撤回只打标记，不改写 transcript 前缀；后续消息附撤回说明。
 - 自己发送的消息写入 `message_logs` 但不额外生成 transcript user 行，因为动作已由 assistant/tool 轨迹表达。
@@ -70,3 +71,4 @@
 - life 整次 think 成功后才清除失败与补试状态；连续消费和无安排自检的中间成功不能补充重试次数。新的明确输入和主动睡眠会结算旧补试，睡眠期间不投递失败补试。生活页只读展示 worker 现有状态和 transcript，不另建任务表。
 
 - QQ/life/worker 的人格装配统一使用五段预设：共同人格与规则加各自职责，当前会话编号由程序提供；不恢复作用域标记解析。worker 摘要和代头在同一事务换代，检查点只存背景摘要，不沿用默认的强制继续任务提示。
+- QQ 工具表只提供梗百科搜索与固定词条读取，不提供通用网页搜索或抓取；`searchWeb`、`fetchWeb` 由 life 和 worker 使用。

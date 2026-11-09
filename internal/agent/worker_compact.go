@@ -212,10 +212,8 @@ func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([
 		}
 		tagTranscriptEntryID(user.Msg, user.TranscriptID)
 		messages = append(messages, user.Msg)
-	}
-	if tc := tools.GetToolContext(ctx); tc != nil {
-		if seq := maxPendingSeq(pending); seq > tc.InjectedArrivalSeq {
-			tc.InjectedArrivalSeq = seq
+		if tc := tools.GetToolContext(ctx); tc != nil {
+			tc.ObservedThroughOrder = max(tc.ObservedThroughOrder, user.Order)
 		}
 	}
 	return messages, nil

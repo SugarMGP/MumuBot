@@ -40,6 +40,17 @@ const emptyForm = {
   api_key: "",
 };
 
+function profileForm(profile: ModelProfile) {
+  return {
+    name: profile.name,
+    base_url: profile.base_url,
+    model_name: profile.model_name,
+    context_window: profile.context_window,
+    reasoning_effort: profile.reasoning_effort,
+    api_key: "",
+  };
+}
+
 export default function ModelsPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -90,16 +101,7 @@ export default function ModelsPage() {
     const current = editingRef.current;
     if (editMode && (!current || current.id !== editID)) return;
     loadedKey.current = key;
-    const next = current
-      ? {
-          name: current.name,
-          base_url: current.base_url,
-          model_name: current.model_name,
-          context_window: current.context_window,
-          reasoning_effort: current.reasoning_effort,
-          api_key: "",
-        }
-      : { ...emptyForm };
+    const next = current ? profileForm(current) : { ...emptyForm };
     setForm(next);
     setBaseline(next);
     setDraftVersion(current?.version ?? 0);
@@ -148,9 +150,16 @@ export default function ModelsPage() {
   };
 
   const reloadLatest = async () => {
-    loadedKey.current = "";
-    setDraftVersion(0);
-    await invalidate();
+    const result = await query.refetch();
+    const current = result.data?.items.find((item) => item.id === editID);
+    if (result.isError || !current) {
+      toastApiError(result.error);
+      return;
+    }
+    const next = profileForm(current);
+    setForm(next);
+    setBaseline(next);
+    setDraftVersion(current.version);
   };
 
   const selectModel = useMutation({

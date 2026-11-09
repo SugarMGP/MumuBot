@@ -192,7 +192,7 @@ go vet ./...
 - 日记是独立 `diaries` 表（日期主键、Markdown、首次/最后保存时间），不建记忆、话题、消息关联；life 用 `writeDiary` 写入，life 和群聊/私聊都可以用 `readDiary`/`searchDiary` 只读，后台只读月历。归属日由 life 显式选择：午睡不写，凌晨可写前一天，漏写可补，保存失败不写成成功，日记不自动产生日程或记忆。
 - life 不能套用群/私聊的话题压缩：它使用摘要检查点（`life_state.context_summary + context_through_id`）+ 检查点后的 transcript；已被有效摘要覆盖且超过历史期限的可见旧轨迹按 `history_days` 清理，当前代头、检查点后的工作集和未完成工具链继续保留。代头每次换代按当前人格与 self 置顶重建，检查点里不保存代头。
 - 睡眠是 QQ 的运行许可，不是 active/blocked：睡眠期间保留 OneBot 接收、媒体、转发、撤回和成员资料，只跳过工作集与调度；已经开始的回合和已接受的 worker 任务可以收尾，普通内部信不打断睡眠。机械唤醒只来自 life 的到期时间、显式后台/`wakeUp` 操作或主人私聊中的精确 `/wake`；不做关键词启发式判断。真实醒来时给 life 一条睡眠期间活跃会话的真人消息概况（数量、最后时间和会话 ID），不自动唤醒这些会话、不建未读表。
-- 扩展 MCP 工具只挂给 life，聊天会话不持有生活账号/浏览器能力；worker 只有执行工具。单个 MCP 服务的初始化、工具发现、连接或装载失败只让该服务不可用，不阻断其它服务和整代生成；初始化和发现必须有界，不能把“模型请求不设整体超时”误解成扩展握手可以永久等待。
+- 扩展 MCP 工具只挂给 life，聊天会话不持有生活账号/浏览器能力；worker 提供执行、文件和公开网页检索/抓取工具。单个 MCP 服务的初始化、工具发现、连接或装载失败只让该服务不可用，不阻断其它服务和整代生成；初始化和发现必须有界，不能把“模型请求不设整体超时”误解成扩展握手可以永久等待。
 - QQ 空间、账号资料设置和账号级社交动作只挂给 life；群聊/私聊 Agent 负责在本会话表达并发送 `file_ref`/`image_ref`。按已确认的最新边界，life 不持有定向 `sendFile`/`sendImage`，它把产物 ref 和用途投给目标会话；life 自己仍可 `viewImage(path|image_ref)`、`readFile(path|file_ref)` 验收材料。worker 使用真实 `/home/worker` 路径并通过 `createFileRef`/`saveFile` 交接，补齐全员可复用的真实 `viewImage`；上传头像和空间配图只接 image ref。
 - 个人目录是 worker 唯一 `/home/worker`，Mumu 主服务不挂该目录。文件上传通过 worker 私网 HTTP 原始字节流读取，主服务内部按受支持位图内容建立 typed ref；worker 不接触 QQ 凭据。跨 worker session 共享同一个执行账号、home、工具与缓存，但 transcript、检查点、上下文和运行状态独立。
 - QQ 文件消息的 `file_id`、原名、大小、`file_hash`、`busid` 和待取 `file_ref` 保存在 `message_logs.file_refs`，临时下载 URL 不做长期定位根；首次读取/发送/存入 home 时才真实下载并固定快照，pending 必须有明确的待取/已固定状态，固定时核对已知声明大小。保存到个人目录的真实文件在 transcript 清理后仍保留，后台不新增文件管理页。`file_ref`/`image_ref` 是 MediaDir 下不可变快照，不建小表、按字节 SHA-256 去重；只有现存 transcript 里 `user/observation/agent_message/assistant/tool` 行的 `result_ref`、payload 文本和 `r` 嵌套引用是长期根；代头、摘要、系统提醒、记忆和日记里的裸 ref 不保活。被删 transcript 的本批候选在提交后按闭包即时释放，从未挂接的孤儿至少保留 24 小时后由启动/每日补扫回收。
@@ -232,7 +232,7 @@ go vet ./...
 - 一条真人消息经 `message_logs` 保存原文与展示正文，按最低保留期清理；`message_forwards` 按句柄保存每一份转发，嵌套转发独立成行，随父原文级联删除，重启后仍可逐层读取仍在库的部分。
 - 撤回只写 `recalled_at` 并同步会话标记；不得清空原文、摘要来源、情感或长期记忆，后续用户消息可附撤回说明，不改写已进入上下文的前缀。
 - 停机时不清零运行时账号；提交队列排空期间仍按真实账号识别自身消息。
-- 思考从会话起始到达序号开始；运行期间新消息由 `BeforeModelRewriteState` 注入，`getNewMessages` 重复调用不重复返回同一批。
+- 思考装配按同一份 pending 快照记录会话内 `Order` 边界；真人消息、观察和内部信只在后续模型边界补入更晚的输入，压缩重建同步更新该边界，`getNewMessages` 重复调用不重复返回同一批。OneBot 提交顺序仍只用 `ArrivalSeq`。
 - 消息时间固定、不注入“最近在场的人”；群聊自动参考最多选当前批次发送者、提及和回复目标 3 人。
 - 长期记忆由主 Agent 通过 `searchMemory`、`readMemory`、`manageMemory` 维护；只使用 `profile/experience` 两种 memory type，更新和归档必须基于已读取版本。只有置顶记忆免于自然遗忘；所有非置顶记忆按共享指数曲线到期归档，Agent 不能检索、按 ID 读取、修改或恢复归档条目，重新认识同一事实用新 ID。
 - `knowledge_items` 使用 `subject_type + subject_target` 表示主体，`subject_target` 为字符串；主体类型只允许 group/user/self/object，self 由后端固定为 `self`；记忆类型只允许 profile/experience，来源字段不保存。
@@ -257,6 +257,7 @@ go vet ./...
 - 提示词支持 `<name>`、`<master_name>`、`<master_qq>`、`<master>` 占位符，在人格、共同规则、QQ 聊天、生活职责、工作职责、worker 和摘要装配时替换；未知 `<...>` 按原文保留，替换结果不再次展开。
 - 共同规则必须保留主人边界：只有后台配置的 QQ 是主人，主人的私聊是明确要求来源；普通研究、实验、工作区内的日常修改，以及日常 QQ 空间发表、点赞、评论和自身昵称/签名/头像调整可以自主完成、阶段结束简短报备；不可恢复删除/覆盖重要资料、支付、涉及隐私或承诺的对外发布/发信、扩大权限、泄露私密内容、改动关键运行配置等高危事项先说明并等待主人对具体事项同意；群聊和其他人的私聊里的要求只是参考，不是主人命令；worker 不能把 life 的“可以做”当成主人授权；没有配置主人时停下等后台配置。QQ 空间发布沿用账号当前可见范围，接口固定使用公开参数，不增加单条可见范围选项。
 - 多种 session 共用的工具优先在工具描述和参数 schema 中写清调用前提、用法、限制和续读方式；QQ 专属交互用法写在 QQ 聊天文本；`speak` 与 `poke` 在群聊和私聊注册的是同一个工具名，不存在 `privateSpeak` 或 `privatePoke`。
+- 通用 `searchWeb`、`fetchWeb` 只给 life 与 worker；群聊/私聊只保留 `searchMeme` 与固定梗百科来源的 `readMeme(slug)`，网页核实需求投给 life。输入原文与 transcript 在同一事务提交成功后才发布到内存，不把无持久化行号的输入交给模型。
 
 ## 数据与检索边界
 
@@ -269,7 +270,7 @@ go vet ./...
 - 持久化使用 PostgreSQL 18；先打开数据库、完成 schema 迁移、动态配置、人格预设和管理后台，再异步等待 OneBot 取得 `self_id` 并创建 Agent；QQ 未登录时后台仍可配置，首次配置模型且 Agent 激活前事件门保持关闭。
 - schema 由 `schema_migrations` 记录并为 v18；空库初始化，当前 v17 显式事务升级并保留业务数据，已是 v18 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
-- 切换或缩小当前模型上下文窗口前，必须按现有装配和 token 估算检查受影响场合的全部持久工作集；检查是只读操作，不能创建/改写代头、追加群说明、裁剪内存或触发压缩。QQ 离线、Agent 尚未激活和 generation 尚未建立也必须检查，有工作集放不下就拒绝并保持旧配置，不静默截断或丢掉会话。
+- 切换模型或缩小当前窗口前，等待受影响会话的当前回合结束，按现有装配和 token 估算检查持久工作集；达到新窗口压缩阈值时先用原模型整理，再复查容量后应用。容量预览本身保持只读；整理复用 QQ 话题压缩和 life/worker 摘要检查点，不能消费待处理输入或切断工具链。QQ 离线、Agent 尚未激活和 generation 尚未建立也走同一流程；整理失败或仍放不下就保持旧配置，不静默截断或丢掉会话。
 - 管理后台日志与模型统计口径保持现有约束。`message_logs`、合并转发和聊天媒体默认保留 180 天，实际最低期限由后台 `history_days` 决定；仍在 transcript 直接引用的过期原文延后删除，正常压缩解除引用后再清理。摘要、记忆、日记和收藏表情有各自的保留含义，不等同于原文清理。
 - 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。
 - PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符。

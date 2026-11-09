@@ -13,6 +13,7 @@ import (
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
+	"github.com/bytedance/sonic"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -59,7 +60,7 @@ func (a *Agent) messageAllowed(ctx context.Context, msg *onebot.ConversationMess
 }
 
 // persistConversationMessage 在队列消费时锁住会话许可，已成功发送的自身消息必须保留
-func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.ConversationMessage, mediaRefs []media.Ref, forwards []forwardDraft) (*memory.MessageLog, bool, error) {
+func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.ConversationMessage, mediaRefs []media.Ref, forwards []forwardDraft, user *sessionUser) (*memory.MessageLog, bool, error) {
 	var log *memory.MessageLog
 	created := false
 	err := a.memory.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -68,29 +69,48 @@ func (a *Agent) persistConversationMessage(ctx context.Context, msg *onebot.Conv
 				return err
 			}
 		}
-		if msg.MessageID == 0 {
+		if msg.MessageID != 0 {
+			log = &memory.MessageLog{
+				ConversationKind: msg.ConversationKind, OneBotMessageID: msg.MessageID,
+				TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname,
+				TextContent: msg.Content, DisplayContent: msg.FinalContent,
+				IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs, FileRefs: msg.Files,
+			}
+			if msg.Reply != nil && msg.Reply.MessageID != 0 {
+				replyTo := msg.Reply.MessageID
+				log.ReplyToMessageID = &replyTo
+			}
+			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(log)
+			if result.Error != nil {
+				return result.Error
+			}
+			created = result.RowsAffected > 0
+			if !created {
+				return tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", msg.ConversationKind, msg.TargetID, msg.MessageID).First(log).Error
+			}
+			if err := saveMessageForwards(tx, log, forwards); err != nil {
+				return err
+			}
+		} else {
 			created = true
+		}
+		if user == nil {
 			return nil
 		}
-		log = &memory.MessageLog{
-			ConversationKind: msg.ConversationKind, OneBotMessageID: msg.MessageID,
-			TargetID: msg.TargetID, UserID: msg.UserID, Nickname: msg.Nickname,
-			TextContent: msg.Content, DisplayContent: msg.FinalContent,
-			IsMentioned: msg.IsMentioned, MessageTime: msg.Time, MediaRefs: mediaRefs, FileRefs: msg.Files,
+		if log != nil {
+			user.LogID = log.ID
 		}
-		if msg.Reply != nil && msg.Reply.MessageID != 0 {
-			replyTo := msg.Reply.MessageID
-			log.ReplyToMessageID = &replyTo
+		payload, err := sonic.Marshal(user.Msg)
+		if err != nil {
+			return err
 		}
-		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(log)
-		if result.Error != nil {
-			return result.Error
+		entry, err := a.memory.AppendUserTranscript(tx, msg.ConversationKind, msg.TargetID, user.LogID, payload, "")
+		if err != nil {
+			return err
 		}
-		created = result.RowsAffected > 0
-		if !created {
-			return tx.Where("conversation_kind=? AND target_id=? AND one_bot_message_id=?", msg.ConversationKind, msg.TargetID, msg.MessageID).First(log).Error
-		}
-		return saveMessageForwards(tx, log, forwards)
+		user.TranscriptID = entry.ID
+		tagTranscriptEntryID(user.Msg, entry.ID)
+		return nil
 	})
 	return log, created, err
 }
@@ -128,7 +148,24 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	if replyErr != nil {
 		zap.L().Warn("核对引用撤回状态失败，省略引用原文", zap.String("conversation_kind", msg.ConversationKind), zap.Int64("target_id", msg.TargetID), zap.Int64("message_id", msg.MessageID), zap.Error(replyErr))
 	}
-	log, created, err := a.persistConversationMessage(ctx, msg, item.media, item.forwards)
+	wakeCommand := a.isWakeCommand(msg)
+	selfID := a.bot.GetSelfID()
+	self := msg.MessageID != 0 && msg.UserID == selfID
+	sleeping := a.qqSleeping() && msg.UserID != selfID
+	var log *memory.MessageLog
+	var created bool
+	persist := func(user *sessionUser) (bool, error) {
+		var err error
+		log, created, err = a.persistConversationMessage(ctx, msg, item.media, item.forwards, user)
+		return created, err
+	}
+	var err error
+	if !self && !sleeping && !wakeCommand {
+		display := a.applyPendingRecall(ctx, msg)
+		err = a.sessions.get(msg.ConversationKind, msg.TargetID).AppendUser(display, item.media, persist)
+	} else {
+		_, err = persist(nil)
+	}
 	if errors.Is(err, memory.ErrConversationUnavailable) {
 		return
 	}
@@ -146,12 +183,12 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	if !created {
 		return
 	}
-	if a.handleWakeCommand(ctx, msg) {
+	if wakeCommand {
+		a.handleWakeCommand(ctx, msg)
 		return
 	}
 	// 睡眠期间只保留原文、媒体和转发：不进入 QQ 工作集，也不启动新回合
-	if a.qqSleeping() && msg.UserID != a.bot.GetSelfID() &&
-		msg.ConversationKind != memory.ConversationKindWorker && msg.ConversationKind != memory.ConversationKindLife {
+	if sleeping {
 		a.updateMember(ctx, msg)
 		return
 	}
@@ -159,8 +196,7 @@ func (a *Agent) commitConversationMessage(item commitItem) {
 	if replyErr == nil && msg.Reply != nil && msg.Reply.MessageID != 0 {
 		a.replyCache.Set(replyCacheKey(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID), *msg.Reply, ttlcache.DefaultTTL)
 	}
-	a.appendSessionMessage(ctx, msg, item.media, log)
-	if msg.MessageID == 0 || msg.UserID == a.bot.GetSelfID() || a.stopping.Load() || a.ctx.Err() != nil {
+	if msg.MessageID == 0 || self || a.stopping.Load() || a.ctx.Err() != nil {
 		return
 	}
 	a.afterMessagePersisted(ctx, msg)
@@ -192,8 +228,7 @@ func (a *Agent) commitOne(item commitItem) {
 	}
 }
 
-// handleWakeCommand 只认主人私聊的纯文本 /wake；指令本身不启动普通 Private ReAct
-func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationMessage) bool {
+func (a *Agent) isWakeCommand(msg *onebot.ConversationMessage) bool {
 	if msg == nil || msg.ConversationKind != memory.ConversationKindPrivate || msg.UserID != config.Snapshot().Identity.MasterUserID {
 		return false
 	}
@@ -205,14 +240,19 @@ func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationM
 			return false
 		}
 	}
+	return true
+}
+
+// handleWakeCommand 处理已经在入口确认的主人私聊纯文本 /wake，不启动普通 Private ReAct
+func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationMessage) {
 	state, err := a.memory.GetLifeState(ctx)
 	if err != nil {
 		zap.L().Warn("处理主人叫醒指令时读取 life 状态失败", zap.Error(err))
-		return true
+		return
 	}
 	if state.Awake {
 		zap.L().Info("life 已经醒着，忽略重复叫醒指令", zap.Int64("user_id", msg.UserID))
-		return true
+		return
 	}
 	now := time.Now()
 	summary := ""
@@ -229,12 +269,12 @@ func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationM
 		memory.ConversationKindLife, memory.LifeTargetID, note, false, true)
 	if err != nil {
 		zap.L().Warn("主人叫醒 life 前投信失败", zap.Error(err))
-		return true
+		return
 	}
 	if err := a.memory.WakeLife(ctx, now); err != nil {
 		zap.L().Warn("主人叫醒 life 失败", zap.Error(err))
 		a.recordLifeError(context.WithoutCancel(ctx), "wake_failed", err.Error())
-		return true
+		return
 	}
 	a.applyLifeAwake(ctx, true)
 	a.sessions.get(memory.ConversationKindLife, memory.LifeTargetID).MarkAgentMessageWake(row.ID)
@@ -242,5 +282,4 @@ func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationM
 		zap.L().Warn("持久化叫醒消息的 wake 标记失败", zap.Error(err))
 	}
 	a.scheduleLifeThink()
-	return true
 }

@@ -47,16 +47,17 @@ type modelInput struct {
 	Version         int64  `json:"version"`
 }
 
-// ensureModelCapacity 在切换或缩小当前模型窗口前检查真实工作集
-func (a *App) ensureModelCapacity(ctx context.Context, window int, role string) ([]string, bool) {
-	if window <= 0 {
-		return nil, true
+// prepareModelCapacity 在保存前自动整理超限历史，并把会话锁保留到运行态切换完成
+func (a *App) prepareModelCapacity(ctx context.Context, windows map[string]int) (func(), []string, bool) {
+	if len(windows) == 0 {
+		return func() {}, nil, true
 	}
 	currentAgent := a.currentAgent()
+	var release func()
 	var affected []string
 	var err error
-	if currentAgent != nil && currentAgent.HasGeneration() {
-		affected, err = currentAgent.ContextCapacity(ctx, window, role)
+	if currentAgent != nil && currentAgent.Ready() {
+		release, affected, err = currentAgent.PrepareContextWindows(ctx, windows)
 	} else {
 		var mcpManager *mcp.Manager
 		if a.mcpStore != nil {
@@ -69,13 +70,13 @@ func (a *App) ensureModelCapacity(ctx context.Context, window int, role string) 
 				defer mcpManager.Close()
 			}
 		}
-		affected, err = agent.ContextCapacityFor(ctx, a.memMgr, window, role, mcpManager)
+		release, affected, err = agent.PrepareContextWindowsFor(ctx, a.memMgr, a.modelStore, windows, mcpManager)
 	}
 	if err != nil {
-		zap.L().Warn("检查模型上下文容量失败", zap.Error(err))
-		return nil, false
+		zap.L().Warn("为模型切换整理上下文失败", zap.Error(err))
+		return release, affected, false
 	}
-	return affected, true
+	return release, affected, true
 }
 
 func (a *App) handleModelCreate(w http.ResponseWriter, r *http.Request) {
@@ -131,16 +132,24 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, currentErr)
 		return
 	}
+	if body.Version != current.Version {
+		a.failFromError(w, r, modelprofiles.ErrVersionConflict)
+		return
+	}
+	windows := make(map[string]int)
 	if body.ContextWindow > 0 && body.ContextWindow < current.ContextWindow {
 		for _, role := range []string{"qq", "life", "worker"} {
 			if selection.ID(role) != id {
 				continue
 			}
-			if affected, ok := a.ensureModelCapacity(r.Context(), body.ContextWindow, role); !ok || len(affected) > 0 {
-				respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
-				return
-			}
+			windows[role] = body.ContextWindow
 		}
+	}
+	release, affected, ok := a.prepareModelCapacity(r.Context(), windows)
+	defer release()
+	if !ok || len(affected) > 0 {
+		respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
+		return
 	}
 	updated, err := a.modelStore.Update(r.Context(), modelprofiles.Profile{
 		ID:              id,
@@ -200,6 +209,7 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, modelprofiles.ErrVersionConflict)
 		return
 	}
+	windows := make(map[string]int)
 	for _, role := range []string{"qq", "life", "worker"} {
 		target, err := a.modelStore.Get(r.Context(), body.ID(role))
 		if err != nil {
@@ -209,10 +219,13 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 		if target.ID == old.ID(role) {
 			continue
 		}
-		if affected, ok := a.ensureModelCapacity(r.Context(), target.ContextWindow, role); !ok || len(affected) > 0 {
-			respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
-			return
-		}
+		windows[role] = target.ContextWindow
+	}
+	release, affected, ok := a.prepareModelCapacity(r.Context(), windows)
+	defer release()
+	if !ok || len(affected) > 0 {
+		respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
+		return
 	}
 	saved, err := a.modelStore.Select(r.Context(), body)
 	if err != nil {

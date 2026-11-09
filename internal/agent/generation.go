@@ -75,25 +75,13 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 	}
 	loaded := map[uint]roleModel{}
 	load := func(id uint) (roleModel, error) {
-		if id == 0 {
-			return roleModel{}, ErrNoModel
-		}
 		if existing, ok := loaded[id]; ok {
 			return existing, nil
 		}
-		profile, err := a.modelStore.Get(a.ctx, id)
+		item, err := a.loadModel(a.ctx, id)
 		if err != nil {
 			return roleModel{}, err
 		}
-		apiKey, err := a.modelStore.DecryptKey(profile)
-		if err != nil {
-			return roleModel{}, err
-		}
-		client, err := llm.NewClient(llm.ModelConfig{APIKey: apiKey, BaseURL: profile.BaseURL, Model: profile.ModelName, ReasoningEffort: profile.ReasoningEffort})
-		if err != nil {
-			return roleModel{}, err
-		}
-		item := roleModel{model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: id, profileVersion: profile.Version}
 		loaded[id] = item
 		return item, nil
 	}
@@ -147,6 +135,25 @@ func (a *Agent) buildGeneration() (*Generation, error) {
 		media:        mediaManager,
 	}
 	return generation, nil
+}
+
+func (a *Agent) loadModel(ctx context.Context, id uint) (roleModel, error) {
+	if id == 0 {
+		return roleModel{}, ErrNoModel
+	}
+	profile, err := a.modelStore.Get(ctx, id)
+	if err != nil {
+		return roleModel{}, err
+	}
+	apiKey, err := a.modelStore.DecryptKey(profile)
+	if err != nil {
+		return roleModel{}, err
+	}
+	client, err := llm.NewClient(llm.ModelConfig{APIKey: apiKey, BaseURL: profile.BaseURL, Model: profile.ModelName, ReasoningEffort: profile.ReasoningEffort})
+	if err != nil {
+		return roleModel{}, err
+	}
+	return roleModel{model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: id, profileVersion: profile.Version}, nil
 }
 
 // newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立
@@ -235,6 +242,8 @@ func (a *Agent) newTypedChatAgent(selected roleModel, chatTools []tool.BaseTool,
 func workerToolBuilders() []func() (tool.BaseTool, error) {
 	return []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) { return tools.NewBashTool() },
+		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
+		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewListSessionsTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadSessionHistoryTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadSessionEntryTool() },
@@ -365,9 +374,8 @@ func sharedToolBuilders(private bool) []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewSaveStickerTool() },
 		func() (tool.BaseTool, error) { return tools.NewManageStickerTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateMoodTool() },
-		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchMemeTool() },
-		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadMemeTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewViewImageTool() },
 		func() (tool.BaseTool, error) { return tools.NewChatReadFileTool() },

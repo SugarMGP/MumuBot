@@ -45,7 +45,7 @@ Core capabilities of this project:
 - 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
 - 💬 **Persona Presets** — Five documents for persona, shared rules, QQ chat, life duties, and work duties, switched and cloned together in the admin panel; role name and master are global settings
 - 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
-- 🧩 **Rich Toolset** — Built-in tools for speaking, staying quiet, memory search, web search, poking, and stickers; external capabilities via MCP are reserved for the life session
+- 🧩 **Rich Toolset** — Chat tools cover speaking, memory, meme search and full entries, poking, and stickers; general web search and page fetching belong to life and workers, while external MCP capabilities stay with life
 - 🖼️ **Media Coverage** — Images, merged forwards, and stickers are understood; voice transcription and video understanding are not implemented yet, so voice messages remain placeholders
 - 📝 **Long-term Memory** — The main agent maintains profile and experience memories for groups, users, itself, and objects, with pinned selection, revisions, and keyword search
 - 👤 **Member Profiles** — Keeps basic member names and related long-term memories; no participation or intimacy scores
@@ -144,7 +144,7 @@ Visit `/admin` after startup. The dashboard remains available when no model is c
 
 QQ chat (groups and DMs), life, and worker each select an existing model profile. Profiles may use the same model name with different reasoning effort. The list stays in creation order. Only `reasoning.effort` is sent: omit, none, low, medium, high, xhigh, or max. `thinking.type` is removed; available effort levels depend on the provider.
 
-Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Before switching to a smaller model context window, the current working set is checked and the switch is rejected if any session cannot fit, keeping the old runtime intact.
+Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Switching models or reducing the current window waits for affected turns to finish, checks the working set against the target window, and uses the original model to compact history when the threshold is reached. This also works while QQ is offline. Pending inputs remain untouched. The new configuration is applied only after a capacity recheck; compaction failures or content that still cannot fit keep the previous configuration.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_trgm;

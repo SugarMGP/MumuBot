@@ -334,11 +334,6 @@ func (a *Agent) Reload() error {
 	return nil
 }
 
-// HasGeneration 表示当前 Agent 是否已持有可用的模型运行态
-func (a *Agent) HasGeneration() bool {
-	return a != nil && a.currentGeneration() != nil
-}
-
 func (a *Agent) currentGeneration() *Generation {
 	a.generationMu.RLock()
 	defer a.generationMu.RUnlock()

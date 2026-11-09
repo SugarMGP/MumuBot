@@ -157,6 +157,9 @@ func (a *Agent) clearPendingThinks() {
 }
 
 func (a *Agent) thinkGroup(groupID int64) {
+	session := a.sessions.get(memory.ConversationKindGroup, groupID)
+	session.maintenanceMu.Lock()
+	defer session.maintenanceMu.Unlock()
 	generation := a.acquireGeneration()
 	if generation == nil {
 		return
@@ -173,9 +176,6 @@ func (a *Agent) thinkGroup(groupID int64) {
 	if a.bot.IsSelfMuted(groupID) {
 		return
 	}
-	session := a.sessions.get(memory.ConversationKindGroup, groupID)
-	session.maintenanceMu.Lock()
-	defer session.maintenanceMu.Unlock()
 	pending := session.PendingMessages()
 	if len(pending) == 0 || !hasActionableMessage(pending) {
 		return
@@ -193,7 +193,6 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 	tc := tools.GetToolContext(ctx)
-	tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 	a.injectMaintenanceHint(ctx, session)
 
 	if state.steps.Remaining() <= 0 {
@@ -264,10 +263,8 @@ func (a *Agent) compactAfterThink(ctx context.Context, session *Session) bool {
 	if session.CompactionCoolingDown(time.Now()) {
 		return false
 	}
-	candidate, err := session.BuildCompactionCandidate(generation.contextWindow, cfg.Compactor.RecentTailRatio)
-	if err != nil {
-		session.MarkCompactionFailure(time.Now())
-		zap.L().Warn("一轮结束后没有可用压缩候选", zap.String("kind", session.kind), zap.Int64("target_id", session.targetID), zap.Error(err))
+	candidate := session.BuildCompactionCandidate(generation.contextWindow, cfg.Compactor.RecentTailRatio)
+	if candidate == nil {
 		return false
 	}
 	compactionCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))

@@ -5,13 +5,15 @@ import (
 	"fmt"
 
 	"mumu-bot/internal/memory"
-	"mumu-bot/internal/tools"
 
 	"go.uber.org/zap"
 )
 
 // thinkWorker 复用现有 Session/transcript，只把工具集换成 worker 工具
 func (a *Agent) thinkWorker(workerID int64) {
+	session := a.sessions.get(memory.ConversationKindWorker, workerID)
+	session.maintenanceMu.Lock()
+	defer session.maintenanceMu.Unlock()
 	generation := a.acquireGeneration()
 	if generation == nil {
 		zap.L().Error("worker 无法开始运行", zap.String("session", fmt.Sprintf("worker:%d", workerID)), zap.String("error", "模型未就绪"))
@@ -26,9 +28,6 @@ func (a *Agent) thinkWorker(workerID int64) {
 	if err != nil || target == nil || !target.Active {
 		return
 	}
-	session := a.sessions.get(memory.ConversationKindWorker, workerID)
-	session.maintenanceMu.Lock()
-	defer session.maintenanceMu.Unlock()
 	state, stateErr := newRunState("worker")
 	if stateErr != nil {
 		zap.L().Error("worker 无法开始运行", zap.String("session", fmt.Sprintf("worker:%d", workerID)), zap.Error(stateErr))
@@ -53,8 +52,6 @@ func (a *Agent) thinkWorker(workerID int64) {
 		ctx := withRunState(runCtx, state)
 		ctx = withGeneration(ctx, generation)
 		ctx = a.buildWorkerToolContext(ctx, workerID, session)
-		tc := tools.GetToolContext(ctx)
-		tc.ThinkStartArrivalSeq = maxPendingSeq(pending)
 
 		if state.steps.Remaining() <= 0 {
 			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, fmt.Errorf("本轮步数用完"))

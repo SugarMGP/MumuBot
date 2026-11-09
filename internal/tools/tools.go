@@ -88,7 +88,6 @@ type ToolContext struct {
 	SnapshotLogID                 uint
 	SnapshotLogIDSet              bool
 	RunID                         string
-	InjectedArrivalSeq            uint64
 	CompactionAttempts            int
 	CurrentConversationOnly       bool
 	MemoryReadVersions            map[uint]uint64
@@ -118,8 +117,7 @@ type ToolContext struct {
 	GroupInfoCallback     func(ctx context.Context) string
 	StickerDir            string
 	Session               SessionContext
-	ThinkStartArrivalSeq  uint64
-	ObservedThroughSeq    uint64
+	ObservedThroughOrder  uint64
 	RecallCallback        func(messageID int64, arrivalSeq uint64)
 
 	memoryMu           sync.Mutex
@@ -243,8 +241,7 @@ func NewGetNewMessagesTool() (tool.EnhancedInvokableTool, error) {
 		if tc == nil || tc.Session == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("新消息读取能力未初始化"))
 		}
-		floor := max(tc.ThinkStartArrivalSeq, tc.ObservedThroughSeq)
-		count := len(tc.Session.PendingAfter(floor)) + len(tc.Session.PendingAgentMessages())
+		count := len(tc.Session.PendingAfter(tc.ObservedThroughOrder))
 		text := "没有新消息。"
 		if count > 0 {
 			text = "新消息已随上下文提供（见随后的用户消息）。"

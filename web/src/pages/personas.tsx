@@ -153,9 +153,18 @@ export default function PersonasPage() {
   }, [leaveTarget, navigate]);
 
   const reloadLatest = async () => {
-    loadedKey.current = "";
-    setDraftVersion(0);
-    await detail.refetch();
+    const result = await detail.refetch();
+    if (result.isError || !result.data) {
+      toastApiError(result.error);
+      return;
+    }
+    const fresh = result.data;
+    const nextTexts = promptTexts(fresh);
+    setName(fresh.name);
+    setDescription(fresh.description);
+    setTexts(nextTexts);
+    setPersonaBaseline({ name: fresh.name, description: fresh.description, texts: nextTexts });
+    setDraftVersion(fresh.version);
   };
 
   const reloadIdentity = async () => {

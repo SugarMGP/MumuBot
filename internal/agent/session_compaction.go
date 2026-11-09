@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -19,7 +18,7 @@ type compactionCandidate struct {
 }
 
 // BuildCompactionCandidate 选出最老的闭合交互段，保留最近尾部
-func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*compactionCandidate, error) {
+func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) *compactionCandidate {
 	s.mu.Lock()
 	entries := append([]sessionEntry(nil), s.seen...)
 	s.mu.Unlock()
@@ -33,7 +32,7 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 	}
 	segments := splitSegments(work)
 	if len(segments) < 2 {
-		return nil, fmt.Errorf("没有可安全压缩的完整旧交互")
+		return nil
 	}
 	tailBudget := int(float64(window) * tailRatio)
 	if tailBudget < 0 {
@@ -63,7 +62,7 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 		}
 	}
 	if cut == 0 {
-		return nil, fmt.Errorf("最近工作集尚未进入模型上下文，不能压缩")
+		return nil
 	}
 	candidate := &compactionCandidate{}
 	for _, segment := range segments[:cut] {
@@ -86,9 +85,9 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) (*comp
 		}
 	}
 	if len(candidate.Messages) == 0 || candidate.ThroughVisibleSeq == 0 || candidate.ThroughMessageLogID == 0 {
-		return nil, fmt.Errorf("没有可安全压缩的旧交互")
+		return nil
 	}
-	return candidate, nil
+	return candidate
 }
 
 // ApplyCompaction 丢弃检查点覆盖的工作集，只保留完整尾部
@@ -146,6 +145,14 @@ func (s *Session) MarkCompactionFailure(now time.Time) {
 	defer s.mu.Unlock()
 	s.compactionRetryAfter = now.Add(60 * time.Second)
 	s.compactionBeforeModel = true
+}
+
+// ClearCompactionFailure 没有可压缩的旧段时解除前置门，由当前请求容量决定能否继续
+func (s *Session) ClearCompactionFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.compactionRetryAfter = time.Time{}
+	s.compactionBeforeModel = false
 }
 
 // SetTokenBase 记录最后一条 assistant 的完整 usage，供压缩和空闲判断使用

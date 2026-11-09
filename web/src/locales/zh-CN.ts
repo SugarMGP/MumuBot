@@ -847,7 +847,7 @@ const zhCN = {
     model_active: "当前正在使用的模型不能删除。",
     model_test_failed: "模型连接测试失败",
     agent_not_ready: "机器人还没有完成启动，请等 QQ 与模型就绪后再试。",
-    model_context_too_small: "当前工作集放不进新的上下文窗口，请先整理或压缩上下文。",
+    model_context_too_small: "未能将上下文整理到新窗口以内，当前模型保持不变。请检查模型连接或选择更大的窗口。",
     model_activate_failed: "模型切换失败，已继续使用旧配置。",
     persona_content_invalid: "请补全五段内容，并检查是否超过字数上限。",
     preset_duplicate: "已经有同名预设了。",

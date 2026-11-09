@@ -24,17 +24,13 @@ type SessionContext interface {
 	FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, resultRef string) (string, *schema.ToolResult, error)
 	RegisterMediaRefs(refs []media.Ref)
 	ResolveMediaByHash(hash string) (media.Ref, bool)
-	PendingAfter(seq uint64) []PendingMessage
-	PendingAgentMessages() []PendingMessage
-	MarkInjected(seq uint64)
+	PendingAfter(order uint64) []PendingMessage
 }
 
 // PendingMessage 待注入模型上下文的消息
 type PendingMessage struct {
-	ArrivalSeq   uint64
-	Order        uint64
-	Msg          *schema.AgenticMessage
-	TranscriptID uint
+	Order uint64
+	Msg   *schema.AgenticMessage
 }
 
 // enhancedTool 返回多模态结果的工具

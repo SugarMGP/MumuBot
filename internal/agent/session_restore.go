@@ -14,13 +14,13 @@ import (
 
 // restoreSessions 先恢复持久化工作集，没有工作集时才回退到最近原文
 func (a *Agent) restoreSessions() error {
-	groupIDs, err := a.memory.ListActiveGroupIDs(a.ctx)
+	groups, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindGroup, true)
 	if err != nil {
 		return fmt.Errorf("读取可恢复群聊失败: %w", err)
 	}
-	for _, groupID := range groupIDs {
-		if err := a.restoreTranscriptSession(memory.ConversationKindGroup, groupID, 0); err != nil {
-			return fmt.Errorf("恢复群 %d 工作集失败: %w", groupID, err)
+	for _, group := range groups {
+		if err := a.restoreTranscriptSession(memory.ConversationKindGroup, group.TargetID, 0); err != nil {
+			return fmt.Errorf("恢复群 %d 工作集失败: %w", group.TargetID, err)
 		}
 	}
 	privateTargets, err := a.memory.ListConversationTargets(a.ctx, memory.ConversationKindPrivate, true)
@@ -59,7 +59,7 @@ func (a *Agent) restoreSessions() error {
 func (a *Agent) restoreTranscriptSession(kind string, targetID int64, afterID uint) error {
 	session := a.sessions.get(kind, targetID)
 	session.ClearTokenBase()
-	if latest, timeErr := a.memory.LatestMessageTime(a.ctx, kind, targetID, a.bot.GetSelfID()); timeErr == nil && !latest.IsZero() {
+	if latest, timeErr := a.memory.LatestMessageTime(a.ctx, kind, targetID, a.BotSelfID()); timeErr == nil && !latest.IsZero() {
 		session.SetLastActivity(latest)
 	}
 	checkpoint, err := a.memory.GetCheckpoint(a.ctx, kind, targetID)
@@ -74,7 +74,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64, afterID ui
 	if err != nil {
 		return err
 	}
-	pending, err := a.memory.PendingInputs(a.ctx, kind, targetID)
+	pending, err := a.memory.PendingInputsAfter(a.ctx, kind, targetID, afterID)
 	if err != nil {
 		return err
 	}

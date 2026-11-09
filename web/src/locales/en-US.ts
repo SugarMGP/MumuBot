@@ -869,7 +869,7 @@ const enUS: typeof zhCN = {
     model_active: "The active model cannot be deleted.",
     model_test_failed: "Model connection test failed",
     agent_not_ready: "The bot is still starting. Wait for QQ and the model to become ready.",
-    model_context_too_small: "The current working set does not fit the new context window. Compact or trim it first.",
+    model_context_too_small: "The context could not be compacted to fit the new window. The current model is unchanged. Check the model connection or choose a larger window.",
     model_activate_failed: "Model switch failed; the previous model is still active.",
     persona_content_invalid: "Complete all five documents and check their character limits.",
     preset_duplicate: "A preset with this name already exists.",

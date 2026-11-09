@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mcpApi, systemApi } from "@/api/client-endpoints";
-import type { MCPServerSummary } from "@/api/types";
+import type { MCPServerDetail, MCPServerSummary } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { EditPanel } from "@/components/admin/edit-panel";
 import { AdminIcon } from "@/components/admin/icons";
@@ -62,6 +62,22 @@ const emptyForm: FormState = {
   headers: "",
   toolNames: "",
 };
+
+function serverForm(server: MCPServerDetail): FormState {
+  return {
+    name: server.name,
+    enabled: server.enabled,
+    type: server.type,
+    url: server.url,
+    command: server.command,
+    args: server.args.join("\n"),
+    env: server.env.join("\n"),
+    headers: Object.entries(server.headers)
+      .map(([name, value]) => `${name}=${value}`)
+      .join("\n"),
+    toolNames: server.tool_names.join(", "),
+  };
+}
 
 function parseLines(text: string): string[] {
   return text
@@ -148,19 +164,7 @@ export default function McpPage() {
     const key = `id:${detail.data.id}`;
     if (loadedKey.current === key) return;
     loadedKey.current = key;
-    const next = {
-      name: detail.data.name,
-      enabled: detail.data.enabled,
-      type: detail.data.type,
-      url: detail.data.url,
-      command: detail.data.command,
-      args: detail.data.args.join("\n"),
-      env: detail.data.env.join("\n"),
-      headers: Object.entries(detail.data.headers)
-        .map(([name, value]) => `${name}=${value}`)
-        .join("\n"),
-      toolNames: detail.data.tool_names.join(", "),
-    };
+    const next = serverForm(detail.data);
     setForm(next);
     setBaseline(next);
     setDraftVersion(detail.data.version);
@@ -240,9 +244,16 @@ export default function McpPage() {
   };
 
   const reloadLatest = async () => {
-    loadedKey.current = "";
-    setDraftVersion(0);
-    await detail.refetch();
+    const result = await detail.refetch();
+    if (result.isError || !result.data) {
+      toastApiError(result.error);
+      return;
+    }
+    const next = serverForm(result.data);
+    setForm(next);
+    setBaseline(next);
+    setDraftVersion(result.data.version);
+    setAdvancedOpen(false);
     await invalidate();
   };
 
