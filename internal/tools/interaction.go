@@ -93,7 +93,7 @@ func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutp
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在群里说话。",
+		"在群里发一条消息。天然一句话一条、单句控制在20字以内、不换行；需要引用某条消息时填真实的 OneBot 消息 ID（reply_to），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
 		speakFunc,
 	)
 }
@@ -102,7 +102,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在私聊里说话。",
+		"在私聊里发一条消息。天然一句话一条、单句控制在20字以内、不换行；需要引用某条消息时填真实的 OneBot 消息 ID（reply_to）。",
 		privateSpeakFunc,
 	)
 }
@@ -130,7 +130,7 @@ func stayQuietFunc(_ context.Context, _ *StayQuietInput) (*StayQuietOutput, erro
 func NewStayQuietTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"stayQuiet",
-		"结束这一轮，不说话。",
+		"安静结束当前这一轮思考：当你决定不接话潜水、或者本轮想说的话已经发完时调用，调用后直接结束本轮，不要在普通文本里写内心戏或事后汇报。",
 		stayQuietFunc,
 	)
 }
@@ -192,7 +192,7 @@ func privatePokeFunc(ctx context.Context, _ *PrivatePokeInput) (*PokeOutput, err
 func NewPokeTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"poke",
-		"戳一戳群里的某个人。",
+		"戳一戳群里的某个群友（传对方 QQ 号），适合回应别人的戳一戳或偶尔逗一下熟人，不要频繁连戳。",
 		pokeFunc,
 	)
 }
@@ -201,7 +201,7 @@ func NewPokeTool() (tool.InvokableTool, error) {
 func NewPrivatePokeTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"poke",
-		"戳一戳对方。",
+		"在私聊里戳一戳对方，适合回应戳一戳或偶尔轻松互动，不要频繁连戳。",
 		privatePokeFunc,
 	)
 }

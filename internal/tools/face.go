@@ -57,7 +57,7 @@ func searchFacesFunc(ctx context.Context, input *SearchFacesInput) (*SearchFaces
 func NewSearchFacesTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"searchFaces",
-		"查询 QQ 自带表情的编号和名称。",
+		"查询 QQ 自带小黄脸表情的编号和名称；确认后可在 speak 正文里写成 %qface:名称% 或 %qface:编号% 发送。",
 		searchFacesFunc,
 	)
 }

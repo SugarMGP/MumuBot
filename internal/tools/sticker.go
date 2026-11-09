@@ -64,7 +64,7 @@ func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*Searc
 func NewSearchStickersTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"searchStickers",
-		"搜索已保存的表情包。",
+		"按关键词搜索收藏库里的表情包（如猫、无语、开心、躺平等），返回表情包 ID 与描述，挑契合当下气氛的再用 sendSticker 发送。",
 		searchStickersFunc,
 	)
 }
@@ -115,7 +115,7 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 func NewSendStickerTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"sendSticker",
-		"发送一个已保存的表情包。",
+		"发送一张收藏库里的表情包（传 searchStickers 返回的 sticker_id）。单次发送一张，不能附带文字；想配话可先用 speak 单独发一句。",
 		sendStickerFunc,
 	)
 }
