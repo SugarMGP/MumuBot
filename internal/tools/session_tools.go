@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"mumu-bot/internal/memory"
 
@@ -141,7 +140,7 @@ func NewListSessionsTool() (tool.InvokableTool, error) {
 
 type SendSessionMessageInput struct {
 	TargetSessionID string `json:"target_session_id" jsonschema:"description=例如 life:1、group:123、private:456 或 worker:1"`
-	Text            string `json:"text" jsonschema:"description=自然语言消息，最多2000字"`
+	Text            string `json:"text" jsonschema:"description=要发送的完整消息正文，没有长度限制，越详细越好"`
 	Wake            *bool  `json:"wake,omitempty" jsonschema:"description=是否请求目标立即处理，默认 true；false 表示只保存，等目标下次正常运行时再读"`
 	ContextMode     string `json:"context_mode,omitempty" jsonschema:"description=仅 life 派 worker 时使用：continue（默认）或 new（从这条派工开始新上下文）"`
 }
@@ -171,9 +170,6 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 	}
 	if input == nil || strings.TrimSpace(input.Text) == "" {
 		return nil, fmt.Errorf("消息正文不能为空")
-	}
-	if utf8.RuneCountInString(strings.TrimSpace(input.Text)) > memory.MaxSessionMessageRunes {
-		return nil, fmt.Errorf("消息正文不能超过 %d 字符", memory.MaxSessionMessageRunes)
 	}
 	kind, targetID, err := parseSessionID(input.TargetSessionID)
 	if err != nil {
@@ -214,7 +210,7 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 }
 
 func NewSendSessionMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendSessionMessage", "向另一个会话持久投信；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只回 life，life 可投任意可用会话。交事带目标、来源会话、原始 OneBot 消息 ID、材料、完成条件，回报带结果、验证、限制、原始 OneBot 消息 ID 和产物 ref，别来回发送无新内容的确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
+	return utils.InferTool("sendSessionMessage", "向另一个会话持久投信，正文没有长度限制，越详细越好；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只回 life，life 可投任意可用会话。交事带目标、来源会话、原始 OneBot 消息 ID、材料、完成条件，回报带详细结果、验证、限制、建议存入记忆的要点（含新装工具/脚本或新结论）、原始 OneBot 消息 ID 和产物 ref，别来回发送无新内容的确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
 }
 
 type UpdateWorkerTitleInput struct {

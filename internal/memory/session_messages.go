@@ -38,9 +38,6 @@ func normalizeSessionMessage(fromKind string, fromTarget int64, toKind string, t
 	if text == "" {
 		return "", fmt.Errorf("消息正文不能为空")
 	}
-	if len([]rune(text)) > MaxSessionMessageRunes {
-		return "", fmt.Errorf("消息正文不能超过 %d 字符", MaxSessionMessageRunes)
-	}
 	return text, nil
 }
 
