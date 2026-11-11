@@ -22,8 +22,8 @@ type SearchMemoryInputV2 struct {
 	Mode            string   `json:"mode,omitempty" jsonschema:"description=exact 或 fuzzy，默认 exact；只有需要放宽匹配时再用 fuzzy"`
 	ExcludeKeywords []string `json:"exclude_keywords,omitempty" jsonschema:"description=排除关键词"`
 	SubjectType     string   `json:"subject_type,omitempty" jsonschema:"description=group/user/self/object"`
-	SubjectTarget   string   `json:"subject_target,omitempty" jsonschema:"description=user 填 QQ 号，group 填群号，object 填名称，self 固定为 self"`
-	MemoryType      string   `json:"memory_type,omitempty" jsonschema:"description=profile 是稳定身份和偏好，experience 是具体经历"`
+	SubjectTarget   string   `json:"subject_target,omitempty" jsonschema:"description=user 填 QQ 号，group 填群号，object 填新梗/事物/项目名称，self 固定为 self"`
+	MemoryType      string   `json:"memory_type,omitempty" jsonschema:"description=profile 是稳定定义/身份/偏好/结论，experience 是具体经历与约定"`
 	UpdatedFrom     string   `json:"updated_from,omitempty" jsonschema:"description=更新时间下限，格式 2006-01-02 或 RFC3339"`
 	UpdatedTo       string   `json:"updated_to,omitempty" jsonschema:"description=更新时间上限，格式 2006-01-02 或 RFC3339"`
 	Cursor          string   `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
@@ -473,7 +473,7 @@ func NewReadMemoryToolV2() (tool.InvokableTool, error) {
 }
 
 func NewManageMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆，全部成功或全部回滚。update/archive 必须先在本轮 readMemory；搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
+	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆（user 存人物偏好/经历，group 存群文化，object 存查明的新梗/事物/项目/复杂结论，self 存自身认知与经验），全部成功或全部回滚。update/archive 必须先在本轮 readMemory；搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
 }
 
 func NewSearchTopicsTool() (tool.InvokableTool, error) {
