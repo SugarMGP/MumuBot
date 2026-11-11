@@ -101,6 +101,11 @@ type conversationsResponse struct {
 	Friends []conversationDTO `json:"friends"`
 }
 
+type conversationCompactDTO struct {
+	Action   string `json:"action"`
+	Messages int    `json:"messages"`
+}
+
 type memoryDTO struct {
 	Version        uint64     `json:"version"`
 	ID             uint       `json:"id"`

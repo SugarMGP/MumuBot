@@ -117,6 +117,21 @@ type headEntrySpec struct {
 	msg  *schema.AgenticMessage
 }
 
+// DropHeads 丢弃内存中的本代代头，下一次装配会按当前人格与摘要重建
+func (s *Session) DropHeads() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.seen[:0]
+	for _, entry := range s.seen {
+		if isHeadEntry(entry.msg) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	s.seen = kept
+	s.tokenBase = nil
+}
+
 // ensureGenerationHead 在本代第一条消息前原子写入人格、群说明、摘要和置顶记忆
 func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager, instruction, groupExtra string) error {
 	if mem == nil {

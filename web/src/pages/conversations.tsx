@@ -20,18 +20,22 @@ import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
 function ConversationRow({
   conversation,
   busy,
+  compacting,
   selected,
   onSelect,
   onBlockedChange,
   onPromptSaved,
+  onCompact,
   onDirtyChange,
 }: {
   conversation: Conversation;
   busy: boolean;
+  compacting: boolean;
   selected: boolean;
   onSelect: (selected: boolean) => void;
   onBlockedChange: (blocked: boolean) => void;
   onPromptSaved: (prompt: string) => Promise<boolean>;
+  onCompact: () => void;
   onDirtyChange: (key: string, dirty: boolean) => void;
 }) {
   const { t } = useTranslation();
@@ -39,6 +43,7 @@ function ConversationRow({
   const [saving, setSaving] = useState(false);
   const [prompt, setPrompt] = useState(conversation.extra_prompt);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [compactOpen, setCompactOpen] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
   const dirty = editing && prompt !== conversation.extra_prompt;
   const key = `${conversation.kind}:${conversation.target_id}`;
@@ -111,6 +116,17 @@ function ConversationRow({
               {t("contacts.editPrompt")}
             </Button>
           ) : null}
+          {conversation.active ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={busy || compacting || saving}
+              onClick={() => setCompactOpen(true)}
+            >
+              {compacting ? <Spinner /> : null}
+              {t("contacts.compactNow")}
+            </Button>
+          ) : null}
         </div>
       </div>
       {conversation.kind === "group" ? (
@@ -159,6 +175,18 @@ function ConversationRow({
         )
       ) : null}
       <ConfirmDialog open={discardOpen} onOpenChange={setDiscardOpen} title={t("common.unsavedTitle")} description={t("common.unsavedBody")} confirmLabel={t("common.leave")} destructive={false} onConfirm={() => { setDiscardOpen(false); closeEditor(); }} />
+      <ConfirmDialog
+        open={compactOpen}
+        onOpenChange={setCompactOpen}
+        title={t("contacts.compactTitle")}
+        description={t("contacts.compactBody")}
+        confirmLabel={t("contacts.compactConfirm")}
+        destructive={false}
+        onConfirm={() => {
+          setCompactOpen(false);
+          onCompact();
+        }}
+      />
     </div>
   );
 }
@@ -234,6 +262,20 @@ export default function ConversationsPage() {
     },
   });
 
+  const compactMutation = useMutation({
+    mutationFn: (input: { kind: string; targetID: number }) =>
+      conversationApi.compact(input.kind, input.targetID),
+    onSuccess: (result) => {
+      toastSuccess(
+        result.data.action === "compacted"
+          ? t("contacts.compacted", { count: result.data.messages })
+          : t("contacts.promptApplied"),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (error) => toastApiError(error),
+  });
+
   if (query.isPending) return <PageSkeleton />;
   if (!query.data) {
     return (
@@ -294,40 +336,51 @@ export default function ConversationsPage() {
                 {empty}
               </p>
             ) : (
-              items.map((conversation) => (
-                <ConversationRow
-                  key={`${conversation.kind}-${conversation.target_id}`}
-                  conversation={conversation}
-                  busy={mutation.isPending}
-                  selected={selected[kind]?.includes(conversation.target_id) ?? false}
-                  onSelect={(checked) => setSelected((current) => ({
-                    ...current,
-                    [kind]: checked
-                      ? [...(current[kind] ?? []), conversation.target_id]
-                      : (current[kind] ?? []).filter((id) => id !== conversation.target_id),
-                  }))}
-                  onDirtyChange={onDirtyChange}
-                  onBlockedChange={(blocked) =>
-                    mutation.mutate({
-                      kind: conversation.kind,
-                      targetIDs: [conversation.target_id],
-                      blocked,
-                    })
-                  }
-                  onPromptSaved={async (prompt) => {
-                    try {
-                      await mutation.mutateAsync({
+              items.map((conversation) => {
+                const compacting =
+                  compactMutation.isPending &&
+                  compactMutation.variables?.kind === conversation.kind &&
+                  compactMutation.variables?.targetID === conversation.target_id;
+                return (
+                  <ConversationRow
+                    key={`${conversation.kind}-${conversation.target_id}`}
+                    conversation={conversation}
+                    busy={mutation.isPending || compacting}
+                    compacting={compacting}
+                    selected={selected[kind]?.includes(conversation.target_id) ?? false}
+                    onSelect={(checked) => setSelected((current) => ({
+                      ...current,
+                      [kind]: checked
+                        ? [...(current[kind] ?? []), conversation.target_id]
+                        : (current[kind] ?? []).filter((id) => id !== conversation.target_id),
+                    }))}
+                    onDirtyChange={onDirtyChange}
+                    onBlockedChange={(blocked) =>
+                      mutation.mutate({
                         kind: conversation.kind,
-                        targetID: conversation.target_id,
-                        extraPrompt: prompt,
-                      });
-                      return true;
-                    } catch {
-                      return false;
+                        targetIDs: [conversation.target_id],
+                        blocked,
+                      })
                     }
-                  }}
-                />
-              ))
+                    onCompact={() => compactMutation.mutate({
+                      kind: conversation.kind,
+                      targetID: conversation.target_id,
+                    })}
+                    onPromptSaved={async (prompt) => {
+                      try {
+                        await mutation.mutateAsync({
+                          kind: conversation.kind,
+                          targetID: conversation.target_id,
+                          extraPrompt: prompt,
+                        });
+                        return true;
+                      } catch {
+                        return false;
+                      }
+                    }}
+                  />
+                );
+              })
             )}
           </div>
         </div>

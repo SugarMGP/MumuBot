@@ -293,6 +293,23 @@ func (m *Manager) DeleteTranscriptHeads(tx *gorm.DB, kind string, targetID int64
 	return candidates, nil
 }
 
+// RefreshTranscriptHead 删除本代代头，下一次装配按当前人格、摘要和置顶记忆重建
+func (m *Manager) RefreshTranscriptHead(ctx context.Context, kind string, targetID int64) (TranscriptCandidates, error) {
+	var released TranscriptCandidates
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		candidates, err := m.DeleteTranscriptHeads(tx, kind, targetID)
+		if err != nil {
+			return err
+		}
+		released = candidates
+		return nil
+	})
+	if err != nil {
+		return TranscriptCandidates{}, err
+	}
+	return released, nil
+}
+
 // DeleteTranscriptThrough 删除检查点覆盖的工作集记录，并返回本批引用候选
 func (m *Manager) DeleteTranscriptThrough(tx *gorm.DB, kind string, targetID int64, visibleSeq uint64) (TranscriptCandidates, error) {
 	if visibleSeq == 0 {

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -9,10 +11,14 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
+type compactionEntryRef struct {
+	LogID    uint
+	OneBotID int64
+}
+
 type compactionCandidate struct {
 	Messages            []*schema.AgenticMessage
-	MessageLogIDs       []uint
-	CoverageRefs        []string
+	Refs                []compactionEntryRef
 	ThroughVisibleSeq   uint64
 	ThroughMessageLogID uint
 }
@@ -64,30 +70,95 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) *compa
 	if cut == 0 {
 		return nil
 	}
-	candidate := &compactionCandidate{}
+	items := make([]sessionEntry, 0, len(work))
 	for _, segment := range segments[:cut] {
-		for _, entry := range segment.items {
-			if entry.msg != nil {
-				candidate.Messages = append(candidate.Messages, entry.msg)
-			}
-			if entry.visibleSeq > candidate.ThroughVisibleSeq {
-				candidate.ThroughVisibleSeq = entry.visibleSeq
-			}
-			if entry.user != nil {
-				if entry.user.LogID > candidate.ThroughMessageLogID {
-					candidate.ThroughMessageLogID = entry.user.LogID
-				}
-				if entry.user.LogID != 0 {
-					candidate.MessageLogIDs = append(candidate.MessageLogIDs, entry.user.LogID)
-					candidate.CoverageRefs = append(candidate.CoverageRefs, entry.user.Ref)
-				}
-			}
-		}
+		items = append(items, segment.items...)
 	}
-	if len(candidate.Messages) == 0 || candidate.ThroughVisibleSeq == 0 || candidate.ThroughMessageLogID == 0 {
+	// 先给可归属的真人消息编号，再复制正文替换行首 ID，编号与 refs 一一对应
+	candidate := &compactionCandidate{}
+	ordinals := make([]int, len(items))
+	for index, entry := range items {
+		if entry.msg == nil || entry.user == nil || entry.user.LogID == 0 || entry.user.MessageID == 0 {
+			continue
+		}
+		candidate.Refs = append(candidate.Refs, compactionEntryRef{LogID: entry.user.LogID, OneBotID: entry.user.MessageID})
+		ordinals[index] = len(candidate.Refs)
+	}
+	for index, entry := range items {
+		// 检查点边界按全部条目推进，和是否渲染这条消息无关
+		if entry.visibleSeq > candidate.ThroughVisibleSeq {
+			candidate.ThroughVisibleSeq = entry.visibleSeq
+		}
+		if entry.user != nil && entry.user.LogID > candidate.ThroughMessageLogID {
+			candidate.ThroughMessageLogID = entry.user.LogID
+		}
+		if entry.msg == nil {
+			continue
+		}
+		msg := entry.msg
+		if ordinals[index] > 0 {
+			msg = renumberCompactionMessage(msg, entry.user.MessageID, ordinals[index])
+		}
+		candidate.Messages = append(candidate.Messages, msg)
+	}
+	if len(candidate.Messages) == 0 || len(candidate.Refs) == 0 || candidate.ThroughVisibleSeq == 0 || candidate.ThroughMessageLogID == 0 {
 		return nil
 	}
 	return candidate
+}
+
+// messageLogIDs 返回候选里的消息原文行号，用于清理本次未归属的旧归属
+func (c *compactionCandidate) messageLogIDs() []uint {
+	if c == nil {
+		return nil
+	}
+	ids := make([]uint, 0, len(c.Refs))
+	for _, ref := range c.Refs {
+		ids = append(ids, ref.LogID)
+	}
+	return ids
+}
+
+// renumberCompactionMessage 复制一条消息并把行首 OneBot ID 换成候选编号，原 transcript 不受影响
+func renumberCompactionMessage(msg *schema.AgenticMessage, oneBotID int64, ordinal int) *schema.AgenticMessage {
+	if msg == nil {
+		return nil
+	}
+	marker := fmt.Sprintf("[#%d]", ordinal)
+	oldPrefix := "[" + strconv.FormatInt(oneBotID, 10) + "]"
+	copied := *msg
+	blocks := make([]*schema.ContentBlock, len(msg.ContentBlocks))
+	replaced := false
+	for index, block := range msg.ContentBlocks {
+		if block == nil {
+			blocks[index] = nil
+			continue
+		}
+		next := *block
+		if !replaced && block.UserInputText != nil {
+			text := block.UserInputText.Text
+			if offset := strings.Index(text, oldPrefix); offset >= 0 {
+				textCopy := *block.UserInputText
+				textCopy.Text = text[:offset] + marker + text[offset+len(oldPrefix):]
+				next.UserInputText = &textCopy
+				replaced = true
+			}
+		}
+		blocks[index] = &next
+	}
+	if !replaced {
+		for _, block := range blocks {
+			if block == nil || block.UserInputText == nil {
+				continue
+			}
+			textCopy := *block.UserInputText
+			textCopy.Text = marker + " " + textCopy.Text
+			block.UserInputText = &textCopy
+			break
+		}
+	}
+	copied.ContentBlocks = blocks
+	return &copied
 }
 
 // ApplyCompaction 丢弃检查点覆盖的工作集，只保留完整尾部

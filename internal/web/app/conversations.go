@@ -1,12 +1,15 @@
 package app
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
+	"mumu-bot/internal/agent"
 	"mumu-bot/internal/memory"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 func (a *App) loadConversations(r *http.Request) (conversationsResponse, error) {
@@ -48,6 +51,34 @@ func (a *App) handleConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondData(w, http.StatusOK, data, nil)
+}
+
+func (a *App) handleConversationCompact(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimSpace(chi.URLParam(r, "kind"))
+	targetID, err := parseUintParam(chi.URLParam(r, "targetID"))
+	if err != nil || targetID == 0 || (kind != memory.ConversationKindGroup && kind != memory.ConversationKindPrivate) {
+		a.failBadRequest(w, "会话参数无效。")
+		return
+	}
+	mumuAgent := a.currentAgent()
+	if mumuAgent == nil {
+		respondError(w, http.StatusConflict, "agent_not_ready", "", nil)
+		return
+	}
+	result, err := mumuAgent.CompactConversationNow(r.Context(), kind, int64(targetID))
+	if err != nil {
+		switch {
+		case errors.Is(err, agent.ErrSessionBusy):
+			respondError(w, http.StatusConflict, "session_busy", "", nil)
+		case errors.Is(err, agent.ErrNoModel):
+			respondError(w, http.StatusConflict, "agent_not_ready", "", nil)
+		default:
+			zap.L().Warn("后台手动整理会话失败", zap.String("kind", kind), zap.Int64("target_id", int64(targetID)), zap.Error(err))
+			respondError(w, http.StatusBadGateway, "compaction_failed", "", nil)
+		}
+		return
+	}
+	respondData(w, http.StatusOK, conversationCompactDTO{Action: result.Action, Messages: result.Messages}, nil)
 }
 
 func (a *App) handleConversationUpdate(w http.ResponseWriter, r *http.Request) {

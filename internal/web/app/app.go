@@ -120,6 +120,7 @@ func (a *App) routes() http.Handler {
 			protected.Get("/conversations", a.handleConversations)
 			protected.Patch("/conversations/blocked", a.handleConversationsBlocked)
 			protected.Patch("/conversations/{kind}/{targetID}", a.handleConversationUpdate)
+			protected.Post("/conversations/{kind}/{targetID}/compact", a.handleConversationCompact)
 			protected.Get("/identity", a.handleIdentity)
 			protected.Get("/identity/friends", a.handleIdentityFriends)
 			protected.Patch("/identity", a.handleIdentityUpdate)

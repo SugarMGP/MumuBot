@@ -1,5 +1,6 @@
 import { apiGet, apiMutate, buildQuery } from "./client";
 import type {
+  ConversationCompactResult,
   ConversationsData,
   DashboardData,
   ListPayload,
@@ -85,6 +86,11 @@ export const conversationApi = {
       "PATCH",
       `/api/v1/conversations/${kind}/${targetId}`,
       body,
+    ),
+  compact: (kind: string, targetId: number) =>
+    apiMutate<ConversationCompactResult>(
+      "POST",
+      `/api/v1/conversations/${kind}/${targetId}/compact`,
     ),
 };
 

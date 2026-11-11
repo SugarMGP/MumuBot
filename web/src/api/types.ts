@@ -84,6 +84,11 @@ export interface ConversationsData {
   friends: Conversation[];
 }
 
+export interface ConversationCompactResult {
+  action: "compacted" | "prompt";
+  messages: number;
+}
+
 export interface MemoryItem {
   version: number;
   id: number;

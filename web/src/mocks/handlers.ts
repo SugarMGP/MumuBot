@@ -752,6 +752,14 @@ export const handlers = [
     });
   }),
 
+  http.post("/api/v1/conversations/:kind/:id/compact", ({ params }) => {
+    const target = conversations.find(
+      (item) => item.kind === params.kind && item.target_id === Number(params.id),
+    );
+    if (!target) return fail(404, "not_found", "会话不存在");
+    return ok({ action: "compacted", messages: 42 });
+  }),
+
   http.patch("/api/v1/conversations/blocked", async ({ request }) => {
     const body = (await request.json()) as { kind: string; target_ids: number[]; blocked: boolean };
     const targets = body.target_ids.map((id) => conversations.find((item) => item.kind === body.kind && item.target_id === id));

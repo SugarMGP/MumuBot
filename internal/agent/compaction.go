@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"go.uber.org/zap"
 )
 
 type FinishCompactionInput struct {
@@ -30,9 +30,10 @@ type FinishCompactionInput struct {
 }
 
 type CompactionTopic struct {
-	Ref      string                   `json:"ref"`
-	Messages []memory.TopicMessageRef `json:"message_ids,omitempty"`
-	Summary  memory.TopicSummary      `json:"summary"`
+	Ref     string              `json:"ref" jsonschema:"description=话题引用号；延续已有话题用 t 开头的编号，新建用 new:a、new:b 依此类推"`
+	Ranges  []string            `json:"ranges,omitempty" jsonschema:"description=该话题覆盖的候选编号区间，如 12-45 或 12；可给多段并按时间排列；已有话题没有新消息时可省略"`
+	Anchors []int               `json:"anchors,omitempty" jsonschema:"description=该话题区间内真正关键的候选编号（行首 [#n] 的数字），必须落在本话题区间内；依据有几条就填几条，简单闲聊可以没有"`
+	Summary memory.TopicSummary `json:"summary"`
 }
 
 // compactionStepBudget 让两次压缩尝试共享同一份模型步数
@@ -64,10 +65,12 @@ const compactionPrompt = `你是 MumuBot 的会话话题压缩器，负责帮当
 - 必须保留：已经达成的结论、决定、约定、承诺、后来对前文的纠正、明确过的分寸与限制、事情的原因和影响；还没做完的事、答应要查/要办的事、正在等谁回复或等 life/worker 回报的事项；理解当下对话所必需的前因后果、谁说的（分清参与者、QQ号与指代）、关键时间点、聊出来的气氛与梗；工具执行的真实结果、已验证结论、失败原因或报错信息。
 - 可以丢弃：纯路过寒暄、无实质内容的复读、冗长无信息量的工具中间日志；已经彻底解决的过程性琐碎细节、已经被本人或对方明确纠正过的旧误会；不影响后续理解的纯表情敷衍和无关旁支。不要因为某件事可能写进过长期记忆，就删掉理解当前上下文仍然需要的前提。
 
-二、话题划分与锚点标注（topics / message_ids）
+二、候选编号、话题划分与锚点（topics / ranges / anchors）
+- 候选消息已按时间顺序编号，正文行首的 [#数字] 就是候选编号，它不是 QQ 消息 ID；回复头、工具结果里出现的数字都不是编号。
 - 延续已有话题时用原本 t 开头的引用号（如 t12）更新；新建话题使用 new:a、new:b 依此类推。
-- 尽量把本次给出的候选消息归入对应话题的 message_ids 中（未归入的会被算作 no-topic，若未分配过多系统会要求你修正一次）。
-- message_ids 里每条消息的 is_anchor 只标在“真正支撑结论、决定、重要约定、关键纠正或话题转折”的核心原话上，其余普通来回一律填 false；它是后续回查原文的证据锚点，不是置顶标记，不要为了凑数给每个话题硬标锚点。
+- 每个话题用 ranges 标出它覆盖的编号区间，例如 ["12-45","60-72"]；同一编号只能归一个话题，区间按时间先后排列。
+- 纯刷屏、表情包、无信息的 @ 不必单独建话题，直接并进相邻话题的区间即可。
+- anchors 只填真正支撑结论、决定、重要约定、关键纠正或话题转折的原话编号（必须落在本话题区间内）；依据有几条就填几条——简单闲聊可以没有，复杂决策或跨多段的关键依据可以多填，不要为了凑数硬标，也不要把回复头或工具结果里的数字当编号。
 - 每个话题的 summary：
   · title：简短清晰地概括这件事；
   · gist：写清这件事聊出了什么结论、前因后果、各方态度与实际影响；
@@ -90,68 +93,6 @@ func newBatchID() string {
 		return fmt.Sprintf("compact-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(raw[:])
-}
-
-func validateCompactionAssignments(candidate *compactionCandidate, topics []memory.CompactionTopicInput) (float64, []string, error) {
-	expected := make(map[uint]bool, len(candidate.MessageLogIDs))
-	for _, id := range candidate.MessageLogIDs {
-		expected[id] = true
-	}
-	available := make(map[int64]uint, len(candidate.MessageLogIDs))
-	for i, id := range candidate.MessageLogIDs {
-		if i >= len(candidate.CoverageRefs) {
-			continue
-		}
-		oneBotID, err := strconv.ParseInt(strings.TrimSpace(candidate.CoverageRefs[i]), 10, 64)
-		if err == nil && oneBotID != 0 {
-			available[oneBotID] = id
-		}
-	}
-	covered := make(map[uint]bool, len(expected))
-	seenRefs := make(map[string]bool, len(topics))
-	for _, topic := range topics {
-		ref := strings.TrimSpace(topic.Ref)
-		if ref == "" {
-			return 0, nil, fmt.Errorf("话题引用为空")
-		}
-		if seenRefs[ref] {
-			return 0, nil, fmt.Errorf("话题引用 %s 重复", ref)
-		}
-		seenRefs[ref] = true
-		if err := memory.ValidateTopicSummary(topic.Summary); err != nil {
-			return 0, nil, err
-		}
-		for _, message := range topic.Messages {
-			id, ok := available[message.MessageID]
-			if !ok {
-				return 0, nil, fmt.Errorf("压缩结果包含候选范围外消息 %d", message.MessageID)
-			}
-			if covered[id] {
-				return 0, nil, fmt.Errorf("压缩结果重复覆盖消息 %d", message.MessageID)
-			}
-			covered[id] = true
-		}
-	}
-	unassigned := make([]string, 0)
-	for i, id := range candidate.MessageLogIDs {
-		if covered[id] {
-			continue
-		}
-		if i < len(candidate.CoverageRefs) {
-			unassigned = append(unassigned, candidate.CoverageRefs[i])
-		}
-	}
-	if len(expected) == 0 {
-		return 1, unassigned, nil
-	}
-	if len(topics) == 0 {
-		return 0, unassigned, fmt.Errorf("压缩结果至少需要一个有效话题")
-	}
-	coverage := float64(len(covered)) / float64(len(expected))
-	if coverageNeedsRepair(len(expected), len(unassigned)) {
-		return coverage, unassigned, fmt.Errorf("话题覆盖率 %.0f%%，未分配 %d 条；请补充分配后重试", coverage*100, len(unassigned))
-	}
-	return coverage, unassigned, nil
 }
 
 func coverageNeedsRepair(total, unassigned int) bool {
@@ -231,7 +172,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	compactionCtx = llm.WithTask(compactionCtx, "compaction", generation.modelName)
 
 	var finish *FinishCompactionInput
-	finishTool, err := utils.InferTool("finishCompaction", "提交会话概览和话题更新；尽量覆盖候选消息，覆盖率过低时系统会要求一次修正。", func(_ context.Context, input *FinishCompactionInput) (any, error) {
+	finishTool, err := utils.InferTool("finishCompaction", "提交会话概览和话题更新；ranges 用候选编号区间标出每个话题覆盖的消息，anchors 标出关键编号；覆盖过低时系统会要求一次修正。", func(_ context.Context, input *FinishCompactionInput) (any, error) {
 		if input == nil {
 			return nil, fmt.Errorf("缺少压缩结果")
 		}
@@ -280,7 +221,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	if err != nil {
 		return err
 	}
-	instruction := fmt.Sprintf("待整理消息：%s。当前尝试第 %d 次。", strings.Join(candidate.CoverageRefs, "、"), attempt)
+	instruction := fmt.Sprintf("候选共 %d 条，按时间编号 #1..#%d，行首 [#n] 即引用号。当前尝试第 %d 次。", len(candidate.Refs), len(candidate.Refs), attempt)
 	if feedback = strings.TrimSpace(feedback); feedback != "" {
 		instruction += "\n上次压缩的反馈：" + feedback
 	}
@@ -309,18 +250,15 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		return &compactionInputError{Err: fmt.Errorf("压缩概览为空")}
 	}
 
-	topics := make([]memory.CompactionTopicInput, 0, len(finish.Topics))
-	for _, item := range finish.Topics {
-		ref := strings.TrimSpace(item.Ref)
-		if ref == "" {
-			return &compactionInputError{Err: fmt.Errorf("话题引用为空")}
-		}
-		topic := memory.CompactionTopicInput{Ref: ref, Summary: item.Summary, Messages: item.Messages}
-		topics = append(topics, topic)
+	resolved, warnings, resolveErr := resolveCompactionTopics(candidate, finish.Topics)
+	if len(warnings) > 20 {
+		warnings = append(warnings[:20:20], fmt.Sprintf("另有 %d 条修正未列出", len(warnings)-20))
 	}
-	coverage, unassigned, coverageErr := validateCompactionAssignments(candidate, topics)
-	if coverageErr != nil {
-		return &compactionInputError{Err: fmt.Errorf("%w; 未分配消息：%s", coverageErr, strings.Join(unassigned, "、"))}
+	if len(warnings) > 0 {
+		logger.FromContext(compactionCtx).Warn("压缩提交已自动修正", zap.Int("count", len(warnings)), zap.Strings("details", warnings))
+	}
+	if resolveErr != nil {
+		return &compactionInputError{Err: resolveErr}
 	}
 	var expectedVersion uint64
 	if checkpoint, getErr := a.memory.GetCheckpoint(ctx, session.kind, session.targetID); getErr != nil {
@@ -333,8 +271,8 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		ConversationKind: session.kind, TargetID: session.targetID,
 		ExpectedVersion: expectedVersion, ThroughVisibleSeq: candidate.ThroughVisibleSeq,
 		ThroughMessageID: candidate.ThroughMessageLogID, Overview: finish.Overview,
-		ActiveTopicRefs: finish.ActiveTopicRefs, Topics: topics, CandidateMessageIDs: candidate.MessageLogIDs,
-		Coverage: coverage, UnassignedCount: len(unassigned), BatchID: batchID,
+		ActiveTopicRefs: finish.ActiveTopicRefs, Topics: resolved.Topics, CandidateMessageIDs: candidate.messageLogIDs(),
+		Coverage: resolved.Coverage, UnassignedCount: len(resolved.Unassigned), BatchID: batchID,
 	}
 	commitCtx, commitCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer commitCancel()
