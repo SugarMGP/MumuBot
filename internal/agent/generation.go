@@ -241,6 +241,9 @@ func (a *Agent) newTypedChatAgent(selected roleModel, chatTools []tool.BaseTool,
 
 func workerToolBuilders() []func() (tool.BaseTool, error) {
 	return []func() (tool.BaseTool, error){
+		func() (tool.BaseTool, error) { return tools.NewManageMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewSearchMemoryToolV2() },
+		func() (tool.BaseTool, error) { return tools.NewReadMemoryToolV2() },
 		func() (tool.BaseTool, error) { return tools.NewBashTool() },
 		func() (tool.BaseTool, error) { return tools.NewSearchWebTool() },
 		func() (tool.BaseTool, error) { return tools.NewFetchWebTool() },
@@ -250,10 +253,12 @@ func workerToolBuilders() []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewReadToolResultTool() },
 		func() (tool.BaseTool, error) { return tools.NewUpdateWorkerTitleTool() },
 		func() (tool.BaseTool, error) { return tools.NewSendSessionMessageTool() },
+		func() (tool.BaseTool, error) { return tools.NewListFilesTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadFileTool() },
+		func() (tool.BaseTool, error) { return tools.NewWriteFileTool() },
 		func() (tool.BaseTool, error) { return tools.NewCreateFileRefTool() },
 		func() (tool.BaseTool, error) { return tools.NewWorkerSaveFileTool() },
 		func() (tool.BaseTool, error) { return tools.NewLifeViewImageTool() },
-		func() (tool.BaseTool, error) { return tools.NewReadFileTool() },
 	}
 }
 
