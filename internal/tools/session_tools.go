@@ -214,7 +214,7 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 }
 
 func NewSendSessionMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendSessionMessage", "向另一个会话持久投信；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只回 life，life 可投任意可用会话。交事带目标、来源、材料、完成条件，回报带结果、验证、限制和产物 ref，别来回发送无新内容的确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
+	return utils.InferTool("sendSessionMessage", "向另一个会话持久投信；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只回 life，life 可投任意可用会话。交事带目标、来源会话、原始 OneBot 消息 ID、材料、完成条件，回报带结果、验证、限制、原始 OneBot 消息 ID 和产物 ref，别来回发送无新内容的确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
 }
 
 type UpdateWorkerTitleInput struct {

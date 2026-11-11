@@ -259,7 +259,7 @@ func (a *Agent) handleWakeCommand(ctx context.Context, msg *onebot.ConversationM
 	if state.SleepStartedAt != nil {
 		summary = a.sleepSummaryText(ctx, *state.SleepStartedAt, now)
 	}
-	note := "主人从私聊发出了 /wake。" + "\n" + "真实来源：private:" + fmt.Sprintf("%d", msg.UserID)
+	note := fmt.Sprintf("主人从私聊发出了 /wake 把你叫醒。\n真实来源：private:%d\n注意：主人随后发出的普通私聊会直接进入 private:%d 由私聊窗口接待，不会自动投递到 life:1；请先用 planNext 留出充裕的清醒时间，准备重新入睡前先查看 private:%d 的最新消息动态，不要在主人还没聊完时睡回去。", msg.UserID, msg.UserID, msg.UserID)
 	if summary != "" {
 		note += "\n" + summary
 	}
