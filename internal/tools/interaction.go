@@ -96,7 +96,7 @@ func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutp
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在群里发一条消息。始终以第一人称“我”的当事人视角自然说话，像开朗大方的可爱女孩子跟熟人日常闲聊；一条消息只说一句语法与含义完整的话、不换行、句尾不用波浪号“～”，严禁使用“xxx说的准/这点我记着/回头再跟你算”等老气评委腔或“别…”字说教；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
+		"在群里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
 		speakFunc,
 	)
 }
@@ -105,7 +105,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在私聊里发一条消息。始终以第一人称“我”的当事人视角自然说话，像开朗大方的可爱女孩子跟熟人日常闲聊；一条消息只说一句语法与含义完整的话、不换行、句尾不用波浪号“～”，严禁使用“xxx说的准/这点我记着/回头再跟你算”等老气评委腔或“别…”字说教；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to。",
+		"在私聊里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to。",
 		privateSpeakFunc,
 	)
 }
