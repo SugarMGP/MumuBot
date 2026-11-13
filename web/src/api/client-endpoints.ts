@@ -245,6 +245,10 @@ export const diariesApi = {
 };
 
 export const lifeApi = {
+  history: (beforeID = 0) =>
+    apiGet<WorkerHistoryData>(`/api/v1/life/history${buildQuery({ before_id: beforeID })}`),
+  entry: (entryID: number, offset = 0) =>
+    apiGet<WorkerEntryData>(`/api/v1/life/entries/${entryID}${buildQuery({ offset })}`),
   workerHistory: (id: number, beforeID = 0) =>
     apiGet<WorkerHistoryData>(`/api/v1/life/workers/${id}/history${buildQuery({ before_id: beforeID })}`),
   workerEntry: (id: number, entryID: number, offset = 0) =>

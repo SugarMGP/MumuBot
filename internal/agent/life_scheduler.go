@@ -180,7 +180,7 @@ func (a *Agent) sleepSummaryText(ctx context.Context, from, to time.Time) string
 }
 
 func (a *Agent) lifeActivitySummaryText(ctx context.Context, from, to time.Time) string {
-	summary, err := a.memory.SummarizeLifeActivitySince(ctx, from, to)
+	summary, err := a.memory.SummarizeLifeActivitySince(ctx, from, to, a.bot.GetSelfID())
 	if err != nil {
 		zap.L().Warn("聚合生活期间实际活动失败", zap.Error(err))
 		return ""

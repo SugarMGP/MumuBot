@@ -5,6 +5,7 @@ import { lifeApi } from "@/api/client-endpoints";
 import { ApiError } from "@/api/client";
 import type { LifeData, LifeSchedule, LifeScheduleUpdate } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
+import { EditPanel } from "@/components/admin/edit-panel";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
 import { SectionCard } from "@/components/admin/section-card";
@@ -37,7 +38,7 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 import { DirtyGuardDialog, useDirtyGuard } from "@/hooks/use-dirty-guard";
-import { LifeWorkers } from "./life-workers";
+import { LifeWorkers, SessionHistoryList } from "./life-workers";
 
 type TimingMode = "once" | "after" | "cron";
 
@@ -118,6 +119,7 @@ export default function LifePage() {
   const [form, setForm] = useState<ScheduleForm | null>(null);
   const [wakeOpen, setWakeOpen] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [formBaseline, setFormBaseline] = useState("");
   const [discardOpen, setDiscardOpen] = useState(false);
   const [formError, setFormError] = useState("");
@@ -293,6 +295,13 @@ export default function LifePage() {
             <Badge variant={state.awake ? "success" : "ghost"}>
               {state.awake ? t("life.awake") : t("life.asleep")}
             </Badge>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => setHistoryOpen(true)}
+            >
+              {t("life.workers.view")}
+            </Button>
           </div>
         }
       >
@@ -500,6 +509,15 @@ export default function LifePage() {
       </SectionCard>
 
       <LifeWorkers workers={data.workers} />
+
+      <EditPanel
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        title={t("life.stateTitle")}
+        description="life:1"
+      >
+        {historyOpen ? <SessionHistoryList workerID={0} /> : null}
+      </EditPanel>
 
       <Dialog open={form !== null} onOpenChange={(open) => !open && closeForm()}>
         <DialogContent>

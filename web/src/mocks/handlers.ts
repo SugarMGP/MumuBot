@@ -1274,6 +1274,23 @@ export const handlers = [
     }),
   ),
 
+  http.get("/api/v1/life/history", ({ request }) => {
+    const before = Number(new URL(request.url).searchParams.get("before_id") || "0");
+    const entries = Array.from({ length: 12 }, (_, index) => ({
+      id: 12 - index, at: iso(index * 15), role: index % 2 ? "assistant" : "tool",
+      text: index % 2 ? "刚翻了翻空间和最近活跃的群聊，顺手给群聊窗口递了封信聊聊今天的趣事，并安排了下一段看番的时间。" : "已向活跃会话投递消息，并更新了下一次回来看的计划。",
+      tool_name: index % 2 ? undefined : "planNext",
+      tool_status: index % 2 ? undefined : "succeeded",
+    })).filter((entry) => !before || entry.id < before);
+    const page = entries.slice(0, 20);
+    return ok({ entries: page, running_tools: [], pending_entries: [], has_more: entries.length > page.length, next_before_id: page.at(-1)?.id });
+  }),
+  http.get("/api/v1/life/entries/:entryID", ({ request }) => {
+    const offset = Number(new URL(request.url).searchParams.get("offset") || "0");
+    const full = "刚翻了翻空间和最近活跃的群聊，顺手给群聊窗口递了封信聊聊今天的趣事，并安排了下一段看番的时间。";
+    const next = Math.min(offset + 8000, full.length);
+    return ok({ text: full.slice(offset, next), total: full.length, complete: next >= full.length, next_offset: next });
+  }),
   http.get("/api/v1/life/workers/:id/history", ({ request }) => {
     const before = Number(new URL(request.url).searchParams.get("before_id") || "0");
     const entries = Array.from({ length: 25 }, (_, index) => ({

@@ -22,7 +22,7 @@ import (
 var errLifeSleepComplete = errors.New("life 已安排睡眠，正常收尾")
 
 // lifeFirstBootText 是第一次进入生活空间时的开放处境，不附固定日程
-const lifeFirstBootText = "这是你自己的时间。看看现在几点、自己是什么状态，安排接下来想做的事和下一次回来的时间。"
+const lifeFirstBootText = "这是你自己的时间。先用 getCurrentStatus 和 listSessions 看看现在几点、自己是什么状态、各窗口最近有什么动静，挑一件想做的事（比如派空闲 worker 去冲浪找点新鲜事、去空间逛逛、或者找最近活跃的会话聊聊近况），并用 planNext 设好下一次回来的时间。"
 
 // scheduleLifeThink 请求一次 life 回合；life 单并发，不占 worker 名额
 func (a *Agent) scheduleLifeThink() {
@@ -184,7 +184,7 @@ func (a *Agent) finishLifeTurn(ctx context.Context, session *Session, tc *tools.
 		}
 		if selfChecked != nil && !*selfChecked {
 			*selfChecked = true
-			nudge := "你这一轮成功结束了，但还没有启用的未来安排。现在确认一下：确实想暂停、不再安排下一次，还是漏了安排？想继续就用 planNext 或 manageSchedule；确实想暂停就不必额外补计划，这一轮之后不会再追问。"
+			nudge := "你这一轮成功结束了，但还没有留下任何启用的未来安排（planNext、manageSchedule 或 sleepUntil）。除非你确实需要彻底暂停生活空间，否则请现在用 planNext 安排接下来想做的事和下一次回来的时间（到了主睡眠时间则用 sleepUntil），让自己的日子自然延续下去。"
 			if appendErr := session.AppendLifeSelfCheck(checkCtx, a.memory, nudge); appendErr != nil {
 				return fmt.Errorf("写入 life 无安排自检失败: %w", appendErr)
 			}

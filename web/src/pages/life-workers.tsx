@@ -21,9 +21,12 @@ import { formatDateTime } from "@/lib/format";
 function EntryBody({ workerID, entryID }: { workerID: number; entryID: number }) {
   const { t } = useTranslation();
   const query = useInfiniteQuery({
-    queryKey: ["worker-entry", workerID, entryID],
+    queryKey: ["session-entry", workerID, entryID],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => lifeApi.workerEntry(workerID, entryID, pageParam),
+    queryFn: ({ pageParam }) =>
+      workerID > 0
+        ? lifeApi.workerEntry(workerID, entryID, pageParam)
+        : lifeApi.entry(entryID, pageParam),
     getNextPageParam: (last) => last.complete ? undefined : last.next_offset,
   });
   if (query.isPending) return <Spinner />;
@@ -41,13 +44,16 @@ function EntryBody({ workerID, entryID }: { workerID: number; entryID: number })
   );
 }
 
-function WorkerHistory({ worker }: { worker: LifeWorker }) {
+export function SessionHistoryList({ workerID }: { workerID: number }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<number | null>(null);
   const query = useInfiniteQuery({
-    queryKey: ["worker-history", worker.id],
+    queryKey: ["session-history", workerID],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => lifeApi.workerHistory(worker.id, pageParam),
+    queryFn: ({ pageParam }) =>
+      workerID > 0
+        ? lifeApi.workerHistory(workerID, pageParam)
+        : lifeApi.history(pageParam),
     getNextPageParam: (last) => last.has_more ? last.next_before_id : undefined,
     refetchInterval: 15_000,
   });
@@ -76,7 +82,7 @@ function WorkerHistory({ worker }: { worker: LifeWorker }) {
               </div>
               {selected !== entry.id ? <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm">{entry.text || entry.tool_calls?.map((call) => call.name).join(", ") || t("life.workers.noText")}</p> : null}
             </button>
-            {selected === entry.id ? <EntryBody workerID={worker.id} entryID={entry.id} /> : null}
+            {selected === entry.id ? <EntryBody workerID={workerID} entryID={entry.id} /> : null}
           </div>
         ))}
       </div>
@@ -109,7 +115,7 @@ export function LifeWorkers({ workers }: { workers: LifeWorker[] }) {
         )}
       </SectionCard>
       <EditPanel open={selected !== undefined} onOpenChange={(open) => !open && setSelectedID(null)} title={selected?.title ?? t("life.workers.title")} description={selected ? `worker:${selected.id}` : undefined}>
-        {selected ? <WorkerHistory key={selected.id} worker={selected} /> : null}
+        {selected ? <SessionHistoryList key={selected.id} workerID={selected.id} /> : null}
       </EditPanel>
     </>
   );

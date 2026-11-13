@@ -7,13 +7,14 @@ import (
 	"time"
 )
 
-// SleepConversationSummary 是睡眠期间一个活跃会话的真人消息概况
+// SleepConversationSummary 是时间窗口内一个活跃会话的真人消息与近期话题概况
 type SleepConversationSummary struct {
 	ConversationKind string    `json:"conversation_kind"`
 	TargetID         int64     `json:"target_id"`
 	Name             string    `json:"name,omitempty"`
 	Count            int       `json:"count"`
 	LastAt           time.Time `json:"last_at"`
+	Topics           []string  `json:"topics,omitempty"`
 }
 
 // SummarizeSleepMessages 聚合睡眠期间的真人消息数量，不生成未读表
@@ -51,7 +52,54 @@ func (m *Manager) SummarizeSleepMessages(ctx context.Context, from, to time.Time
 		})
 		total += row.Count
 	}
+	m.attachActiveTopicTitles(ctx, items, to)
 	return items, total, nil
+}
+
+// attachActiveTopicTitles 为活跃会话补充最近 2 个有效活跃话题标题，帮助 life 感知各群聊动向
+func (m *Manager) attachActiveTopicTitles(ctx context.Context, items []SleepConversationSummary, now time.Time) {
+	limit := len(items)
+	if limit > 20 {
+		limit = 20
+	}
+	for i := 0; i < limit; i++ {
+		var titles []string
+		err := m.db.WithContext(ctx).Raw(`
+			SELECT COALESCE(ts.summary_json::jsonb->>'title', '') AS title
+			FROM topic_threads tt
+			JOIN topic_summaries ts ON ts.topic_id = tt.id
+				AND ts.version = (SELECT MAX(s2.version) FROM topic_summaries s2 WHERE s2.topic_id = tt.id)
+			WHERE tt.conversation_kind = ? AND tt.target_id = ?
+				AND tt.status = 'active' AND tt.forgotten_at IS NULL AND tt.forget_at > ?
+			ORDER BY tt.updated_at DESC, tt.id DESC
+			LIMIT 2`, items[i].ConversationKind, items[i].TargetID, now).Scan(&titles).Error
+		if err != nil {
+			continue
+		}
+		for _, title := range titles {
+			if title = strings.TrimSpace(title); title != "" {
+				items[i].Topics = append(items[i].Topics, title)
+			}
+		}
+	}
+}
+
+func formatConversationPulseLine(item SleepConversationSummary) string {
+	label := "会话"
+	if item.ConversationKind == ConversationKindGroup {
+		label = "群"
+	} else if item.ConversationKind == ConversationKindPrivate {
+		label = "好友"
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		name = fmt.Sprint(item.TargetID)
+	}
+	line := fmt.Sprintf("- %s「%s」（%s:%d）%d 条，最后 %s", label, name, item.ConversationKind, item.TargetID, item.Count, formatSleepTime(item.LastAt))
+	if len(item.Topics) > 0 {
+		line += "；近期话题：" + strings.Join(item.Topics, "、")
+	}
+	return line
 }
 
 // FormatSleepSummary 把概况写成可读的系统事实，不声称精确逐条未读
@@ -70,17 +118,7 @@ func FormatSleepSummary(items []SleepConversationSummary, total int, from, to ti
 		limit = 20
 	}
 	for _, item := range items[:limit] {
-		label := "会话"
-		if item.ConversationKind == ConversationKindGroup {
-			label = "群"
-		} else if item.ConversationKind == ConversationKindPrivate {
-			label = "好友"
-		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = fmt.Sprint(item.TargetID)
-		}
-		lines = append(lines, fmt.Sprintf("- %s「%s」（%s:%d）%d 条，最后 %s", label, name, item.ConversationKind, item.TargetID, item.Count, formatSleepTime(item.LastAt)))
+		lines = append(lines, formatConversationPulseLine(item))
 	}
 	if len(items) > limit {
 		lines = append(lines, fmt.Sprintf("- 另有 %d 个会话有新消息", len(items)-limit))
@@ -104,8 +142,8 @@ type lifeMessageActivityRow struct {
 	Count        int
 }
 
-// SummarizeLifeActivitySince 汇总生活日程设好后到触发前的真实工具调用和跨会话来信
-func (m *Manager) SummarizeLifeActivitySince(ctx context.Context, from, to time.Time) (string, error) {
+// SummarizeLifeActivitySince 汇总生活日程设好后到触发前的真实工具调用、跨会话来信和活跃 QQ 会话脉搏
+func (m *Manager) SummarizeLifeActivitySince(ctx context.Context, from, to time.Time, selfID int64) (string, error) {
 	if from.IsZero() || !to.After(from) {
 		return "", nil
 	}
@@ -134,10 +172,14 @@ func (m *Manager) SummarizeLifeActivitySince(ctx context.Context, from, to time.
 		ORDER BY MAX(id) DESC`, ConversationKindLife, LifeTargetID, from, to).Scan(&msgRows).Error; err != nil {
 		return "", err
 	}
-	return formatLifeActivitySummary(from, to, toolRows, msgRows), nil
+	activeItems, activeTotal, err := m.SummarizeSleepMessages(ctx, from, to, selfID)
+	if err != nil {
+		activeItems, activeTotal = nil, 0
+	}
+	return formatLifeActivitySummary(from, to, toolRows, msgRows, activeItems, activeTotal), nil
 }
 
-func formatLifeActivitySummary(from, to time.Time, tools []lifeToolActivityRow, messages []lifeMessageActivityRow) string {
+func formatLifeActivitySummary(from, to time.Time, tools []lifeToolActivityRow, messages []lifeMessageActivityRow, activeItems []SleepConversationSummary, activeTotal int) string {
 	toolLine := fmt.Sprintf("从 %s 到 %s，你在生活空间没有调用过工具。", formatSleepTime(from), formatSleepTime(to))
 	if len(tools) > 0 {
 		seen := make(map[string]struct{}, len(tools))
@@ -175,5 +217,21 @@ func formatLifeActivitySummary(from, to time.Time, tools []lifeToolActivityRow, 
 		}
 		msgLine = fmt.Sprintf("期间收到 %d 封跨会话来信：%s。", total, strings.Join(sources, "、"))
 	}
-	return "【期间实际活动核对｜系统事实】\n" + toolLine + "\n" + msgLine
+	chatLine := "期间各 QQ 会话没有新的真人消息。"
+	if len(activeItems) > 0 {
+		limit := len(activeItems)
+		if limit > 5 {
+			limit = 5
+		}
+		lines := make([]string, 0, limit+2)
+		lines = append(lines, fmt.Sprintf("期间活跃的 QQ 会话（共 %d 个会话 %d 条真人消息）：", len(activeItems), activeTotal))
+		for _, item := range activeItems[:limit] {
+			lines = append(lines, formatConversationPulseLine(item))
+		}
+		if len(activeItems) > limit {
+			lines = append(lines, fmt.Sprintf("- 另有 %d 个会话有新消息", len(activeItems)-limit))
+		}
+		chatLine = strings.Join(lines, "\n")
+	}
+	return "【期间实际活动核对｜系统事实】\n" + toolLine + "\n" + msgLine + "\n" + chatLine
 }

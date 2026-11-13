@@ -109,6 +109,8 @@ func (a *App) routes() http.Handler {
 			protected.Delete("/memories/{id}", a.handleMemoryDelete)
 			protected.Get("/members", a.handleMembers)
 			protected.Get("/life", a.handleLife)
+			protected.Get("/life/history", a.handleLifeHistory)
+			protected.Get("/life/entries/{entryID}", a.handleLifeEntry)
 			protected.Get("/life/workers/{id}/history", a.handleWorkerHistory)
 			protected.Get("/life/workers/{id}/entries/{entryID}", a.handleWorkerEntry)
 			protected.Post("/life/schedules", a.handleLifeScheduleCreate)
