@@ -83,18 +83,20 @@ func (a *Agent) deliverLifeRetry(now time.Time) {
 // deliverSchedule 在事务内推进日程并投递内部信，提交成功后才写内存并请求调度
 func (a *Agent) deliverSchedule(row memory.Schedule, now time.Time) {
 	wakeLife := row.ScheduleKey == memory.LifeNextKey
-	sleepSummary := ""
-	if wakeLife {
-		if state, err := a.memory.GetLifeState(a.ctx); err == nil && state != nil && !state.Awake && state.SleepStartedAt != nil {
-			sleepSummary = a.sleepSummaryText(a.ctx, *state.SleepStartedAt, now)
+	extraSummary := ""
+	if row.TargetKind == memory.ConversationKindLife {
+		if state, err := a.memory.GetLifeState(a.ctx); err == nil && state != nil && wakeLife && !state.Awake && state.SleepStartedAt != nil {
+			extraSummary = a.sleepSummaryText(a.ctx, *state.SleepStartedAt, now)
+		} else {
+			extraSummary = a.lifeActivitySummaryText(a.ctx, row.UpdatedAt, now)
 		}
 	}
 	var message *schema.AgenticMessage
 	build := func(msg *memory.SessionMessage) (json.RawMessage, error) {
 		body := scheduleMessageBody(row, now)
 		body += fmt.Sprintf("\n内部消息编号：%d", msg.ID)
-		if sleepSummary != "" {
-			body += "\n\n" + sleepSummary
+		if extraSummary != "" {
+			body += "\n\n" + extraSummary
 		}
 		message = schema.UserAgenticMessage(body)
 		message.Extra = map[string]any{
@@ -175,4 +177,13 @@ func (a *Agent) sleepSummaryText(ctx context.Context, from, to time.Time) string
 		return ""
 	}
 	return memory.FormatSleepSummary(items, total, from, to)
+}
+
+func (a *Agent) lifeActivitySummaryText(ctx context.Context, from, to time.Time) string {
+	summary, err := a.memory.SummarizeLifeActivitySince(ctx, from, to)
+	if err != nil {
+		zap.L().Warn("聚合生活期间实际活动失败", zap.Error(err))
+		return ""
+	}
+	return summary
 }

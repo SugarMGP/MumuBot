@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { ApiError } from "@/api/client";
@@ -9,7 +9,7 @@ import type { PersonaDetail, PersonaSessionMode, PersonaTexts } from "@/api/type
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
-import { toastApiError, toastSuccess, toastWarningCode } from "@/components/admin/toast";
+import { toastApiError, toastError, toastSuccess, toastWarningCode } from "@/components/admin/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -65,6 +65,7 @@ export default function PersonasPage() {
   const [previewing, setPreviewing] = useState(false);
   const [busyAction, setBusyAction] = useState("");
   const loadedKey = useRef("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const list = useQuery({
     queryKey: ["personas"],
@@ -219,6 +220,82 @@ export default function PersonasPage() {
     },
   });
 
+  const exportPreset = () => {
+    const exportName = name.trim() || selected?.name || t("personas.editor.newTitle");
+    const payload = {
+      name: exportName,
+      description: description.trim(),
+      ...promptTexts(texts),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = exportName.replace(/[\\/:*?"<>|]/g, "_").trim() || "persona";
+    link.href = url;
+    link.download = `${safeName}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toastSuccess(t("personas.editor.exported"));
+  };
+
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    let parsed: Record<string, unknown>;
+    try {
+      const raw = JSON.parse(await file.text()) as unknown;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        toastError(t("personas.editor.importInvalid"));
+        return;
+      }
+      parsed = raw as Record<string, unknown>;
+    } catch {
+      toastError(t("personas.editor.importInvalid"));
+      return;
+    }
+    const importedTexts: PersonaTexts = { ...emptyTexts };
+    for (const { key, limit } of personaDocs) {
+      const value = parsed[key];
+      if (typeof value !== "string" || !value.trim() || Array.from(value).length > limit) {
+        toastError(t("personas.editor.importInvalid"));
+        return;
+      }
+      importedTexts[key] = value;
+    }
+    const existingNames = new Set((list.data?.items ?? []).map((item) => item.name));
+    const rawName = typeof parsed.name === "string" && parsed.name.trim()
+      ? parsed.name.trim()
+      : file.name.replace(/\.json$/i, "").trim() || t("personas.editor.newTitle");
+    let resolvedName = rawName.slice(0, 80);
+    if (existingNames.has(resolvedName)) {
+      const base = t("personas.editor.importCopyName", { name: resolvedName.slice(0, 70) });
+      resolvedName = base;
+      for (let idx = 2; existingNames.has(resolvedName); idx += 1) {
+        resolvedName = `${base} ${idx}`;
+      }
+    }
+    const resolvedDesc = typeof parsed.description === "string" ? parsed.description.trim() : "";
+    setBusyAction("import");
+    try {
+      const result = await personaApi.create({
+        name: resolvedName,
+        description: resolvedDesc,
+        ...importedTexts,
+      });
+      if (result.warning) toastWarningCode(result.warning.code);
+      else toastSuccess(t("personas.editor.imported"));
+      await queryClient.invalidateQueries({ queryKey: ["personas"] });
+      setLeaveTarget(`/admin/personas?id=${result.data.id}`);
+    } catch (error) {
+      toastApiError(error);
+    } finally {
+      setBusyAction("");
+    }
+  };
+
   const runAction = async (action: "activate" | "clone" | "delete") => {
     setBusyAction(action);
     try {
@@ -304,12 +381,32 @@ export default function PersonasPage() {
         title={t("personas.title")}
         subtitle={t("personas.subtitle")}
         actions={
-          <Button
-            size="sm"
-            onClick={() => navigate("/admin/personas?new=1")}
-          >
-            {t("personas.newPreset")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="sr-only"
+              aria-label={t("personas.importPreset")}
+              onChange={(event) => void handleImportFile(event)}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {busyAction === "import" ? <Spinner /> : null}
+              {t("personas.importPreset")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => navigate("/admin/personas?new=1")}
+            >
+              {t("personas.newPreset")}
+            </Button>
+          </div>
         }
       />
 
@@ -686,6 +783,13 @@ export default function PersonasPage() {
                         disabled={busy || personaDirty}
                       >
                         {t("personas.editor.clone")}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={exportPreset}
+                        disabled={busy || !promptsValid}
+                      >
+                        {t("personas.editor.export")}
                       </Button>
                       <Button
                         variant="ghost"
