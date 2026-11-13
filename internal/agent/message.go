@@ -124,8 +124,11 @@ func (a *Agent) resolveReplyInfo(ctx context.Context, msg *onebot.ConversationMe
 	if msg == nil || msg.Reply == nil || msg.Reply.MessageID == 0 {
 		return nil
 	}
+	defer func() {
+		a.markSelfReply(msg.Reply)
+	}()
 	key := replyCacheKey(msg.ConversationKind, msg.TargetID, msg.Reply.MessageID)
-	if msg.Reply.Content != "" && msg.Reply.SenderID != 0 {
+	if msg.Reply.Content != "" && msg.Reply.SenderID != 0 && resolveMessageDisplayName(msg.Reply.GroupCard, msg.Reply.Nickname) != "" {
 		return nil
 	}
 
@@ -166,7 +169,7 @@ func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.Re
 		return nil, err
 	}
 	if replyData == nil {
-		return &onebot.ReplyInfo{MessageID: messageID}, nil
+		return nil, nil
 	}
 
 	reply := &onebot.ReplyInfo{MessageID: messageID, Content: replyData.RawMessage}
@@ -183,6 +186,16 @@ func (a *Agent) fetchReplyInfo(ctx context.Context, messageID int64) (*onebot.Re
 		}
 	}
 	return reply, nil
+}
+
+func (a *Agent) markSelfReply(reply *onebot.ReplyInfo) {
+	if reply == nil || a.bot == nil {
+		return
+	}
+	if selfID := a.bot.GetSelfID(); selfID > 0 && reply.SenderID == selfID {
+		reply.GroupCard = ""
+		reply.Nickname = botMentionDisplayName(a.botName())
+	}
 }
 
 func replyCacheKey(kind string, targetID, messageID int64) string {

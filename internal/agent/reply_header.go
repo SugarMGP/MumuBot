@@ -11,7 +11,7 @@ import (
 func renderReplyHeader(reply *onebot.ReplyInfo) string {
 	var parts []string
 	name := strings.Join(strings.Fields(resolveMessageDisplayName(reply.GroupCard, reply.Nickname)), " ")
-	if reply.SenderID > 0 {
+	if reply.SenderID > 0 && !strings.HasSuffix(name, "(你)") {
 		name = fmt.Sprintf("%s(%d)", name, reply.SenderID)
 	}
 	if name != "" {

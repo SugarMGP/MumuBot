@@ -138,17 +138,17 @@ func (a *Agent) stopPrivateTimers() {
 	}
 }
 
-func (a *Agent) doPrivateSpeak(ctx context.Context, targetID int64, content string, replyTo int64) error {
+func (a *Agent) doPrivateSpeak(ctx context.Context, targetID int64, content string, replyTo int64) (int64, error) {
 	messageID, seq, err := a.bot.SendPrivateMessage(ctx, targetID, content, replyTo)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	msg := &onebot.ConversationMessage{ConversationKind: memory.ConversationKindPrivate, MessageID: messageID, TargetID: targetID, UserID: a.bot.GetSelfID(), Nickname: a.botName(), Content: content, MessageParts: []onebot.MessagePart{{Kind: "text", Text: content}}, Time: time.Now(), ReceivedAt: time.Now(), ArrivalSeq: seq}
 	if replyTo != 0 {
 		msg.Reply = &onebot.ReplyInfo{MessageID: replyTo}
 	}
 	a.onMessage(msg)
-	return nil
+	return messageID, nil
 }
 
 func (a *Agent) doPrivateSticker(ctx context.Context, targetID int64, fileName string, description string) error {

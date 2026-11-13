@@ -32,7 +32,7 @@ func (s *Session) MaintenanceDue(memoryTurns, topicTurns int) (string, uint64, u
 	var labels []string
 	nextMemory, nextTopic := s.lastMemoryHintTurn, s.lastTopicHintTurn
 	if memoryTurns > 0 && s.turnSeq-s.lastMemoryTurn >= uint64(memoryTurns) && s.turnSeq-s.lastMemoryHintTurn >= uint64(max(1, memoryTurns/2)) {
-		labels = append(labels, fmt.Sprintf("你已经连续 %d 轮没有更新长期记忆。如果这段对话或刚才的查询里出现了值得留存的新梗/事物知识（object）、费劲查明的结论、群内文化（group）、人物稳定偏好与约定（user）、你自己的新经验与变化（self）、重要共同经历（experience）或需要纠正的旧记忆，先用 searchMemory 查重，再用 manageMemory 新建或更新；没有就继续，不要为了清空提醒而硬写。", memoryTurns))
+		labels = append(labels, fmt.Sprintf("你已经连续 %d 轮没有更新长期记忆。如果这段对话或刚才的查询里出现了值得留存的新梗/事物知识（object）、费劲查明的结论、群内文化（group）、人物稳定偏好与约定（user）、你自己的新经验与变化（self）、重要共同经历（experience）或需要纠正的旧记忆，先用 searchMemory 查重，再用 manageMemory 新建或更新；没有就继续，不要为了清空提醒而硬写。记记忆在心里安静调工具即可，严禁在 speak 回复里对人说“这点我记着”“这话我记下了”来汇报自己记了笔记。", memoryTurns))
 		nextMemory = s.turnSeq
 	}
 	if topicTurns > 0 && s.turnSeq-s.lastTopicTurn >= uint64(topicTurns) && s.turnSeq-s.lastTopicHintTurn >= uint64(max(1, topicTurns/2)) {

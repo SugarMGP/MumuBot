@@ -350,7 +350,7 @@ func (a *Agent) hasStrongInteraction(pending []*sessionUser) bool {
 	return false
 }
 
-func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) error {
+func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, replyTo int64, mentions []int64) (int64, error) {
 	cfg := configFor(ctx)
 	if cfg.Chat.TypingSimulation {
 		typingSpeed := cfg.Chat.TypingSpeed
@@ -370,7 +370,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return ctx.Err()
+			return 0, ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -378,7 +378,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	msgID, arrivalSeq, err := a.bot.SendGroupMessage(ctx, groupID, content, replyTo, mentions)
 	if err != nil {
 		zap.L().Error("发言失败", zap.Int64("group_id", groupID), zap.Error(err))
-		return err
+		return 0, err
 	}
 
 	parts := make([]onebot.MessagePart, 0, len(mentions)+1)
@@ -420,7 +420,7 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	a.sessions.get(memory.ConversationKindGroup, groupID).NoteSelfSpoke(msg.Time)
 	a.gates.markReply(groupID)
 	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
-	return nil
+	return msgID, nil
 }
 
 func (a *Agent) doSendSticker(ctx context.Context, groupID int64, fileName string, description string) error {

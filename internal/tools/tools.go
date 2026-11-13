@@ -18,7 +18,7 @@ import (
 )
 
 // SpeakCallback 发言回调函数类型
-type SpeakCallback func(ctx context.Context, targetID int64, content string, replyTo int64, mentions []int64) error
+type SpeakCallback func(ctx context.Context, targetID int64, content string, replyTo int64, mentions []int64) (int64, error)
 
 // SendStickerCallback 发送表情包回调函数类型
 type SendStickerCallback func(ctx context.Context, targetID int64, fileName string, description string) error

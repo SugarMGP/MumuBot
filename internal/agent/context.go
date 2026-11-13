@@ -102,7 +102,7 @@ func (a *Agent) buildConversationToolContext(ctx context.Context, kind string, t
 		MemberRosterCallback:   a.memberRoster,
 		MemoryReadVersions:     map[uint]uint64{},
 		SessionRunningCallback: a.sessionRunning,
-		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) error {
+		SpeakCallback: func(callCtx context.Context, gid int64, content string, replyTo int64, mentions []int64) (int64, error) {
 			if kind == memory.ConversationKindPrivate {
 				return a.doPrivateSpeak(callCtx, gid, content, replyTo)
 			}

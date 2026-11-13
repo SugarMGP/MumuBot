@@ -34,8 +34,9 @@ type PrivateSpeakInput struct {
 
 // SpeakOutput 发言的输出
 type SpeakOutput struct {
-	Success bool   `json:"success"`
-	Message string `json:"message,omitempty"`
+	Success   bool   `json:"success"`
+	MessageID int64  `json:"message_id,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 // speakFunc 发言的实际实现 - 会通过回调实际发送消息
@@ -65,13 +66,15 @@ func speakContent(ctx context.Context, content string, replyTo int64, inputMenti
 		mentions = append(mentions, userID)
 	}
 
-	if err := tc.SpeakCallback(ctx, tc.TargetID, content, replyTo, mentions); err != nil {
+	messageID, err := tc.SpeakCallback(ctx, tc.TargetID, content, replyTo, mentions)
+	if err != nil {
 		return nil, err
 	}
 
 	return &SpeakOutput{
-		Success: true,
-		Message: "发言成功",
+		Success:   true,
+		MessageID: messageID,
+		Message:   "发言成功",
 	}, nil
 }
 
@@ -93,7 +96,7 @@ func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutp
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在群里发一条消息。用口语化日常闲聊短句，一条消息只说一句话、不换行，句子在短的同时要保证语法结构和含义完整，不要过度精简；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
+		"在群里发一条消息。始终以第一人称“我”的当事人视角自然说话，像活泼可爱的女孩子跟熟人日常闲聊；一条消息只说一句语法与含义完整的话、不换行，严禁使用“xxx说的准/这点我记着/回头再跟你算”等老气评委腔或“别…”字说教；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
 		speakFunc,
 	)
 }
@@ -102,7 +105,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在私聊里发一条消息。用口语化日常闲聊短句，一条消息只说一句话、不换行，句子在短的同时要保证语法结构和含义完整，不要过度精简；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to。",
+		"在私聊里发一条消息。始终以第一人称“我”的当事人视角自然说话，像活泼可爱的女孩子跟熟人日常闲聊；一条消息只说一句语法与含义完整的话、不换行，严禁使用“xxx说的准/这点我记着/回头再跟你算”等老气评委腔或“别…”字说教；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to。",
 		privateSpeakFunc,
 	)
 }
