@@ -27,15 +27,19 @@ func (a *Agent) CompactConversationNow(ctx context.Context, kind string, targetI
 	if targetID <= 0 {
 		return ManualCompactionResult{}, fmt.Errorf("会话参数无效")
 	}
-	generation := a.acquireGeneration()
-	if generation == nil || generation.forKind(kind).model == nil {
-		return ManualCompactionResult{}, ErrNoModel
-	}
 	session := a.sessions.get(kind, targetID)
 	if !session.maintenanceMu.TryLock() {
 		return ManualCompactionResult{}, ErrSessionBusy
 	}
 	defer session.maintenanceMu.Unlock()
+	generation := a.acquireGeneration()
+	if generation == nil {
+		return ManualCompactionResult{}, ErrNoModel
+	}
+	defer generation.wg.Done()
+	if generation.forKind(kind).model == nil {
+		return ManualCompactionResult{}, ErrNoModel
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	ctx = withGeneration(ctx, generation)

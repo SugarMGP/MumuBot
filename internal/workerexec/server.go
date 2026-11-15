@@ -1,3 +1,5 @@
+//go:build linux
+
 package workerexec
 
 import (
@@ -11,7 +13,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -175,10 +176,7 @@ func (s *Server) Exec(ctx context.Context, req workerproto.ExecRequest) (*worker
 		"NIX_REMOTE=daemon",
 		"PLAYWRIGHT_BROWSERS_PATH=" + filepath.Join(home, ".cache", "ms-playwright"),
 	}
-	sysProcAttr := &syscall.SysProcAttr{}
-	if runtime.GOOS == "linux" {
-		sysProcAttr.Setpgid = true
-	}
+	sysProcAttr := &syscall.SysProcAttr{Setpgid: true}
 	if os.Geteuid() != int(s.uid) {
 		sysProcAttr.Credential = &syscall.Credential{
 			Uid: s.uid, Gid: s.gid, Groups: s.groups,

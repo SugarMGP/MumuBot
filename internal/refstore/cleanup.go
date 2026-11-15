@@ -11,7 +11,7 @@ func (s *Store) CleanupCandidates(roots map[string]bool, candidates []string) (i
 	s.gcMu.Lock()
 	defer s.gcMu.Unlock()
 	removedRefs := 0
-	hashes := make([]string, 0)
+	hashes := map[string]bool{}
 	seen := map[string]bool{}
 	for _, token := range candidates {
 		id, _, err := Parse(token)
@@ -31,14 +31,28 @@ func (s *Store) CleanupCandidates(roots map[string]bool, candidates []string) (i
 		}
 		removedRefs++
 		if ref.SHA256 != "" {
-			hashes = append(hashes, ref.SHA256)
+			hashes[ref.SHA256] = true
 		}
 	}
-	removedBlobs := 0
-	for _, hash := range hashes {
-		if s.hashReferenced(hash) {
+	if len(hashes) == 0 {
+		return removedRefs, 0, nil
+	}
+	entries, err := os.ReadDir(s.refsDir())
+	if err != nil {
+		return removedRefs, 0, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
+		ref, err := s.get(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return removedRefs, 0, err
+		}
+		delete(hashes, ref.SHA256)
+	}
+	removedBlobs := 0
+	for hash := range hashes {
 		if err := os.Remove(s.blobPath(hash)); err != nil && !os.IsNotExist(err) {
 			return removedRefs, removedBlobs, err
 		}
@@ -102,10 +116,6 @@ func (s *Store) Cleanup(roots map[string]bool, minAge time.Duration) (int, int, 
 		if liveHashes[entry.Name()] {
 			continue
 		}
-		// 元数据仍存在但尚未参与 roots 的共享 hash 不能删除；再扫一遍 refs 兜底
-		if s.hashReferenced(entry.Name()) {
-			continue
-		}
 		if err := os.Remove(filepath.Join(s.blobsDir(), entry.Name())); err != nil && !os.IsNotExist(err) {
 			return removedRefs, removedBlobs, err
 		}
@@ -137,21 +147,4 @@ func (s *Store) cleanupTempFiles(minAge time.Duration) {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
-}
-
-func (s *Store) hashReferenced(hash string) bool {
-	entries, err := os.ReadDir(s.refsDir())
-	if err != nil {
-		return true
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		ref, getErr := s.get(strings.TrimSuffix(entry.Name(), ".json"))
-		if getErr == nil && ref.SHA256 == hash {
-			return true
-		}
-	}
-	return false
 }

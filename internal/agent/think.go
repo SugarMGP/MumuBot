@@ -419,7 +419,6 @@ func (a *Agent) doSpeak(ctx context.Context, groupID int64, content string, repl
 	a.onMessage(msg)
 	a.sessions.get(memory.ConversationKindGroup, groupID).NoteSelfSpoke(msg.Time)
 	a.gates.markReply(groupID)
-	zap.L().Info("发言成功", zap.Int64("group_id", groupID), zap.String("content", content))
 	return msgID, nil
 }
 

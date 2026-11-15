@@ -18,10 +18,10 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 
-function EntryBody({ workerID, entryID }: { workerID: number; entryID: number }) {
+function EntryBody({ workerID, entryID, toolStatus }: { workerID: number; entryID: number; toolStatus?: string }) {
   const { t } = useTranslation();
   const query = useInfiniteQuery({
-    queryKey: ["session-entry", workerID, entryID],
+    queryKey: ["session-entry", workerID, entryID, toolStatus],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       workerID > 0
@@ -82,7 +82,7 @@ export function SessionHistoryList({ workerID }: { workerID: number }) {
               </div>
               {selected !== entry.id ? <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm">{entry.text || entry.tool_calls?.map((call) => call.name).join(", ") || t("life.workers.noText")}</p> : null}
             </button>
-            {selected === entry.id ? <EntryBody workerID={workerID} entryID={entry.id} /> : null}
+            {selected === entry.id ? <EntryBody workerID={workerID} entryID={entry.id} toolStatus={entry.tool_status} /> : null}
           </div>
         ))}
       </div>

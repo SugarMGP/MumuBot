@@ -290,6 +290,7 @@ func lifeToolBuilders() []func() (tool.BaseTool, error) {
 		func() (tool.BaseTool, error) { return tools.NewSetSelfProfileTool() },
 		func() (tool.BaseTool, error) { return tools.NewListQzonePostsTool() },
 		func() (tool.BaseTool, error) { return tools.NewReadQzonePostTool() },
+		func() (tool.BaseTool, error) { return tools.NewReadQzoneCommentsTool() },
 		func() (tool.BaseTool, error) { return tools.NewPublishQzoneTool() },
 		func() (tool.BaseTool, error) { return tools.NewLikeQzoneTool() },
 		func() (tool.BaseTool, error) { return tools.NewCommentQzoneTool() },

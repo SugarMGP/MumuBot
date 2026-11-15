@@ -51,15 +51,17 @@ func (a *Agent) SyncWorkers(desired int) error {
 
 	for len(active) > desired {
 		entry := active[len(active)-1]
-		a.stopWorkerRun(entry.worker.ID)
+		cancelled := a.stopWorkerRun(entry.worker.ID)
 		if err := a.memory.SetWorkerTargetActive(a.ctx, entry.worker.ID, false); err != nil {
 			return err
 		}
-		if err := a.memory.SetWorkerStatus(a.ctx, entry.worker.ID, memory.WorkerStatusCancelled, "worker 数量已调整", entry.worker.ModelName); err != nil {
-			return err
+		if cancelled {
+			if err := a.memory.SetWorkerStatus(a.ctx, entry.worker.ID, memory.WorkerStatusCancelled, "worker 数量已调整", entry.worker.ModelName); err != nil {
+				return err
+			}
+			a.notifyLifeWorkerCancelled(a.ctx, entry.worker.ID)
 		}
 		zap.L().Info("worker 已从池中停用", zap.Uint("worker_id", entry.worker.ID))
-		a.notifyLifeWorkerCancelled(a.ctx, entry.worker.ID)
 		active = active[:len(active)-1]
 		inactive = append(inactive, entry)
 	}

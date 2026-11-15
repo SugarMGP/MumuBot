@@ -83,8 +83,8 @@ func (a *Agent) finishWorkerRun(workerID uint, epoch uint64) bool {
 	return true
 }
 
-// stopWorkerRun 让当前 run 失效并取消；旧 run 之后不能再写状态或失败记录
-func (a *Agent) stopWorkerRun(workerID uint) {
+// stopWorkerRun 让当前 run 失效并取消，返回是否中断了回合
+func (a *Agent) stopWorkerRun(workerID uint) bool {
 	a.workerCancelMu.Lock()
 	run, ok := a.workerRuns[workerID]
 	delete(a.workerRuns, workerID)
@@ -93,6 +93,7 @@ func (a *Agent) stopWorkerRun(workerID uint) {
 	if ok && run.cancel != nil {
 		run.cancel()
 	}
+	return ok
 }
 
 // invalidateWorkerRun 无运行也推进 epoch，防止已经结束但还没写状态的旧 run 复活
