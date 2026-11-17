@@ -8,12 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 18
+const latestSchemaVersion = 19
 
 // LatestSchemaVersion 返回当前程序支持的数据结构版本。
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
-// RunMigrations 初始化空库或将当前 v17 原子升级到 v18，不删除业务数据
+// RunMigrations 初始化空库或将 v17/v18 原子升级到当前版本，不删除业务数据
 func RunMigrations(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("PostgreSQL 未初始化")
@@ -41,7 +41,7 @@ func RunMigrations(db *gorm.DB) error {
 		if err := tx.Model(&memory.SchemaMigration{}).Select("COALESCE(max(version),0)").Scan(&version).Error; err != nil {
 			return err
 		}
-		if version != 17 && version != 18 {
+		if version < 17 || version > latestSchemaVersion {
 			return fmt.Errorf("不支持 schema v%d，请先备份并使用受支持的数据库", version)
 		}
 		if err := validateSchema(tx, version); err != nil {
@@ -54,8 +54,17 @@ func RunMigrations(db *gorm.DB) error {
 			if err := recordSchemaVersion(tx, 18, "independent_session_models"); err != nil {
 				return err
 			}
+			version = 18
 		}
-		return validateSchema(tx, 18)
+		if version == 18 {
+			if err := upgradeV19(tx); err != nil {
+				return err
+			}
+			if err := recordSchemaVersion(tx, 19, "dual_model_protocols"); err != nil {
+				return err
+			}
+		}
+		return validateSchema(tx, latestSchemaVersion)
 	})
 }
 
@@ -190,8 +199,15 @@ func validateSchema(db *gorm.DB, expectedVersion int) error {
 	if expectedVersion == 17 && !db.Migrator().HasColumn("model_profiles", "thinking_type") {
 		return fmt.Errorf("v17 缺少 model_profiles.thinking_type")
 	}
-	if expectedVersion == 18 && (db.Migrator().HasColumn("model_profiles", "thinking_type") || db.Migrator().HasColumn("model_profiles", "active")) {
+	if expectedVersion >= 18 && (db.Migrator().HasColumn("model_profiles", "thinking_type") || db.Migrator().HasColumn("model_profiles", "active")) {
 		return fmt.Errorf("v18 仍含已移除的模型配置字段")
+	}
+	if expectedVersion >= 19 {
+		for _, column := range []string{"thinking_mode", "body_override"} {
+			if !db.Migrator().HasColumn("model_profiles", column) {
+				return fmt.Errorf("v19 缺少 model_profiles.%s", column)
+			}
+		}
 	}
 	var version int
 	if err := db.Model(&memory.SchemaMigration{}).Select("COALESCE(max(version),0)").Scan(&version).Error; err != nil {

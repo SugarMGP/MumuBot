@@ -130,7 +130,7 @@ export default function SystemStatusPage() {
       return {
         label: t(`models.roles.${role}`),
         value: profile
-          ? `${profile.name} · ${profile.model_name} · ${profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")} · ${t("system.status.tokens", { count: profile.context_window })}`
+          ? [profile.name, profile.model_name, enumLabel(t, "modelProvider", profile.provider), ...(profile.provider === "openai_chat_completions" ? [profile.thinking_mode ? enumLabel(t, "thinkingMode", profile.thinking_mode) : t("models.fields.effortNone")] : []), profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone"), t("system.status.tokens", { count: profile.context_window })].join(" · ")
           : t("system.status.notConfigured"),
       };
     }),

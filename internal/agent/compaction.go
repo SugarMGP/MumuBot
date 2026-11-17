@@ -222,6 +222,9 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		return err
 	}
 	instruction := fmt.Sprintf("候选共 %d 条，按时间编号 #1..#%d，行首 [#n] 即引用号。当前尝试第 %d 次。", len(candidate.Refs), len(candidate.Refs), attempt)
+	if len(candidate.Refs) == 0 {
+		instruction = "这次为切换接口整理执行轨迹，没有可归属的真人消息。只更新 overview，topics 和 active_topic_refs 留空；原有活跃话题保持不变。"
+	}
 	if feedback = strings.TrimSpace(feedback); feedback != "" {
 		instruction += "\n上次压缩的反馈：" + feedback
 	}
@@ -273,10 +276,11 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 		ThroughMessageID: candidate.ThroughMessageLogID, Overview: finish.Overview,
 		ActiveTopicRefs: finish.ActiveTopicRefs, Topics: resolved.Topics, CandidateMessageIDs: candidate.messageLogIDs(),
 		Coverage: resolved.Coverage, UnassignedCount: len(resolved.Unassigned), BatchID: batchID,
+		ConsumedTranscriptIDs: candidate.ConsumedTranscriptIDs,
 	}
 	commitCtx, commitCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer commitCancel()
-	candidates, err := a.memory.CommitCompaction(commitCtx, commit)
+	seqs, candidates, err := a.memory.CommitCompaction(commitCtx, commit)
 	if err != nil {
 		if checkpoint, getErr := a.memory.GetCheckpoint(commitCtx, session.kind, session.targetID); getErr == nil && checkpoint != nil && checkpoint.BatchID == batchID {
 			err = nil
@@ -293,6 +297,7 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	if err != nil {
 		return err
 	}
+	session.ApplyVisibleSeqs(seqs)
 	session.ApplyCompaction(checkpoint)
 	a.releaseTranscriptCandidates(commitCtx, candidates)
 	return nil

@@ -661,6 +661,13 @@ const zhCN = {
     fields: {
       name: "名称",
       baseUrl: "Base URL",
+      provider: "接口协议",
+      thinkingMode: "推理开关",
+      bodyOverride: "Body 覆盖",
+      bodyOverrideHint: "递归合并并覆盖请求参数；不支持覆盖 stream",
+      bodyJSONError: "请输入有效的 JSON。",
+      bodyObjectError: "Body 覆盖必须是 JSON 对象。",
+      bodyStreamError: "不支持覆盖顶层 stream 字段。",
       baseUrlPlaceholder: "https://api.example.com/v1",
       modelName: "模型名",
       contextWindow: "上下文窗口",
@@ -671,7 +678,7 @@ const zhCN = {
 
       reasoningEffort: "推理强度",
 
-      effortNone: "不传",
+      effortNone: "不指定",
       reasoningGroup: "上下文与推理参数",
     },
     secretUnavailable: "加密密钥尚未配置，暂时不能保存模型。",
@@ -864,6 +871,7 @@ const zhCN = {
     session_busy: "会话正在处理消息，请等这一轮结束后再试。",
     compaction_failed: "整理没有完成，请稍后重试；详细原因见运行日志。",
     model_context_too_small: "未能将上下文整理到新窗口以内，当前模型保持不变。请检查模型连接或选择更大的窗口。",
+    model_switch_context_failed: "未能为新接口或窗口完成上下文整理，当前模型保持不变。请检查模型连接和运行日志后重试。",
     model_activate_failed: "模型切换失败，已继续使用旧配置。",
     persona_content_invalid: "请补全五段内容，并检查是否超过字数上限。",
     preset_duplicate: "已经有同名预设了。",
@@ -929,6 +937,14 @@ const zhCN = {
     mcpType: {
       sse: "SSE",
       stdio: "Stdio",
+    },
+    modelProvider: {
+      openai_responses: "Responses",
+      openai_chat_completions: "Chat Completions",
+    },
+    thinkingMode: {
+      enabled: "开启推理",
+      disabled: "关闭推理",
     },
     reasoningEffort: {
       none: "无（none）",

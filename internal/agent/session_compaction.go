@@ -17,10 +17,11 @@ type compactionEntryRef struct {
 }
 
 type compactionCandidate struct {
-	Messages            []*schema.AgenticMessage
-	Refs                []compactionEntryRef
-	ThroughVisibleSeq   uint64
-	ThroughMessageLogID uint
+	Messages              []*schema.AgenticMessage
+	Refs                  []compactionEntryRef
+	ThroughVisibleSeq     uint64
+	ThroughMessageLogID   uint
+	ConsumedTranscriptIDs []uint
 }
 
 // BuildCompactionCandidate 选出最老的闭合交互段，保留最近尾部
@@ -74,6 +75,36 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) *compa
 	for _, segment := range segments[:cut] {
 		items = append(items, segment.items...)
 	}
+	candidate := buildCompactionCandidate(items)
+	if len(candidate.Messages) == 0 || len(candidate.Refs) == 0 || candidate.ThroughVisibleSeq == 0 || candidate.ThroughMessageLogID == 0 {
+		return nil
+	}
+	return candidate
+}
+
+// BuildProtocolCompaction 包含尚未作为输入读过的已完成输出，不保留不兼容尾部
+func (s *Session) BuildProtocolCompaction(provider string) (*compactionCandidate, error) {
+	s.mu.Lock()
+	entries := orderEntries(append([]sessionEntry(nil), s.seen...))
+	s.mu.Unlock()
+	work := make([]sessionEntry, 0, len(entries))
+	messages := make([]*schema.AgenticMessage, 0, len(entries))
+	for _, entry := range entries {
+		if entry.msg != nil && !isHeadEntry(entry.msg) {
+			work = append(work, entry)
+			messages = append(messages, entry.msg)
+		}
+	}
+	prefix, err := protocolSummaryPrefix(messages, provider)
+	if err != nil || len(prefix) == 0 {
+		return nil, err
+	}
+	candidate := buildCompactionCandidate(work[:len(prefix)])
+	candidate.ConsumedTranscriptIDs = transcriptIDs(prefix)
+	return candidate, nil
+}
+
+func buildCompactionCandidate(items []sessionEntry) *compactionCandidate {
 	// 先给可归属的真人消息编号，再复制正文替换行首 ID，编号与 refs 一一对应
 	candidate := &compactionCandidate{}
 	ordinals := make([]int, len(items))
@@ -100,9 +131,6 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) *compa
 			msg = renumberCompactionMessage(msg, entry.user.MessageID, ordinals[index])
 		}
 		candidate.Messages = append(candidate.Messages, msg)
-	}
-	if len(candidate.Messages) == 0 || len(candidate.Refs) == 0 || candidate.ThroughVisibleSeq == 0 || candidate.ThroughMessageLogID == 0 {
-		return nil
 	}
 	return candidate
 }

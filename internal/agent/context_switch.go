@@ -18,18 +18,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// PrepareContextWindows 用旧模型整理超限历史；调用方在保存并切换运行态后释放会话锁
-func (a *Agent) PrepareContextWindows(ctx context.Context, windows map[string]int) (func(), []string, error) {
-	return a.prepareContextWindows(ctx, windows, nil)
+// PrepareModelSwitch 用旧模型整理不兼容或超限历史，锁保持到保存与运行态切换结束
+func (a *Agent) PrepareModelSwitch(ctx context.Context, targets map[string]ModelTarget) (func(), []string, error) {
+	return a.prepareModelSwitch(ctx, targets, nil)
 }
 
-// PrepareContextWindowsFor 在 QQ 离线或 Agent 尚未激活时整理持久工作集
-func PrepareContextWindowsFor(ctx context.Context, mem *memory.Manager, models *modelprofiles.Store, windows map[string]int, mcpManager *mcp.Manager) (func(), []string, error) {
+// PrepareModelSwitchFor 在 QQ 离线或 Agent 尚未激活时整理持久工作集
+func PrepareModelSwitchFor(ctx context.Context, mem *memory.Manager, models *modelprofiles.Store, targets map[string]ModelTarget, mcpManager *mcp.Manager) (func(), []string, error) {
 	a := &Agent{ctx: ctx, memory: mem, modelStore: models, sessions: newSessionStore(mem)}
-	return a.prepareContextWindows(ctx, windows, mcpManager)
+	return a.prepareModelSwitch(ctx, targets, mcpManager)
 }
 
-func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]int, mcpManager *mcp.Manager) (release func(), affected []string, err error) {
+func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]ModelTarget, mcpManager *mcp.Manager) (release func(), affected []string, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stopShutdownWatch := context.AfterFunc(a.ctx, cancel)
 	locked := make([]*Session, 0)
@@ -67,16 +67,17 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 	candidates := make([]*Session, 0)
 	seen := map[string]bool{}
 	for _, role := range []string{"qq", "life", "worker"} {
-		window := windows[role]
+		target := targets[role]
+		window := target.ContextWindow
 		if window <= 0 {
 			continue
 		}
-		targets, listErr := capacityTargets(ctx, a.memory, role)
+		conversations, listErr := capacityTargets(ctx, a.memory, role)
 		if listErr != nil {
 			return release, nil, listErr
 		}
-		for _, target := range targets {
-			session := a.sessions.get(target.ConversationKind, target.TargetID)
+		for _, conversation := range conversations {
+			session := a.sessions.get(conversation.ConversationKind, conversation.TargetID)
 			key := sessionKey(session.kind, session.targetID)
 			if seen[key] {
 				continue
@@ -87,7 +88,10 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 			if previewErr != nil {
 				return release, nil, previewErr
 			}
-			if session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) < capacityTrigger(window, state.config.Compactor.TriggerRatio) {
+			selected := available.forKind(session.kind)
+			changingProtocol := selected.model != nil && selected.provider != target.Provider
+			needsCapacity := target.CheckCapacity && session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) >= capacityTrigger(window, state.config.Compactor.TriggerRatio)
+			if !changingProtocol && !needsCapacity && lastIncompatibleMessage(messages, target.Provider) < 0 {
 				continue
 			}
 			seen[key] = true
@@ -107,7 +111,8 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 	}
 	for _, session := range locked {
 		role, chatTools := capacityRoleTools(available, session.kind)
-		window := windows[role]
+		target := targets[role]
+		window := target.ContextWindow
 		key := sessionKey(session.kind, session.targetID)
 		if generation == nil {
 			afterID := uint(0)
@@ -139,11 +144,25 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 			if previewErr != nil {
 				return release, []string{key}, previewErr
 			}
-			if session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) < capacityTrigger(window, state.config.Compactor.TriggerRatio) {
+			incompatible := lastIncompatibleMessage(messages, target.Provider) >= 0
+			needsCapacity := target.CheckCapacity && session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) >= capacityTrigger(window, state.config.Compactor.TriggerRatio)
+			if !incompatible && !needsCapacity {
 				break
 			}
 			var candidate *compactionCandidate
-			if role == "qq" {
+			if incompatible {
+				if role == "qq" {
+					candidate, previewErr = session.BuildProtocolCompaction(target.Provider)
+				} else {
+					messages, previewErr = protocolSummaryPrefix(messages, target.Provider)
+				}
+				if previewErr != nil {
+					return release, []string{key}, previewErr
+				}
+				if role == "qq" && candidate == nil {
+					return release, []string{key}, fmt.Errorf("no closed protocol compaction candidate")
+				}
+			} else if role == "qq" {
 				candidate = session.BuildCompactionCandidate(window, state.config.Compactor.RecentTailRatio)
 				if candidate == nil {
 					break
@@ -180,13 +199,14 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 	// 整理其它会话时仍会接收新输入，保存前只复查本次锁住的会话
 	for _, session := range locked {
 		role, chatTools := capacityRoleTools(available, session.kind)
-		window := windows[role]
+		target := targets[role]
+		window := target.ContextWindow
 		previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: window}})
 		messages, previewErr := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
 		if previewErr != nil {
 			return release, affected, previewErr
 		}
-		if session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) > window {
+		if lastIncompatibleMessage(messages, target.Provider) >= 0 || session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) > window {
 			affected = append(affected, sessionKey(session.kind, session.targetID))
 		}
 	}

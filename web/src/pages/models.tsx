@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { modelApi } from "@/api/client-endpoints";
-import type { ModelProfile, ModelSelection } from "@/api/types";
+import type { ModelProfile, ModelSelection, ModelProvider, ThinkingMode } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
@@ -16,7 +16,7 @@ import {
 } from "@/components/admin/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect } from "@/components/ui/form-controls";
+import { Field, Input, NativeSelect, Textarea } from "@/components/ui/form-controls";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -32,6 +32,9 @@ import { formatDateTime } from "@/lib/format";
 import { enumLabel } from "@/lib/labels";
 
 const emptyForm = {
+  provider: "openai_responses" as ModelProvider,
+  thinking_mode: "" as ThinkingMode,
+  body_override: "{}",
   name: "",
   base_url: "",
   model_name: "",
@@ -42,6 +45,9 @@ const emptyForm = {
 
 function profileForm(profile: ModelProfile) {
   return {
+    provider: profile.provider,
+    thinking_mode: profile.thinking_mode,
+    body_override: profile.body_override,
     name: profile.name,
     base_url: profile.base_url,
     model_name: profile.model_name,
@@ -80,6 +86,16 @@ export default function ModelsPage() {
     editMode && editing && draftVersion > 0 && editing.version !== draftVersion,
   );
   const guard = useDirtyGuard(dirty && !leaveAfter);
+  const bodyError = useMemo(() => {
+    try {
+      const body: unknown = JSON.parse(form.body_override.trim() || "{}");
+      if (body === null || typeof body !== "object" || Array.isArray(body)) return "models.fields.bodyObjectError";
+      if (Object.hasOwn(body, "stream")) return "models.fields.bodyStreamError";
+      return null;
+    } catch {
+      return "models.fields.bodyJSONError";
+    }
+  }, [form.body_override]);
 
   useEffect(() => {
     if (!leaveAfter) return;
@@ -112,7 +128,7 @@ export default function ModelsPage() {
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (saving || versionConflict || !panelOpen || (editMode && !editing)) return;
+    if (saving || versionConflict || bodyError || !panelOpen || (editMode && !editing)) return;
     setSaving(true);
     try {
       if (editMode && editing) {
@@ -284,6 +300,7 @@ export default function ModelsPage() {
                   </TableCell>
                   <TableCell className="text-xs">
                     <p>{profile.model_name}</p>
+                    <p className="mt-0.5 text-muted-foreground">{enumLabel(t, "modelProvider", profile.provider)}</p>
                     <p className="mt-0.5 break-all text-muted-foreground">
                       {profile.base_url}
                     </p>
@@ -291,7 +308,10 @@ export default function ModelsPage() {
                   <TableCell className="admin-number text-xs">
                     {profile.context_window}
                   </TableCell>
-                  <TableCell className="text-xs">{profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")}</TableCell>
+                  <TableCell className="text-xs">
+                    {profile.provider === "openai_chat_completions" ? <p>{profile.thinking_mode ? enumLabel(t, "thinkingMode", profile.thinking_mode) : t("models.fields.effortNone")}</p> : null}
+                    <p>{profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")}</p>
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-1">
                       {(["qq", "life", "worker"] as const).filter((role) => query.data.selection[role] === profile.id).map((role) => <Badge key={role}>{t(`models.roles.${role}`)}</Badge>)}
@@ -352,7 +372,7 @@ export default function ModelsPage() {
             <Button
               type="submit"
               form="model-form"
-              disabled={saving || versionConflict || (editMode && !editing)}
+              disabled={saving || versionConflict || Boolean(bodyError) || (editMode && !editing)}
             >
               {saving ? <Spinner /> : null}
               {t("models.save")}
@@ -363,7 +383,7 @@ export default function ModelsPage() {
         {editMode && !editing ? (
           <p className="text-sm text-muted-foreground">{t("common.loadFailed")}</p>
         ) : (
-          <form id="model-form" className="space-y-5" onSubmit={save}>
+          <form id="model-form" className="space-y-4" onSubmit={save}>
           {versionConflict ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
               <div>
@@ -398,6 +418,12 @@ export default function ModelsPage() {
               />
             </Field>
           </div>
+
+          <Field label={t("models.fields.provider")}>
+            <NativeSelect value={form.provider} onChange={(event) => setForm((value) => ({ ...value, provider: event.target.value as ModelProvider }))}>
+              {(["openai_responses", "openai_chat_completions"] as const).map((provider) => <option key={provider} value={provider}>{enumLabel(t, "modelProvider", provider)}</option>)}
+            </NativeSelect>
+          </Field>
 
           <Field label={t("models.fields.baseUrl")}>
             <Input
@@ -438,12 +464,12 @@ export default function ModelsPage() {
             />
           </Field>
 
-          <div className="border-t border-border pt-5">
+          <div className="border-t border-border pt-4">
             <p className="mb-4 text-sm font-medium text-foreground">
               {t("models.fields.reasoningGroup")}
             </p>
             <div className="admin-form-grid">
-              <Field label={t("models.fields.contextWindow")}>
+              <Field label={t("models.fields.contextWindow")} className={form.provider === "openai_chat_completions" ? "col-span-2" : undefined}>
                 <Input
                   type="number"
                   min={1}
@@ -457,6 +483,14 @@ export default function ModelsPage() {
                   }
                 />
               </Field>
+              {form.provider === "openai_chat_completions" ? (
+                <Field label={t("models.fields.thinkingMode")}>
+                  <NativeSelect value={form.thinking_mode} onChange={(event) => setForm((value) => ({ ...value, thinking_mode: event.target.value as ThinkingMode }))}>
+                    <option value="">{t("models.fields.effortNone")}</option>
+                    {(["enabled", "disabled"] as const).map((mode) => <option key={mode} value={mode}>{enumLabel(t, "thinkingMode", mode)}</option>)}
+                  </NativeSelect>
+                </Field>
+              ) : null}
               <Field label={t("models.fields.reasoningEffort")}>
                 <NativeSelect
                   value={form.reasoning_effort}
@@ -476,6 +510,12 @@ export default function ModelsPage() {
                 </NativeSelect>
               </Field>
             </div>
+          </div>
+          <div className="border-t border-border pt-4">
+            <Field label={t("models.fields.bodyOverride")} hint={t("models.fields.bodyOverrideHint")} error={bodyError ? t(bodyError) : undefined}>
+              <Textarea rows={6} className="font-mono" value={form.body_override} spellCheck={false} aria-invalid={Boolean(bodyError)} aria-describedby={bodyError ? "model-body-error" : undefined} onChange={(event) => setForm((value) => ({ ...value, body_override: event.target.value }))} />
+            </Field>
+            {bodyError ? <span id="model-body-error" role="alert" className="sr-only">{t(bodyError)}</span> : null}
           </div>
         </form>
         )}

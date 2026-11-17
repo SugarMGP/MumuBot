@@ -675,6 +675,13 @@ const enUS: typeof zhCN = {
     fields: {
       name: "Name",
       baseUrl: "Base URL",
+      provider: "API protocol",
+      thinkingMode: "Thinking mode",
+      bodyOverride: "Body override",
+      bodyOverrideHint: "Recursively merge and override request parameters; stream cannot be overridden.",
+      bodyJSONError: "Enter valid JSON.",
+      bodyObjectError: "The body override must be a JSON object.",
+      bodyStreamError: "The top-level stream field cannot be overridden.",
       baseUrlPlaceholder: "https://api.example.com/v1",
       modelName: "Model name",
       contextWindow: "Context window",
@@ -685,7 +692,7 @@ const enUS: typeof zhCN = {
 
       reasoningEffort: "Reasoning effort",
 
-      effortNone: "Omit",
+      effortNone: "Unspecified",
       reasoningGroup: "Context and reasoning",
     },
     secretUnavailable:
@@ -886,6 +893,7 @@ const enUS: typeof zhCN = {
     session_busy: "The conversation is processing a turn. Try again when it finishes.",
     compaction_failed: "Compaction didn't finish. Try again later; see the runtime log for details.",
     model_context_too_small: "The context could not be compacted to fit the new window. The current model is unchanged. Check the model connection or choose a larger window.",
+    model_switch_context_failed: "Context could not be prepared for the new protocol or window. The current model is unchanged. Check the model connection and runtime logs, then retry.",
     model_activate_failed: "Model switch failed; the previous model is still active.",
     persona_content_invalid: "Complete all five documents and check their character limits.",
     preset_duplicate: "A preset with this name already exists.",
@@ -953,6 +961,14 @@ const enUS: typeof zhCN = {
     mcpType: {
       sse: "SSE",
       stdio: "Stdio",
+    },
+    modelProvider: {
+      openai_responses: "Responses",
+      openai_chat_completions: "Chat Completions",
+    },
+    thinkingMode: {
+      enabled: "Thinking enabled",
+      disabled: "Thinking disabled",
     },
     reasoningEffort: {
       none: "None (none)",

@@ -34,7 +34,7 @@ func (a *App) handleSystem(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			item := modelProfileDTO{Name: profile.Name, BaseURL: profile.BaseURL, ModelName: profile.ModelName, ReasoningEffort: profile.ReasoningEffort, ContextWindow: profile.ContextWindow}
+			item := modelProfileDTO{Provider: profile.Provider, ThinkingMode: profile.ThinkingMode, Name: profile.Name, BaseURL: profile.BaseURL, ModelName: profile.ModelName, ReasoningEffort: profile.ReasoningEffort, ContextWindow: profile.ContextWindow}
 			profiles[role] = item
 		}
 	}

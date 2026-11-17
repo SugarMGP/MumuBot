@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/llm"
 	"mumu-bot/internal/secrets"
 
 	"gorm.io/gorm"
@@ -21,6 +22,8 @@ type Profile struct {
 	ModelName        string    `gorm:"column:model_name" json:"model_name"`
 	ContextWindow    int       `gorm:"column:context_window" json:"context_window"`
 	ReasoningEffort  string    `gorm:"column:reasoning_effort" json:"reasoning_effort"`
+	ThinkingMode     string    `gorm:"column:thinking_mode" json:"thinking_mode"`
+	BodyOverride     string    `gorm:"column:body_override;type:jsonb" json:"body_override"`
 	APIKeyCiphertext []byte    `gorm:"column:api_key_ciphertext" json:"-"`
 	APIKeyNonce      []byte    `gorm:"column:api_key_nonce" json:"-"`
 	APIKeyKeyVersion int       `gorm:"column:api_key_key_version" json:"-"`
@@ -74,14 +77,13 @@ func (s *Store) Get(ctx context.Context, id uint) (Profile, error) {
 
 // Create 新建尚未分配给场合的模型档案
 func (s *Store) Create(ctx context.Context, row Profile, apiKey string) (Profile, error) {
-	if err := validate(row, apiKey, true); err != nil {
-		return row, err
-	}
 	ciphertext, nonce, version, err := secrets.EncryptString(strings.TrimSpace(apiKey))
 	if err != nil {
 		return row, err
 	}
-	row.Provider = "openai_responses"
+	if strings.TrimSpace(row.BodyOverride) == "" {
+		row.BodyOverride = "{}"
+	}
 	row.APIKeyCiphertext = ciphertext
 	row.APIKeyNonce = nonce
 	row.APIKeyKeyVersion = version
@@ -98,10 +100,13 @@ func (s *Store) Update(ctx context.Context, row Profile, apiKey string) (Profile
 	if row.ID == 0 {
 		return row, ErrInvalidModel
 	}
-	if err := validate(row, apiKey, false); err != nil {
-		return row, err
+	if strings.TrimSpace(row.BodyOverride) == "" {
+		row.BodyOverride = "{}"
 	}
 	updates := map[string]any{
+		"provider":         row.Provider,
+		"thinking_mode":    row.ThinkingMode,
+		"body_override":    row.BodyOverride,
 		"name":             strings.TrimSpace(row.Name),
 		"base_url":         strings.TrimSpace(row.BaseURL),
 		"model_name":       strings.TrimSpace(row.ModelName),
@@ -160,7 +165,17 @@ func (s *Store) DecryptKey(row Profile) (string, error) {
 	return secrets.DecryptString(row.APIKeyCiphertext, row.APIKeyNonce, row.APIKeyKeyVersion)
 }
 
-func validate(row Profile, apiKey string, requireKey bool) error {
+// Validate 在保存和切换准备前校验完整档案
+func (row Profile) Validate() error {
+	if row.Provider != llm.ProviderResponses && row.Provider != llm.ProviderChatCompletions {
+		return fmt.Errorf("%w: unknown model protocol", ErrInvalidModel)
+	}
+	if row.ThinkingMode != "" && row.ThinkingMode != "enabled" && row.ThinkingMode != "disabled" {
+		return fmt.Errorf("%w: invalid thinking mode", ErrInvalidModel)
+	}
+	if _, err := llm.ParseBodyOverride(row.BodyOverride); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidModel, err)
+	}
 	if strings.TrimSpace(row.Name) == "" {
 		return fmt.Errorf("%w: 名称不能为空", ErrInvalidModel)
 	}
@@ -175,9 +190,6 @@ func validate(row Profile, apiKey string, requireKey bool) error {
 	}
 	if !reasoningEfforts[row.ReasoningEffort] {
 		return fmt.Errorf("%w: reasoning.effort 无效", ErrInvalidModel)
-	}
-	if requireKey && strings.TrimSpace(apiKey) == "" {
-		return fmt.Errorf("%w: API Key 不能为空", ErrInvalidModel)
 	}
 	return nil
 }

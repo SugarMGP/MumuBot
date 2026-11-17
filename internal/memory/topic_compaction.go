@@ -20,18 +20,19 @@ func compactionInputErrorf(format string, args ...any) error {
 }
 
 // CommitCompaction 原子写入话题、归属、检查点，并删除被覆盖的工作集记录
-func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) (TranscriptCandidates, error) {
-	if input.ConversationKind == "" || input.TargetID <= 0 || input.ThroughMessageID == 0 || input.ThroughVisibleSeq == 0 || strings.TrimSpace(input.BatchID) == "" {
-		return TranscriptCandidates{}, compactionInputErrorf("压缩提交范围无效")
+func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) (map[uint]uint64, TranscriptCandidates, error) {
+	if input.ConversationKind == "" || input.TargetID <= 0 || ((input.ThroughMessageID == 0 || input.ThroughVisibleSeq == 0) && len(input.ConsumedTranscriptIDs) == 0) || strings.TrimSpace(input.BatchID) == "" {
+		return nil, TranscriptCandidates{}, compactionInputErrorf("压缩提交范围无效")
 	}
 	if input.UnassignedCount > 16 || (input.UnassignedCount > 0 && input.Coverage < 0.80) {
-		return TranscriptCandidates{}, compactionInputErrorf("话题覆盖率不足：未分配 %d 条", input.UnassignedCount)
+		return nil, TranscriptCandidates{}, compactionInputErrorf("话题覆盖率不足：未分配 %d 条", input.UnassignedCount)
 	}
 	topicIDs := map[string]uint{}
 	now := time.Now()
 	policy := CurrentRetentionPolicy()
 	newStability, newAnchor, newForgetAt := policy.TopicState(now, now)
 	released := TranscriptCandidates{}
+	seqs := map[uint]uint64{}
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var checkpoint CompactionCheckpoint
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("conversation_kind=? AND target_id=?", input.ConversationKind, input.TargetID).Take(&checkpoint).Error
@@ -46,6 +47,28 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 			return fmt.Errorf("上下文检查点已变化，请重新读取后再压缩")
 		}
 		nextVersion := currentVersion + 1
+		seqs, err = markVisibleTx(tx, input.ConversationKind, input.TargetID, input.ConsumedTranscriptIDs)
+		if err != nil {
+			return err
+		}
+		for _, seq := range seqs {
+			input.ThroughVisibleSeq = max(input.ThroughVisibleSeq, seq)
+		}
+		// 没有真人来源的协议整理只更新概览，保留原活跃话题与来源边界
+		if len(input.CandidateMessageIDs) == 0 && len(input.ConsumedTranscriptIDs) > 0 {
+			if strings.TrimSpace(input.Overview) == "" || len([]rune(input.Overview)) > 12000 {
+				return compactionInputErrorf("压缩概览无效")
+			}
+			if !hasCheckpoint {
+				checkpoint = CompactionCheckpoint{ConversationKind: input.ConversationKind, TargetID: input.TargetID, ActiveTopicVersions: []byte("[]")}
+			}
+			checkpoint.Version = nextVersion
+			checkpoint.Overview = strings.TrimSpace(input.Overview)
+			checkpoint.BatchID = input.BatchID
+			checkpoint.ThroughVisibleSeq = &input.ThroughVisibleSeq
+			released, err = m.commitCompactionCheckpoint(tx, checkpoint)
+			return err
+		}
 
 		oneBotIDs := make([]int64, 0)
 		for _, topicInput := range input.Topics {
@@ -286,26 +309,29 @@ func (m *Manager) CommitCompaction(ctx context.Context, input CompactionCommit) 
 			Overview: overview, ActiveTopicVersions: snapshotJSON,
 			BatchID: input.BatchID, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		}
-		if err := m.SaveCheckpoint(tx, checkpoint); err != nil {
-			return err
-		}
-		headRefs, err := m.DeleteTranscriptHeads(tx, input.ConversationKind, input.TargetID)
-		if err != nil {
-			return err
-		}
-		released.ToolRefs = append(released.ToolRefs, headRefs.ToolRefs...)
-		released.SnapshotRefs = append(released.SnapshotRefs, headRefs.SnapshotRefs...)
-		refs, err := m.DeleteTranscriptThrough(tx, input.ConversationKind, input.TargetID, input.ThroughVisibleSeq)
-		if err != nil {
-			return err
-		}
-		released.ToolRefs = append(released.ToolRefs, refs.ToolRefs...)
-		released.SnapshotRefs = append(released.SnapshotRefs, refs.SnapshotRefs...)
-		return nil
+		released, err = m.commitCompactionCheckpoint(tx, checkpoint)
+		return err
 	})
+	if err != nil {
+		return seqs, TranscriptCandidates{}, err
+	}
+	return seqs, released, nil
+}
+
+func (m *Manager) commitCompactionCheckpoint(tx *gorm.DB, checkpoint CompactionCheckpoint) (TranscriptCandidates, error) {
+	if err := m.SaveCheckpoint(tx, checkpoint); err != nil {
+		return TranscriptCandidates{}, err
+	}
+	released, err := m.DeleteTranscriptHeads(tx, checkpoint.ConversationKind, checkpoint.TargetID)
 	if err != nil {
 		return TranscriptCandidates{}, err
 	}
+	refs, err := m.DeleteTranscriptThrough(tx, checkpoint.ConversationKind, checkpoint.TargetID, *checkpoint.ThroughVisibleSeq)
+	if err != nil {
+		return TranscriptCandidates{}, err
+	}
+	released.ToolRefs = append(released.ToolRefs, refs.ToolRefs...)
+	released.SnapshotRefs = append(released.SnapshotRefs, refs.SnapshotRefs...)
 	return released, nil
 }
 

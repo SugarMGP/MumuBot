@@ -16,6 +16,8 @@ import type {
   MemoryItem,
   Member,
   ModelProfile,
+  ModelProvider,
+  ThinkingMode,
   ModelStatsData,
   ModelsData,
   ModelSelection,
@@ -180,6 +182,9 @@ export const settingsApi = {
 };
 
 export interface ModelInput {
+  provider: ModelProvider;
+  thinking_mode: ThinkingMode;
+  body_override: string;
   name: string;
   base_url: string;
   model_name: string;

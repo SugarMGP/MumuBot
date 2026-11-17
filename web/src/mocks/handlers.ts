@@ -351,7 +351,9 @@ const models: ModelProfile[] = emptySeed
       {
         id: 1,
         name: "主力模型",
-        provider: "openai",
+        provider: "openai_responses",
+        thinking_mode: "",
+        body_override: "{}",
         base_url: "https://api.example.com/v1",
         model_name: "gpt-5",
         context_window: 400000,
@@ -366,7 +368,9 @@ const models: ModelProfile[] = emptySeed
       {
         id: 2,
         name: "备用模型",
-        provider: "openai",
+        provider: "openai_chat_completions",
+        thinking_mode: "enabled",
+        body_override: "{\n  \"temperature\": 0.2\n}",
         base_url: "https://api.example.com/v1",
         model_name: "gpt-5-mini",
         context_window: 200000,
@@ -1072,7 +1076,9 @@ export const handlers = [
     const created: ModelProfile = {
       id: Math.max(...models.map((item) => item.id), 0) + 1,
       name: body.name,
-      provider: "",
+      provider: body.provider,
+      thinking_mode: body.thinking_mode,
+      body_override: body.body_override.trim() || "{}",
       base_url: body.base_url,
       model_name: body.model_name,
       context_window: body.context_window,
@@ -1094,6 +1100,9 @@ export const handlers = [
     if (model.version !== body.version) return fail(409, "version_conflict", "内容已被修改");
     Object.assign(model, {
       name: body.name,
+      provider: body.provider,
+      thinking_mode: body.thinking_mode,
+      body_override: body.body_override.trim() || "{}",
       base_url: body.base_url,
       model_name: body.model_name,
       context_window: body.context_window,
@@ -1205,8 +1214,8 @@ export const handlers = [
         connected: true,
         agent_ready: true,
         reconnect_sec: 5,
-        schema_version: 17,
-        latest_schema_version: 17,
+        schema_version: 19,
+        latest_schema_version: 19,
         self_id: 3889000000,
         media_max_bytes_mb: 10,
       },

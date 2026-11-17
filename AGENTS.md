@@ -178,8 +178,8 @@ go vet ./...
 ## 核心架构约束
 
 - QQ 聊天和同步话题压缩共用 QQ 档案；life 和 worker 分别选择自己的档案并用于运行与摘要，可添加同名模型不同推理强度的档案，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
-- 对话模型只走 OpenAI Responses 端点（`/responses`）；当前模型的上下文窗口用于输入预算和压缩触发，设置 `max_output_tokens` 或固定输出预留不是本项目行为。
-- 模型档案只开放 `reasoning.effort`，支持省略或 none/low/medium/high/xhigh/max；API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
+- 模型档案独立选择 Responses（`/responses`）或 Chat Completions（`/chat/completions`），内部始终使用 `schema.AgenticMessage`；国产 Chat 图片保留在工具回执，不统一搬到 user。上下文窗口仍用于预算和压缩，程序不自动设置输出上限或固定输出预留。
+- Responses 使用 `reasoning.effort`，Chat 独立配置 `thinking.type` 与 `reasoning_effort`；强度支持省略或 none/low/medium/high/xhigh/max，原值发送。两种协议均支持最高优先级 Body JSON 递归覆盖，仅禁止顶层 `stream`；数组、标量、null 整值替换，null 不删除键。API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
 - 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
 - 强提及和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
@@ -271,7 +271,7 @@ go vet ./...
 - 持久化使用 PostgreSQL 18；先打开数据库、完成 schema 迁移、动态配置、人格预设和管理后台，再异步等待 OneBot 取得 `self_id` 并创建 Agent；QQ 未登录时后台仍可配置，首次配置模型且 Agent 激活前事件门保持关闭。
 - schema 由 `schema_migrations` 记录并为 v18；空库初始化，当前 v17 显式事务升级并保留业务数据，已是 v18 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
-- 切换模型或缩小当前窗口前，等待受影响会话的当前回合结束，按现有装配和 token 估算检查持久工作集；达到新窗口压缩阈值时先用原模型整理，再复查容量后应用。容量预览本身保持只读；整理复用 QQ 话题压缩和 life/worker 摘要检查点，不能消费待处理输入或切断工具链。QQ 离线、Agent 尚未激活和 generation 尚未建立也走同一流程；整理失败或仍放不下就保持旧配置，不静默截断或丢掉会话。
+- 模型切换前检查目标协议兼容性；缩小窗口时同时检查容量。不兼容轨迹先用原模型整理，覆盖末尾不兼容块与完整工具链，不做 reasoning 出站过滤。通常保留待处理输入；life/worker 必须越过它们才能覆盖不兼容轨迹时，可由真实摘要请求读取并原子记为已读，未完成事项保存进摘要。QQ 协议整理允许未 visible 的已完成输出和无真人来源的概览更新，在同一事务分配 visible、保存检查点并删除覆盖轨迹。QQ 离线和未激活也走同一流程；失败不切换，已成功整理的摘要不跨会话回滚。
 - 管理后台日志与模型统计口径保持现有约束。`message_logs`、合并转发和聊天媒体默认保留 180 天，实际最低期限由后台 `history_days` 决定；仍在 transcript 直接引用的过期原文延后删除，正常压缩解除引用后再清理。摘要、记忆、日记和收藏表情有各自的保留含义，不等同于原文清理。
 - 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。
 - PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符。

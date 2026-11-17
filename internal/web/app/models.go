@@ -38,18 +38,31 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 type modelInput struct {
+	Provider        string `json:"provider"`
 	Name            string `json:"name"`
 	BaseURL         string `json:"base_url"`
 	ModelName       string `json:"model_name"`
 	ContextWindow   int    `json:"context_window"`
 	ReasoningEffort string `json:"reasoning_effort"`
+	ThinkingMode    string `json:"thinking_mode"`
+	BodyOverride    string `json:"body_override"`
 	APIKey          string `json:"api_key"`
 	Version         int64  `json:"version"`
 }
 
+func (input modelInput) profile(id uint) (modelprofiles.Profile, error) {
+	row := modelprofiles.Profile{
+		ID: id, Name: strings.TrimSpace(input.Name), Provider: input.Provider,
+		BaseURL: strings.TrimSpace(input.BaseURL), ModelName: strings.TrimSpace(input.ModelName),
+		ContextWindow: input.ContextWindow, ReasoningEffort: input.ReasoningEffort,
+		ThinkingMode: input.ThinkingMode, BodyOverride: input.BodyOverride, Version: input.Version,
+	}
+	return row, row.Validate()
+}
+
 // prepareModelCapacity 在保存前自动整理超限历史，并把会话锁保留到运行态切换完成
-func (a *App) prepareModelCapacity(ctx context.Context, windows map[string]int) (func(), []string, bool) {
-	if len(windows) == 0 {
+func (a *App) prepareModelCapacity(ctx context.Context, targets map[string]agent.ModelTarget) (func(), []string, bool) {
+	if len(targets) == 0 {
 		return func() {}, nil, true
 	}
 	currentAgent := a.currentAgent()
@@ -57,7 +70,7 @@ func (a *App) prepareModelCapacity(ctx context.Context, windows map[string]int) 
 	var affected []string
 	var err error
 	if currentAgent != nil && currentAgent.Ready() {
-		release, affected, err = currentAgent.PrepareContextWindows(ctx, windows)
+		release, affected, err = currentAgent.PrepareModelSwitch(ctx, targets)
 	} else {
 		var mcpManager *mcp.Manager
 		if a.mcpStore != nil {
@@ -70,7 +83,7 @@ func (a *App) prepareModelCapacity(ctx context.Context, windows map[string]int) 
 				defer mcpManager.Close()
 			}
 		}
-		release, affected, err = agent.PrepareContextWindowsFor(ctx, a.memMgr, a.modelStore, windows, mcpManager)
+		release, affected, err = agent.PrepareModelSwitchFor(ctx, a.memMgr, a.modelStore, targets, mcpManager)
 	}
 	if err != nil {
 		zap.L().Warn("为模型切换整理上下文失败", zap.Error(err))
@@ -93,13 +106,12 @@ func (a *App) handleModelCreate(w http.ResponseWriter, r *http.Request) {
 		a.failBadRequest(w, "首次保存模型必须填写 API Key。")
 		return
 	}
-	created, err := a.modelStore.Create(r.Context(), modelprofiles.Profile{
-		Name:            strings.TrimSpace(body.Name),
-		BaseURL:         strings.TrimSpace(body.BaseURL),
-		ModelName:       strings.TrimSpace(body.ModelName),
-		ContextWindow:   body.ContextWindow,
-		ReasoningEffort: strings.TrimSpace(body.ReasoningEffort),
-	}, body.APIKey)
+	row, err := body.profile(0)
+	if err != nil {
+		a.failFromError(w, r, err)
+		return
+	}
+	created, err := a.modelStore.Create(r.Context(), row, body.APIKey)
 	if err != nil {
 		a.failFromError(w, r, err)
 		return
@@ -136,30 +148,24 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, modelprofiles.ErrVersionConflict)
 		return
 	}
-	windows := make(map[string]int)
-	if body.ContextWindow > 0 && body.ContextWindow < current.ContextWindow {
-		for _, role := range []string{"qq", "life", "worker"} {
-			if selection.ID(role) != id {
-				continue
-			}
-			windows[role] = body.ContextWindow
-		}
-	}
-	release, affected, ok := a.prepareModelCapacity(r.Context(), windows)
-	defer release()
-	if !ok || len(affected) > 0 {
-		respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
+	row, err := body.profile(id)
+	if err != nil {
+		a.failFromError(w, r, err)
 		return
 	}
-	updated, err := a.modelStore.Update(r.Context(), modelprofiles.Profile{
-		ID:              id,
-		Name:            strings.TrimSpace(body.Name),
-		BaseURL:         strings.TrimSpace(body.BaseURL),
-		ModelName:       strings.TrimSpace(body.ModelName),
-		ContextWindow:   body.ContextWindow,
-		ReasoningEffort: strings.TrimSpace(body.ReasoningEffort),
-		Version:         body.Version,
-	}, body.APIKey)
+	targets := make(map[string]agent.ModelTarget)
+	for _, role := range []string{"qq", "life", "worker"} {
+		if selection.ID(role) == id {
+			targets[role] = agent.ModelTarget{Provider: row.Provider, ContextWindow: row.ContextWindow, CheckCapacity: row.ContextWindow < current.ContextWindow}
+		}
+	}
+	release, affected, ok := a.prepareModelCapacity(r.Context(), targets)
+	defer release()
+	if !ok || len(affected) > 0 {
+		respondError(w, http.StatusBadRequest, "model_switch_context_failed", "", map[string]any{"sessions": affected})
+		return
+	}
+	updated, err := a.modelStore.Update(r.Context(), row, body.APIKey)
 	if err != nil {
 		a.failFromError(w, r, err)
 		return
@@ -209,10 +215,14 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 		a.failFromError(w, r, modelprofiles.ErrVersionConflict)
 		return
 	}
-	windows := make(map[string]int)
+	targets := make(map[string]agent.ModelTarget)
 	for _, role := range []string{"qq", "life", "worker"} {
 		target, err := a.modelStore.Get(r.Context(), body.ID(role))
 		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+		if err := target.Validate(); err != nil {
 			a.failFromError(w, r, err)
 			return
 		}
@@ -228,14 +238,12 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 			a.failFromError(w, r, err)
 			return
 		}
-		if target.ContextWindow < current.ContextWindow {
-			windows[role] = target.ContextWindow
-		}
+		targets[role] = agent.ModelTarget{Provider: target.Provider, ContextWindow: target.ContextWindow, CheckCapacity: target.ContextWindow < current.ContextWindow}
 	}
-	release, affected, ok := a.prepareModelCapacity(r.Context(), windows)
+	release, affected, ok := a.prepareModelCapacity(r.Context(), targets)
 	defer release()
 	if !ok || len(affected) > 0 {
-		respondError(w, http.StatusBadRequest, "model_context_too_small", "", map[string]any{"sessions": affected})
+		respondError(w, http.StatusBadRequest, "model_switch_context_failed", "", map[string]any{"sessions": affected})
 		return
 	}
 	saved, err := a.modelStore.Select(r.Context(), body)
@@ -283,10 +291,13 @@ func (a *App) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	if err := llm.Test(ctx, llm.ModelConfig{
+		Provider:        row.Provider,
 		APIKey:          key,
 		BaseURL:         row.BaseURL,
 		Model:           row.ModelName,
 		ReasoningEffort: row.ReasoningEffort,
+		ThinkingMode:    row.ThinkingMode,
+		BodyOverride:    row.BodyOverride,
 	}); err != nil {
 		respondError(w, http.StatusBadRequest, "model_test_failed", "模型连接测试失败", map[string]any{
 			"reason": err.Error(),

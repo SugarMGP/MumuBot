@@ -343,14 +343,19 @@ export interface SettingsData {
   secret_configured: boolean;
 }
 
+export type ModelProvider = "openai_responses" | "openai_chat_completions";
+export type ThinkingMode = "" | "enabled" | "disabled";
+
 export interface ModelProfile {
   id: number;
   name: string;
-  provider: string;
+  provider: ModelProvider;
   base_url: string;
   model_name: string;
   context_window: number;
   reasoning_effort: string;
+  thinking_mode: ThinkingMode;
+  body_override: string;
   api_key_hint: string;
   version: number;
   created_at: string;
@@ -415,7 +420,7 @@ export interface SystemData {
     compactor: RuntimeConfig["compactor"];
   };
   model: {
-    profiles: Record<string, { name: string; model_name: string; reasoning_effort: string; base_url: string; context_window: number }>;
+    profiles: Record<string, { name: string; provider: ModelProvider; thinking_mode: ThinkingMode; model_name: string; reasoning_effort: string; base_url: string; context_window: number }>;
     mcp_tool_count: number;
     mcp_statuses?: { name: string; enabled: boolean; connected: boolean; tool_count: number; error?: string }[];
   };

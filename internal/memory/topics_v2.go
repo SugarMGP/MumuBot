@@ -90,18 +90,19 @@ type CompactionTopicInput struct {
 }
 
 type CompactionCommit struct {
-	ConversationKind    string
-	TargetID            int64
-	ExpectedVersion     uint64
-	ThroughVisibleSeq   uint64
-	ThroughMessageID    uint
-	Overview            string
-	ActiveTopicRefs     []string
-	Topics              []CompactionTopicInput
-	CandidateMessageIDs []uint
-	Coverage            float64
-	UnassignedCount     int
-	BatchID             string
+	ConversationKind      string
+	TargetID              int64
+	ExpectedVersion       uint64
+	ThroughVisibleSeq     uint64
+	ThroughMessageID      uint
+	Overview              string
+	ActiveTopicRefs       []string
+	Topics                []CompactionTopicInput
+	CandidateMessageIDs   []uint
+	ConsumedTranscriptIDs []uint
+	Coverage              float64
+	UnassignedCount       int
+	BatchID               string
 }
 
 func summaryTitle(summary TopicSummary, topicID uint) string {

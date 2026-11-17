@@ -289,6 +289,8 @@ type systemModelDTO struct {
 }
 
 type modelProfileDTO struct {
+	Provider        string `json:"provider"`
+	ThinkingMode    string `json:"thinking_mode"`
 	ContextWindow   int    `json:"context_window"`
 	Name            string `json:"name"`
 	BaseURL         string `json:"base_url"`

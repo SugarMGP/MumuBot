@@ -76,7 +76,7 @@ Core capabilities of this project:
 | Bun 1.4.4+ | Build frontend assets (only needed for source builds) |
 | PostgreSQL 18 | Stores messages, memory, topics, checkpoints, and emotions using `pg_trgm` |
 | SnowLuma | OneBot 11 protocol implementation |
-| LLM API | OpenAI Responses compatible (`/responses`), must support tool calling |
+| LLM API | Responses (`/responses`) or Chat Completions (`/chat/completions`), with tool calling support |
 
 ### Docker Compose
 
@@ -144,15 +144,17 @@ set +a
 
 Visit `/admin` after startup. The dashboard remains available when no model is configured; add profiles and select models for QQ, life, and worker under Settings → Models. Settings changes do not require a process restart.
 
-QQ chat (groups and DMs), life, and worker each select an existing model profile. Profiles may use the same model name with different reasoning effort. The list stays in creation order. Only `reasoning.effort` is sent: omit, none, low, medium, high, xhigh, or max. `thinking.type` is removed; available effort levels depend on the provider.
+QQ chat (groups and DMs), life, and worker each select a model profile and may use different protocols simultaneously. Responses sends `reasoning.effort`; Chat Completions separately configures thinking mode (unspecified/enabled/disabled, sent as `thinking.type`) and `reasoning_effort`. Effort values are unspecified, none, low, medium, high, xhigh, or max, sent unchanged; support depends on the service. Profiles may share a model name with different protocol or reasoning settings. Tool images and Chat `reasoning_content` are preserved.
 
-Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Switching models or reducing the current window waits for affected turns to finish, checks the working set against the target window, and uses the original model to compact history when the threshold is reached. This also works while QQ is offline. Pending inputs remain untouched. The new configuration is applied only after a capacity recheck; compaction failures or content that still cannot fit keep the previous configuration.
+Each profile accepts a body override JSON object, recursively merged after the standard request. Objects merge by key; arrays, scalars, and null replace the entire value. Null does not delete a field. Overrides have highest priority and may replace any field except top-level `stream`, including model, messages, tools, and reasoning. Empty text means `{}`. Overrides do not change the recorded working set or configured context window; keep overridden core fields consistent yourself. The connection test uses the saved profile and overrides and only verifies connectivity.
+
+Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Reducing the window uses the original model to compact history when needed. Protocol switches reuse compatible history; incompatible reasoning is summarized with the original model before a compatibility and capacity recheck. This also works while QQ is offline. Pending inputs are normally preserved. When life/worker must cross pending inputs to cover incompatible history, the summary request reads them and marks them visible; unfinished work is retained in the summary, but individual replies or task triggers may no longer run. Failures block switching; summaries already committed for other sessions remain valid.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-This release uses schema v18. Empty databases are initialized; a current v17 database upgrades in one transaction while preserving profiles, keys, memories, and history. The previously active profile becomes the selection for all three roles. A prior `thinking.type=disabled` becomes `reasoning.effort=none`. Older or incompatible structures are rejected without deleting business data. Back up the database and media before upgrading.
+This release uses schema v19. Empty databases are initialized; supported v17/v18 databases upgrade in one transaction while preserving profiles, keys, memories, and history. Existing profiles remain on Responses with unspecified thinking mode and an empty body override. The v17 active profile becomes the selection for all three roles, and its prior `thinking.type=disabled` is migrated to `reasoning.effort=none` by v18. Older or incompatible structures are rejected without deleting business data. Back up the database and media before upgrading.
 
 The service listens on port `7468` by default (configurable via `MUMU_SERVER_PORT`).
 

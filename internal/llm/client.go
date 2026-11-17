@@ -16,12 +16,22 @@ import (
 
 const handshakeTimeout = 10 * time.Second
 
+const (
+	// ProviderResponses 使用 Responses 接口
+	ProviderResponses = "openai_responses"
+	// ProviderChatCompletions 使用 Chat Completions 接口
+	ProviderChatCompletions = "openai_chat_completions"
+)
+
 // ModelConfig 是一次模型客户端构建所需的非敏感配置
 type ModelConfig struct {
+	Provider        string
 	APIKey          string
 	BaseURL         string
 	Model           string
 	ReasoningEffort string
+	ThinkingMode    string
+	BodyOverride    string
 }
 
 // NewClient 按指定档案创建模型客户端；不做进程级缓存
@@ -36,7 +46,31 @@ func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: handshakeTimeout, KeepAlive: 30 * time.Second}).DialContext
 	transport.TLSHandshakeTimeout = handshakeTimeout
-	httpClient := &http.Client{Transport: transport}
+	fields, err := ParseBodyOverride(cfg.BodyOverride)
+	if err != nil {
+		return nil, err
+	}
+	var requestTransport http.RoundTripper = transport
+	if len(fields) > 0 {
+		requestTransport = &bodyOverrideTransport{base: transport, fields: fields}
+	}
+	httpClient := &http.Client{Transport: requestTransport}
+
+	if cfg.Provider == ProviderChatCompletions {
+		extra := map[string]any{}
+		if cfg.ThinkingMode != "" {
+			extra["thinking"] = map[string]string{"type": cfg.ThinkingMode}
+		}
+		if cfg.ReasoningEffort != "" {
+			extra["reasoning_effort"] = cfg.ReasoningEffort
+		}
+		return agenticopenai.NewChatModel(context.Background(), &agenticopenai.ChatConfig{
+			BaseURL: baseURL, APIKey: apiKey, Model: modelName, HTTPClient: httpClient, ExtraFields: extra,
+		})
+	}
+	if cfg.Provider != ProviderResponses {
+		return nil, fmt.Errorf("unknown model protocol: %s", cfg.Provider)
+	}
 
 	var reasoning *responses.ReasoningParam
 	if effort := strings.TrimSpace(cfg.ReasoningEffort); effort != "" {

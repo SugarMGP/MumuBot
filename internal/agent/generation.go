@@ -21,6 +21,7 @@ import (
 var ErrNoModel = fmt.Errorf("尚未配置模型")
 
 type roleModel struct {
+	provider       string
 	model          model.AgenticModel
 	modelName      string
 	contextWindow  int
@@ -149,11 +150,11 @@ func (a *Agent) loadModel(ctx context.Context, id uint) (roleModel, error) {
 	if err != nil {
 		return roleModel{}, err
 	}
-	client, err := llm.NewClient(llm.ModelConfig{APIKey: apiKey, BaseURL: profile.BaseURL, Model: profile.ModelName, ReasoningEffort: profile.ReasoningEffort})
+	client, err := llm.NewClient(llm.ModelConfig{Provider: profile.Provider, APIKey: apiKey, BaseURL: profile.BaseURL, Model: profile.ModelName, ReasoningEffort: profile.ReasoningEffort, ThinkingMode: profile.ThinkingMode, BodyOverride: profile.BodyOverride})
 	if err != nil {
 		return roleModel{}, err
 	}
-	return roleModel{model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: id, profileVersion: profile.Version}, nil
+	return roleModel{provider: profile.Provider, model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: id, profileVersion: profile.Version}, nil
 }
 
 // newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立
