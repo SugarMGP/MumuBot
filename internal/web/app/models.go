@@ -216,10 +216,21 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 			a.failFromError(w, r, err)
 			return
 		}
-		if target.ID == old.ID(role) {
+		oldID := old.ID(role)
+		if target.ID == oldID {
 			continue
 		}
-		windows[role] = target.ContextWindow
+		if oldID == 0 {
+			continue
+		}
+		current, err := a.modelStore.Get(r.Context(), oldID)
+		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+		if target.ContextWindow < current.ContextWindow {
+			windows[role] = target.ContextWindow
+		}
 	}
 	release, affected, ok := a.prepareModelCapacity(r.Context(), windows)
 	defer release()

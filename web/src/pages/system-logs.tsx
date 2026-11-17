@@ -16,6 +16,28 @@ import {
 import { useLogStream } from "@/hooks/use-log-stream";
 import { cn } from "@/lib/cn";
 
+const fieldPreviewLimit = 600;
+
+function LogFieldValue({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  if (text.length <= fieldPreviewLimit) return <span>{text}</span>;
+  const preview = Array.from(text).slice(0, fieldPreviewLimit).join("");
+  return (
+    <span>
+      <button
+        type="button"
+        className="mr-2 text-xs text-primary underline-offset-2 hover:underline"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {expanded ? t("system.logs.collapseField") : t("system.logs.expandField")}
+      </button>
+      {expanded ? text : `${preview}…`}
+    </span>
+  );
+}
+
 export default function SystemLogsPage() {
   const { t } = useTranslation();
   const [keywordInput, setKeywordInput] = useState("");
@@ -205,7 +227,9 @@ export default function SystemLogsPage() {
                             className="admin-log-field"
                           >
                             <b>{field.name}</b>
-                            <span>{formatted ? (field.formatted_value ?? field.value) : field.value}</span>
+                            <LogFieldValue
+                              text={formatted ? (field.formatted_value ?? field.value) : field.value}
+                            />
                           </span>
                         ))}
                       </span>

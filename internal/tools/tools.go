@@ -389,7 +389,7 @@ func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
 // ==================== 获取消息表情回应工具 ====================
 
 type GetMessageReactionsInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID"`
+	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）"`
 }
 
 type ReactionSummary struct {

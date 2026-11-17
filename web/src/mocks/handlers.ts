@@ -436,15 +436,35 @@ const sampleLogs = () => {
       fields: [
         { name: "session", value: `group:${90001 + (index % 2)}` },
         { name: "step", value: String(index % 6) },
+        ...(index === 0 ? [{ name: "context", value: "long field sample ".repeat(180) }] : []),
         ...(index % 10 === 0 ? [{ name: "input", value: '[{"role":"user","text":"你好\\n第二行"}]', formatted_value: '- role: user\n  text: |-\n    你好\n    第二行' }] : []),
       ] as LogField[],
-      text: "",
     });
   }
   return lines;
 };
 
 let liveLogs = sampleLogs();
+
+const logLevels = ["DEBUG", "INFO", "WARN", "ERROR"];
+function logSnapshot(request: Request, afterSeq = 0) {
+  const url = new URL(request.url);
+  const keyword = (url.searchParams.get("keyword") || "").trim().toLowerCase();
+  const minimumLevel = Math.max(0, logLevels.indexOf((url.searchParams.get("level") || "debug").toUpperCase()));
+  const matching = liveLogs.filter((line) => {
+    if (logLevels.indexOf(line.level) < minimumLevel) return false;
+    if (!keyword) return true;
+    return [line.message, ...line.fields.flatMap((field) => [field.name, field.value, field.formatted_value ?? ""])]
+      .some((value) => value.toLowerCase().includes(keyword));
+  });
+  return {
+    lines: matching.filter((line) => line.seq > afterSeq),
+    total: liveLogs.length,
+    filtered: matching.length,
+    first_seq: liveLogs[0]?.seq ?? logSeq,
+    last_seq: liveLogs[liveLogs.length - 1]?.seq ?? logSeq - 1,
+  };
+}
 
 
 const lifeSeed: LifeData = {
@@ -1223,39 +1243,46 @@ export const handlers = [
       series,
     });
   }),
-  http.get("/api/v1/system/logs/stream", () => {
+  http.get("/api/v1/system/logs", ({ request }) => ok(logSnapshot(request))),
+  http.get("/api/v1/system/logs/stream", ({ request }) => {
     const encoder = new TextEncoder();
     let timer: ReturnType<typeof setInterval> | undefined;
+    const url = new URL(request.url);
+    let lastSeq = Number(url.searchParams.get("after_seq") || "0");
     const stream = new ReadableStream({
       start(controller) {
-        const send = () => {
+        const send = (event: string, payload: ReturnType<typeof logSnapshot>) => {
+          controller.enqueue(
+            encoder.encode("event: " + event + "\ndata: " + JSON.stringify(payload) + "\n\n"),
+          );
+        };
+        const initial = logSnapshot(request, lastSeq);
+        if (lastSeq === 0 || lastSeq > initial.last_seq) {
+          send("snapshot", logSnapshot(request));
+          lastSeq = initial.last_seq;
+        } else if (initial.last_seq > lastSeq) {
+          send("append", initial);
+          lastSeq = initial.last_seq;
+        }
+        timer = setInterval(() => {
           liveLogs = [
             ...liveLogs.slice(-299),
             {
               seq: logSeq++,
               time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
               level: ["DEBUG", "INFO", "WARN"][logSeq % 3],
-              message: `实时日志 ${logSeq}：mock 服务每秒推送一条`,
+              message: "实时日志 " + logSeq + "：mock 服务每秒推送一条",
               fields: [{ name: "source", value: "mock" }],
-              text: "",
             },
           ];
           try {
-            controller.enqueue(
-              encoder.encode(
-                `event: snapshot\ndata: ${JSON.stringify({
-                  lines: liveLogs,
-                  total: liveLogs.length,
-                  filtered: liveLogs.length,
-                })}\n\n`,
-              ),
-            );
+            const payload = logSnapshot(request, lastSeq);
+            send("append", payload);
+            lastSeq = payload.last_seq;
           } catch {
             if (timer) clearInterval(timer);
           }
-        };
-        send();
-        timer = setInterval(send, 1000);
+        }, 1000);
       },
       cancel() {
         if (timer) clearInterval(timer);

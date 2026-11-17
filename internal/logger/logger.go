@@ -12,9 +12,30 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+type logEntry struct {
+	seq  uint64
+	raw  string
+	once sync.Once
+	line Line
+	ok   bool
+}
+
+func (e *logEntry) value() (Line, bool) {
+	e.once.Do(func() {
+		var fields map[string]any
+		if err := logJSONAPI.UnmarshalFromString(e.raw, &fields); err != nil {
+			return
+		}
+		e.line = formatLogLine(fields)
+		e.line.Seq = e.seq
+		e.ok = true
+	})
+	return e.line, e.ok
+}
+
 type logBuffer struct {
 	mu      sync.RWMutex
-	lines   []string
+	lines   []*logEntry
 	written uint64
 	max     int
 }
@@ -22,13 +43,13 @@ type logBuffer struct {
 func newLogBuffer(max int) *logBuffer { return &logBuffer{max: max} }
 
 func (b *logBuffer) Write(p []byte) (int, error) {
-	line := strings.TrimSpace(string(p))
-	if line == "" {
+	raw := strings.TrimSpace(string(p))
+	if raw == "" {
 		return len(p), nil
 	}
 	b.mu.Lock()
-	b.lines = append(b.lines, line)
 	b.written++
+	b.lines = append(b.lines, &logEntry{seq: b.written, raw: raw})
 	if len(b.lines) > b.max {
 		b.lines = b.lines[len(b.lines)-b.max:]
 	}
@@ -38,13 +59,17 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 
 func (b *logBuffer) Sync() error { return nil }
 
-// Snapshot 返回缓冲副本和首行对应的绝对序号，保证同一行内容重复出现时也能唯一定位
-func (b *logBuffer) Snapshot() ([]string, uint64) {
+// snapshotEntries 返回当前缓冲条目的只读副本和绝对序号范围
+func (b *logBuffer) snapshotEntries() ([]*logEntry, uint64, uint64) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	result := make([]string, len(b.lines))
-	copy(result, b.lines)
-	return result, b.written - uint64(len(b.lines))
+	lines := make([]*logEntry, len(b.lines))
+	copy(lines, b.lines)
+	first := b.written + 1
+	if len(lines) > 0 {
+		first = lines[0].seq
+	}
+	return lines, first, b.written
 }
 
 var recentLogs = newLogBuffer(300)
@@ -102,6 +127,8 @@ type QueryResult struct {
 	Lines    []Line
 	Total    int
 	Filtered int
+	FirstSeq uint64
+	LastSeq  uint64
 }
 
 type Line struct {
@@ -120,31 +147,35 @@ type Field struct {
 }
 
 func Query(keyword, minimumLevel string) QueryResult {
-	raw, firstSeq := recentLogs.Snapshot()
-	result := QueryResult{Total: len(raw), Lines: make([]Line, 0, len(raw))}
+	return QueryAfter(keyword, minimumLevel, 0)
+}
+
+// QueryAfter 只返回序号大于 afterSeq 的匹配日志，同时给出整个缓冲区的计数和序号范围
+func QueryAfter(keyword, minimumLevel string, afterSeq uint64) QueryResult {
+	entries, firstSeq, lastSeq := recentLogs.snapshotEntries()
+	result := QueryResult{Total: len(entries), Lines: make([]Line, 0, len(entries)), FirstSeq: firstSeq, LastSeq: lastSeq}
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	minimum := zapcore.DebugLevel
 	if err := minimum.UnmarshalText([]byte(strings.ToLower(strings.TrimSpace(minimumLevel)))); err != nil {
 		minimum = zapcore.DebugLevel
 	}
-	for i, line := range raw {
-		var fields map[string]any
-		if err := logJSONAPI.UnmarshalFromString(line, &fields); err != nil {
+	for _, entry := range entries {
+		line, ok := entry.value()
+		if !ok {
 			continue
 		}
-		levelText, _ := fields["level"].(string)
 		var level zapcore.Level
-		if level.UnmarshalText([]byte(levelText)) != nil || level < minimum {
+		if level.UnmarshalText([]byte(strings.ToLower(line.Level))) != nil || level < minimum {
 			continue
 		}
-		formatted := formatLogLine(fields)
-		if keyword != "" && !strings.Contains(strings.ToLower(formatted.Text), keyword) {
+		if keyword != "" && !strings.Contains(strings.ToLower(line.Text), keyword) {
 			continue
 		}
-		formatted.Seq = firstSeq + uint64(i)
-		result.Lines = append(result.Lines, formatted)
+		result.Filtered++
+		if line.Seq > afterSeq {
+			result.Lines = append(result.Lines, line)
+		}
 	}
-	result.Filtered = len(result.Lines)
 	return result
 }
 

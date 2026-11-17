@@ -151,6 +151,7 @@ func (a *App) routes() http.Handler {
 			protected.Delete("/mcp-servers/{id}", a.handleMCPServerDelete)
 			protected.Get("/system", a.handleSystem)
 			protected.Get("/system/model-stats", a.handleModelStats)
+			protected.Get("/system/logs", a.handleLogs)
 			protected.Get("/system/logs/stream", a.handleLogStream)
 			protected.Get("/system/logs/download", a.handleLogDownload)
 		})

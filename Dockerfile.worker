@@ -29,6 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential xz-utils unzip zip procps htop vim-tiny \
     python3 python3-venv python3-pip python3-dev \
     fd-find bat file tree p7zip-full poppler-utils xvfb \
+    libglib2.0-0t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libdbus-1-3 \
+    libcups2t64 libxkbcommon0 libasound2t64 libpango-1.0-0 libcairo2 \
+    libgbm1 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libatspi2.0-0t64 libx11-6 libxcb1 libxext6 libxi6 fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # 固定 Node 24.22.2 与 Bun 1.4.4；Bun 优先，Node 继续兼容现有项目

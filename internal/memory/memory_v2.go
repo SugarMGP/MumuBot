@@ -448,24 +448,29 @@ func mutateMemory(tx *gorm.DB, change MemoryChange) (MemoryChangeResult, error) 
 	if change.ItemID == 0 {
 		return MemoryChangeResult{}, fmt.Errorf("记忆编号不能为空")
 	}
-	if change.ExpectedVersion == 0 {
-		return MemoryChangeResult{}, fmt.Errorf("修改记忆前必须读取并提交当前版本")
-	}
 	var item KnowledgeRecord
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", change.ItemID).Take(&item).Error; err != nil {
 		return MemoryChangeResult{}, err
 	}
-	if item.Version != change.ExpectedVersion {
+	if change.Action == "archive" && item.Status == "archived" {
+		return MemoryChangeResult{ItemID: item.ID, Action: "archive", Version: item.Version, Status: item.Status}, nil
+	}
+	if item.Status != "active" {
+		return MemoryChangeResult{}, ErrMemoryNotEditable
+	}
+	if change.Action == "update" {
+		if change.ExpectedVersion == 0 {
+			return MemoryChangeResult{}, fmt.Errorf("修改记忆前必须读取并提交当前版本")
+		}
+		if !item.Pinned && item.ForgetAt != nil && !time.Now().Before(*item.ForgetAt) {
+			return MemoryChangeResult{}, ErrMemoryNotEditable
+		}
+	}
+	if change.ExpectedVersion != 0 && item.Version != change.ExpectedVersion {
 		return MemoryChangeResult{}, ErrMemoryVersion
 	}
 	before := item
 	item.Version++
-	if item.Status != "active" {
-		return MemoryChangeResult{}, ErrMemoryNotEditable
-	}
-	if change.Action == "update" && !item.Pinned && item.ForgetAt != nil && !time.Now().Before(*item.ForgetAt) {
-		return MemoryChangeResult{}, ErrMemoryNotEditable
-	}
 	switch change.Action {
 	case "update":
 		if subjectType := strings.ToLower(strings.TrimSpace(change.SubjectType)); subjectType != "" {

@@ -40,7 +40,7 @@ type ManageMemoryInputV2 struct {
 
 type MemoryChangeInput struct {
 	Action        string `json:"action" jsonschema:"description=create/update/archive；归档后不可恢复"`
-	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=update/archive 必填，须先在本轮 readMemory；create 省略"`
+	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=update/archive 必填；update 须先在本轮 readMemory，archive 可直接按 ID；create 省略"`
 	SubjectType   string `json:"subject_type,omitempty" jsonschema:"description=create 必填；update 可纠正主体类型，省略沿用；group/user/self/object"`
 	SubjectTarget string `json:"subject_target,omitempty" jsonschema:"description=create 必填；update 可纠正归属，改变主体类型时同时填写；user 填 QQ，group 填群号，object 填名称，self 固定 self"`
 	MemoryType    string `json:"memory_type,omitempty" jsonschema:"description=create 必填；update 可纠正类型，省略沿用；profile 是稳定身份和偏好，experience 是具体经历"`
@@ -83,7 +83,7 @@ type SearchHistoryInputV2 struct {
 type ReadHistoryInputV2 struct {
 	ConversationKind string `json:"conversation_kind,omitempty" jsonschema:"description=要读取的会话种类；省略默认当前会话"`
 	TargetID         int64  `json:"target_id,omitempty" jsonschema:"description=要读取的群号或好友 QQ；省略默认当前会话"`
-	AroundMessageID  int64  `json:"around_message_id,omitempty" jsonschema:"description=OneBot 消息 ID；与 topic_id 二选一"`
+	AroundMessageID  int64  `json:"around_message_id,omitempty" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）；与 topic_id 二选一"`
 	TopicID          uint   `json:"topic_id,omitempty" jsonschema:"description=话题编号；与 around_message_id 二选一"`
 	Before           int    `json:"before,omitempty" jsonschema:"description=向前读取条数，默认5，最大15"`
 	After            int    `json:"after,omitempty" jsonschema:"description=向后读取条数，默认5，最大15"`
@@ -186,12 +186,19 @@ func manageMemoryV2(ctx context.Context, input *ManageMemoryInputV2) (any, error
 			SubjectTarget: raw.SubjectTarget, MemoryType: raw.MemoryType, Label: raw.Label,
 			Content: raw.Content, Pinned: raw.Pinned, Reason: raw.Reason,
 		}
-		if raw.Action == "update" || raw.Action == "archive" {
+		if raw.Action == "update" {
 			version, ok := tc.MemoryVersion(raw.ItemID)
 			if !ok {
+				if _, readErr := tc.MemoryMgr.ReadMemory(ctx, raw.ItemID); readErr != nil {
+					return nil, fmt.Errorf("记忆 %d 无法更新：%w", raw.ItemID, readErr)
+				}
 				return nil, fmt.Errorf("修改记忆 %d 前必须先用 readMemory 完整读取", raw.ItemID)
 			}
 			change.ExpectedVersion = version
+		} else if raw.Action == "archive" {
+			if version, ok := tc.MemoryVersion(raw.ItemID); ok {
+				change.ExpectedVersion = version
+			}
 		}
 		changes = append(changes, change)
 	}
@@ -473,7 +480,7 @@ func NewReadMemoryToolV2() (tool.InvokableTool, error) {
 }
 
 func NewManageMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆（user 存人物偏好/经历，group 存群文化，object 存查明的新梗/事物/项目/复杂结论，self 存自身认知与经验），全部成功或全部回滚。update/archive 必须先在本轮 readMemory；搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
+	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆（user 存人物偏好/经历，group 存群文化，object 存查明的新梗/事物/项目/复杂结论，self 存自身认知与经验），全部成功或全部回滚。update 必须先在本轮 readMemory；archive 可直接按 ID，若本轮读过同一条则同时校验版本。搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
 }
 
 func NewSearchTopicsTool() (tool.InvokableTool, error) {

@@ -467,13 +467,14 @@ export interface LogLine {
   level: string;
   message: string;
   fields: LogField[];
-  text: string;
 }
 
 export interface LogSnapshot {
   lines: LogLine[];
   total: number;
   filtered: number;
+  first_seq: number;
+  last_seq: number;
 }
 
 export interface WarningPayload {

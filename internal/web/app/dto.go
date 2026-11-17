@@ -333,11 +333,12 @@ type logLineDTO struct {
 	Level   string        `json:"level"`
 	Message string        `json:"message"`
 	Fields  []logFieldDTO `json:"fields"`
-	Text    string        `json:"text"`
 }
 
 type logSnapshotDTO struct {
 	Lines    []logLineDTO `json:"lines"`
 	Total    int          `json:"total"`
 	Filtered int          `json:"filtered"`
+	FirstSeq uint64       `json:"first_seq"`
+	LastSeq  uint64       `json:"last_seq"`
 }

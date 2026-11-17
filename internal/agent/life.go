@@ -337,7 +337,11 @@ func (a *Agent) newLifeSummarizer(ctx context.Context, generation *Generation) (
 // saveLifeContext 在同一事务里推进摘要边界、可见序号和代头，成功后再同步内存
 func (a *Agent) saveLifeContext(ctx context.Context, session *Session, before, after adk.TypedChatModelAgentState[*schema.AgenticMessage], head []*schema.AgenticMessage) error {
 	ids := transcriptIDs(before.Messages)
-	through := uint(0)
+	row, err := a.memory.GetLifeState(ctx)
+	if err != nil {
+		return err
+	}
+	through := row.ContextThroughID
 	for _, id := range ids {
 		if id > through {
 			through = id

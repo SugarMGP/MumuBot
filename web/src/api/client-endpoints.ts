@@ -11,6 +11,7 @@ import type {
   LifeData,
   LifeScheduleInput,
   LifeScheduleUpdate,
+  LogSnapshot,
   MemoryDetail,
   MemoryItem,
   Member,
@@ -230,6 +231,10 @@ export const systemApi = {
   stats: (range: string) =>
     apiGet<ModelStatsData>(
       `/api/v1/system/model-stats${buildQuery({ range })}`,
+    ),
+  logs: (keyword: string, level: string) =>
+    apiGet<LogSnapshot>(
+      `/api/v1/system/logs${buildQuery({ keyword, level })}`,
     ),
   logDownloadUrl: (keyword: string, level: string) =>
     `/api/v1/system/logs/download${buildQuery({ keyword, level })}`,

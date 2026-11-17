@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mumu-bot/internal/memory"
 	"strings"
 	"time"
-
-	"mumu-bot/internal/memory"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -21,7 +20,7 @@ type SpeakInput struct {
 	// Content 你想说的话
 	Content string `json:"content" jsonschema:"description=说话内容"`
 	// ReplyTo 要回复的 OneBot 消息 ID（可选）
-	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的数字）"`
+	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的完整整数，可为负数）"`
 	// Mentions 要提及的用户 QQ 号列表（可选）
 	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
 }
@@ -29,7 +28,7 @@ type SpeakInput struct {
 // PrivateSpeakInput 私聊发言的输入参数
 type PrivateSpeakInput struct {
 	Content string `json:"content" jsonschema:"description=说话内容"`
-	ReplyTo int64  `json:"reply_to,omitempty" jsonschema:"description=要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的数字）"`
+	ReplyTo int64  `json:"reply_to,omitempty" jsonschema:"description=要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的完整整数，可为负数）"`
 }
 
 // SpeakOutput 发言的输出
@@ -74,7 +73,7 @@ func speakContent(ctx context.Context, content string, replyTo int64, inputMenti
 	return &SpeakOutput{
 		Success:   true,
 		MessageID: messageID,
-		Message:   "发言成功",
+		Message:   fmt.Sprintf("发言成功：\"%s\"，请注意不要重复发言", content),
 	}, nil
 }
 
@@ -96,7 +95,7 @@ func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutp
 func NewSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在群里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
+		"在群里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 原样填进 reply_to，保留负号（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
 		speakFunc,
 	)
 }
@@ -105,7 +104,7 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 func NewPrivateSpeakTool() (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"speak",
-		"在私聊里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 填进 reply_to。",
+		"在私聊里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 原样填进 reply_to，保留负号。",
 		privateSpeakFunc,
 	)
 }
@@ -213,7 +212,7 @@ func NewPrivatePokeTool() (tool.InvokableTool, error) {
 
 // ReactToMessageInput 对消息贴表情的输入参数
 type ReactToMessageInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID"`
+	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）"`
 	// Reaction 要使用的语义表情
 	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
 }
@@ -282,7 +281,7 @@ func NewReactToMessageTool() (tool.InvokableTool, error) {
 
 // RecallMessageInput 撤回消息的输入参数
 type RecallMessageInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID"`
+	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）"`
 }
 
 // RecallMessageOutput 撤回消息的输出

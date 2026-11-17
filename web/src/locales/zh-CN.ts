@@ -796,6 +796,8 @@ const zhCN = {
       },
       format: "格式化",
       download: "下载当前日志",
+      expandField: "展开全文",
+      collapseField: "收起",
       filtered: "筛选后 {{count}} 条",
       buffer: "缓冲区 {{count}} / 300 条",
       empty: "当前筛选条件下暂无日志。",

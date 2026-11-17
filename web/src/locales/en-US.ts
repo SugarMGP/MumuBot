@@ -814,6 +814,8 @@ const enUS: typeof zhCN = {
       },
       format: "Formatted",
       download: "Download logs",
+      expandField: "Show full text",
+      collapseField: "Collapse",
       filtered: "{{count}} filtered",
       buffer: "Buffer {{count}} / 300",
       empty: "No logs match the current filters.",

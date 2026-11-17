@@ -303,6 +303,26 @@ func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage,
 	}
 }
 
+// EstimatedRequestTokens 用最近一次真实用量加新增输入校准容量检查
+func (s *Session) EstimatedRequestTokens(messages []*schema.AgenticMessage, tools []*schema.ToolInfo) int {
+	estimated := requestTokens(messages, tools)
+	s.mu.Lock()
+	base := s.tokenBase
+	s.mu.Unlock()
+	if base == nil || base.total <= 0 {
+		return estimated
+	}
+	baseID := transcriptEntryID(base.message)
+	if baseID > 0 {
+		for index, message := range messages {
+			if transcriptEntryID(message) == baseID {
+				return max(estimated, base.total+requestTokens(messages[index+1:], nil))
+			}
+		}
+	}
+	return max(base.total, estimated)
+}
+
 // textScale 返回当前会话校准后的文本估算比例
 func (s *Session) textScale() float64 {
 	s.mu.Lock()

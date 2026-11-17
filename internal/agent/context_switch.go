@@ -50,29 +50,6 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 		return release, nil, err
 	}
 	ctx = withRunState(ctx, state)
-	for _, role := range []string{"qq", "life", "worker"} {
-		if windows[role] <= 0 {
-			continue
-		}
-		targets, listErr := capacityTargets(ctx, a.memory, role)
-		if listErr != nil {
-			return release, nil, listErr
-		}
-		for _, target := range targets {
-			locked = append(locked, a.sessions.get(target.ConversationKind, target.TargetID))
-		}
-	}
-	// 多场合切换按固定顺序拿锁，等待当前回合结束后才取模型快照
-	sort.Slice(locked, func(i, j int) bool {
-		return sessionKey(locked[i].kind, locked[i].targetID) < sessionKey(locked[j].kind, locked[j].targetID)
-	})
-	for _, session := range locked {
-		if err := ctx.Err(); err != nil {
-			return release, nil, err
-		}
-		session.maintenanceMu.Lock()
-		acquired++
-	}
 	generation = a.acquireGeneration()
 	available := generation
 	if available == nil {
@@ -86,18 +63,51 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 		}
 		available = &Generation{groupTools: group, privateTools: private, lifeTools: life, workerTools: worker}
 	}
+	// 先只读预筛达到新窗口阈值的会话；无关会话不抢维护锁，也不被正在运行的长回合拖住
+	candidates := make([]*Session, 0)
+	seen := map[string]bool{}
+	for _, role := range []string{"qq", "life", "worker"} {
+		window := windows[role]
+		if window <= 0 {
+			continue
+		}
+		targets, listErr := capacityTargets(ctx, a.memory, role)
+		if listErr != nil {
+			return release, nil, listErr
+		}
+		for _, target := range targets {
+			session := a.sessions.get(target.ConversationKind, target.TargetID)
+			key := sessionKey(session.kind, session.targetID)
+			if seen[key] {
+				continue
+			}
+			_, chatTools := capacityRoleTools(available, session.kind)
+			previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: window}})
+			messages, previewErr := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
+			if previewErr != nil {
+				return release, nil, previewErr
+			}
+			if session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) < capacityTrigger(window, state.config.Compactor.TriggerRatio) {
+				continue
+			}
+			seen[key] = true
+			candidates = append(candidates, session)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return sessionKey(candidates[i].kind, candidates[i].targetID) < sessionKey(candidates[j].kind, candidates[j].targetID)
+	})
+	for _, session := range candidates {
+		if err := ctx.Err(); err != nil {
+			return release, nil, err
+		}
+		session.maintenanceMu.Lock()
+		locked = append(locked, session)
+		acquired++
+	}
 	for _, session := range locked {
 		role, chatTools := capacityRoleTools(available, session.kind)
 		window := windows[role]
-		previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: window}})
-		messages, previewErr := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
-		if previewErr != nil {
-			return release, affected, previewErr
-		}
-		infos := modelToolInfos(ctx, chatTools)
-		if requestTokens(messages, infos) < int(float64(window)*state.config.Compactor.TriggerRatio) {
-			continue
-		}
 		key := sessionKey(session.kind, session.targetID)
 		if generation == nil {
 			afterID := uint(0)
@@ -118,59 +128,77 @@ func (a *Agent) prepareContextWindows(ctx context.Context, windows map[string]in
 					afterID = max(afterID, row.ContextStartID-1)
 				}
 			}
-			if err := a.restoreTranscriptSession(session.kind, session.targetID, afterID); err != nil {
-				return release, []string{key}, err
-			}
-			messages, err = previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
-			if err != nil {
-				return release, []string{key}, err
+			if restoreErr := a.restoreTranscriptSession(session.kind, session.targetID, afterID); restoreErr != nil {
+				return release, []string{key}, restoreErr
 			}
 		}
-		var candidate *compactionCandidate
-		if role == "qq" {
-			candidate = session.BuildCompactionCandidate(window, state.config.Compactor.RecentTailRatio)
-			if candidate == nil {
-				continue
+		// shortcut: 单次切换最多整理四段，异常候选不至于无限循环；确实更大的历史再改为按窗口收敛
+		for pass := 0; pass < 4; pass++ {
+			previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: window}})
+			messages, previewErr := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
+			if previewErr != nil {
+				return release, []string{key}, previewErr
 			}
-		} else {
-			messages = contextSummaryPrefix(session, messages)
-			if len(messages) == 0 {
-				continue
+			if session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) < capacityTrigger(window, state.config.Compactor.TriggerRatio) {
+				break
 			}
-		}
-		selected := available.forKind(session.kind)
-		if selected.model == nil {
-			selection, loadErr := a.modelStore.Selection(ctx)
-			if loadErr != nil {
-				return release, []string{key}, loadErr
+			var candidate *compactionCandidate
+			if role == "qq" {
+				candidate = session.BuildCompactionCandidate(window, state.config.Compactor.RecentTailRatio)
+				if candidate == nil {
+					break
+				}
+			} else {
+				messages = contextSummaryPrefix(session, messages)
+				if len(messages) == 0 {
+					break
+				}
 			}
-			selected, err = a.loadModel(ctx, selection.ID(role))
-			if err != nil {
-				return release, []string{key}, err
+			selected := available.forKind(session.kind)
+			if selected.model == nil {
+				selection, loadErr := a.modelStore.Selection(ctx)
+				if loadErr != nil {
+					return release, []string{key}, loadErr
+				}
+				selected, loadErr = a.loadModel(ctx, selection.ID(role))
+				if loadErr != nil {
+					return release, []string{key}, loadErr
+				}
 			}
-		}
-		// 压缩使用原模型，但尾部与新代摘要按目标窗口计算
-		selected.contextWindow = window
-		compactGeneration := &Generation{roleModel: selected, lifeModel: selected, workerModel: selected}
-		compactCtx := withGeneration(ctx, compactGeneration)
-		if err := a.compactForWindow(compactCtx, session, candidate, messages); err != nil {
-			return release, []string{key}, fmt.Errorf("整理 %s 以切换模型失败: %w", key, err)
+			// 压缩使用原模型，但尾部与新代摘要按目标窗口计算
+			selected.contextWindow = window
+			compactGeneration := &Generation{roleModel: selected, lifeModel: selected, workerModel: selected}
+			compactCtx := withGeneration(ctx, compactGeneration)
+			if compactErr := a.compactForWindow(compactCtx, session, candidate, messages); compactErr != nil {
+				return release, []string{key}, fmt.Errorf("整理 %s 以切换模型失败: %w", key, compactErr)
+			}
+			if role != "qq" {
+				break
+			}
 		}
 	}
-	// 整理其它会话时仍会接收新输入，保存前统一复查一次
+	// 整理其它会话时仍会接收新输入，保存前只复查本次锁住的会话
 	for _, session := range locked {
 		role, chatTools := capacityRoleTools(available, session.kind)
 		window := windows[role]
 		previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: window}})
-		messages, err := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
-		if err != nil {
-			return release, affected, err
+		messages, previewErr := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
+		if previewErr != nil {
+			return release, affected, previewErr
 		}
-		if requestTokens(messages, modelToolInfos(ctx, chatTools)) > window {
+		if session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) > window {
 			affected = append(affected, sessionKey(session.kind, session.targetID))
 		}
 	}
 	return release, affected, nil
+}
+
+func capacityTrigger(window int, ratio float64) int {
+	trigger := int(float64(window) * ratio)
+	if trigger <= 0 || trigger > window {
+		return window
+	}
+	return trigger
 }
 
 func capacityRoleTools(generation *Generation, kind string) (string, []tool.BaseTool) {
