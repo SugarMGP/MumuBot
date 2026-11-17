@@ -76,6 +76,9 @@ type Session struct {
 	lastTopicHintTurn        uint64
 	lastActivityAt           time.Time
 	maintenanceMu            sync.Mutex
+	switching                bool
+	modelRequestSeq          uint64
+	modelCancel              context.CancelCauseFunc
 	contextStartID           uint
 	idleDoneForActivity      bool
 	idleCancel               context.CancelFunc

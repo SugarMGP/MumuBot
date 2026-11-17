@@ -33,6 +33,10 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 	}
 	task := "react"
 	if tc := tools.GetToolContext(ctx); tc != nil {
+		if session, ok := tc.Session.(*Session); ok {
+			ctx = llm.WithRequestTracker(ctx, session.trackModelRequest)
+			defer session.finishModelRequest(nil)
+		}
 		if generation != nil {
 			modelName = generation.forKind(tc.ConversationKind).modelName
 		}
@@ -95,6 +99,9 @@ func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *ad
 	sort.SliceStable(pending, func(i, j int) bool { return pending[i].Order < pending[j].Order })
 	if err := h.captureToolResults(ctx, state, tc); err != nil {
 		return ctx, state, err
+	}
+	if session, ok := tc.Session.(*Session); ok && session.switchPending() {
+		return ctx, state, errModelSwitchPending
 	}
 	// 睡眠工具已经成功落库：工具回执已绑定行号，正常结束这一轮，不再请求模型
 	if tc.EndAfterSleep {

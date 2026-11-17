@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,10 @@ import (
 )
 
 func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
+	a.respondModels(w, r, nil)
+}
+
+func (a *App) respondModels(w http.ResponseWriter, r *http.Request, warning *warningPayload) {
 	profiles, err := a.modelStore.List(r.Context())
 	if err != nil {
 		a.failFromError(w, r, err)
@@ -34,7 +39,7 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 		Selection:        selection,
 		Items:            profiles,
 		SecretConfigured: secrets.Configured(),
-	}, nil)
+	}, warning)
 }
 
 type modelInput struct {
@@ -61,16 +66,16 @@ func (input modelInput) profile(id uint) (modelprofiles.Profile, error) {
 }
 
 // prepareModelCapacity 在保存前自动整理超限历史，并把会话锁保留到运行态切换完成
-func (a *App) prepareModelCapacity(ctx context.Context, targets map[string]agent.ModelTarget) (func(), []string, bool) {
+func (a *App) prepareModelCapacity(ctx context.Context, targets map[string]agent.ModelTarget) (func(), *agent.ModelSwitchReport, bool) {
 	if len(targets) == 0 {
 		return func() {}, nil, true
 	}
 	currentAgent := a.currentAgent()
 	var release func()
-	var affected []string
+	var report *agent.ModelSwitchReport
 	var err error
 	if currentAgent != nil && currentAgent.Ready() {
-		release, affected, err = currentAgent.PrepareModelSwitch(ctx, targets)
+		release, report, err = currentAgent.PrepareModelSwitch(ctx, targets)
 	} else {
 		var mcpManager *mcp.Manager
 		if a.mcpStore != nil {
@@ -83,13 +88,13 @@ func (a *App) prepareModelCapacity(ctx context.Context, targets map[string]agent
 				defer mcpManager.Close()
 			}
 		}
-		release, affected, err = agent.PrepareModelSwitchFor(ctx, a.memMgr, a.modelStore, targets, mcpManager)
+		release, report, err = agent.PrepareModelSwitchFor(ctx, a.memMgr, a.modelStore, targets, mcpManager)
 	}
 	if err != nil {
 		zap.L().Warn("为模型切换整理上下文失败", zap.Error(err))
-		return release, affected, false
+		return release, report, false
 	}
-	return release, affected, true
+	return release, report, true
 }
 
 func (a *App) handleModelCreate(w http.ResponseWriter, r *http.Request) {
@@ -154,23 +159,33 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targets := make(map[string]agent.ModelTarget)
-	for _, role := range []string{"qq", "life", "worker"} {
-		if selection.ID(role) == id {
-			targets[role] = agent.ModelTarget{Provider: row.Provider, ContextWindow: row.ContextWindow, CheckCapacity: row.ContextWindow < current.ContextWindow}
+	if selection.Uses(id) {
+		target, err := a.modelSwitchTarget(current, row, strings.TrimSpace(body.APIKey))
+		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+		for _, role := range []string{"qq", "life", "worker"} {
+			if selection.ID(role) == id {
+				targets[role] = target
+			}
 		}
 	}
-	release, affected, ok := a.prepareModelCapacity(r.Context(), targets)
+	release, report, ok := a.prepareModelCapacity(r.Context(), targets)
 	defer release()
-	if !ok || len(affected) > 0 {
-		respondError(w, http.StatusBadRequest, "model_switch_context_failed", "", map[string]any{"sessions": affected})
+	if !ok || (report != nil && len(report.Sessions) > 0) {
+		a.failModelSwitch(w, report)
 		return
 	}
 	updated, err := a.modelStore.Update(r.Context(), row, body.APIKey)
 	if err != nil {
-		a.failFromError(w, r, err)
+		a.failModelSave(w, r, err, report)
 		return
 	}
 	var warning *warningPayload
+	if report != nil && report.Fallback {
+		warning = &warningPayload{Code: "model_switch_fallback"}
+	}
 	if selection.Uses(updated.ID) {
 		if agent := a.currentAgent(); agent != nil {
 			if err := agent.Reload(); err != nil {
@@ -178,6 +193,9 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 				warning = &warningPayload{Code: "runtime_reload_failed"}
 			}
 		}
+	}
+	if report != nil && (warning == nil || warning.Code != "runtime_reload_failed") {
+		report.Applied = true
 	}
 	respondData(w, http.StatusOK, updated, warning)
 }
@@ -238,17 +256,22 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 			a.failFromError(w, r, err)
 			return
 		}
-		targets[role] = agent.ModelTarget{Provider: target.Provider, ContextWindow: target.ContextWindow, CheckCapacity: target.ContextWindow < current.ContextWindow}
+		prepared, err := a.modelSwitchTarget(current, target, "")
+		if err != nil {
+			a.failFromError(w, r, err)
+			return
+		}
+		targets[role] = prepared
 	}
-	release, affected, ok := a.prepareModelCapacity(r.Context(), targets)
+	release, report, ok := a.prepareModelCapacity(r.Context(), targets)
 	defer release()
-	if !ok || len(affected) > 0 {
-		respondError(w, http.StatusBadRequest, "model_switch_context_failed", "", map[string]any{"sessions": affected})
+	if !ok || (report != nil && len(report.Sessions) > 0) {
+		a.failModelSwitch(w, report)
 		return
 	}
 	saved, err := a.modelStore.Select(r.Context(), body)
 	if err != nil {
-		a.failFromError(w, r, err)
+		a.failModelSave(w, r, err, report)
 		return
 	}
 	if agent := a.currentAgent(); agent != nil {
@@ -265,11 +288,18 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 				zap.L().Error("回滚场合模型失败", zap.Error(rollbackErr))
 			}
 			zap.L().Warn("场合模型切换失败", zap.Error(err))
-			respondError(w, http.StatusBadRequest, "model_activate_failed", "", nil)
+			respondError(w, http.StatusBadRequest, "model_activate_failed", "", map[string]any{"compacted": report != nil && report.Compacted})
 			return
 		}
 	}
-	a.handleModels(w, r)
+	var warning *warningPayload
+	if report != nil && report.Fallback {
+		warning = &warningPayload{Code: "model_switch_fallback"}
+	}
+	if report != nil {
+		report.Applied = true
+	}
+	a.respondModels(w, r, warning)
 }
 
 func (a *App) handleModelTest(w http.ResponseWriter, r *http.Request) {
@@ -305,4 +335,60 @@ func (a *App) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondData(w, http.StatusOK, map[string]bool{"ok": true}, nil)
+}
+
+func (a *App) modelSwitchTarget(current, target modelprofiles.Profile, apiKey string) (agent.ModelTarget, error) {
+	oldKey, keyErr := a.modelStore.DecryptKey(current)
+	if apiKey == "" {
+		if target.ID == current.ID {
+			if keyErr != nil {
+				return agent.ModelTarget{}, keyErr
+			}
+			apiKey = oldKey
+		} else {
+			var err error
+			apiKey, err = a.modelStore.DecryptKey(target)
+			if err != nil {
+				return agent.ModelTarget{}, err
+			}
+		}
+	}
+	return agent.ModelTarget{Profile: target, APIKey: apiKey, CheckCapacity: target.ContextWindow < current.ContextWindow,
+		ConnectionChanged: target.Provider != current.Provider || target.BaseURL != current.BaseURL || target.ModelName != current.ModelName,
+		KeyChanged:        keyErr != nil || oldKey != apiKey}, nil
+}
+
+func (a *App) failModelSwitch(w http.ResponseWriter, report *agent.ModelSwitchReport) {
+	code := "model_switch_context_failed"
+	if report != nil {
+		switch report.Stage {
+		case "target":
+			code = "model_switch_target_failed"
+		case "window":
+			code = "model_switch_window_failed"
+		case "storage":
+			code = "model_switch_storage_failed"
+		case "busy":
+			code = "model_switch_busy"
+		}
+	}
+	var details map[string]any
+	if report != nil {
+		details = map[string]any{"sessions": report.Sessions, "stage": report.Stage, "compacted": report.Compacted, "fallback": report.Fallback}
+	}
+	respondError(w, http.StatusBadRequest, code, "", details)
+}
+
+func (a *App) failModelSave(w http.ResponseWriter, r *http.Request, err error, report *agent.ModelSwitchReport) {
+	if report == nil || !report.Compacted {
+		a.failFromError(w, r, err)
+		return
+	}
+	if errors.Is(err, modelprofiles.ErrVersionConflict) {
+		respondError(w, http.StatusConflict, "version_conflict", "", map[string]any{"compacted": true})
+		return
+	}
+	zap.L().Warn("上下文已整理，模型配置保存失败", zap.Error(err))
+	report.Stage = "storage"
+	a.failModelSwitch(w, report)
 }

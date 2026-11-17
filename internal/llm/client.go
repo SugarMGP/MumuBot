@@ -50,11 +50,11 @@ func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	var requestTransport http.RoundTripper = transport
+	var handler http.RoundTripper = transport
 	if len(fields) > 0 {
-		requestTransport = &bodyOverrideTransport{base: transport, fields: fields}
+		handler = &bodyOverrideTransport{base: transport, fields: fields}
 	}
-	httpClient := &http.Client{Transport: requestTransport}
+	httpClient := &http.Client{Transport: &requestTransport{base: handler}}
 
 	if cfg.Provider == ProviderChatCompletions {
 		extra := map[string]any{}

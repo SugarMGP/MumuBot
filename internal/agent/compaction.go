@@ -43,8 +43,11 @@ type compactionStepBudget struct {
 }
 
 func (h *compactionStepBudget) BeforeModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
+	if err := checkSwitchInput(ctx, state.Messages, state.ToolInfos); err != nil {
+		return ctx, state, err
+	}
 	if h == nil || h.remaining == nil || *h.remaining <= 0 {
-		return ctx, state, fmt.Errorf("压缩步数预算已用尽")
+		return ctx, state, fmt.Errorf("压缩步数预算已用尽: %w", adk.ErrExceedMaxIterations)
 	}
 	*h.remaining--
 	return ctx, state, nil
@@ -141,6 +144,10 @@ func (a *Agent) runCompactionWithRepair(ctx context.Context, session *Session, c
 }
 
 func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *compactionCandidate, attempt int, remainingSteps *int, feedback string) error {
+	if switchAttemptFrom(ctx) == nil {
+		ctx = llm.WithRequestTracker(ctx, session.trackModelRequest)
+		defer session.finishModelRequest(nil)
+	}
 	cfg := configFor(ctx)
 	generation := generationFrom(ctx)
 	if cfg == nil || generation == nil || candidate == nil || len(candidate.Messages) == 0 {
@@ -233,8 +240,19 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	if checkpointDigest != "" {
 		messages = append(messages, schema.UserAgenticMessage("【压缩前已有摘要】\n"+checkpointDigest))
 	}
-	messages = append(messages, candidate.Messages...)
+	if switchState := switchAttemptFrom(ctx); switchState != nil && switchState.portable {
+		materials, err := switchMaterials(candidate.Messages)
+		if err != nil {
+			return err
+		}
+		messages = append(messages, materials...)
+	} else {
+		messages = append(messages, candidate.Messages...)
+	}
 	messages = append(messages, schema.UserAgenticMessage(instruction+"\n现在调用 finishCompaction。"))
+	if err := checkSwitchInput(ctx, messages, modelToolInfos(ctx, available)); err != nil {
+		return err
+	}
 	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: compactor})
 	iter := runner.Run(compactionCtx, messages)
 	for {
@@ -292,6 +310,9 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 			return &compactionInputError{Err: err}
 		}
 		return err
+	}
+	if attempt := switchAttemptFrom(ctx); attempt != nil {
+		attempt.report.Compacted = true
 	}
 	checkpoint, err := a.memory.GetCheckpoint(commitCtx, session.kind, session.targetID)
 	if err != nil {

@@ -54,6 +54,9 @@ func (a *Agent) thinkLife(targetID int64) {
 	session := a.sessions.get(memory.ConversationKindLife, targetID)
 	session.maintenanceMu.Lock()
 	defer session.maintenanceMu.Unlock()
+	if session.switchPending() {
+		return
+	}
 	generation := a.acquireGeneration()
 	if generation == nil {
 		failure = fmt.Errorf("模型未就绪")
@@ -105,6 +108,9 @@ func (a *Agent) thinkLife(targetID int64) {
 			return
 		}
 		if runErr := a.runAgent(ctx, lifeAgent, messages); runErr != nil {
+			if errors.Is(runErr, errModelSwitchPending) {
+				return
+			}
 			zap.L().Error("life 回合失败", zap.Error(runErr))
 			failure = runErr
 			return
@@ -299,14 +305,19 @@ func (a *Agent) newLifeSummarizer(ctx context.Context, generation *Generation) (
 		return nil, nil
 	}
 	var pendingHead []*schema.AgenticMessage
+	var inputBuilder summarization.TypedGenModelInputFunc[*schema.AgenticMessage]
+	if attempt := switchAttemptFrom(ctx); attempt != nil && attempt.portable {
+		inputBuilder = switchSummaryInput
+	}
 	return summarization.NewTyped(a.ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
 		Model:           generation.lifeModel.model,
 		Trigger:         &summarization.TriggerCondition{ContextTokens: triggerTokens},
 		UserInstruction: persona.Render(lifeSummaryInstruction, persona.IdentityFromConfig(cfg.Identity)),
+		GenModelInput:   inputBuilder,
 		Finalize: func(ctx context.Context, _ []*schema.AgenticMessage, summary *schema.AgenticMessage) ([]*schema.AgenticMessage, error) {
 			text := strings.TrimSpace(agenticMessageText(summary))
 			if text == "" {
-				return nil, fmt.Errorf("life 摘要正文为空，保留原上下文")
+				return nil, &compactionInputError{Err: fmt.Errorf("life 摘要正文为空，保留原上下文")}
 			}
 			head, err := buildLifeHead(ctx, a.memory.WithContext(ctx), a.lifeInstructionText(ctx))
 			if err != nil {
@@ -329,7 +340,9 @@ func (a *Agent) newLifeSummarizer(ctx context.Context, generation *Generation) (
 			}
 			head := pendingHead
 			pendingHead = nil
-			return a.saveLifeContext(ctx, session, before, after, head)
+			commitCtx, cancel := switchCommitContext(ctx)
+			defer cancel()
+			return a.saveLifeContext(commitCtx, session, before, after, head)
 		},
 	})
 }
@@ -358,6 +371,9 @@ func (a *Agent) saveLifeContext(ctx context.Context, session *Session, before, a
 	seqs, headIDs, candidates, err := a.memory.CommitLifeCheckpoint(ctx, payload, through, ids, heads)
 	if err != nil {
 		return err
+	}
+	if attempt := switchAttemptFrom(ctx); attempt != nil {
+		attempt.report.Compacted = true
 	}
 	a.releaseTranscriptCandidates(ctx, candidates)
 	session.ApplyVisibleSeqs(seqs)

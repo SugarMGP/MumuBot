@@ -9,6 +9,7 @@ import (
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/media"
+	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/tools"
 
 	"github.com/cloudwego/eino/adk"
@@ -150,11 +151,15 @@ func (a *Agent) loadModel(ctx context.Context, id uint) (roleModel, error) {
 	if err != nil {
 		return roleModel{}, err
 	}
+	return buildRoleModel(profile, apiKey)
+}
+
+func buildRoleModel(profile modelprofiles.Profile, apiKey string) (roleModel, error) {
 	client, err := llm.NewClient(llm.ModelConfig{Provider: profile.Provider, APIKey: apiKey, BaseURL: profile.BaseURL, Model: profile.ModelName, ReasoningEffort: profile.ReasoningEffort, ThinkingMode: profile.ThinkingMode, BodyOverride: profile.BodyOverride})
 	if err != nil {
 		return roleModel{}, err
 	}
-	return roleModel{provider: profile.Provider, model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: id, profileVersion: profile.Version}, nil
+	return roleModel{provider: profile.Provider, model: client, modelName: profile.ModelName, contextWindow: profile.ContextWindow, profileID: profile.ID, profileVersion: profile.Version}, nil
 }
 
 // newChatAgent 两种会话共用步数、错误处理与执行约束，工具清单各自独立

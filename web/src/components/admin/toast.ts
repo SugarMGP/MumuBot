@@ -18,6 +18,14 @@ export function toastError(message: string) {
 
 export function toastApiError(error: unknown) {
   if (error instanceof ApiError) {
+    if (error.code.startsWith("model_switch_") || error.details?.compacted === true) {
+      toast.error(translateError(error), {
+        description: error.details?.compacted === true
+          ? i18n.t("models.partialContext")
+          : undefined,
+      });
+      return;
+    }
     if (error.code === "model_context_too_small") {
       const sessions = error.details?.sessions;
       toast.error(i18n.t("errors.model_context_too_small"), {

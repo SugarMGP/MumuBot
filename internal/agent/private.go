@@ -53,6 +53,9 @@ func (a *Agent) thinkPrivate(targetID int64) {
 	session := a.sessions.get(memory.ConversationKindPrivate, targetID)
 	session.maintenanceMu.Lock()
 	defer session.maintenanceMu.Unlock()
+	if session.switchPending() {
+		return
+	}
 	generation := a.acquireGeneration()
 	if generation == nil {
 		return
@@ -95,6 +98,9 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		return
 	}
 	if runErr := a.runAgent(ctx, chatAgent, messages); runErr != nil {
+		if errors.Is(runErr, errModelSwitchPending) {
+			return
+		}
 		if isContextOverflowError(runErr) {
 			if a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
 				if tc != nil {

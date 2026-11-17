@@ -160,6 +160,9 @@ func (a *Agent) thinkGroup(groupID int64) {
 	session := a.sessions.get(memory.ConversationKindGroup, groupID)
 	session.maintenanceMu.Lock()
 	defer session.maintenanceMu.Unlock()
+	if session.switchPending() {
+		return
+	}
 	generation := a.acquireGeneration()
 	if generation == nil {
 		return
@@ -210,6 +213,9 @@ func (a *Agent) thinkGroup(groupID int64) {
 		return
 	}
 	if runErr := a.runAgent(ctx, chatAgent, messages); runErr != nil {
+		if errors.Is(runErr, errModelSwitchPending) {
+			return
+		}
 		if isContextOverflowError(runErr) {
 			if a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.passthroughModelInput, session) {
 				if tc != nil {
@@ -243,6 +249,9 @@ func (a *Agent) thinkGroup(groupID int64) {
 // finishSuccessfulThink 在一轮 think 完整结束后再判断压缩并推进维护计数
 func (a *Agent) finishSuccessfulThink(ctx context.Context, session *Session, tc *tools.ToolContext) {
 	session.ClearFailedBatch()
+	if session.switchPending() {
+		return
+	}
 	compacted := a.compactAfterThink(ctx, session)
 	if tc != nil {
 		session.CompleteTurn(tc.MemoryMaintained, tc.TopicMaintained || compacted)

@@ -649,6 +649,7 @@ const enUS: typeof zhCN = {
     selectionTitle: "Models by session",
     roles: { qq: "QQ chat", life: "Life", worker: "Worker" },
     selectionSaved: "Model selection updated",
+    partialContext: "Some context has been summarized, but the model switch is incomplete. Completed summaries are retained.",
     choose: "Choose a model profile",
     usage: "Used by",
     title: "Model profiles",
@@ -894,6 +895,10 @@ const enUS: typeof zhCN = {
     compaction_failed: "Compaction didn't finish. Try again later; see the runtime log for details.",
     model_context_too_small: "The context could not be compacted to fit the new window. The current model is unchanged. Check the model connection or choose a larger window.",
     model_switch_context_failed: "Context could not be prepared for the new protocol or window. The current model is unchanged. Check the model connection and runtime logs, then retry.",
+    model_switch_target_failed: "The new model could not summarize the context. The model has not switched. Check its connection and settings.",
+    model_switch_window_failed: "A complete history segment or existing summary does not fit the new window. The model has not switched. Choose a larger window.",
+    model_switch_storage_failed: "The saved context could not be confirmed. The model has not switched. Check the runtime logs before retrying.",
+    model_switch_busy: "The conversation is waiting for its current operation to finish. The model has not switched. Try again later.",
     model_activate_failed: "Model switch failed; the previous model is still active.",
     persona_content_invalid: "Complete all five documents and check their character limits.",
     preset_duplicate: "A preset with this name already exists.",
@@ -903,6 +908,7 @@ const enUS: typeof zhCN = {
     internal: "The operation did not complete. Please try again later.",
     unknown: "The operation did not complete. Please try again later.",
     warning: {
+      model_switch_fallback: "The new model summarized the context and the switch was applied.",
       mcp_partial_failure: "The extension config is saved, but one or more services failed to connect this time; see System status for details.",
       runtime_reload_failed:
         "Saved, but the runtime failed to apply it. The previous connection is still active; see the runtime logs for details.",

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"mumu-bot/internal/memory"
@@ -14,6 +15,9 @@ func (a *Agent) thinkWorker(workerID int64) {
 	session := a.sessions.get(memory.ConversationKindWorker, workerID)
 	session.maintenanceMu.Lock()
 	defer session.maintenanceMu.Unlock()
+	if session.switchPending() {
+		return
+	}
 	generation := a.acquireGeneration()
 	if generation == nil {
 		zap.L().Error("worker 无法开始运行", zap.String("session", fmt.Sprintf("worker:%d", workerID)), zap.String("error", "模型未就绪"))
@@ -88,6 +92,12 @@ func (a *Agent) thinkWorker(workerID int64) {
 			return
 		}
 		if runErr != nil {
+			if errors.Is(runErr, errModelSwitchPending) {
+				a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.workerModel.modelName)
+				a.finishWorkerRun(id, epoch)
+				cancel()
+				return
+			}
 			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, runErr)
 			a.finishWorkerRun(id, epoch)
 			cancel()

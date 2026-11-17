@@ -30,8 +30,13 @@ func (a *Agent) newWorkerSummarizer(ctx context.Context, generation *Generation)
 		return nil, nil
 	}
 	var pendingHead []*schema.AgenticMessage
+	var inputBuilder summarization.TypedGenModelInputFunc[*schema.AgenticMessage]
+	if attempt := switchAttemptFrom(ctx); attempt != nil && attempt.portable {
+		inputBuilder = switchSummaryInput
+	}
 	return summarization.NewTyped(a.ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
-		Model: generation.workerModel.model,
+		Model:         generation.workerModel.model,
+		GenModelInput: inputBuilder,
 		Trigger: &summarization.TriggerCondition{
 			ContextTokens: triggerTokens,
 		},
@@ -39,7 +44,7 @@ func (a *Agent) newWorkerSummarizer(ctx context.Context, generation *Generation)
 		Finalize: func(ctx context.Context, _ []*schema.AgenticMessage, summary *schema.AgenticMessage) ([]*schema.AgenticMessage, error) {
 			text := strings.TrimSpace(agenticMessageText(summary))
 			if text == "" {
-				return nil, fmt.Errorf("worker 摘要正文为空，保留原上下文")
+				return nil, &compactionInputError{Err: fmt.Errorf("worker 摘要正文为空，保留原上下文")}
 			}
 			tc := tools.GetToolContext(ctx)
 			head := previewSystemMessage(a.personaFor(ctx), memory.ConversationKindWorker, tc.TargetID)
@@ -59,7 +64,9 @@ func (a *Agent) newWorkerSummarizer(ctx context.Context, generation *Generation)
 			}
 			head := pendingHead
 			pendingHead = nil
-			return a.saveWorkerContext(ctx, uint(tc.TargetID), session, before, after, head)
+			commitCtx, cancel := switchCommitContext(ctx)
+			defer cancel()
+			return a.saveWorkerContext(commitCtx, uint(tc.TargetID), session, before, after, head)
 		},
 	})
 }
@@ -91,6 +98,9 @@ func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *S
 	seqs, headIDs, candidates, err := a.memory.CommitWorkerCheckpoint(ctx, workerID, json.RawMessage(payload), through, ids, heads)
 	if err != nil {
 		return err
+	}
+	if attempt := switchAttemptFrom(ctx); attempt != nil {
+		attempt.report.Compacted = true
 	}
 	session.ApplyVisibleSeqs(seqs)
 	session.ApplyCheckpoint(through)

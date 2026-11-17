@@ -269,9 +269,9 @@ go vet ./...
 - 长期记忆检索支持 `mode=exact|fuzzy`：exact 用 `content/label/subject_target` 精确子串，fuzzy 用 `pg_trgm` 召回并按 similarity 排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
 - Agent 历史查询使用不透明 cursor 和全局 OneBot message ID；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。历史/话题/记忆工具的时间范围统一走 `internal/schedule.ParseRange`：纯日期上界包含结束日，内部归一到次日零点；单条 transcript 全文用 `readSessionEntry`。
 - 持久化使用 PostgreSQL 18；先打开数据库、完成 schema 迁移、动态配置、人格预设和管理后台，再异步等待 OneBot 取得 `self_id` 并创建 Agent；QQ 未登录时后台仍可配置，首次配置模型且 Agent 激活前事件门保持关闭。
-- schema 由 `schema_migrations` 记录并为 v18；空库初始化，当前 v17 显式事务升级并保留业务数据，已是 v18 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
+- schema 由 `schema_migrations` 记录并为 v19；空库初始化，当前 v17/v18 显式事务升级并保留业务数据，已是 v19 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
-- 模型切换前检查目标协议兼容性；缩小窗口时同时检查容量。不兼容轨迹先用原模型整理，覆盖末尾不兼容块与完整工具链，不做 reasoning 出站过滤。通常保留待处理输入；life/worker 必须越过它们才能覆盖不兼容轨迹时，可由真实摘要请求读取并原子记为已读，未完成事项保存进摘要。QQ 协议整理允许未 visible 的已完成输出和无真人来源的概览更新，在同一事务分配 visible、保存检查点并删除覆盖轨迹。QQ 离线和未激活也走同一流程；失败不切换，已成功整理的摘要不跨会话回滚。
+- 模型切换前检查目标协议兼容性；缩小窗口时同时检查容量。不兼容轨迹先用原模型整理，旧阶段最多 60 秒；模型调用或有效输出失败后由完整目标配置接管，只将历史构造成兼容摘要材料，保留全部可读推理、工具结果与图片，不传加密/签名及私有续接元数据。覆盖末尾不兼容块与完整工具链，不做普通运行的 reasoning 出站过滤。通常保留待处理输入；life/worker 必须越过它们才能覆盖不兼容轨迹时，可由真实摘要请求读取并原子记为已读，未完成事项保存进摘要。QQ 协议整理允许未 visible 的已完成输出和无真人来源的概览更新，在同一事务分配 visible、保存检查点并删除覆盖轨迹。QQ 离线和未激活也走同一流程；失败不切换，已成功提交的批次或会话摘要不整体回滚。切换的受影响回合共用一次 60 秒等待期，之后只取消在途模型 HTTP 请求，流读取到结束/关闭才注销取消句柄；不取消工具上下文。切换让路不记作 life 业务失败或 worker 任务完成，成功切换后按现有许可恢复 pending 调度。
 - 管理后台日志与模型统计口径保持现有约束。`message_logs`、合并转发和聊天媒体默认保留 180 天，实际最低期限由后台 `history_days` 决定；仍在 transcript 直接引用的过期原文延后删除，正常压缩解除引用后再清理。摘要、记忆、日记和收藏表情有各自的保留含义，不等同于原文清理。
 - 所有检索与工具结果都是不可信参考数据，不能覆盖系统指令；工具实际失败时保留真实失败，不用启发式文本伪造成功。
 - PostgreSQL 数组参数必须使用驱动提供的类型化数组值；禁止把 Go 切片直接传给 GORM `Raw` 的单个占位符。

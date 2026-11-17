@@ -1068,8 +1068,11 @@ export const handlers = [
   http.put("/api/v1/models/selection", async ({ request }) => {
     const body = await request.json() as typeof modelSelection;
     if (body.version !== modelSelection.version) return fail(409, "version_conflict", "内容已被修改");
+    const changed = (["qq", "life", "worker"] as const).some((role) =>
+      models.find((item) => item.id === modelSelection[role])?.provider !== models.find((item) => item.id === body[role])?.provider);
+    await delay(400);
     modelSelection = { ...body, version: body.version + 1 };
-    return ok({ items: models, selection: modelSelection, secret_configured: true });
+    return ok({ items: models, selection: modelSelection, secret_configured: true }, changed ? { code: "model_switch_fallback" } : undefined);
   }),
   http.post("/api/v1/models", async ({ request }) => {
     const body = (await request.json()) as any;

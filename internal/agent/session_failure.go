@@ -56,6 +56,9 @@ func (s *Session) MarkFailedAfterRun(pending []*sessionUser, requestAttempted bo
 	if s == nil {
 		return
 	}
+	if s.switchPending() {
+		return
+	}
 	if requestAttempted {
 		s.mu.Lock()
 		order := s.requestActionableThrough

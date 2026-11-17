@@ -95,6 +95,13 @@ func messageTokensScaled(message *schema.AgenticMessage, scale float64) int {
 			total += 2000
 		case block.Reasoning != nil:
 			total += textTokens(block.Reasoning.Text)
+			if extension := block.Reasoning.OpenAIExtension; extension != nil {
+				for _, content := range extension.Content {
+					if content != nil {
+						total += textTokens(content.Text)
+					}
+				}
+			}
 		case block.FunctionToolCall != nil:
 			total += textTokens(block.FunctionToolCall.Name + block.FunctionToolCall.Arguments)
 		case block.FunctionToolResult != nil:

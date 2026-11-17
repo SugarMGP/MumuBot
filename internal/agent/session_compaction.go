@@ -83,7 +83,7 @@ func (s *Session) BuildCompactionCandidate(window int, tailRatio float64) *compa
 }
 
 // BuildProtocolCompaction 包含尚未作为输入读过的已完成输出，不保留不兼容尾部
-func (s *Session) BuildProtocolCompaction(provider string) (*compactionCandidate, error) {
+func (s *Session) BuildProtocolCompaction(target ModelTarget) (*compactionCandidate, error) {
 	s.mu.Lock()
 	entries := orderEntries(append([]sessionEntry(nil), s.seen...))
 	s.mu.Unlock()
@@ -95,7 +95,7 @@ func (s *Session) BuildProtocolCompaction(provider string) (*compactionCandidate
 			messages = append(messages, entry.msg)
 		}
 	}
-	prefix, err := protocolSummaryPrefix(messages, provider)
+	prefix, err := protocolSummaryPrefix(messages, target)
 	if err != nil || len(prefix) == 0 {
 		return nil, err
 	}
@@ -242,6 +242,9 @@ func (s *Session) CompactionCoolingDown(now time.Time) bool {
 func (s *Session) MarkCompactionFailure(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.switching {
+		return
+	}
 	s.compactionRetryAfter = now.Add(60 * time.Second)
 	s.compactionBeforeModel = true
 }
