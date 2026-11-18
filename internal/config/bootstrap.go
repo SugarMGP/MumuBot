@@ -27,17 +27,29 @@ var boot Bootstrap
 
 // LoadBootstrap 从环境变量读取启动配置
 func LoadBootstrap() (Bootstrap, error) {
+	serverPort, err := intEnv("MUMU_SERVER_PORT", 7468)
+	if err != nil {
+		return Bootstrap{}, err
+	}
+	reconnect, err := intEnv("MUMU_ONEBOT_RECONNECT_SECONDS", 5)
+	if err != nil {
+		return Bootstrap{}, err
+	}
+	debug, err := boolEnv("MUMU_DEBUG")
+	if err != nil {
+		return Bootstrap{}, err
+	}
 	b := Bootstrap{
 		DatabaseDSN:       strings.TrimSpace(os.Getenv("MUMU_DATABASE_DSN")),
 		WebAdminKey:       os.Getenv("MUMU_WEB_ADMIN_KEY"),
-		ServerPort:        intEnv("MUMU_SERVER_PORT", 7468),
+		ServerPort:        serverPort,
 		OneBotWSURL:       strings.TrimSpace(os.Getenv("MUMU_ONEBOT_WS_URL")),
 		OneBotToken:       os.Getenv("MUMU_ONEBOT_TOKEN"),
-		OneBotReconnect:   intEnv("MUMU_ONEBOT_RECONNECT_SECONDS", 5),
+		OneBotReconnect:   reconnect,
 		MediaDir:          strings.TrimSpace(os.Getenv("MUMU_MEDIA_DIR")),
 		StickerDir:        strings.TrimSpace(os.Getenv("MUMU_STICKER_DIR")),
 		LogLevel:          strings.TrimSpace(os.Getenv("MUMU_LOG_LEVEL")),
-		Debug:             boolEnv("MUMU_DEBUG"),
+		Debug:             debug,
 		SecretKey:         strings.TrimSpace(os.Getenv("MUMU_SECRET_KEY")),
 		WorkerExecutorURL: strings.TrimSpace(os.Getenv("MUMU_WORKER_EXECUTOR_URL")),
 	}
@@ -74,23 +86,26 @@ func Boot() Bootstrap {
 	return boot
 }
 
-func intEnv(name string, fallback int) int {
+func intEnv(name string, fallback int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("%s 必须是整数", name)
 	}
-	return value
+	return value, nil
 }
 
-func boolEnv(name string) bool {
+func boolEnv(name string) (bool, error) {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
-		return false
+		return false, nil
 	}
 	value, err := strconv.ParseBool(raw)
-	return err == nil && value
+	if err != nil {
+		return false, fmt.Errorf("%s 必须是布尔值", name)
+	}
+	return value, nil
 }

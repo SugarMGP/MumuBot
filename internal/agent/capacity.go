@@ -41,7 +41,7 @@ func capacityTargets(ctx context.Context, mem *memory.Manager, role string) ([]m
 	return targets, nil
 }
 
-// previewPersistedMessages 只读拼装持久工作集，不写代头、不写群说明、不触发压缩
+// previewPersistedMessages 只读拼装切换检查用的工作集；没有旧交互时返回空
 func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *persona.Persona, kind string, targetID int64) ([]*schema.AgenticMessage, error) {
 	checkpoint, err := mem.GetCheckpoint(ctx, kind, targetID)
 	if err != nil {
@@ -79,6 +79,9 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	visible, err := mem.VisibleTranscript(ctx, kind, targetID, afterVisible, afterID)
 	if err != nil {
 		return nil, err
+	}
+	if !hasSwitchHistory(visible) {
+		return nil, nil
 	}
 	pending, err := mem.PendingInputsAfter(ctx, kind, targetID, afterID)
 	if err != nil {
@@ -191,6 +194,16 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	return messages, nil
 }
 
+func hasSwitchHistory(entries []memory.TranscriptEntry) bool {
+	for _, entry := range entries {
+		switch entry.EntryKind {
+		case "user", "observation", "agent_message", "assistant", "tool":
+			return true
+		}
+	}
+	return false
+}
+
 func previewSystemMessage(p *persona.Persona, kind string, targetID int64) *schema.AgenticMessage {
 	system := schema.SystemAgenticMessage(p.SessionInstruction(kind, targetID))
 	system.Extra = map[string]any{"kind": kindSystemPrompt}
@@ -199,6 +212,9 @@ func previewSystemMessage(p *persona.Persona, kind string, targetID int64) *sche
 
 // switchContextCheck 共用硬窗口限制；提前整理线只适用于主动缩窗
 func (s *Session) switchContextCheck(messages []*schema.AgenticMessage, tools []*schema.ToolInfo, target ModelTarget, triggerRatio float64) (incompatible, needsCapacity bool, tokens int) {
+	if len(messages) == 0 {
+		return false, false, 0
+	}
 	tokens = s.estimateSwitchTokens(messages, tools, target)
 	return lastIncompatibleMessage(messages, target) >= 0,
 		tokens > target.ContextWindow || (target.ShrinkWindow && tokens >= capacityTrigger(target.ContextWindow, triggerRatio)), tokens

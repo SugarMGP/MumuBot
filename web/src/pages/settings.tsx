@@ -141,6 +141,11 @@ export default function SettingsPage() {
   const [rulesText, setRulesText] = useState("");
   const [activeSection, setActiveSection] = useState<Section>("agent");
   const parsedRules = parseRules(rulesText);
+  const idleMinutesInvalid = Boolean(
+    config &&
+      config.compactor.idle_minutes !== 0 &&
+      (config.compactor.idle_minutes < 5 || config.compactor.idle_minutes > 240),
+  );
   const configRef = useRef<RuntimeConfig | null>(null);
   const savedConfigRef = useRef<RuntimeConfig | null>(null);
   const applySettingsRef = useRef<
@@ -281,7 +286,7 @@ export default function SettingsPage() {
   };
 
   const saveSection = async (section: Section, values: unknown) => {
-    if (conflicts[section]) return;
+    if (conflicts[section] || (section === "compactor" && idleMinutesInvalid)) return;
     setBusy(section);
     try {
       const result = await settingsApi.save(
@@ -753,6 +758,7 @@ export default function SettingsPage() {
             <Field
               label={t("settings.compactor.idleMinutes")}
               hint={t("settings.compactor.idleOff")}
+              error={idleMinutesInvalid ? t("settings.compactor.idleMinutesInvalid") : undefined}
             >
               <Input
                 type="number"
@@ -783,7 +789,7 @@ export default function SettingsPage() {
           </div>
           <SaveButtons
             busy={busy === "compactor"}
-            disabled={Boolean(conflicts.compactor)}
+            disabled={Boolean(conflicts.compactor) || idleMinutesInvalid}
             onSave={() => saveSection("compactor", config.compactor)}
             onReset={() => setResetSection("compactor")}
           />

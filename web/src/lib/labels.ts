@@ -50,3 +50,10 @@ export function taskLabel(t: TFunction, key: string): string {
   if (!key) return t("common.none");
   return t(`system.stats.tasks.${key}`, { defaultValue: key });
 }
+
+export function mcpErrorLabel(t: TFunction, code?: string): string {
+  if (!code) return t("system.status.mcpUnknown");
+  return t(`system.status.mcpErrors.${code}`, {
+    defaultValue: t("system.status.mcpUnknown"),
+  });
+}

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"mumu-bot/internal/tools"
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 )
 
 type workerExecutor struct {

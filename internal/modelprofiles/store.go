@@ -139,25 +139,33 @@ func (s *Store) Update(ctx context.Context, row Profile, apiKey string) (Profile
 
 // Delete 删除未被任何场合使用的模型
 func (s *Store) Delete(ctx context.Context, id uint, expectedVersion int64) error {
-	row, err := s.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	selection, err := s.Selection(ctx)
-	if err != nil {
-		return err
-	}
-	if selection.Uses(row.ID) {
-		return ErrActiveModel
-	}
-	result := s.db.WithContext(ctx).Where("id = ? AND version = ?", id, expectedVersion).Delete(&Profile{})
-	if result.Error != nil {
-		return fmt.Errorf("删除模型失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrVersionConflict
-	}
-	return nil
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSelection(tx); err != nil {
+			return err
+		}
+		var row Profile
+		if err := tx.Where("id = ?", id).Take(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("读取模型失败: %w", err)
+		}
+		selection, err := readSelection(tx)
+		if err != nil {
+			return err
+		}
+		if selection.Uses(row.ID) {
+			return ErrActiveModel
+		}
+		result := tx.Where("id = ? AND version = ?", id, expectedVersion).Delete(&Profile{})
+		if result.Error != nil {
+			return fmt.Errorf("删除模型失败: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrVersionConflict
+		}
+		return nil
+	})
 }
 
 // DecryptKey 解密模型 API Key

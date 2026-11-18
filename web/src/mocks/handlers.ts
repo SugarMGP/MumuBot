@@ -1217,7 +1217,7 @@ export const handlers = [
         mcp_tool_count: 4,
         mcp_statuses: [
           { name: "weather", enabled: true, connected: true, tool_count: 2 },
-          { name: "search", enabled: true, connected: false, tool_count: 0, error: "连接超时" },
+          { name: "search", enabled: true, connected: false, tool_count: 0, error_code: "connect_failed" },
         ],
       },
       runtime: {

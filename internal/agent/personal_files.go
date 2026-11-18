@@ -11,7 +11,7 @@ import (
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/refstore"
 	"mumu-bot/internal/tools"
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 )
 
 type workerFileAdapter struct {

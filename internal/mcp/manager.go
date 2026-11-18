@@ -37,7 +37,7 @@ type ServerStatus struct {
 	Enabled   bool   `json:"enabled"`
 	Connected bool   `json:"connected"`
 	ToolCount int    `json:"tool_count"`
-	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 // Manager MCP 客户端管理器
@@ -69,9 +69,9 @@ func (m *Manager) Load(ctx context.Context, servers []ServerConfig) error {
 			zap.L().Debug("MCP 服务器已禁用，跳过", zap.String("name", serverCfg.Name))
 			continue
 		}
-		toolCount, err := m.connectServer(ctx, &serverCfg)
+		toolCount, errorCode, err := m.connectServer(ctx, &serverCfg)
 		if err != nil {
-			m.statuses = append(m.statuses, ServerStatus{Name: serverCfg.Name, Enabled: true, Error: err.Error()})
+			m.statuses = append(m.statuses, ServerStatus{Name: serverCfg.Name, Enabled: true, ErrorCode: errorCode})
 			zap.L().Warn("连接 MCP 服务器失败", zap.String("name", serverCfg.Name), zap.Error(err))
 			continue
 		}
@@ -83,7 +83,7 @@ func (m *Manager) Load(ctx context.Context, servers []ServerConfig) error {
 }
 
 // connectServer 连接单个 MCP 服务器
-func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, error) {
+func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, string, error) {
 	var cli *client.Client
 	var err error
 	const initTimeout = 30 * time.Second
@@ -103,21 +103,21 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 	case "sse":
 		cli, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.CustomHeaders))
 		if err != nil {
-			return 0, fmt.Errorf("创建 SSE 客户端失败: %w", err)
+			return 0, "connect_failed", fmt.Errorf("创建 SSE 客户端失败: %w", err)
 		}
 	case "stdio":
 		cli, err = client.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 		if err != nil {
-			return 0, fmt.Errorf("创建 Stdio 客户端失败: %w", err)
+			return 0, "connect_failed", fmt.Errorf("创建 Stdio 客户端失败: %w", err)
 		}
 	default:
-		return 0, fmt.Errorf("不支持的 MCP 服务器类型: %s", cfg.Type)
+		return 0, "connect_failed", fmt.Errorf("不支持的 MCP 服务器类型: %s", cfg.Type)
 	}
 
 	// 启动客户端
 	if err := cli.Start(connectionCtx); err != nil {
 		_ = cli.Close()
-		return 0, fmt.Errorf("启动 MCP 客户端失败: %w", err)
+		return 0, "connect_failed", fmt.Errorf("启动 MCP 客户端失败: %w", err)
 	}
 
 	// 初始化连接
@@ -130,7 +130,7 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 
 	if _, err := cli.Initialize(initCtx, initRequest); err != nil {
 		_ = cli.Close()
-		return 0, fmt.Errorf("初始化 MCP 连接失败: %w", err)
+		return 0, "initialize_failed", fmt.Errorf("初始化 MCP 连接失败: %w", err)
 	}
 
 	// 获取工具 - 使用 MCPClient 接口
@@ -143,13 +143,13 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 	baseTools, err := mcptool.GetTools(initCtx, mcpToolCfg)
 	if err != nil {
 		_ = cli.Close()
-		return 0, fmt.Errorf("获取 MCP 工具失败: %w", err)
+		return 0, "tool_discovery_failed", fmt.Errorf("获取 MCP 工具失败: %w", err)
 	}
 
 	renamed, err := renameMCPTools(ctx, baseTools, cfg.Name, m.tools)
 	if err != nil {
 		_ = cli.Close()
-		return 0, err
+		return 0, "tool_validation_failed", err
 	}
 	m.clients = append(m.clients, cli)
 	m.cancels = append(m.cancels, cancelConnection)
@@ -160,7 +160,7 @@ func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, er
 		zap.String("server", cfg.Name),
 		zap.Int("tool_count", len(baseTools)))
 
-	return len(renamed), nil
+	return len(renamed), "", nil
 }
 
 // renamedTool 把 MCP 工具改名成 mcp-服务名-工具名，调用能力原样透传

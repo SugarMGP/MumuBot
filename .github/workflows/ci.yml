@@ -55,3 +55,11 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Build worker
+        working-directory: worker
+        run: go build ./...
+
+      - name: Vet worker
+        working-directory: worker
+        run: go vet ./...

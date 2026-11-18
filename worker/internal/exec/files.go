@@ -19,7 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 )
 
 func (s *Server) handleFileList(w http.ResponseWriter, r *http.Request) {

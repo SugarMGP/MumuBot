@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.11 AS build
 ARG TARGETOS
 ARG TARGETARCH
-WORKDIR /src
-COPY go.mod go.sum ./
+WORKDIR /src/worker
+COPY worker/go.mod ./
 RUN go mod download
-COPY cmd/worker-exec ./cmd/worker-exec
-COPY internal/workerproto ./internal/workerproto
-COPY internal/workerexec ./internal/workerexec
+COPY worker/cmd/worker-exec ./cmd/worker-exec
+COPY worker/proto ./proto
+COPY worker/internal/exec ./internal/exec
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/worker-exec ./cmd/worker-exec
 RUN set -eux; \
     CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go install github.com/mikefarah/yq/v4@v4.54.2; \

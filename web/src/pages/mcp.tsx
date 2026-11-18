@@ -25,6 +25,7 @@ import {
   Textarea,
 } from "@/components/ui/form-controls";
 import { Spinner } from "@/components/ui/spinner";
+import { mcpErrorLabel } from "@/lib/labels";
 import {
   Table,
   TableBody,
@@ -320,7 +321,7 @@ export default function McpPage() {
                       ? t("common.loadFailed")
                       : !status ? t("mcp.runtimePending")
                       : status.connected ? t("system.status.mcpConnected", { count: status.tool_count })
-                      : t("system.status.mcpFailure", { reason: status.error || t("system.status.mcpUnknown") })}</p> : null}
+                      : t("system.status.mcpFailure", { reason: mcpErrorLabel(t, status.error_code) })}</p> : null}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex gap-1">

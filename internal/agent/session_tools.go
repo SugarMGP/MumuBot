@@ -12,8 +12,6 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-const toolResultPreviewRunes = tools.ToolResultPreviewRunes
-
 // BeginToolTranscript 在执行工具前幂等登记工具回执
 func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, callID, arguments string) (id uint, existingResult string, resumed bool, err error) {
 	if s.memory == nil {

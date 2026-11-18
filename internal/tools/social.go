@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"mumu-bot/internal/media"
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"

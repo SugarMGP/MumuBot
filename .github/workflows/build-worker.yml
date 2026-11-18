@@ -8,11 +8,7 @@ on:
       - .dockerignore
       - Dockerfile.worker
       - docker-entrypoint.worker.sh
-      - cmd/worker-exec/**
-      - internal/workerexec/**
-      - internal/workerproto/**
-      - go.mod
-      - go.sum
+      - worker/**
 
 permissions:
   contents: read

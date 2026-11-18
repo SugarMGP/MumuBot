@@ -8,7 +8,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const SelectionKey = "model_selection"
+const (
+	SelectionKey     = "model_selection"
+	selectionLockKey = "mumubot_model_selection"
+)
 
 // Selection 保存三个场合各自使用的档案，0 表示尚未配置
 type Selection struct {
@@ -34,11 +37,15 @@ func (s Selection) Uses(id uint) bool { return s.QQ == id || s.Life == id || s.W
 
 // Selection 读取三个场合的独立档案选择
 func (s *Store) Selection(ctx context.Context) (Selection, error) {
+	return readSelection(s.db.WithContext(ctx))
+}
+
+func readSelection(db *gorm.DB) (Selection, error) {
 	var row struct {
 		ConfigValue string
 		Version     int64
 	}
-	err := s.db.WithContext(ctx).Raw("SELECT config_value::text AS config_value,version FROM app_config WHERE config_key=?", SelectionKey).Scan(&row).Error
+	err := db.Raw("SELECT config_value::text AS config_value,version FROM app_config WHERE config_key=?", SelectionKey).Scan(&row).Error
 	if err != nil {
 		return Selection{}, err
 	}
@@ -58,17 +65,41 @@ func (s *Store) Select(ctx context.Context, selection Selection) (Selection, err
 	if err != nil {
 		return Selection{}, err
 	}
-	var result *gorm.DB
-	if selection.Version == 0 {
-		result = s.db.WithContext(ctx).Exec(`INSERT INTO app_config(config_key,config_value,version,updated_at) VALUES(?,?::jsonb,1,now()) ON CONFLICT(config_key) DO NOTHING`, SelectionKey, raw)
-	} else {
-		result = s.db.WithContext(ctx).Exec(`UPDATE app_config SET config_value=?::jsonb,version=version+1,updated_at=now() WHERE config_key=? AND version=?`, raw, SelectionKey, selection.Version)
+	if selection.QQ == 0 || selection.Life == 0 || selection.Worker == 0 {
+		return Selection{}, ErrInvalidModel
 	}
-	if result.Error != nil {
-		return Selection{}, fmt.Errorf("保存场合模型失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return Selection{}, ErrVersionConflict
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSelection(tx); err != nil {
+			return err
+		}
+		ids := map[uint]bool{selection.QQ: true, selection.Life: true, selection.Worker: true}
+		values := make([]uint, 0, len(ids))
+		for id := range ids {
+			values = append(values, id)
+		}
+		var count int64
+		if err := tx.Model(&Profile{}).Where("id IN ?", values).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != int64(len(values)) {
+			return ErrNotFound
+		}
+		var result *gorm.DB
+		if selection.Version == 0 {
+			result = tx.Exec(`INSERT INTO app_config(config_key,config_value,version,updated_at) VALUES(?,?::jsonb,1,now()) ON CONFLICT(config_key) DO NOTHING`, SelectionKey, raw)
+		} else {
+			result = tx.Exec(`UPDATE app_config SET config_value=?::jsonb,version=version+1,updated_at=now() WHERE config_key=? AND version=?`, raw, SelectionKey, selection.Version)
+		}
+		if result.Error != nil {
+			return fmt.Errorf("保存场合模型失败: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrVersionConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return Selection{}, err
 	}
 	selection.Version++
 	return selection, nil
@@ -87,12 +118,21 @@ func (s *Store) ForRole(ctx context.Context, role string) (Profile, error) {
 }
 
 func (s *Store) ClearSelection(ctx context.Context, version int64) error {
-	result := s.db.WithContext(ctx).Exec("DELETE FROM app_config WHERE config_key=? AND version=?", SelectionKey, version)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrVersionConflict
-	}
-	return nil
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSelection(tx); err != nil {
+			return err
+		}
+		result := tx.Exec("DELETE FROM app_config WHERE config_key=? AND version=?", SelectionKey, version)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrVersionConflict
+		}
+		return nil
+	})
+}
+
+func lockSelection(tx *gorm.DB) error {
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", selectionLockKey).Error
 }

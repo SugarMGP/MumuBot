@@ -64,9 +64,13 @@ func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
 		if cfg.ReasoningEffort != "" {
 			extra["reasoning_effort"] = cfg.ReasoningEffort
 		}
-		return agenticopenai.NewChatModel(context.Background(), &agenticopenai.ChatConfig{
+		client, err := agenticopenai.NewChatModel(context.Background(), &agenticopenai.ChatConfig{
 			BaseURL: baseURL, APIKey: apiKey, Model: modelName, HTTPClient: httpClient, ExtraFields: extra,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("创建主模型失败: %w", err)
+		}
+		return &chatCompatibleModel{AgenticModel: client}, nil
 	}
 	if cfg.Provider != ProviderResponses {
 		return nil, fmt.Errorf("unknown model protocol: %s", cfg.Provider)

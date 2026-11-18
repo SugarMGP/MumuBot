@@ -9,13 +9,15 @@ COPY web/ ./
 RUN bun run build
 
 # go-webp 依赖 libwebp，cgo 必须按目标架构构建
-FROM --platform=$TARGETPLATFORM golang:1.26.5-alpine AS build
+FROM --platform=$TARGETPLATFORM golang:1.26.11-alpine AS build
 RUN apk add --no-cache build-base libwebp-dev libwebp-static
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY worker/go.mod ./worker/go.mod
 RUN go mod download
 COPY main.go ./
 COPY internal/ ./internal/
+COPY worker/proto/ ./worker/proto/
 COPY --from=assets /src/internal/web/assets/dist/ internal/web/assets/dist/
 ARG TARGETOS
 ARG TARGETARCH

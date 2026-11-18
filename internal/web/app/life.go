@@ -273,8 +273,9 @@ func (a *App) handleLifeRun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Note string `json:"note,omitempty"`
 	}
-	if r.Body != nil {
-		_ = decodeJSON(r, &body)
+	if err := decodeOptionalJSON(r, &body); err != nil {
+		a.failBadRequest(w, "请求格式不正确。")
+		return
 	}
 	agent := a.currentAgent()
 	if agent == nil {

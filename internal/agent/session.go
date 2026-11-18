@@ -208,6 +208,7 @@ func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, media
 			user.Text = text
 		}
 	}
+	tagTranscriptEntryID(user.Msg, transcriptID)
 	if visible {
 		s.seen = append(s.seen, sessionEntry{user: user, msg: user.Msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
 	} else {

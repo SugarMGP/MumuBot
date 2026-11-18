@@ -183,7 +183,7 @@ func (a *Agent) lifeActivitySummaryText(ctx context.Context, from, to time.Time)
 	summary, err := a.memory.SummarizeLifeActivitySince(ctx, from, to, a.bot.GetSelfID())
 	if err != nil {
 		zap.L().Warn("聚合生活期间实际活动失败", zap.Error(err))
-		return ""
+		return "【期间实际活动核对暂不可用｜系统事实】系统未能读取完整活动记录，不能据此判断期间是否有新消息或工具调用。"
 	}
 	return summary
 }

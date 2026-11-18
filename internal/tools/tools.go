@@ -10,7 +10,7 @@ import (
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/refstore"
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"

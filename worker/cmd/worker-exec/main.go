@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"mumu-bot/internal/workerexec"
+	workerexec "mumu-bot/worker/internal/exec"
 )
 
 func main() {

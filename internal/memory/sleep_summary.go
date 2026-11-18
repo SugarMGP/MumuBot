@@ -174,7 +174,7 @@ func (m *Manager) SummarizeLifeActivitySince(ctx context.Context, from, to time.
 	}
 	activeItems, activeTotal, err := m.SummarizeSleepMessages(ctx, from, to, selfID)
 	if err != nil {
-		activeItems, activeTotal = nil, 0
+		return "", err
 	}
 	return formatLifeActivitySummary(from, to, toolRows, msgRows, activeItems, activeTotal), nil
 }

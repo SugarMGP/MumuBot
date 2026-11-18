@@ -67,9 +67,10 @@ func (r *Refs) Scan(src any) error {
 }
 
 const (
-	imageDir   = "image"
-	stickerDir = "sticker"
-	tempDir    = "tmp"
+	imageDir     = "image"
+	stickerDir   = "sticker"
+	tempDir      = "tmp"
+	maxImageSide = 16384
 
 	webpMime = "image/webp"
 )
@@ -186,6 +187,9 @@ func (m *Manager) storeSticker(hash, tempPath string) (Ref, error) {
 
 // storeImage 普通图片按 EXIF 方向摆正，窄边缩到上限后转 webp
 func (m *Manager) storeImage(hash, tempPath string) (Ref, error) {
+	if err := validateImageDimensions(tempPath); err != nil {
+		return Ref{}, err
+	}
 	if sniffMime(tempPath) == "image/gif" {
 		target := filepath.Join(m.opts.Dir, imageDir, hash+".gif")
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -243,6 +247,22 @@ func (m *Manager) storeImage(hash, tempPath string) (Ref, error) {
 		return Ref{}, fmt.Errorf("读取图片信息失败: %w", err)
 	}
 	return Ref{Hash: hash, Path: target, Mime: webpMime, Bytes: info.Size()}, nil
+}
+
+func validateImageDimensions(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	config, _, err := image.DecodeConfig(file)
+	if err != nil {
+		return fmt.Errorf("读取图片尺寸失败: %w", err)
+	}
+	if config.Width > maxImageSide || config.Height > maxImageSide {
+		return fmt.Errorf("图片尺寸超过单边 %d 像素限制", maxImageSide)
+	}
+	return nil
 }
 
 // resize 窄边超过上限时等比缩放，窄边本来就小于上限时不处理

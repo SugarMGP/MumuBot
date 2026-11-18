@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 )
 
 type workerFileContent struct {

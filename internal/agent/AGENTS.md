@@ -39,7 +39,7 @@
 - `sleepUntil` 只有在睡眠状态、起床安排和工具回执都成功后才允许收尾当前回合；成功回执后的终结不能依赖下一次模型节点或额外步数，失败继续让模型在剩余步数内修正。
 - `readSessionHistory` 的 entries 返回已持久化的 assistant/tool 轨迹，user/observation/agent_message 仍只算实际进入成功请求的输入；单条全文用 `readSessionEntry`。`file_refs` 随消息日志保存，历史返回附件元信息，不把临时 URL 当长期资源。
 - `agent_message` 是独立的会话间内部消息条目，不是真人 user 行；它与真人输入共用会话本地 `Order` 的装配/补入边界，不占用 OneBot `ArrivalSeq`。边界来自实际装配的 pending 快照，压缩重建时同步推进，不靠 ID 集合过滤重复输入。`wake=false` 只保存，不触发新回合，也不作为群门控的强交互。
-- 重启恢复必须按 transcript payload 原样恢复 user/assistant/tool/internal 消息，禁止重新渲染已固定正文。
+- 重启恢复必须按 transcript payload 原样恢复 user/assistant/tool/internal 消息，禁止重新渲染已固定正文；Chat 工具图片兼容转换只发生在模型出站副本，不回写 transcript。
 - 遗留 running/planned 工具改成 `unknown`，assistant 工具调用没有对应回执时补 `not_executed`，都不自动重放。
 - `run_id + call_id` 是工具回执幂等键；不同 CallID 的重复搜索、读取和多次发言不拦截。
 - 普通文本工具结果超过 2000 字符时只把前 2000 字符、原文总长度、截断说明和 `result_ref` 交给模型，完整内容写内容寻址文件；压缩器使用同一外置规则但没有 transcript 行。`readToolResult`、`readSessionEntry`、`readDiary`、`readFile` 保留显式读取窗口；`viewImage` 图片本体保留。只有现存 transcript 的引用闭包（`result_ref`、payload 文本内的 `file_ref`/`image_ref` 和 `r` 嵌套内容）是长期引用根，最后一个引用删除后释放；未挂接孤儿至少保留 24 小时再按启动/每日补扫。
@@ -51,7 +51,7 @@
 - 压缩只在一轮 think 完整结束后、最后一条 assistant 的实际用量达到窗口 90% 时触发，不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
 - 模型、人格、MCP 和运行态使用 generation 快照；模型/人格/MCP 等需要热切换的内容替换 generation，并发数与三种单轮步数在下一个 think 生效且不重启进程。每次 think 只取一次配置快照，构造 runner 和连续子步骤都复用它。切换前优先用原模型整理不兼容或超限历史，旧阶段最多 60 秒；生成失败后用目标模型读取兼容材料接管，可读推理完整入料，密文/签名不跨模型转移。生成失败与持久化失败分开，后者不能触发模型接管。分批整理必须推进真实检查点；复查通过后保存并替换 generation；普通缩窗保留待处理输入，协议整理按下文的显式规则处理。会话取得维护锁后才获取 generation，排队回合不能继续使用切换前的模型快照。
 - 普通压缩候选只包含完整、已可见、协议闭合的旧交互段，保护当前批次、活动工具链、未闭合 CallID 和最近尾部。协议切换另选覆盖末尾不兼容块的闭合前缀，可包含尚未 visible 的已完成输出；事务提交 visible 后再应用内存检查点，无真人来源时只更新概览并保留活跃话题。
-- 没有安全候选属于暂不压缩，不设置压缩失败前置门；主请求或模型切换仍按窗口硬上限判断。重启恢复与切换容量检查包含活跃但拉黑的群，运行许可继续独立检查。
+- 仅有代头、摘要、系统提醒或待处理输入时没有旧交互，模型切换不要求整理，也不消费待处理输入。存在旧交互但没有安全候选时不设置压缩失败前置门；换模仍按兼容性和目标窗口硬上限判断。重启恢复与切换容量检查包含活跃但拉黑的群，运行许可继续独立检查。
 - 压缩器只能读当前会话并使用 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和 `finishCompaction`；不提供 `readHistory`，不能写记忆、情感、便签或外部系统。
 - 压缩请求只给模型看本轮候选的局部编号 `[#n]`，`finishCompaction` 用 `ranges`/`anchors` 提交；服务端把编号还原成真实 OneBot 消息 ID，越界只做笔误级修正，明显越界与外部 ID 一律丢弃，不静默改归属。
 - 后台可手动整理单个 QQ 会话：`CompactConversationNow` 在维护锁内复用同一套压缩；没有可压缩旧段时只删除本代代头并按当前人格重建，让改过的提示词在下一轮装配时立即生效。

@@ -59,6 +59,7 @@ func (s *Session) AppendSeenMessage(msg *schema.AgenticMessage, transcriptID uin
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tagTranscriptEntryID(msg, transcriptID)
 	s.seen = append(s.seen, sessionEntry{msg: msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
 }
 
@@ -69,6 +70,7 @@ func (s *Session) AppendSeenObservation(msg *schema.AgenticMessage, transcriptID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tagTranscriptEntryID(msg, transcriptID)
 	user := &sessionUser{Msg: msg, TranscriptID: transcriptID, IsObservation: true}
 	s.seen = append(s.seen, sessionEntry{user: user, msg: msg, transcriptID: transcriptID, visibleSeq: visibleSeq})
 }

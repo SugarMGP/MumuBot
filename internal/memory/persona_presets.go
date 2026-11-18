@@ -15,6 +15,7 @@ import (
 const (
 	// PersonaPresetBuiltinName 是内置预设的固定名称，不允许改名
 	PersonaPresetBuiltinName = "内置预设"
+	personaSelectionLockKey  = "mumubot_persona_selection"
 )
 
 var (
@@ -151,6 +152,9 @@ func (m *Manager) UpdatePersonaPreset(ctx context.Context, id uint, name, descri
 // ActivatePersonaPreset 切换当前使用的预设
 func (m *Manager) ActivatePersonaPreset(ctx context.Context, id uint) error {
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockPersonaSelection(tx); err != nil {
+			return err
+		}
 		var row PersonaPreset
 		if err := tx.Where("id = ?", id).Take(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -170,23 +174,32 @@ func (m *Manager) ActivatePersonaPreset(ctx context.Context, id uint) error {
 
 // DeletePersonaPreset 删除预设，内置与正在使用的不允许删除
 func (m *Manager) DeletePersonaPreset(ctx context.Context, id uint) error {
-	var row PersonaPreset
-	if err := m.db.WithContext(ctx).Where("id = ?", id).Take(&row).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrPersonaPresetNotFound
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockPersonaSelection(tx); err != nil {
+			return err
 		}
-		return fmt.Errorf("读取人格预设失败: %w", err)
-	}
-	if row.Builtin {
-		return ErrPersonaPresetBuiltin
-	}
-	if row.Active {
-		return ErrPersonaPresetActive
-	}
-	if err := m.db.WithContext(ctx).Where("id = ?", id).Delete(&PersonaPreset{}).Error; err != nil {
-		return fmt.Errorf("删除人格预设失败: %w", err)
-	}
-	return nil
+		var row PersonaPreset
+		if err := tx.Where("id = ?", id).Take(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPersonaPresetNotFound
+			}
+			return fmt.Errorf("读取人格预设失败: %w", err)
+		}
+		if row.Builtin {
+			return ErrPersonaPresetBuiltin
+		}
+		if row.Active {
+			return ErrPersonaPresetActive
+		}
+		if err := tx.Where("id = ?", id).Delete(&PersonaPreset{}).Error; err != nil {
+			return fmt.Errorf("删除人格预设失败: %w", err)
+		}
+		return nil
+	})
+}
+
+func lockPersonaSelection(tx *gorm.DB) error {
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", personaSelectionLockKey).Error
 }
 
 // ClonePersonaPreset 复制一份预设，名字自动加"副本"

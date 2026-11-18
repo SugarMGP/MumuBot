@@ -422,7 +422,7 @@ export interface SystemData {
   model: {
     profiles: Record<string, { name: string; provider: ModelProvider; thinking_mode: ThinkingMode; model_name: string; reasoning_effort: string; base_url: string; context_window: number }>;
     mcp_tool_count: number;
-    mcp_statuses?: { name: string; enabled: boolean; connected: boolean; tool_count: number; error?: string }[];
+    mcp_statuses?: { name: string; enabled: boolean; connected: boolean; tool_count: number; error_code?: string }[];
   };
   runtime: {
     connected: boolean;

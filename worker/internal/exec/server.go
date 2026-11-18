@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"mumu-bot/internal/workerproto"
+	workerproto "mumu-bot/worker/proto"
 )
 
 type Server struct {

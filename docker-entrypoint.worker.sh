@@ -2,8 +2,12 @@
 set -eu
 
 mkdir -p /nix/var/nix/daemon-socket
-mkdir -p /home/worker/.cache /home/worker/.tmp
-chown -R worker:worker /home/worker
+chown worker:worker /home/worker
+install -d -o worker -g worker \
+  /home/worker/.cache \
+  /home/worker/.tmp \
+  /home/worker/.config \
+  /home/worker/.local
 
 NIX_REMOTE=local /nix/var/nix/profiles/default/bin/nix-daemon --daemon &
 for _ in $(seq 1 50); do

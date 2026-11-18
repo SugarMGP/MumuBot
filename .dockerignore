@@ -4,13 +4,13 @@
 !Dockerfile.worker
 !docker-entrypoint.sh
 !docker-entrypoint.worker.sh
-!cmd/
-!cmd/**
 !go.mod
 !go.sum
 !main.go
 !web/
 !web/**
+!worker/
+!worker/**
 !internal/
 !internal/**
 web/node_modules

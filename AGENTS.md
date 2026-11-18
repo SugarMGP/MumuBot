@@ -19,7 +19,7 @@
 - `web/`：管理后台 React 前端工程（Vite + TypeScript + Tailwind 4 + shadcn/ui）。
 - `internal/config/`：env 启动配置、代码内置默认值、PostgreSQL 动态配置快照和加密配置。
 - `internal/refstore/`、`internal/filemeta/`：不可变 `file_ref`/`image_ref` 快照、元数据和引用回收。
-- `internal/workerexec/`、`internal/workerproto/`：worker 私网执行、受限文件读写和主服务字节流协议。
+- `worker/`：独立 Go 子模块，包含 worker 私网执行、受限文件读写、主服务共享协议和可执行入口。
 - `internal/schedule/`：生活时间表达式、状态切换和到期计算。
 - 管理后台“人格预设”页维护人格、共同规则、QQ 聊天、生活职责、工作职责，以及全局角色名与主人；“设置”页维护对话、压缩、并发、媒体、模型、MCP 服务器，以及记忆与历史保留策略。
 
@@ -51,6 +51,7 @@ cd web && bun run lint:i18n
 cd web && bun run build
 go build ./...
 go vet ./...
+cd worker && go build ./... && go vet ./...
 ```
 
 - 只改 Go 逻辑时，至少运行 `go build ./...`；涉及语法或逻辑变更时再运行 `go vet ./...`。
@@ -178,7 +179,7 @@ go vet ./...
 ## 核心架构约束
 
 - QQ 聊天和同步话题压缩共用 QQ 档案；life 和 worker 分别选择自己的档案并用于运行与摘要，可添加同名模型不同推理强度的档案，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
-- 模型档案独立选择 Responses（`/responses`）或 Chat Completions（`/chat/completions`），内部始终使用 `schema.AgenticMessage`；国产 Chat 图片保留在工具回执，不统一搬到 user。上下文窗口仍用于预算和压缩，程序不自动设置输出上限或固定输出预留。
+- 模型档案独立选择 Responses（`/responses`）或 Chat Completions（`/chat/completions`），内部始终使用 `schema.AgenticMessage`。transcript 原样保存工具图片与 CallID；Chat 出站副本把图片移到整组工具回执后的 user 消息，Responses 原样发送。上下文窗口仍用于预算和压缩，程序不自动设置输出上限或固定输出预留。
 - Responses 使用 `reasoning.effort`，Chat 独立配置 `thinking.type` 与 `reasoning_effort`；强度支持省略或 none/low/medium/high/xhigh/max，原值发送。两种协议均支持最高优先级 Body JSON 递归覆盖，仅禁止顶层 `stream`；数组、标量、null 整值替换，null 不删除键。API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
 - 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
@@ -216,7 +217,7 @@ go vet ./...
 - 消息正文进入上下文后不再变化：首次渲染写入 transcript，时间固定为 `YYYY-MM-DD HH:MM:SS`；当前时间、群信息和情感只由 `getCurrentStatus` 查询。
 - 工作便签已移除；跨轮临时状态由连续 transcript、checkpoint overview 和话题 open_loops 承担，不保留 `saveWorkingNote`、状态查询字段或后台入口。
 - 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
-- 每轮原样回传 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 保存同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。
+- 每轮原样保存 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 使用同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。Chat 只在出站副本中移动工具图片，不回写工作集。
 - 主上下文装配不静默截断 transcript；一轮 think 完整结束后，最后一条 assistant 的实际用量达到窗口 90% 时触发一次完整同步压缩，压缩阶段不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
 - 压缩器步数独立配置（默认 12 步），不设置整体模型超时；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和一次 `finishCompaction`；不提供 `readHistory`。
 - 注入预算默认摘要 30%（含 overview、置顶记忆和话题）+ 最近原文 10%；摘要话题按 `active_topic_refs` 从尾部裁剪，固定部分超预算时保留并记录日志。

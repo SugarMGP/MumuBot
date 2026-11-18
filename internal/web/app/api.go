@@ -12,6 +12,8 @@ import (
 
 const maxJSONBody = 1 << 20
 
+var errEmptyJSONBody = errors.New("empty body")
+
 // respondData 输出统一成功信封；warning 表示已落库但运行态未完全应用
 func respondData(w http.ResponseWriter, status int, data any, warning *warningPayload) {
 	payload := struct {
@@ -46,16 +48,24 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func decodeJSON(r *http.Request, target any) error {
 	if r.Body == nil {
-		return errors.New("empty body")
+		return errEmptyJSONBody
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBody))
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(string(raw)) == "" {
-		return errors.New("empty body")
+		return errEmptyJSONBody
 	}
 	return sonic.Unmarshal(raw, target)
+}
+
+func decodeOptionalJSON(r *http.Request, target any) error {
+	err := decodeJSON(r, target)
+	if errors.Is(err, errEmptyJSONBody) {
+		return nil
+	}
+	return err
 }
 
 func queryInt(r *http.Request, key string, fallback int) int {

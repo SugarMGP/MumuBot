@@ -7,7 +7,7 @@ import { PageSkeleton } from "@/components/admin/loading";
 import { SectionCard } from "@/components/admin/section-card";
 import { SystemTabs } from "@/components/admin/tabs";
 import { Badge } from "@/components/ui/badge";
-import { enumLabel } from "@/lib/labels";
+import { enumLabel, mcpErrorLabel } from "@/lib/labels";
 
 function FieldRow({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -154,7 +154,7 @@ export default function SystemStatusPage() {
           value: item.connected
             ? t("system.status.mcpConnected", { count: item.tool_count })
             : t("system.status.mcpFailure", {
-                reason: item.error || t("system.status.mcpUnknown"),
+                reason: mcpErrorLabel(t, item.error_code),
               }),
         }))
       : []),
