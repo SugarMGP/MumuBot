@@ -85,10 +85,14 @@ type Session struct {
 }
 
 type tokenBase struct {
-	message    *schema.AgenticMessage
-	prompt     int
-	completion int
-	total      int
+	message        *schema.AgenticMessage
+	prompt         int
+	completion     int
+	total          int
+	profileID      uint
+	profileVersion int64
+	anchorID       uint
+	prefixIDs      []uint
 }
 
 type sessionStore struct {

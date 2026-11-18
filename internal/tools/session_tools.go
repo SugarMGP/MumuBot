@@ -105,10 +105,14 @@ func listSessions(ctx context.Context, input *ListSessionsInput) (*ListSessionsO
 		if tc.SessionRunningCallback != nil {
 			running = tc.SessionRunningCallback(row.Kind, row.TargetID)
 		}
+		lastError := row.WorkerLastError
+		if lastError == memory.WorkerModelSwitchInterruption {
+			lastError = "因模型切换中断，任务尚未完成；需要时投递明确的续办指令，勿重做已完成的操作"
+		}
 		sessions = append(sessions, SessionSummary{
 			SessionID: row.Kind + ":" + strconv.FormatInt(row.TargetID, 10),
 			Kind:      row.Kind, TargetID: row.TargetID, Name: name,
-			Status: status, LastError: row.WorkerLastError,
+			Status: status, LastError: lastError,
 			PendingCount: row.PendingCount, Running: running,
 			LastMessageAt: row.LastMessageAt, UpdatedAt: row.UpdatedAt,
 		})

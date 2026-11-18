@@ -159,21 +159,22 @@ func (a *App) handleModelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targets := make(map[string]agent.ModelTarget)
-	if selection.Uses(id) {
-		target, err := a.modelSwitchTarget(current, row, strings.TrimSpace(body.APIKey))
+	key := strings.TrimSpace(body.APIKey)
+	if selection.Uses(id) && (key != "" || row.ContextWindow != current.ContextWindow || modelConnectionChanged(current, row)) {
+		target, err := a.modelSwitchTarget(current, row, key)
 		if err != nil {
 			a.failFromError(w, r, err)
 			return
 		}
 		for _, role := range []string{"qq", "life", "worker"} {
-			if selection.ID(role) == id {
+			if selection.ID(role) == id && (target.ConnectionChanged || target.KeyChanged || row.ContextWindow != current.ContextWindow) {
 				targets[role] = target
 			}
 		}
 	}
 	release, report, ok := a.prepareModelCapacity(r.Context(), targets)
 	defer release()
-	if !ok || (report != nil && len(report.Sessions) > 0) {
+	if !ok {
 		a.failModelSwitch(w, report)
 		return
 	}
@@ -265,7 +266,7 @@ func (a *App) handleModelSelection(w http.ResponseWriter, r *http.Request) {
 	}
 	release, report, ok := a.prepareModelCapacity(r.Context(), targets)
 	defer release()
-	if !ok || (report != nil && len(report.Sessions) > 0) {
+	if !ok {
 		a.failModelSwitch(w, report)
 		return
 	}
@@ -353,9 +354,16 @@ func (a *App) modelSwitchTarget(current, target modelprofiles.Profile, apiKey st
 			}
 		}
 	}
-	return agent.ModelTarget{Profile: target, APIKey: apiKey, CheckCapacity: target.ContextWindow < current.ContextWindow,
-		ConnectionChanged: target.Provider != current.Provider || target.BaseURL != current.BaseURL || target.ModelName != current.ModelName,
-		KeyChanged:        keyErr != nil || oldKey != apiKey}, nil
+	connectionChanged := modelConnectionChanged(current, target)
+	keyChanged := keyErr != nil || oldKey != apiKey
+	return agent.ModelTarget{Profile: target, APIKey: apiKey, ShrinkWindow: target.ContextWindow < current.ContextWindow,
+		ConnectionChanged: connectionChanged, KeyChanged: keyChanged,
+		ReuseUsage: current.ID == target.ID && !connectionChanged && !keyChanged &&
+			current.ThinkingMode == target.ThinkingMode && current.ReasoningEffort == target.ReasoningEffort && current.BodyOverride == target.BodyOverride}, nil
+}
+
+func modelConnectionChanged(current, target modelprofiles.Profile) bool {
+	return target.Provider != current.Provider || target.BaseURL != current.BaseURL || target.ModelName != current.ModelName
 }
 
 func (a *App) failModelSwitch(w http.ResponseWriter, report *agent.ModelSwitchReport) {
@@ -364,8 +372,8 @@ func (a *App) failModelSwitch(w http.ResponseWriter, report *agent.ModelSwitchRe
 		switch report.Stage {
 		case "target":
 			code = "model_switch_target_failed"
-		case "window":
-			code = "model_switch_window_failed"
+		case "input_window", "upstream_window", "boundary", "remaining_window", "target_timeout":
+			code = "model_switch_" + report.Stage
 		case "storage":
 			code = "model_switch_storage_failed"
 		case "busy":
@@ -375,6 +383,9 @@ func (a *App) failModelSwitch(w http.ResponseWriter, report *agent.ModelSwitchRe
 	var details map[string]any
 	if report != nil {
 		details = map[string]any{"sessions": report.Sessions, "stage": report.Stage, "compacted": report.Compacted, "fallback": report.Fallback}
+		if report.ContextWindow > 0 {
+			details["estimated_tokens"], details["context_window"] = report.EstimatedTokens, report.ContextWindow
+		}
 	}
 	respondError(w, http.StatusBadRequest, code, "", details)
 }

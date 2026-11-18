@@ -277,14 +277,14 @@ func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *ad
 		return ctx, state, nil
 	}
 	requestMessages := state.Messages[:len(state.Messages)-1]
-	if last.ResponseMeta != nil && last.ResponseMeta.TokenUsage != nil && last.ResponseMeta.TokenUsage.TotalTokens > 0 {
-		session.ObserveResponseUsage(requestMessages, state.ToolInfos, last.ResponseMeta.TokenUsage)
-		session.SetTokenBase(last, last.ResponseMeta.TokenUsage)
-	} else {
-		session.ClearTokenBase()
-	}
 	if _, err := session.AppendAssistant(ctx, tc.RunID, last); err != nil {
 		return ctx, state, err
+	}
+	if last.ResponseMeta != nil && last.ResponseMeta.TokenUsage != nil && last.ResponseMeta.TokenUsage.TotalTokens > 0 {
+		session.ObserveResponseUsage(requestMessages, state.ToolInfos, last.ResponseMeta.TokenUsage)
+		session.SetTokenBase(last, last.ResponseMeta.TokenUsage, requestMessages, generationFrom(ctx).forKind(session.kind))
+	} else {
+		session.ClearTokenBase()
 	}
 	// 新生成的 assistant 轨迹尚未进入任何成功请求，不能在同一事务里标 visible
 	ids := transcriptIDs(requestMessages)

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -258,7 +259,7 @@ func (s *Session) ClearCompactionFailure() {
 }
 
 // SetTokenBase 记录最后一条 assistant 的完整 usage，供压缩和空闲判断使用
-func (s *Session) SetTokenBase(message *schema.AgenticMessage, usage *schema.TokenUsage) {
+func (s *Session) SetTokenBase(message *schema.AgenticMessage, usage *schema.TokenUsage, prefix []*schema.AgenticMessage, source roleModel) {
 	if message == nil || usage == nil {
 		return
 	}
@@ -269,11 +270,14 @@ func (s *Session) SetTokenBase(message *schema.AgenticMessage, usage *schema.Tok
 	if total <= 0 {
 		return
 	}
+	base := &tokenBase{message: message, prompt: usage.PromptTokens, completion: usage.CompletionTokens, total: total}
+	if ids := transcriptIDs(prefix); len(ids) == len(prefix) {
+		base.profileID, base.profileVersion = source.profileID, source.profileVersion
+		base.anchorID, base.prefixIDs = transcriptEntryID(message), ids
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tokenBase = &tokenBase{
-		message: message, prompt: usage.PromptTokens, completion: usage.CompletionTokens, total: total,
-	}
+	s.tokenBase = base
 }
 
 // LastResponseTokens 返回最后一条 assistant 的实际总 token 数
@@ -334,24 +338,24 @@ func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage,
 	}
 }
 
-// EstimatedRequestTokens 用最近一次真实用量加新增输入校准容量检查
-func (s *Session) EstimatedRequestTokens(messages []*schema.AgenticMessage, tools []*schema.ToolInfo) int {
+// estimateSwitchTokens 只复用同一档案、同一版本且仍完整出现在请求中的用量基线
+func (s *Session) estimateSwitchTokens(messages []*schema.AgenticMessage, tools []*schema.ToolInfo, target ModelTarget) int {
 	estimated := requestTokens(messages, tools)
+	if !target.ReuseUsage {
+		return estimated
+	}
 	s.mu.Lock()
 	base := s.tokenBase
 	s.mu.Unlock()
-	if base == nil || base.total <= 0 {
+	if base == nil || base.profileID == 0 || base.profileID != target.ID || base.profileVersion != target.Version {
 		return estimated
 	}
-	baseID := transcriptEntryID(base.message)
-	if baseID > 0 {
-		for index, message := range messages {
-			if transcriptEntryID(message) == baseID {
-				return max(estimated, base.total+requestTokens(messages[index+1:], nil))
-			}
-		}
+	index := len(base.prefixIDs)
+	if base.anchorID != 0 && index < len(messages) && transcriptEntryID(messages[index]) == base.anchorID &&
+		slices.Equal(base.prefixIDs, transcriptIDs(messages[:index])) {
+		return max(estimated, base.total+requestTokens(messages[index+1:], nil))
 	}
-	return max(base.total, estimated)
+	return estimated
 }
 
 // textScale 返回当前会话校准后的文本估算比例

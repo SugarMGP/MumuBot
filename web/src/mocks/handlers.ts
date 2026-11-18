@@ -16,13 +16,14 @@ import type {
 } from "@/api/types";
 
 const emptySeed = import.meta.env.VITE_MOCK_SEED === "empty";
+const switchWindowSeed = import.meta.env.VITE_MOCK_SEED === "switch-window";
 
 function ok(data: unknown, warning?: { code: string }) {
   return HttpResponse.json(warning ? { data, warning } : { data });
 }
 
-function fail(status: number, code: string, message: string) {
-  return HttpResponse.json({ error: { code, message } }, { status });
+function fail(status: number, code: string, message: string, details?: Record<string, unknown>) {
+  return HttpResponse.json({ error: { code, message, details } }, { status });
 }
 
 function page<T>(items: T[], request: Request) {
@@ -373,7 +374,7 @@ const models: ModelProfile[] = emptySeed
         body_override: "{\n  \"temperature\": 0.2\n}",
         base_url: "https://api.example.com/v1",
         model_name: "gpt-5-mini",
-        context_window: 200000,
+        context_window: switchWindowSeed ? 400000 : 200000,
 
         reasoning_effort: "",
         api_key_hint: "sk-…1c3d",
@@ -489,7 +490,7 @@ const lifeSeed: LifeData = {
   },
   workers: emptySeed ? [] : [
     { id: 1, title: "整理资料与配图", status: "running", active: true, last_error: "", updated_at: iso(1) },
-    { id: 2, title: "教程笔记", status: "idle", active: true, last_error: "", updated_at: iso(25) },
+    { id: 2, title: "教程笔记", status: switchWindowSeed ? "cancelled" : "idle", active: true, last_error: switchWindowSeed ? "model_switch_interrupted" : "", updated_at: iso(25) },
     { id: 3, title: "下载课程材料", status: "failed", active: true, last_error: "上游请求返回 HTTP 504，材料尚未下载完成", updated_at: iso(40) },
   ],
   schedules: [
@@ -1071,6 +1072,12 @@ export const handlers = [
     const changed = (["qq", "life", "worker"] as const).some((role) =>
       models.find((item) => item.id === modelSelection[role])?.provider !== models.find((item) => item.id === body[role])?.provider);
     await delay(400);
+    if (switchWindowSeed && changed) {
+      return fail(400, "model_switch_remaining_window", "", {
+        sessions: ["group:90001"], stage: "remaining_window", compacted: true, fallback: true,
+        estimated_tokens: 402000, context_window: 400000,
+      });
+    }
     modelSelection = { ...body, version: body.version + 1 };
     return ok({ items: models, selection: modelSelection, secret_configured: true }, changed ? { code: "model_switch_fallback" } : undefined);
   }),

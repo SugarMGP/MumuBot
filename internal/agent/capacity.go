@@ -52,27 +52,28 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	if checkpoint != nil && checkpoint.ThroughVisibleSeq != nil {
 		afterVisible = *checkpoint.ThroughVisibleSeq
 	}
-	startID := uint(0)
+	var summary []byte
 	switch kind {
 	case memory.ConversationKindWorker:
 		row, rowErr := mem.GetWorkerSessionByID(ctx, uint(targetID))
 		if rowErr != nil {
 			return nil, rowErr
 		}
-		startID = row.ContextStartID
-		if row.ContextThroughID > afterID {
-			afterID = row.ContextThroughID
+		afterID = row.ContextThroughID
+		if row.ContextStartID > 0 {
+			afterID = max(afterID, row.ContextStartID-1)
 		}
-		if startID > 0 && startID-1 > afterID {
-			afterID = startID - 1
+		if row.ContextThroughID > 0 && row.ContextThroughID >= row.ContextStartID {
+			summary = row.ContextSummary
 		}
 	case memory.ConversationKindLife:
 		row, rowErr := mem.GetLifeState(ctx)
 		if rowErr != nil {
 			return nil, rowErr
 		}
-		if row.ContextThroughID > afterID {
-			afterID = row.ContextThroughID
+		afterID = row.ContextThroughID
+		if afterID > 0 {
+			summary = row.ContextSummary
 		}
 	}
 	visible, err := mem.VisibleTranscript(ctx, kind, targetID, afterVisible, afterID)
@@ -166,15 +167,12 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 			head = append(head, note)
 		}
 	}
-	if kind == memory.ConversationKindLife || kind == memory.ConversationKindWorker {
-		summary, summaryStart := previewSummary(ctx, mem, kind, targetID)
-		if len(summary) > 0 && summaryStart {
-			summaryMessages := make([]*schema.AgenticMessage, 0)
-			if err := sonic.Unmarshal(summary, &summaryMessages); err != nil {
-				return nil, fmt.Errorf("解析 %s:%d 摘要检查点失败: %w", kind, targetID, err)
-			}
-			head = append(head, summaryMessages...)
+	if len(summary) > 0 {
+		var summaryMessages []*schema.AgenticMessage
+		if err := sonic.Unmarshal(summary, &summaryMessages); err != nil {
+			return nil, fmt.Errorf("解析 %s:%d 摘要检查点失败: %w", kind, targetID, err)
 		}
+		head = append(head, summaryMessages...)
 	}
 	messages = append(head, messages...)
 	for _, entry := range pending {
@@ -199,29 +197,9 @@ func previewSystemMessage(p *persona.Persona, kind string, targetID int64) *sche
 	return system
 }
 
-func capacitySummaryValid(raw []byte) bool {
-	text := strings.TrimSpace(string(raw))
-	return text != "" && text != "[]" && text != "null"
-}
-
-func previewSummary(ctx context.Context, mem *memory.Manager, kind string, targetID int64) ([]byte, bool) {
-	switch kind {
-	case memory.ConversationKindLife:
-		row, err := mem.GetLifeState(ctx)
-		if err != nil || row.ContextThroughID == 0 || !capacitySummaryValid(row.ContextSummary) {
-			return nil, false
-		}
-		return row.ContextSummary, true
-	case memory.ConversationKindWorker:
-		row, err := mem.GetWorkerSessionByID(ctx, uint(targetID))
-		if err != nil || !capacitySummaryValid(row.ContextSummary) || row.ContextThroughID == 0 {
-			return nil, false
-		}
-		if row.ContextStartID > 0 && row.ContextThroughID < row.ContextStartID {
-			return nil, false
-		}
-		return row.ContextSummary, true
-	default:
-		return nil, false
-	}
+// switchContextCheck 共用硬窗口限制；提前整理线只适用于主动缩窗
+func (s *Session) switchContextCheck(messages []*schema.AgenticMessage, tools []*schema.ToolInfo, target ModelTarget, triggerRatio float64) (incompatible, needsCapacity bool, tokens int) {
+	tokens = s.estimateSwitchTokens(messages, tools, target)
+	return lastIncompatibleMessage(messages, target) >= 0,
+		tokens > target.ContextWindow || (target.ShrinkWindow && tokens >= capacityTrigger(target.ContextWindow, triggerRatio)), tokens
 }

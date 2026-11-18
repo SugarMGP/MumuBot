@@ -41,11 +41,11 @@ func (s *Session) switchPending() bool {
 }
 
 // lockForModelSwitch 不取消工具；超时只中断当前模型请求，下一模型边界会让出维护锁
-func (s *Session) lockForModelSwitch(ctx context.Context, deadline time.Time) (bool, error) {
+func (s *Session) lockForModelSwitch(ctx context.Context, deadline time.Time) error {
 	s.mu.Lock()
 	if s.switching {
 		s.mu.Unlock()
-		return false, errModelSwitchPending
+		return errModelSwitchPending
 	}
 	s.switching = true
 	s.mu.Unlock()
@@ -53,33 +53,30 @@ func (s *Session) lockForModelSwitch(ctx context.Context, deadline time.Time) (b
 	defer timer.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	canceled := false
 	for {
 		if s.maintenanceMu.TryLock() {
-			return canceled, nil
+			return nil
 		}
 		select {
 		case <-ctx.Done():
 			s.endModelSwitch()
-			return canceled, ctx.Err()
+			return ctx.Err()
 		case <-timer.C:
-			canceled = s.finishModelRequest(errModelSwitchPending)
+			s.finishModelRequest(errModelSwitchPending)
 		case <-ticker.C:
 		}
 	}
 }
 
 // finishModelRequest 也用于回合退出：SDK 提前关闭流时可能仍在等待下一个网络分片
-func (s *Session) finishModelRequest(cause error) bool {
+func (s *Session) finishModelRequest(cause error) {
 	s.mu.Lock()
 	cancel := s.modelCancel
 	s.modelCancel = nil
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel(cause)
-		return true
 	}
-	return false
 }
 
 func (s *Session) endModelSwitch() {

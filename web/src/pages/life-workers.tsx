@@ -102,15 +102,20 @@ export function LifeWorkers({ workers }: { workers: LifeWorker[] }) {
             <TableHeader><TableRow>
               <TableHead>{t("life.workers.session")}</TableHead><TableHead>{t("life.workers.task")}</TableHead><TableHead>{t("common.status")}</TableHead><TableHead>{t("common.updatedAt")}</TableHead><TableHead className="text-right">{t("common.actions")}</TableHead>
             </TableRow></TableHeader>
-            <TableBody>{workers.map((worker) => (
-              <TableRow key={worker.id}>
-                <TableCell className="admin-number text-xs">{`worker:${worker.id}`}</TableCell>
-                <TableCell className="max-w-lg"><p>{worker.title}</p>{worker.last_error ? <p className="mt-1 whitespace-pre-wrap break-words text-xs text-destructive">{worker.last_error}</p> : null}</TableCell>
-                <TableCell><Badge variant={!worker.active ? "ghost" : worker.status === "failed" ? "destructive" : worker.status === "running" ? "success" : "outline"}>{t(`life.workers.status.${worker.active ? worker.status : "inactive"}`, { defaultValue: t("life.workers.status.unknown") })}</Badge></TableCell>
-                <TableCell className="admin-number text-xs">{formatDateTime(worker.updated_at)}</TableCell>
-                <TableCell className="text-right"><Button size="xs" variant="ghost" onClick={() => setSelectedID(worker.id)}>{t("life.workers.view")}</Button></TableCell>
-              </TableRow>
-            ))}</TableBody>
+            <TableBody>{workers.map((worker) => {
+              const interrupted = worker.last_error === "model_switch_interrupted";
+              const status = !worker.active ? "inactive" : interrupted ? "interrupted" : worker.status;
+              const reason = interrupted ? t("life.workers.modelSwitchInterrupted") : worker.last_error;
+              return (
+                <TableRow key={worker.id}>
+                  <TableCell className="admin-number text-xs">{`worker:${worker.id}`}</TableCell>
+                  <TableCell className="max-w-lg"><p>{worker.title}</p>{reason ? <p className="mt-1 whitespace-pre-wrap break-words text-xs text-destructive">{reason}</p> : null}</TableCell>
+                  <TableCell><Badge variant={!worker.active ? "ghost" : worker.status === "failed" ? "destructive" : worker.status === "running" ? "success" : "outline"}>{t(`life.workers.status.${status}`, { defaultValue: t("life.workers.status.unknown") })}</Badge></TableCell>
+                  <TableCell className="admin-number text-xs">{formatDateTime(worker.updated_at)}</TableCell>
+                  <TableCell className="text-right"><Button size="xs" variant="ghost" onClick={() => setSelectedID(worker.id)}>{t("life.workers.view")}</Button></TableCell>
+                </TableRow>
+              );
+            })}</TableBody>
           </Table>
         )}
       </SectionCard>

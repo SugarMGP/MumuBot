@@ -93,7 +93,8 @@ func (a *Agent) thinkWorker(workerID int64) {
 		}
 		if runErr != nil {
 			if errors.Is(runErr, errModelSwitchPending) {
-				a.setWorkerIdle(context.WithoutCancel(ctx), id, epoch, generation.workerModel.modelName)
+				// 已读的任务可能尚未完成，不能由空闲派工覆盖工作集
+				a.setWorkerStatusIfCurrent(context.WithoutCancel(ctx), id, epoch, memory.WorkerStatusCancelled, memory.WorkerModelSwitchInterruption, generation.workerModel.modelName)
 				a.finishWorkerRun(id, epoch)
 				cancel()
 				return

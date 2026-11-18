@@ -13,7 +13,8 @@ import (
 type ModelTarget struct {
 	modelprofiles.Profile
 	APIKey            string
-	CheckCapacity     bool
+	ShrinkWindow      bool
+	ReuseUsage        bool
 	ConnectionChanged bool
 	KeyChanged        bool
 }

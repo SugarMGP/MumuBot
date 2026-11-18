@@ -163,15 +163,17 @@ func switchSummaryInput(ctx context.Context, system, instruction *schema.Agentic
 	return input, checkSwitchInput(ctx, input, nil)
 }
 
-type switchWindowError struct{}
+type switchWindowError struct{ tokens, window int }
 
-func (*switchWindowError) Error() string {
-	return "closed history or fixed summary exceeds the target model window"
+func (e *switchWindowError) Error() string {
+	return fmt.Sprintf("summary input estimate %d exceeds the target window %d", e.tokens, e.window)
 }
 
 func checkSwitchInput(ctx context.Context, messages []*schema.AgenticMessage, infos []*schema.ToolInfo) error {
-	if attempt := switchAttemptFrom(ctx); attempt != nil && attempt.portable && requestTokens(messages, infos) > attempt.window {
-		return &switchWindowError{}
+	if attempt := switchAttemptFrom(ctx); attempt != nil && attempt.portable {
+		if tokens := requestTokens(messages, infos); tokens > attempt.window {
+			return &switchWindowError{tokens: tokens, window: attempt.window}
+		}
 	}
 	return nil
 }

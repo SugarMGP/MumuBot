@@ -19,18 +19,17 @@ export function toastError(message: string) {
 export function toastApiError(error: unknown) {
   if (error instanceof ApiError) {
     if (error.code.startsWith("model_switch_") || error.details?.compacted === true) {
-      toast.error(translateError(error), {
-        description: error.details?.compacted === true
-          ? i18n.t("models.partialContext")
-          : undefined,
-      });
-      return;
-    }
-    if (error.code === "model_context_too_small") {
-      const sessions = error.details?.sessions;
-      toast.error(i18n.t("errors.model_context_too_small"), {
-        description: Array.isArray(sessions) ? sessions.join(", ") : undefined,
-      });
+      const { sessions, estimated_tokens: estimated, context_window: window, compacted } = error.details ?? {};
+      const details: string[] = [];
+      if (Array.isArray(sessions) && sessions.length > 0) {
+        details.push(i18n.t("models.switchSessions", { sessions: sessions.join(", ") }));
+      }
+      if (typeof estimated === "number" && typeof window === "number") {
+        const format = new Intl.NumberFormat(i18n.language);
+        details.push(i18n.t("models.switchCapacity", { estimated: format.format(estimated), window: format.format(window) }));
+      }
+      if (compacted === true) details.push(i18n.t("models.partialContext"));
+      toast.error(translateError(error), { description: details.join(" · ") || undefined });
       return;
     }
     if (error.code === "model_test_failed") {

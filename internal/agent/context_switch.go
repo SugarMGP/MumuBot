@@ -20,11 +20,18 @@ import (
 
 // ModelSwitchReport 描述实际整理进度，不承诺跨会话或批次回滚
 type ModelSwitchReport struct {
-	Applied   bool     `json:"-"`
-	Sessions  []string `json:"sessions,omitempty"`
-	Stage     string   `json:"stage,omitempty"`
-	Compacted bool     `json:"compacted"`
-	Fallback  bool     `json:"fallback"`
+	Applied         bool     `json:"-"`
+	Sessions        []string `json:"sessions,omitempty"`
+	Stage           string   `json:"stage,omitempty"`
+	Compacted       bool     `json:"compacted"`
+	Fallback        bool     `json:"fallback"`
+	EstimatedTokens int      `json:"estimated_tokens,omitempty"`
+	ContextWindow   int      `json:"context_window,omitempty"`
+}
+
+func (r *ModelSwitchReport) windowFailure(stage string, tokens, window int) error {
+	r.Stage, r.EstimatedTokens, r.ContextWindow = stage, tokens, window
+	return fmt.Errorf("model switch %s: estimated input %d, configured window %d", stage, tokens, window)
 }
 
 // PrepareModelSwitch 先尝试旧模型，再由目标模型接管，锁保留到保存和运行态切换结束
@@ -105,16 +112,18 @@ func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]Model
 		}
 		for _, conversation := range conversations {
 			session := a.sessions.get(conversation.ConversationKind, conversation.TargetID)
+			if target.ID != available.forKind(session.kind).profileID || target.ConnectionChanged || target.KeyChanged {
+				candidates = append(candidates, session)
+				continue
+			}
 			_, chatTools := capacityRoleTools(available, session.kind)
 			previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: target.ContextWindow}})
 			messages, previewErr := previewPersistedMessages(previewCtx, a.memory, state.persona, session.kind, session.targetID)
 			if previewErr != nil {
 				return release, report, previewErr
 			}
-			selected := available.forKind(session.kind)
-			changing := target.ConnectionChanged || target.KeyChanged || (selected.model != nil && selected.provider != target.Provider)
-			needsCapacity := target.CheckCapacity && session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) >= capacityTrigger(target.ContextWindow, state.config.Compactor.TriggerRatio)
-			if changing || needsCapacity || lastIncompatibleMessage(messages, target) >= 0 {
+			incompatible, needsCapacity, _ := session.switchContextCheck(messages, modelToolInfos(ctx, chatTools), target, state.config.Compactor.TriggerRatio)
+			if needsCapacity || incompatible {
 				candidates = append(candidates, session)
 			}
 		}
@@ -130,20 +139,11 @@ func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]Model
 	waitUntil := time.Now().Add(modelSwitchWait)
 	for _, session := range candidates {
 		report.Sessions = []string{sessionKey(session.kind, session.targetID)}
-		canceled, lockErr := session.lockForModelSwitch(ctx, waitUntil)
-		if lockErr != nil {
+		if lockErr := session.lockForModelSwitch(ctx, waitUntil); lockErr != nil {
 			report.Stage = "busy"
 			return release, report, lockErr
 		}
 		locked = append(locked, session)
-		role, _ := capacityRoleTools(available, session.kind)
-		oldID := available.forKind(session.kind).profileID
-		if oldID == 0 {
-			oldID = selection.ID(role)
-		}
-		if canceled {
-			unavailable[oldID] = true
-		}
 	}
 	for _, session := range locked {
 		role, chatTools := capacityRoleTools(available, session.kind)
@@ -162,8 +162,9 @@ func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]Model
 			return release, report, compactErr
 		}
 	}
-	report.Sessions = nil
 	for _, session := range locked {
+		report.Sessions = []string{sessionKey(session.kind, session.targetID)}
+		report.Stage = "storage"
 		role, chatTools := capacityRoleTools(available, session.kind)
 		target := targets[role]
 		previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: target.ContextWindow}})
@@ -171,11 +172,16 @@ func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]Model
 		if previewErr != nil {
 			return release, report, previewErr
 		}
-		if lastIncompatibleMessage(messages, target) >= 0 || session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) > target.ContextWindow {
-			report.Stage = "window"
-			report.Sessions = append(report.Sessions, sessionKey(session.kind, session.targetID))
+		incompatible, _, tokens := session.switchContextCheck(messages, modelToolInfos(ctx, chatTools), target, state.config.Compactor.TriggerRatio)
+		if incompatible {
+			report.Stage = "boundary"
+			return release, report, fmt.Errorf("incompatible history remains after model switch preparation")
+		}
+		if tokens > target.ContextWindow {
+			return release, report, report.windowFailure("remaining_window", tokens, target.ContextWindow)
 		}
 	}
+	report.Sessions = nil
 	return release, report, nil
 }
 

@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	MaxWorkerTitleRunes   = 30
-	WorkerStatusIdle      = "idle"
-	WorkerStatusRunning   = "running"
-	WorkerStatusFailed    = "failed"
-	WorkerStatusCancelled = "cancelled"
+	MaxWorkerTitleRunes           = 30
+	WorkerStatusIdle              = "idle"
+	WorkerStatusRunning           = "running"
+	WorkerStatusFailed            = "failed"
+	WorkerStatusCancelled         = "cancelled"
+	WorkerModelSwitchInterruption = "model_switch_interrupted"
 )
 
 // WorkerSession 保存一个 worker 的元数据和 eino 上下文检查点

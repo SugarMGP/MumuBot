@@ -27,20 +27,23 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 	newAttempt := &switchAttempt{portable: true, remaining: steps, window: target.ContextWindow, report: report}
 	usingTarget := unavailable[original.profileID]
 	loaded := original.model != nil
+	compacted := false
+	toolInfos := modelToolInfos(ctx, chatTools)
+	triggerRatio := configFor(ctx).Compactor.TriggerRatio
+	previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: target.ContextWindow}})
+	report.Stage = "storage"
+	workingSet, err := previewPersistedMessages(previewCtx, a.memory, a.personaFor(ctx), session.kind, session.targetID)
+	if err != nil {
+		return err
+	}
 	for {
-		report.Stage = "storage"
-		previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: target.ContextWindow}})
-		messages, err := previewPersistedMessages(previewCtx, a.memory, a.personaFor(ctx), session.kind, session.targetID)
-		if err != nil {
-			return err
-		}
-		incompatible := lastIncompatibleMessage(messages, target) >= 0
-		needsCapacity := target.CheckCapacity && session.EstimatedRequestTokens(messages, modelToolInfos(ctx, chatTools)) >= capacityTrigger(target.ContextWindow, configFor(ctx).Compactor.TriggerRatio)
+		messages := workingSet
+		incompatible, needsCapacity, tokens := session.switchContextCheck(messages, toolInfos, target, triggerRatio)
 		if !incompatible && !needsCapacity {
 			return nil
 		}
 		var candidate *compactionCandidate
-		report.Stage = "history"
+		report.Stage = "boundary"
 		isQQ := session.kind == memory.ConversationKindGroup || session.kind == memory.ConversationKindPrivate
 		if incompatible {
 			if isQQ {
@@ -57,15 +60,22 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 			return err
 		}
 		if isQQ {
-			if candidate == nil {
-				if incompatible {
-					return fmt.Errorf("no closed protocol compaction candidate")
-				}
-				return nil
+			messages = nil
+			if candidate != nil {
+				messages = candidate.Messages
 			}
-			messages = candidate.Messages
 		}
 		if len(transcriptIDs(messages)) == 0 {
+			if incompatible {
+				return fmt.Errorf("no closed protocol compaction candidate")
+			}
+			if tokens > target.ContextWindow {
+				stage := "boundary"
+				if compacted {
+					stage = "remaining_window"
+				}
+				return report.windowFailure(stage, tokens, target.ContextWindow)
+			}
 			return nil
 		}
 		if !usingTarget && !loaded {
@@ -89,20 +99,23 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 				usingTarget = true
 			}
 			attempt, selected := oldAttempt, original
-			attemptCtx := ctx
+			attemptCtx, cancelAttempt := context.WithCancel(ctx)
 			if usingTarget {
 				attempt, selected = newAttempt, destination
+				selected.model = &requestModel{AgenticModel: selected.model, idleTimeout: switchTargetIdleTimeout}
 				report.Fallback = true
 			} else {
-				attemptCtx = llm.WithRequestTracker(ctx, modelRequestDeadline(oldDeadline))
+				attemptCtx = llm.WithRequestTracker(attemptCtx, modelRequestDeadline(oldDeadline))
+				selected.model = &requestModel{AgenticModel: selected.model}
 			}
 			selected.contextWindow = target.ContextWindow
-			selected.model = &requestModel{selected.model}
 			attemptCtx = context.WithValue(attemptCtx, switchAttemptKey{}, attempt)
 			attemptCtx = withGeneration(attemptCtx, &Generation{roleModel: selected, lifeModel: selected, workerModel: selected})
 			report.Stage = "storage"
 			err = a.compactForWindow(attemptCtx, session, candidate, messages)
+			cancelAttempt()
 			if err == nil {
+				compacted = true
 				report.Compacted = true
 				zap.L().Info("模型切换上下文已整理", zap.String("session", sessionKey(session.kind, session.targetID)), zap.Bool("fallback", usingTarget), zap.Int("entries", len(transcriptIDs(messages))))
 				break
@@ -111,13 +124,19 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 				return ctx.Err()
 			}
 			var windowErr *switchWindowError
-			if usingTarget && (errors.As(err, &windowErr) || isContextOverflowError(err)) {
-				if candidate == nil && errors.As(err, &windowErr) {
+			var requestErr *modelRequestError
+			localOverflow := errors.As(err, &windowErr)
+			requestFailed := errors.As(err, &requestErr)
+			if usingTarget && (localOverflow || (requestFailed && isContextOverflowError(err))) {
+				if candidate == nil && localOverflow {
 					attempt.remaining++
 				}
 				messages = smallerSwitchPrefix(messages, !isQQ)
 				if len(messages) == 0 {
-					report.Stage = "window"
+					if localOverflow {
+						return report.windowFailure("input_window", windowErr.tokens, windowErr.window)
+					}
+					report.Stage = "upstream_window"
 					return err
 				}
 				if candidate != nil {
@@ -129,10 +148,9 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 				}
 				continue
 			}
-			var requestErr *modelRequestError
 			var inputErr *compactionInputError
 			var materialErr *switchMaterialError
-			if !usingTarget && (errors.As(err, &requestErr) || errors.As(err, &inputErr) || errors.Is(err, adk.ErrExceedMaxIterations) || errors.Is(err, errSwitchBudgetExhausted)) {
+			if !usingTarget && (requestFailed || errors.As(err, &inputErr) || errors.Is(err, adk.ErrExceedMaxIterations) || errors.Is(err, errSwitchBudgetExhausted)) {
 				if unavailableModel(err) {
 					unavailable[original.profileID] = true
 				}
@@ -140,19 +158,21 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 				usingTarget = true
 				continue
 			}
-			if errors.As(err, &requestErr) || errors.As(err, &inputErr) || errors.As(err, &materialErr) || errors.Is(err, errSwitchBudgetExhausted) || errors.Is(err, adk.ErrExceedMaxIterations) {
+			if errors.Is(err, errModelRequestIdle) {
+				report.Stage = "target_timeout"
+			} else if requestFailed || errors.As(err, &inputErr) || errors.As(err, &materialErr) || errors.Is(err, errSwitchBudgetExhausted) || errors.Is(err, adk.ErrExceedMaxIterations) {
 				report.Stage = "target"
 			}
 			return err
 		}
 		// 每一批必须有真实 transcript 被检查点覆盖，下一次只读取仍然存在的工作集
-		remaining, err := previewPersistedMessages(previewCtx, a.memory, a.personaFor(ctx), session.kind, session.targetID)
+		workingSet, err = previewPersistedMessages(previewCtx, a.memory, a.personaFor(ctx), session.kind, session.targetID)
 		if err != nil {
 			return err
 		}
 		before := transcriptIDs(messages)
 		after := make(map[uint]bool)
-		for _, id := range transcriptIDs(remaining) {
+		for _, id := range transcriptIDs(workingSet) {
 			after[id] = true
 		}
 		for _, id := range before {
