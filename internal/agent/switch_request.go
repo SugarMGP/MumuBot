@@ -10,7 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const modelSwitchWait = 60 * time.Second
+const (
+	modelSwitchWait       = 60 * time.Second
+	oldModelSwitchTimeout = 180 * time.Second
+)
 
 var errModelSwitchPending = errors.New("模型切换正在等待当前回合收尾")
 

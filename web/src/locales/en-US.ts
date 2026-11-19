@@ -909,7 +909,7 @@ const enUS: typeof zhCN = {
     model_switch_upstream_window: "The new model rejected the summary input as too long. The model has not switched.",
     model_switch_boundary: "There is no complete history segment that can be safely summarized. The model has not switched.",
     model_switch_remaining_window: "The remaining context still exceeds the new window after summarization. The model has not switched.",
-    model_switch_target_timeout: "The new model made no progress for 120 seconds. The model has not switched.",
+    model_switch_target_timeout: "The new model made no progress for 360 seconds. The model has not switched.",
     model_switch_storage_failed: "The saved context could not be confirmed. The model has not switched. Check the runtime logs before retrying.",
     model_switch_busy: "The conversation is waiting for its current operation to finish. The model has not switched. Try again later.",
     model_activate_failed: "Model switch failed; the previous model is still active.",

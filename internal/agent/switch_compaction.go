@@ -18,7 +18,7 @@ import (
 var errSwitchBudgetExhausted = errors.New("模型切换摘要步数预算已用尽")
 
 func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, target ModelTarget, original, destination roleModel, chatTools []tool.BaseTool, unavailable map[uint]bool, report *ModelSwitchReport) error {
-	oldDeadline := time.Now().Add(modelSwitchWait)
+	oldDeadline := time.Now().Add(oldModelSwitchTimeout)
 	steps := configFor(ctx).Compactor.MaxSteps
 	if steps <= 0 {
 		steps = 12

@@ -887,7 +887,7 @@ const zhCN = {
     model_switch_upstream_window: "新模型拒绝了过长的整理请求，模型尚未切换。",
     model_switch_boundary: "没有可安全整理的完整历史段，模型尚未切换。",
     model_switch_remaining_window: "整理后剩余上下文仍超过新窗口，模型尚未切换。",
-    model_switch_target_timeout: "新模型连续 120 秒没有响应进展，模型尚未切换。",
+    model_switch_target_timeout: "新模型连续 360 秒没有响应进展，模型尚未切换。",
     model_switch_storage_failed: "上下文整理结果未能确认保存，模型尚未切换。请检查运行日志后重试。",
     model_switch_busy: "会话仍在等待当前操作结束，模型尚未切换。请稍后重试。",
     model_activate_failed: "模型切换失败，已继续使用旧配置。",

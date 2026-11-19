@@ -21,7 +21,7 @@ type modelRequestError struct{ error }
 
 func (e *modelRequestError) Unwrap() error { return e.error }
 
-const switchTargetIdleTimeout = 120 * time.Second
+const switchTargetIdleTimeout = 360 * time.Second
 
 var errModelRequestIdle = errors.New("目标模型请求长时间没有响应进展")
 
