@@ -84,11 +84,6 @@ func ToolErrorResult(err error) string {
 	return payload
 }
 
-// TextResult 构造纯文本工具结果
-func TextResult(text string) *Result {
-	return &Result{Parts: []Part{{Type: PartTypeText, Text: text}}}
-}
-
 // TerminalToolError 标记必须结束当前 Agent 轮次的错误
 type TerminalToolError struct{ error }
 
@@ -132,14 +127,6 @@ func ResultText(value any) string {
 		return fmt.Sprint(value)
 	}
 	return encoded
-}
-
-// ResultParts 把任意工具返回值转成内容块；普通结构是单个文本块
-func ResultParts(value any) []Part {
-	if result, ok := ResultOf(value); ok {
-		return result.Parts
-	}
-	return []Part{{Type: PartTypeText, Text: ResultText(value)}}
 }
 
 // ResultSucceeded 按结果里的 success 字段判断工具是否成功；字段缺失视为成功

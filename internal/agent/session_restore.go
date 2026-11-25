@@ -202,7 +202,7 @@ func (a *Agent) collectMissingToolResults(session *Session, entries []memory.Tra
 				continue
 			}
 			assistantID := entry.ID
-			toolEntry, created, err := session.AppendNotExecutedTool(a.ctx, entry.RunID, call.CallID, call.Name)
+			toolEntry, created, err := session.AppendNotExecutedTool(a.ctx, entry.RunID, call.CallID, call.Name, toolNotExecutedText)
 			if err != nil {
 				return nil, err
 			}
@@ -217,7 +217,7 @@ func (a *Agent) collectMissingToolResults(session *Session, entries []memory.Tra
 
 func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry, missing map[uint][]*memory.TranscriptEntry) error {
 	if entry.EntryKind == "tool" && (entry.ToolStatus == "running" || entry.ToolStatus == "planned") {
-		if err := session.RepairToolTranscript(a.ctx, entry, "unknown", "工具执行因进程退出而中断，没有可复用结果，请勿自动重放。"); err != nil {
+		if err := session.RepairToolTranscript(a.ctx, entry, "unknown", toolInterruptedText); err != nil {
 			return err
 		}
 	}
@@ -232,10 +232,7 @@ func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry
 		}
 	}
 	for _, extra := range missing[entry.ID] {
-		var repaired agentic.Message
-		if sonic.Unmarshal(extra.Payload, &repaired) == nil {
-			session.AppendSeenMessage(&repaired, extra.ID, 0)
-		}
+		session.appendSeenToolResult(extra.ID, extra.Payload)
 	}
 	return nil
 }

@@ -46,6 +46,9 @@ const (
 	ToolResultPartFile  = "file"
 )
 
+// MissingToolResultText 是缺失工具回执的统一说明，恢复、修复和出站守卫共用
+const MissingToolResultText = "工具未能执行：没有可用结果，请勿自动重放。"
+
 // Message 是一条 transcript 消息；Provider 与 ProviderData 记录 assistant 的协议原生状态
 type Message struct {
 	Role          Role            `json:"role"`

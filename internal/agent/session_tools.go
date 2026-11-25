@@ -15,6 +15,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	toolNotExecutedText = agentic.MissingToolResultText
+	toolInterruptedText = "工具执行因进程退出而中断，没有可复用结果，请勿自动重放。"
+)
+
 // BeginToolTranscript 在执行工具前幂等登记工具回执
 func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, callID, arguments string) (id uint, existingResult string, resumed bool, err error) {
 	if s.memory == nil {
@@ -95,14 +100,20 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	if err := s.memory.UpdateToolTranscript(ctx, id, status, payload, resultRef); err != nil {
 		return "", nil, err
 	}
-	var resultMsg agentic.Message
-	if err := sonic.Unmarshal(payload, &resultMsg); err == nil {
-		tagTranscriptEntryID(&resultMsg, id)
-		s.mu.Lock()
-		s.seen = append(s.seen, sessionEntry{msg: &resultMsg, transcriptID: id})
-		s.mu.Unlock()
-	}
+	s.appendSeenToolResult(id, payload)
 	return resultText, enhanced, nil
+}
+
+// appendSeenToolResult 把已写库的工具回执按原始 payload 放进工作集，保证装配和数据库一致
+func (s *Session) appendSeenToolResult(id uint, payload []byte) {
+	var resultMsg agentic.Message
+	if sonic.Unmarshal(payload, &resultMsg) != nil {
+		return
+	}
+	tagTranscriptEntryID(&resultMsg, id)
+	s.mu.Lock()
+	s.seen = append(s.seen, sessionEntry{msg: &resultMsg, transcriptID: id})
+	s.mu.Unlock()
 }
 
 func textResultBlocks(text string) []*agentic.FunctionToolResultContentBlock {
@@ -192,17 +203,22 @@ func blocksText(blocks []*agentic.FunctionToolResultContentBlock) string {
 	return strings.Join(parts, "\n")
 }
 
-// RepairToolTranscript 在重启恢复时把中断工具改成不可重放的终态
-func (s *Session) RepairToolTranscript(ctx context.Context, entry *memory.TranscriptEntry, status, text string) error {
-	payload, err := sonic.Marshal(&agentic.Message{
+// toolResultPayload 生成只有文本的工具回执，供缺失和中断修复共用
+func toolResultPayload(callID, name, text string) ([]byte, error) {
+	return sonic.Marshal(&agentic.Message{
 		Role: agentic.RoleUser,
 		ContentBlocks: []*agentic.ContentBlock{{
 			Type: agentic.BlockTypeFunctionToolResult,
 			FunctionToolResult: &agentic.FunctionToolResult{
-				CallID: entry.ToolCallID, Name: entry.ToolName, Content: textResultBlocks(text),
+				CallID: callID, Name: name, Content: textResultBlocks(text),
 			},
 		}},
 	})
+}
+
+// RepairToolTranscript 在重启恢复时把中断工具改成不可重放的终态
+func (s *Session) RepairToolTranscript(ctx context.Context, entry *memory.TranscriptEntry, status, text string) error {
+	payload, err := toolResultPayload(entry.ToolCallID, entry.ToolName, text)
 	if err != nil {
 		return err
 	}
@@ -215,17 +231,8 @@ func (s *Session) RepairToolTranscript(ctx context.Context, entry *memory.Transc
 }
 
 // AppendNotExecutedTool 为缺少回执的工具调用补一条关闭协议的结果
-func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, toolName string) (*memory.TranscriptEntry, bool, error) {
-	payload, err := sonic.Marshal(&agentic.Message{
-		Role: agentic.RoleUser,
-		ContentBlocks: []*agentic.ContentBlock{{
-			Type: agentic.BlockTypeFunctionToolResult,
-			FunctionToolResult: &agentic.FunctionToolResult{
-				CallID: callID, Name: toolName,
-				Content: textResultBlocks("工具调用没有执行：进程在工具开始前中断，请勿自动重放。"),
-			},
-		}},
-	})
+func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, toolName, text string) (*memory.TranscriptEntry, bool, error) {
+	payload, err := toolResultPayload(callID, toolName, text)
 	if err != nil {
 		return nil, false, err
 	}
@@ -235,6 +242,12 @@ func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, tool
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if !created && entry != nil && (entry.ToolStatus == "running" || entry.ToolStatus == "planned") {
+		// 进程中断留下的 running/planned 行没有可复用结果，统一转成不可重放的终态
+		if err := s.RepairToolTranscript(ctx, entry, "unknown", toolInterruptedText); err != nil {
+			return nil, false, err
+		}
 	}
 	return entry, created, nil
 }
@@ -265,16 +278,6 @@ func convertFile(value *tools.File) *agentic.UserInputFile {
 		return nil
 	}
 	return &agentic.UserInputFile{URL: value.URL, Name: value.Name, Base64Data: value.Base64Data, FileID: value.FileID, MIMEType: value.MIMEType}
-}
-
-func toolResultBlocksText(blocks []*agentic.FunctionToolResultContentBlock) string {
-	var parts []string
-	for _, block := range blocks {
-		if block != nil && block.Text != nil {
-			parts = append(parts, block.Text.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 // syncToolChains 在模型请求前把运行时回执并入工作集，并保证每个工具调用都有回执
@@ -441,22 +444,16 @@ func (s *Session) repairMissingToolCalls(ctx context.Context, runID string, mess
 				continue
 			}
 			callRunID := s.toolCallRunID(ctx, runID, messages, call.CallID)
-			id, _, resumed, err := s.BeginToolTranscript(ctx, callRunID, call.Name, call.CallID, call.Arguments)
-			if err != nil {
-				return false, err
-			}
-			if resumed {
-				// 回执已在库里但不在当前消息里，重新装配后会补进请求
-				results[call.CallID] = true
-				repaired = true
-				continue
-			}
-			text := "工具未能执行：会话在回执前中断，没有可用结果。"
+			text := toolNotExecutedText
 			if !known[call.Name] {
 				text = tools.ToolErrorResult(fmt.Errorf("没有工具 %s，请使用已提供的工具名称", call.Name))
 			}
-			if _, _, err := s.FinishToolTranscript(ctx, id, "not_executed", text, nil, ""); err != nil {
+			entry, _, err := s.AppendNotExecutedTool(ctx, callRunID, call.CallID, call.Name, text)
+			if err != nil {
 				return false, err
+			}
+			if entry != nil {
+				s.appendSeenToolResult(entry.ID, entry.Payload)
 			}
 			results[call.CallID] = true
 			repaired = true

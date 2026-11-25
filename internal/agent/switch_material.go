@@ -102,6 +102,12 @@ func switchMaterialBlocks(block *agentic.ContentBlock) ([]*agentic.ContentBlock,
 	case block.AssistantGenImage != nil:
 		image := block.AssistantGenImage
 		return []*agentic.ContentBlock{agentic.NewContentBlock(&agentic.UserInputImage{URL: image.URL, Base64Data: image.Base64Data, MIMEType: image.MIMEType})}, nil
+	case block.AssistantGenAudio != nil:
+		audio := block.AssistantGenAudio
+		return []*agentic.ContentBlock{agentic.NewContentBlock(&agentic.UserInputAudio{URL: audio.URL, Base64Data: audio.Base64Data, MIMEType: audio.MIMEType})}, nil
+	case block.AssistantGenVideo != nil:
+		video := block.AssistantGenVideo
+		return []*agentic.ContentBlock{agentic.NewContentBlock(&agentic.UserInputVideo{URL: video.URL, Base64Data: video.Base64Data, MIMEType: video.MIMEType})}, nil
 	case block.UserInputAudio != nil:
 		if block.UserInputAudio.FileID != "" {
 			return nil, fmt.Errorf("cannot transfer provider audio ID to another model")

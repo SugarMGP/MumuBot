@@ -67,6 +67,18 @@ func fromModelAssistant(provider string, source model.Message) *agentic.Message 
 					URL: part.Image.URL, Base64Data: base64.StdEncoding.EncodeToString(part.Image.Data), MIMEType: part.Image.Format,
 				}))
 			}
+		case model.ContentTypeAudio:
+			if part.Audio != nil {
+				message.ContentBlocks = append(message.ContentBlocks, agentic.NewContentBlock(&agentic.AssistantGenAudio{
+					URL: part.Audio.URL, Base64Data: base64.StdEncoding.EncodeToString(part.Audio.Data), MIMEType: part.Audio.Format,
+				}))
+			}
+		case model.ContentTypeVideo:
+			if part.Video != nil {
+				message.ContentBlocks = append(message.ContentBlocks, agentic.NewContentBlock(&agentic.AssistantGenVideo{
+					URL: part.Video.URL, Base64Data: base64.StdEncoding.EncodeToString(part.Video.Data), MIMEType: part.Video.Format,
+				}))
+			}
 		}
 	}
 	for _, text := range texts {
@@ -144,7 +156,8 @@ func toModelMessage(provider, modelName string, message *agentic.Message) model.
 			texts = append(texts, block.UserInputText.Text)
 		case block.AssistantGenText != nil:
 			texts = append(texts, block.AssistantGenText.Text)
-		case block.UserInputImage != nil, block.UserInputAudio != nil, block.UserInputVideo != nil, block.UserInputFile != nil, block.AssistantGenImage != nil:
+		case block.UserInputImage != nil, block.UserInputAudio != nil, block.UserInputVideo != nil, block.UserInputFile != nil,
+			block.AssistantGenImage != nil, block.AssistantGenAudio != nil, block.AssistantGenVideo != nil:
 			hasMedia = true
 		case block.FunctionToolCall != nil && out.Role == model.RoleAssistant:
 			out.ToolCalls = append(out.ToolCalls, model.ToolCall{
@@ -175,9 +188,11 @@ func toModelMessage(provider, modelName string, message *agentic.Message) model.
 			case block.UserInputFile != nil:
 				parts = append(parts, filePart(block.UserInputFile))
 			case block.AssistantGenImage != nil:
-				parts = append(parts, model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{
-					URL: block.AssistantGenImage.URL, Format: block.AssistantGenImage.MIMEType,
-				}})
+				parts = append(parts, imageData(block.AssistantGenImage.URL, block.AssistantGenImage.Base64Data, block.AssistantGenImage.MIMEType, ""))
+			case block.AssistantGenAudio != nil:
+				parts = append(parts, audioData(block.AssistantGenAudio.URL, block.AssistantGenAudio.Base64Data, block.AssistantGenAudio.MIMEType))
+			case block.AssistantGenVideo != nil:
+				parts = append(parts, videoData(block.AssistantGenVideo.URL, block.AssistantGenVideo.Base64Data, block.AssistantGenVideo.MIMEType))
 			}
 		}
 		out.ContentParts = parts
@@ -258,29 +273,41 @@ func toolResultText(result *agentic.FunctionToolResult) string {
 }
 
 func imagePart(image *agentic.UserInputImage) model.ContentPart {
-	part := model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: image.URL, Detail: image.Detail, Format: image.MIMEType}}
-	if image.Base64Data != "" {
-		if data, err := base64.StdEncoding.DecodeString(image.Base64Data); err == nil {
+	return imageData(image.URL, image.Base64Data, image.MIMEType, image.Detail)
+}
+
+func audioPart(audio *agentic.UserInputAudio) model.ContentPart {
+	return audioData(audio.URL, audio.Base64Data, audio.MIMEType)
+}
+
+func videoPart(video *agentic.UserInputVideo) model.ContentPart {
+	return videoData(video.URL, video.Base64Data, video.MIMEType)
+}
+
+func imageData(url, encoded, mimeType, detail string) model.ContentPart {
+	part := model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: url, Detail: detail, Format: mimeType}}
+	if encoded != "" {
+		if data, err := base64.StdEncoding.DecodeString(encoded); err == nil {
 			part.Image.Data = data
 		}
 	}
 	return part
 }
 
-func audioPart(audio *agentic.UserInputAudio) model.ContentPart {
-	part := model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{URL: audio.URL, Format: audio.MIMEType}}
-	if audio.Base64Data != "" {
-		if data, err := base64.StdEncoding.DecodeString(audio.Base64Data); err == nil {
+func audioData(url, encoded, mimeType string) model.ContentPart {
+	part := model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{URL: url, Format: mimeType}}
+	if encoded != "" {
+		if data, err := base64.StdEncoding.DecodeString(encoded); err == nil {
 			part.Audio.Data = data
 		}
 	}
 	return part
 }
 
-func videoPart(video *agentic.UserInputVideo) model.ContentPart {
-	part := model.ContentPart{Type: model.ContentTypeVideo, Video: &model.Video{URL: video.URL, Format: video.MIMEType}}
-	if video.Base64Data != "" {
-		if data, err := base64.StdEncoding.DecodeString(video.Base64Data); err == nil {
+func videoData(url, encoded, mimeType string) model.ContentPart {
+	part := model.ContentPart{Type: model.ContentTypeVideo, Video: &model.Video{URL: url, Format: mimeType}}
+	if encoded != "" {
+		if data, err := base64.StdEncoding.DecodeString(encoded); err == nil {
 			part.Video.Data = data
 		}
 	}
@@ -323,6 +350,7 @@ type callRef struct {
 func guardToolChains(input []*agentic.Message) []*agentic.Message {
 	used := map[string]bool{}
 	byOriginal := map[string][]*callRef{}
+	results := map[int][]*agentic.Message{}
 	out := make([]*agentic.Message, 0, len(input))
 	for _, message := range input {
 		if message == nil {
@@ -334,13 +362,14 @@ func guardToolChains(input []*agentic.Message) []*agentic.Message {
 				continue
 			}
 			ref.matched = true
-			if ref.wire == result.CallID {
-				out = append(out, message)
-				continue
+			resultMessage := message
+			if ref.wire != result.CallID {
+				copied := cloneMessage(message)
+				toolResultOf(copied).CallID = ref.wire
+				resultMessage = copied
 			}
-			copied := cloneMessage(message)
-			toolResultOf(copied).CallID = ref.wire
-			out = append(out, copied)
+			// 回执必须紧跟调用它的 assistant，按调用分组后再输出
+			results[ref.assistant] = append(results[ref.assistant], resultMessage)
 			continue
 		}
 		if message.Role == agentic.RoleAssistant && hasToolCall(message) {
@@ -378,12 +407,13 @@ func guardToolChains(input []*agentic.Message) []*agentic.Message {
 			repairs[ref.assistant] = append(repairs[ref.assistant], syntheticToolResult(ref))
 		}
 	}
-	if len(repairs) == 0 {
+	if len(repairs) == 0 && len(results) == 0 {
 		return out
 	}
 	final := make([]*agentic.Message, 0, len(out)+len(repairs))
 	for index, message := range out {
 		final = append(final, message)
+		final = append(final, results[index]...)
 		final = append(final, repairs[index]...)
 	}
 	return final
@@ -413,7 +443,7 @@ func syntheticToolResult(ref *callRef) *agentic.Message {
 			CallID: ref.wire, Name: ref.name,
 			Content: []*agentic.FunctionToolResultContentBlock{{
 				Type: agentic.ToolResultPartText,
-				Text: &agentic.UserInputText{Text: "工具未能执行：会话在回执前中断，没有可用结果。"},
+				Text: &agentic.UserInputText{Text: agentic.MissingToolResultText},
 			}},
 		}),
 	}}
