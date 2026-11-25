@@ -50,6 +50,8 @@ type modelInput struct {
 	ContextWindow   int    `json:"context_window"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	ThinkingMode    string `json:"thinking_mode"`
+	ThinkingBudget  *int   `json:"thinking_budget"`
+	ThinkingLevel   string `json:"thinking_level"`
 	BodyOverride    string `json:"body_override"`
 	APIKey          string `json:"api_key"`
 	Version         int64  `json:"version"`
@@ -60,7 +62,8 @@ func (input modelInput) profile(id uint) (modelprofiles.Profile, error) {
 		ID: id, Name: strings.TrimSpace(input.Name), Provider: input.Provider,
 		BaseURL: strings.TrimSpace(input.BaseURL), ModelName: strings.TrimSpace(input.ModelName),
 		ContextWindow: input.ContextWindow, ReasoningEffort: input.ReasoningEffort,
-		ThinkingMode: input.ThinkingMode, BodyOverride: input.BodyOverride, Version: input.Version,
+		ThinkingMode: input.ThinkingMode, ThinkingBudget: input.ThinkingBudget,
+		ThinkingLevel: input.ThinkingLevel, BodyOverride: input.BodyOverride, Version: input.Version,
 	}
 	return row, row.Validate()
 }

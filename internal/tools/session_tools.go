@@ -9,13 +9,12 @@ import (
 
 	"mumu-bot/internal/memory"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type ListSessionsInput struct {
 	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	Limit  int    `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type SessionSummary struct {
@@ -138,15 +137,15 @@ func sessionKindRank(kind string) int {
 	}
 }
 
-func NewListSessionsTool() (tool.InvokableTool, error) {
-	return utils.InferTool("listSessions", "按当前会话角色列出可见会话的元数据：类型、名称、状态、失败原因、待处理数量、是否正在运行和最近真人消息时间；不返回聊天正文。", listSessions)
+func NewListSessionsTool() (tool.Tool, error) {
+	return newFunctionTool("listSessions", "按当前会话角色列出可见会话的元数据：类型、名称、状态、失败原因、待处理数量、是否正在运行和最近真人消息时间；不返回聊天正文。", listSessions)
 }
 
 type SendSessionMessageInput struct {
-	TargetSessionID string `json:"target_session_id" jsonschema:"description=例如 life:1、group:123、private:456 或 worker:1"`
-	Text            string `json:"text" jsonschema:"description=要发送的完整消息正文，没有长度限制，越详细越好"`
-	Wake            *bool  `json:"wake,omitempty" jsonschema:"description=是否请求目标立即处理，默认 true；false 表示只保存，等目标下次正常运行时再读"`
-	ContextMode     string `json:"context_mode,omitempty" jsonschema:"description=仅 life 派 worker 时使用：continue（默认）或 new（从这条派工开始新上下文）"`
+	TargetSessionID string `json:"target_session_id" description:"例如 life:1、group:123、private:456 或 worker:1"`
+	Text            string `json:"text" description:"要发送的完整消息正文，没有长度限制，越详细越好"`
+	Wake            *bool  `json:"wake,omitempty" description:"是否请求目标立即处理，默认 true；false 表示只保存，等目标下次正常运行时再读"`
+	ContextMode     string `json:"context_mode,omitempty" description:"仅 life 派 worker 时使用：continue（默认）或 new（从这条派工开始新上下文）"`
 }
 
 type SendSessionMessageOutput struct {
@@ -213,12 +212,12 @@ func sendSessionMessage(ctx context.Context, input *SendSessionMessageInput) (*S
 	return &SendSessionMessageOutput{Success: true, MessageID: row.ID}, nil
 }
 
-func NewSendSessionMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendSessionMessage", "向另一个会话持久投信，随时可用（派工、中途追问澄清、补充材料、同步阶段进展或完工回报皆可），正文没有长度限制，越详细越好；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作或补充沟通、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只与 life 通信，life 可投任意可用会话。交事或沟通带目标、来源会话、原始 OneBot 消息 ID、材料、完成条件或具体疑问，回报带详细结果、验证、限制、建议存入记忆的要点（含新装工具/脚本或新结论）、原始 OneBot 消息 ID 和产物 ref，别来回发送无新内容的空确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
+func NewSendSessionMessageTool() (tool.Tool, error) {
+	return newFunctionTool("sendSessionMessage", "向另一个会话持久投信，随时可用（派工、中途追问澄清、补充材料、同步阶段进展或完工回报皆可），正文没有长度限制，越详细越好；成功只代表入队，不代表已读、做完或发给真人。QQ 可以向 life 交工作或补充沟通、向其它 QQ 会话转必要消息，不能直接派 worker；worker 只与 life 通信，life 可投任意可用会话。交事或沟通带目标、来源会话、原始 OneBot 消息 ID、材料、完成条件或具体疑问，回报带详细结果、验证、限制、建议存入记忆的要点（含新装工具/脚本或新结论）、原始 OneBot 消息 ID 和产物 ref，别来回发送无新内容的空确认。wake=false 只保存，不唤醒；wake=true 也不打断睡眠或绕过群门控。只有 life 派空闲且无待处理输入的 worker 可用 context_mode=new，默认 continue。回执 message_id 是内部条目号，不是 QQ 消息 ID。", sendSessionMessage)
 }
 
 type UpdateWorkerTitleInput struct {
-	Title string `json:"title" jsonschema:"description=当前正在执行的任务标题，最多30个字"`
+	Title string `json:"title" description:"当前正在执行的任务标题，最多30个字"`
 }
 
 type UpdateWorkerTitleOutput struct {
@@ -247,6 +246,6 @@ func updateWorkerTitle(ctx context.Context, input *UpdateWorkerTitleInput) (*Upd
 	return &UpdateWorkerTitleOutput{Success: true, Title: title}, nil
 }
 
-func NewUpdateWorkerTitleTool() (tool.InvokableTool, error) {
-	return utils.InferTool("updateWorkerTitle", "更新 worker 当前任务的标题。", updateWorkerTitle)
+func NewUpdateWorkerTitleTool() (tool.Tool, error) {
+	return newFunctionTool("updateWorkerTitle", "更新 worker 当前任务的标题。", updateWorkerTitle)
 }

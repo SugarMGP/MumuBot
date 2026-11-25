@@ -17,6 +17,7 @@ import type {
   Member,
   ModelProfile,
   ModelProvider,
+  ThinkingLevel,
   ThinkingMode,
   ModelStatsData,
   ModelsData,
@@ -184,6 +185,8 @@ export const settingsApi = {
 export interface ModelInput {
   provider: ModelProvider;
   thinking_mode: ThinkingMode;
+  thinking_budget: number | null;
+  thinking_level: ThinkingLevel;
   body_override: string;
   name: string;
   base_url: string;

@@ -2,14 +2,17 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // BeginToolTranscript 在执行工具前幂等登记工具回执
@@ -22,7 +25,7 @@ func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, call
 	} else if ok {
 		return id, result, true, nil
 	}
-	payload, err := sonic.Marshal(&schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, Extra: map[string]any{"tool_arguments": arguments}})
+	payload, err := sonic.Marshal(&agentic.Message{Role: agentic.RoleUser, Extra: map[string]any{"tool_arguments": arguments}})
 	if err != nil {
 		return 0, "", false, err
 	}
@@ -37,7 +40,7 @@ func (s *Session) BeginToolTranscript(ctx context.Context, runID, toolName, call
 }
 
 // FinishToolTranscript 更新工具回执；大文本只保留预览和内容寻址句柄
-func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, suppliedRef string) (string, *schema.ToolResult, error) {
+func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *tools.Result, suppliedRef string) (string, *tools.Result, error) {
 	if s.memory == nil || id == 0 {
 		return resultText, enhanced, nil
 	}
@@ -72,16 +75,16 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	if sonic.Unmarshal(row.Payload, &prior) == nil {
 		toolArguments, _ = prior.Extra["tool_arguments"].(string)
 	}
-	payload, err := sonic.Marshal(&schema.AgenticMessage{
-		Role: schema.AgenticRoleTypeUser,
+	payload, err := sonic.Marshal(&agentic.Message{
+		Role: agentic.RoleUser,
 		Extra: map[string]any{
 			"source": "tool_result", "tool_status": status,
 			"completed_at":   time.Now().UTC().Format(time.RFC3339Nano),
 			"tool_arguments": strings.TrimSpace(toolArguments),
 		},
-		ContentBlocks: []*schema.ContentBlock{{
-			Type: schema.ContentBlockTypeFunctionToolResult,
-			FunctionToolResult: &schema.FunctionToolResult{
+		ContentBlocks: []*agentic.ContentBlock{{
+			Type: agentic.BlockTypeFunctionToolResult,
+			FunctionToolResult: &agentic.FunctionToolResult{
 				CallID: row.ToolCallID, Name: row.ToolName, Content: blocks,
 			},
 		}},
@@ -92,7 +95,7 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	if err := s.memory.UpdateToolTranscript(ctx, id, status, payload, resultRef); err != nil {
 		return "", nil, err
 	}
-	var resultMsg schema.AgenticMessage
+	var resultMsg agentic.Message
 	if err := sonic.Unmarshal(payload, &resultMsg); err == nil {
 		tagTranscriptEntryID(&resultMsg, id)
 		s.mu.Lock()
@@ -102,37 +105,37 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 	return resultText, enhanced, nil
 }
 
-func textResultBlocks(text string) []*schema.FunctionToolResultContentBlock {
-	return []*schema.FunctionToolResultContentBlock{{
-		Type: schema.FunctionToolResultContentBlockTypeText,
-		Text: &schema.UserInputText{Text: text},
+func textResultBlocks(text string) []*agentic.FunctionToolResultContentBlock {
+	return []*agentic.FunctionToolResultContentBlock{{
+		Type: agentic.ToolResultPartText,
+		Text: &agentic.UserInputText{Text: text},
 	}}
 }
 
-func toolResultBlocks(result *schema.ToolResult, fallbackText string) []*schema.FunctionToolResultContentBlock {
+func toolResultBlocks(result *tools.Result, fallbackText string) []*agentic.FunctionToolResultContentBlock {
 	if result == nil {
 		return textResultBlocks(fallbackText)
 	}
-	blocks := make([]*schema.FunctionToolResultContentBlock, 0, len(result.Parts))
+	blocks := make([]*agentic.FunctionToolResultContentBlock, 0, len(result.Parts))
 	for _, part := range result.Parts {
 		switch part.Type {
-		case schema.ToolPartTypeText:
-			blocks = append(blocks, &schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: part.Text}})
-		case schema.ToolPartTypeImage:
+		case tools.PartTypeText:
+			blocks = append(blocks, &agentic.FunctionToolResultContentBlock{Type: agentic.ToolResultPartText, Text: &agentic.UserInputText{Text: part.Text}})
+		case tools.PartTypeImage:
 			if part.Image != nil {
-				blocks = append(blocks, &schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeImage, Image: convertImage(part.Image)})
+				blocks = append(blocks, &agentic.FunctionToolResultContentBlock{Type: agentic.ToolResultPartImage, Image: convertImage(part.Image)})
 			}
-		case schema.ToolPartTypeAudio:
+		case tools.PartTypeAudio:
 			if part.Audio != nil {
-				blocks = append(blocks, &schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeAudio, Audio: convertAudio(part.Audio)})
+				blocks = append(blocks, &agentic.FunctionToolResultContentBlock{Type: agentic.ToolResultPartAudio, Audio: convertAudio(part.Audio)})
 			}
-		case schema.ToolPartTypeVideo:
+		case tools.PartTypeVideo:
 			if part.Video != nil {
-				blocks = append(blocks, &schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeVideo, Video: convertVideo(part.Video)})
+				blocks = append(blocks, &agentic.FunctionToolResultContentBlock{Type: agentic.ToolResultPartVideo, Video: convertVideo(part.Video)})
 			}
-		case schema.ToolPartTypeFile:
+		case tools.PartTypeFile:
 			if part.File != nil {
-				blocks = append(blocks, &schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeFile, File: convertFile(part.File)})
+				blocks = append(blocks, &agentic.FunctionToolResultContentBlock{Type: agentic.ToolResultPartFile, File: convertFile(part.File)})
 			}
 		}
 	}
@@ -143,7 +146,7 @@ func toolResultBlocks(result *schema.ToolResult, fallbackText string) []*schema.
 }
 
 // toolResultManifest 把非 viewImage 的多媒体结果收敛成文本清单，避免媒体本体进入上下文
-func toolResultManifest(blocks []*schema.FunctionToolResultContentBlock) string {
+func toolResultManifest(blocks []*agentic.FunctionToolResultContentBlock) string {
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
 		if block == nil {
@@ -170,16 +173,16 @@ func toolResultManifest(blocks []*schema.FunctionToolResultContentBlock) string 
 	return strings.Join(parts, "\n")
 }
 
-func hasMediaBlock(blocks []*schema.FunctionToolResultContentBlock) bool {
+func hasMediaBlock(blocks []*agentic.FunctionToolResultContentBlock) bool {
 	for _, block := range blocks {
-		if block != nil && block.Type != schema.FunctionToolResultContentBlockTypeText {
+		if block != nil && block.Type != agentic.ToolResultPartText {
 			return true
 		}
 	}
 	return false
 }
 
-func blocksText(blocks []*schema.FunctionToolResultContentBlock) string {
+func blocksText(blocks []*agentic.FunctionToolResultContentBlock) string {
 	var parts []string
 	for _, block := range blocks {
 		if block != nil && block.Text != nil && block.Text.Text != "" {
@@ -191,11 +194,11 @@ func blocksText(blocks []*schema.FunctionToolResultContentBlock) string {
 
 // RepairToolTranscript 在重启恢复时把中断工具改成不可重放的终态
 func (s *Session) RepairToolTranscript(ctx context.Context, entry *memory.TranscriptEntry, status, text string) error {
-	payload, err := sonic.Marshal(&schema.AgenticMessage{
-		Role: schema.AgenticRoleTypeUser,
-		ContentBlocks: []*schema.ContentBlock{{
-			Type: schema.ContentBlockTypeFunctionToolResult,
-			FunctionToolResult: &schema.FunctionToolResult{
+	payload, err := sonic.Marshal(&agentic.Message{
+		Role: agentic.RoleUser,
+		ContentBlocks: []*agentic.ContentBlock{{
+			Type: agentic.BlockTypeFunctionToolResult,
+			FunctionToolResult: &agentic.FunctionToolResult{
 				CallID: entry.ToolCallID, Name: entry.ToolName, Content: textResultBlocks(text),
 			},
 		}},
@@ -213,11 +216,11 @@ func (s *Session) RepairToolTranscript(ctx context.Context, entry *memory.Transc
 
 // AppendNotExecutedTool 为缺少回执的工具调用补一条关闭协议的结果
 func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, toolName string) (*memory.TranscriptEntry, bool, error) {
-	payload, err := sonic.Marshal(&schema.AgenticMessage{
-		Role: schema.AgenticRoleTypeUser,
-		ContentBlocks: []*schema.ContentBlock{{
-			Type: schema.ContentBlockTypeFunctionToolResult,
-			FunctionToolResult: &schema.FunctionToolResult{
+	payload, err := sonic.Marshal(&agentic.Message{
+		Role: agentic.RoleUser,
+		ContentBlocks: []*agentic.ContentBlock{{
+			Type: agentic.BlockTypeFunctionToolResult,
+			FunctionToolResult: &agentic.FunctionToolResult{
 				CallID: callID, Name: toolName,
 				Content: textResultBlocks("工具调用没有执行：进程在工具开始前中断，请勿自动重放。"),
 			},
@@ -236,97 +239,35 @@ func (s *Session) AppendNotExecutedTool(ctx context.Context, runID, callID, tool
 	return entry, created, nil
 }
 
-func commonValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-func convertImage(value *schema.ToolOutputImage) *schema.UserInputImage {
+func convertImage(value *tools.Image) *agentic.UserInputImage {
 	if value == nil {
 		return nil
 	}
-	return &schema.UserInputImage{URL: commonValue(value.URL), Base64Data: commonValue(value.Base64Data), FileID: commonValue(value.FileID), MIMEType: value.MIMEType}
+	return &agentic.UserInputImage{URL: value.URL, Base64Data: value.Base64Data, FileID: value.FileID, MIMEType: value.MIMEType}
 }
 
-func convertAudio(value *schema.ToolOutputAudio) *schema.UserInputAudio {
+func convertAudio(value *tools.Audio) *agentic.UserInputAudio {
 	if value == nil {
 		return nil
 	}
-	return &schema.UserInputAudio{URL: commonValue(value.URL), Base64Data: commonValue(value.Base64Data), FileID: commonValue(value.FileID), MIMEType: value.MIMEType}
+	return &agentic.UserInputAudio{URL: value.URL, Base64Data: value.Base64Data, FileID: value.FileID, MIMEType: value.MIMEType}
 }
 
-func convertVideo(value *schema.ToolOutputVideo) *schema.UserInputVideo {
+func convertVideo(value *tools.Video) *agentic.UserInputVideo {
 	if value == nil {
 		return nil
 	}
-	return &schema.UserInputVideo{URL: commonValue(value.URL), Base64Data: commonValue(value.Base64Data), FileID: commonValue(value.FileID), MIMEType: value.MIMEType}
+	return &agentic.UserInputVideo{URL: value.URL, Base64Data: value.Base64Data, FileID: value.FileID, MIMEType: value.MIMEType}
 }
 
-func convertFile(value *schema.ToolOutputFile) *schema.UserInputFile {
+func convertFile(value *tools.File) *agentic.UserInputFile {
 	if value == nil {
 		return nil
 	}
-	return &schema.UserInputFile{URL: commonValue(value.URL), Base64Data: commonValue(value.Base64Data), FileID: commonValue(value.FileID), MIMEType: value.MIMEType}
+	return &agentic.UserInputFile{URL: value.URL, Name: value.Name, Base64Data: value.Base64Data, FileID: value.FileID, MIMEType: value.MIMEType}
 }
 
-// CaptureStateToolResults 补记 Eino 提供给模型但未被工具 wrapper 捕获的结果，例如未知工具
-func (s *Session) CaptureStateToolResults(ctx context.Context, runID string, messages []*schema.AgenticMessage) error {
-	if s.memory == nil || strings.TrimSpace(runID) == "" {
-		return nil
-	}
-	for _, message := range messages {
-		if message == nil {
-			continue
-		}
-		for _, block := range message.ContentBlocks {
-			if block == nil || block.FunctionToolResult == nil || strings.TrimSpace(block.FunctionToolResult.CallID) == "" {
-				continue
-			}
-			// 已带行号的历史结果不再写库，也不为新 run 复制一份
-			if transcriptEntryID(message) != 0 {
-				continue
-			}
-			result := block.FunctionToolResult
-			if id, _, ok, err := s.memory.ResumeToolTranscript(ctx, s.kind, s.targetID, runID, result.CallID); err != nil {
-				return err
-			} else if ok {
-				tagTranscriptEntryID(message, id)
-				continue
-			}
-			payload, err := sonic.Marshal(message)
-			if err != nil {
-				return err
-			}
-			status := "succeeded"
-			var outcome struct {
-				Success *bool `json:"success"`
-			}
-			if sonic.UnmarshalString(toolResultBlocksText(result.Content), &outcome) == nil && outcome.Success != nil && !*outcome.Success {
-				status = "failed"
-			}
-			entry, created, err := s.memory.EnsureToolTranscript(ctx, &memory.TranscriptEntry{
-				ConversationKind: s.kind, TargetID: s.targetID, EntryKind: "tool",
-				RunID: runID, ToolCallID: result.CallID, ToolName: result.Name,
-				ToolStatus: status, Payload: payload,
-			})
-			if err != nil {
-				return err
-			}
-			tagTranscriptEntryID(message, entry.ID)
-			if !created {
-				continue
-			}
-			s.mu.Lock()
-			s.seen = append(s.seen, sessionEntry{msg: message, transcriptID: entry.ID})
-			s.mu.Unlock()
-		}
-	}
-	return nil
-}
-
-func toolResultBlocksText(blocks []*schema.FunctionToolResultContentBlock) string {
+func toolResultBlocksText(blocks []*agentic.FunctionToolResultContentBlock) string {
 	var parts []string
 	for _, block := range blocks {
 		if block != nil && block.Text != nil {
@@ -334,4 +275,213 @@ func toolResultBlocksText(blocks []*schema.FunctionToolResultContentBlock) strin
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// syncToolChains 在模型请求前把运行时回执并入工作集，并保证每个工具调用都有回执
+// 调用方只在返回变化时重新装配，装配后的下一次请求不会再看到悬空调用
+func (a *Agent) syncToolChains(ctx context.Context, session *Session, flow []model.Message, messages []*agentic.Message) ([]*agentic.Message, error) {
+	tc := tools.GetToolContext(ctx)
+	if tc == nil {
+		return messages, nil
+	}
+	captured, err := session.captureRuntimeToolResults(ctx, tc.RunID, flow, messages, tc.ToolDeclarations)
+	if err != nil {
+		return nil, err
+	}
+	if captured {
+		messages, err = a.assembleForRun(ctx, session)
+		if err != nil {
+			return nil, err
+		}
+	}
+	repaired, err := session.repairMissingToolCalls(ctx, tc.RunID, messages, tc.ToolDeclarations)
+	if err != nil {
+		return nil, err
+	}
+	if repaired {
+		messages, err = a.assembleForRun(ctx, session)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return messages, nil
+}
+
+// captureRuntimeToolResults 把运行时已产生但未落 transcript 的工具回执补入库
+// 未知工具不会触发 AfterTool，只有从运行时请求里才能补登记这条回执
+func (s *Session) captureRuntimeToolResults(ctx context.Context, runID string, flowMessages []model.Message, assembled []*agentic.Message, declarations []*tool.Declaration) (bool, error) {
+	if s.memory == nil || runID == "" || len(flowMessages) == 0 {
+		return false, nil
+	}
+	known := map[string]bool{}
+	for _, declaration := range declarations {
+		if declaration != nil {
+			known[declaration.Name] = true
+		}
+	}
+	existing := map[string]bool{}
+	inContext := map[string]bool{}
+	for _, message := range assembled {
+		if message == nil {
+			continue
+		}
+		for _, block := range message.ContentBlocks {
+			if block == nil {
+				continue
+			}
+			if block.FunctionToolResult != nil && block.FunctionToolResult.CallID != "" {
+				existing[block.FunctionToolResult.CallID] = true
+			}
+			if block.FunctionToolCall != nil && block.FunctionToolCall.CallID != "" {
+				inContext[block.FunctionToolCall.CallID] = true
+			}
+		}
+	}
+	// 只补最近一次模型输出产生的工具回执，避免把压缩掉的历史结果重新写回工作集
+	calls := map[string]model.ToolCall{}
+	for index := len(flowMessages) - 1; index >= 0; index-- {
+		message := flowMessages[index]
+		if message.Role != model.RoleAssistant || len(message.ToolCalls) == 0 {
+			continue
+		}
+		for _, call := range message.ToolCalls {
+			if call.ID != "" {
+				calls[call.ID] = call
+			}
+		}
+		break
+	}
+	if len(calls) == 0 {
+		return false, nil
+	}
+	changed := false
+	for _, message := range flowMessages {
+		if message.Role != model.RoleTool || message.ToolID == "" || existing[message.ToolID] {
+			continue
+		}
+		call, hasCall := calls[message.ToolID]
+		if !hasCall || !inContext[message.ToolID] {
+			continue
+		}
+		name := message.ToolName
+		if name == "" && hasCall {
+			name = call.Function.Name
+		}
+		arguments := "{}"
+		if hasCall && len(call.Function.Arguments) > 0 {
+			arguments = string(call.Function.Arguments)
+		}
+		callRunID := s.toolCallRunID(ctx, runID, assembled, message.ToolID)
+		id, _, resumed, err := s.BeginToolTranscript(ctx, callRunID, name, message.ToolID, arguments)
+		if err != nil {
+			return changed, err
+		}
+		if resumed {
+			// 回执已在库里但不在本次装配中，必须重新装配，不能当成本次已完成
+			existing[message.ToolID] = true
+			changed = true
+			continue
+		}
+		status := "succeeded"
+		content := message.Content
+		if !known[name] {
+			// 未知工具按旧契约返回可纠正 JSON，而不是运行时生成的裸错误文本
+			status = "failed"
+			content = tools.ToolErrorResult(fmt.Errorf("没有工具 %s，请使用已提供的工具名称", name))
+		} else {
+			var outcome struct {
+				Success *bool `json:"success"`
+			}
+			if sonic.UnmarshalString(message.Content, &outcome) == nil && outcome.Success != nil && !*outcome.Success {
+				status = "failed"
+			}
+		}
+		if _, _, err := s.FinishToolTranscript(ctx, id, status, content, nil, ""); err != nil {
+			return changed, err
+		}
+		existing[message.ToolID] = true
+		changed = true
+	}
+	return changed, nil
+}
+
+// repairMissingToolCalls 给没有回执的助手调用补一条 not_executed 行，避免工具链永远悬空
+func (s *Session) repairMissingToolCalls(ctx context.Context, runID string, messages []*agentic.Message, declarations []*tool.Declaration) (bool, error) {
+	if s.memory == nil || runID == "" {
+		return false, nil
+	}
+	known := map[string]bool{}
+	for _, declaration := range declarations {
+		if declaration != nil {
+			known[declaration.Name] = true
+		}
+	}
+	results := map[string]bool{}
+	repaired := false
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		for _, block := range message.ContentBlocks {
+			if block != nil && block.FunctionToolResult != nil && block.FunctionToolResult.CallID != "" {
+				results[block.FunctionToolResult.CallID] = true
+			}
+		}
+	}
+	for _, message := range messages {
+		if message == nil || message.Role != agentic.RoleAssistant {
+			continue
+		}
+		for _, block := range message.ContentBlocks {
+			if block == nil || block.FunctionToolCall == nil {
+				continue
+			}
+			call := block.FunctionToolCall
+			if call.CallID == "" || results[call.CallID] {
+				continue
+			}
+			callRunID := s.toolCallRunID(ctx, runID, messages, call.CallID)
+			id, _, resumed, err := s.BeginToolTranscript(ctx, callRunID, call.Name, call.CallID, call.Arguments)
+			if err != nil {
+				return false, err
+			}
+			if resumed {
+				// 回执已在库里但不在当前消息里，重新装配后会补进请求
+				results[call.CallID] = true
+				repaired = true
+				continue
+			}
+			text := "工具未能执行：会话在回执前中断，没有可用结果。"
+			if !known[call.Name] {
+				text = tools.ToolErrorResult(fmt.Errorf("没有工具 %s，请使用已提供的工具名称", call.Name))
+			}
+			if _, _, err := s.FinishToolTranscript(ctx, id, "not_executed", text, nil, ""); err != nil {
+				return false, err
+			}
+			results[call.CallID] = true
+			repaired = true
+		}
+	}
+	return repaired, nil
+}
+
+// toolCallRunID 取工具调用所属 assistant 行的 run_id；回执与 assistant 必须同一次运行
+func (s *Session) toolCallRunID(ctx context.Context, fallback string, messages []*agentic.Message, callID string) string {
+	for _, message := range messages {
+		if message == nil || message.Role != agentic.RoleAssistant {
+			continue
+		}
+		for _, block := range message.ContentBlocks {
+			if block == nil || block.FunctionToolCall == nil || block.FunctionToolCall.CallID != callID {
+				continue
+			}
+			if id := transcriptEntryID(message); id != 0 {
+				if row, err := s.memory.GetTranscript(ctx, id); err == nil && row.RunID != "" {
+					return row.RunID
+				}
+			}
+			return fallback
+		}
+	}
+	return fallback
 }

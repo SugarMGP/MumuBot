@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/cloudwego/eino/schema"
+import "mumu-bot/internal/agentic"
 
 // MarkFailedThrough 记录已经失败到的实际请求边界
 func (s *Session) MarkFailedThrough(order uint64) {
@@ -32,8 +32,8 @@ func (s *Session) FailedBatchAllowsRetry(pending []*sessionUser) bool {
 }
 
 // RecordRequestBoundary 记录真正进入模型请求的最后一个可行动输入
-func (s *Session) RecordRequestBoundary(messages []*schema.AgenticMessage) {
-	included := make(map[*schema.AgenticMessage]bool, len(messages))
+func (s *Session) RecordRequestBoundary(messages []*agentic.Message) {
+	included := make(map[*agentic.Message]bool, len(messages))
 	for _, message := range messages {
 		included[message] = true
 	}

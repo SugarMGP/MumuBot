@@ -6,16 +6,14 @@ import (
 	"sort"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/mcp"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/modelprofiles"
 	"mumu-bot/internal/tools"
 
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/adk/middlewares/summarization"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ModelSwitchReport 描述实际整理进度，不承诺跨会话或批次回滚
@@ -122,7 +120,7 @@ func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]Model
 			if previewErr != nil {
 				return release, report, previewErr
 			}
-			incompatible, needsCapacity, _ := session.switchContextCheck(messages, modelToolInfos(ctx, chatTools), target, state.config.Compactor.TriggerRatio)
+			incompatible, needsCapacity, _ := session.switchContextCheck(messages, toolDeclarations(chatTools), target, state.config.Compactor.TriggerRatio)
 			if needsCapacity || incompatible {
 				candidates = append(candidates, session)
 			}
@@ -172,7 +170,7 @@ func (a *Agent) prepareModelSwitch(ctx context.Context, targets map[string]Model
 		if previewErr != nil {
 			return release, report, previewErr
 		}
-		incompatible, _, tokens := session.switchContextCheck(messages, modelToolInfos(ctx, chatTools), target, state.config.Compactor.TriggerRatio)
+		incompatible, _, tokens := session.switchContextCheck(messages, toolDeclarations(chatTools), target, state.config.Compactor.TriggerRatio)
 		if incompatible {
 			report.Stage = "boundary"
 			return release, report, fmt.Errorf("incompatible history remains after model switch preparation")
@@ -215,7 +213,7 @@ func capacityTrigger(window int, ratio float64) int {
 	return trigger
 }
 
-func capacityRoleTools(generation *Generation, kind string) (string, []tool.BaseTool) {
+func capacityRoleTools(generation *Generation, kind string) (string, []tool.Tool) {
 	switch kind {
 	case memory.ConversationKindGroup:
 		return "qq", generation.groupTools
@@ -228,7 +226,7 @@ func capacityRoleTools(generation *Generation, kind string) (string, []tool.Base
 	}
 }
 
-func (a *Agent) compactForWindow(ctx context.Context, session *Session, candidate *compactionCandidate, messages []*schema.AgenticMessage) error {
+func (a *Agent) compactForWindow(ctx context.Context, session *Session, candidate *compactionCandidate, messages []*agentic.Message) error {
 	attempt := switchAttemptFrom(ctx)
 	if attempt.remaining <= 0 {
 		return errSwitchBudgetExhausted
@@ -239,27 +237,11 @@ func (a *Agent) compactForWindow(ctx context.Context, session *Session, candidat
 	}
 	attempt.remaining--
 	ctx = tools.WithToolContext(ctx, &tools.ToolContext{ConversationKind: session.kind, TargetID: session.targetID, Session: session})
-	generation := generationFrom(ctx)
-	ctx = llm.WithTask(ctx, session.kind, generation.forKind(session.kind).modelName)
-	var summarizer adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]
-	var err error
-	if session.kind == memory.ConversationKindLife {
-		summarizer, err = a.newLifeSummarizer(ctx, generation)
-	} else {
-		summarizer, err = a.newWorkerSummarizer(ctx, generation)
-	}
-	if err != nil {
-		return err
-	}
-	if summarizer == nil {
-		return fmt.Errorf("摘要器未启用")
-	}
-	_, err = summarizer.(*summarization.TypedMiddleware[*schema.AgenticMessage]).Summarize(ctx, &adk.TypedChatModelAgentState[*schema.AgenticMessage]{Messages: messages})
-	return err
+	return a.summarizeNow(ctx, session, messages)
 }
 
 // contextSummaryPrefix 不消费待处理输入，也不让检查点跨过它们或切断工具链
-func contextSummaryPrefix(session *Session, messages []*schema.AgenticMessage) []*schema.AgenticMessage {
+func contextSummaryPrefix(session *Session, messages []*agentic.Message) []*agentic.Message {
 	firstPending := ^uint(0)
 	session.mu.Lock()
 	for _, pending := range session.pending {
@@ -268,7 +250,7 @@ func contextSummaryPrefix(session *Session, messages []*schema.AgenticMessage) [
 		}
 	}
 	session.mu.Unlock()
-	prefix := make([]*schema.AgenticMessage, 0, len(messages))
+	prefix := make([]*agentic.Message, 0, len(messages))
 	openCalls := make(map[string]bool)
 	closed := 0
 	for _, message := range messages {

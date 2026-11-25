@@ -4,15 +4,14 @@ import (
 	"context"
 	"strings"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
-
-	"github.com/cloudwego/eino/schema"
 )
 
 const kindPinnedUpdate = "pinned_memory_update"
 
 // syncPinnedMemories 追加最新置顶快照，不改写已被模型读过的前缀
-func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, messages []*schema.AgenticMessage) (*schema.AgenticMessage, error) {
+func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, messages []*agentic.Message) (*agentic.Message, error) {
 	if s.kind != memory.ConversationKindGroup && s.kind != memory.ConversationKindPrivate {
 		return nil, nil
 	}
@@ -30,9 +29,9 @@ func (s *Session) syncPinnedMemories(ctx context.Context, mem *memory.Manager, m
 	return message, nil
 }
 
-func pinnedUpdateMessage(rows []memory.KnowledgeRecord, messages []*schema.AgenticMessage) *schema.AgenticMessage {
+func pinnedUpdateMessage(rows []memory.KnowledgeRecord, messages []*agentic.Message) *agentic.Message {
 	text := strings.TrimSpace(renderPinnedMemories(rows))
-	var previous *schema.AgenticMessage
+	var previous *agentic.Message
 	for _, message := range messages {
 		kind := messageKind(message)
 		if kind == kindPinnedMemory || kind == kindPinnedUpdate {
@@ -58,7 +57,7 @@ func pinnedUpdateMessage(rows []memory.KnowledgeRecord, messages []*schema.Agent
 	} else {
 		body += "\n" + text
 	}
-	message := schema.UserAgenticMessage(systemNote("置顶记忆更新", body))
+	message := agentic.UserAgenticMessage(systemNote("置顶记忆更新", body))
 	message.Extra = map[string]any{"kind": kindPinnedUpdate, "hash": hash}
 	return message
 }

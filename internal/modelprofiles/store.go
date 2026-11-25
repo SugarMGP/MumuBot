@@ -15,14 +15,17 @@ import (
 
 // Profile 是数据库中的模型档案，API Key 只保存密文
 type Profile struct {
-	ID               uint      `gorm:"column:id;primaryKey" json:"id"`
-	Name             string    `gorm:"column:name" json:"name"`
-	Provider         string    `gorm:"column:provider" json:"provider"`
-	BaseURL          string    `gorm:"column:base_url" json:"base_url"`
-	ModelName        string    `gorm:"column:model_name" json:"model_name"`
-	ContextWindow    int       `gorm:"column:context_window" json:"context_window"`
-	ReasoningEffort  string    `gorm:"column:reasoning_effort" json:"reasoning_effort"`
-	ThinkingMode     string    `gorm:"column:thinking_mode" json:"thinking_mode"`
+	ID              uint   `gorm:"column:id;primaryKey" json:"id"`
+	Name            string `gorm:"column:name" json:"name"`
+	Provider        string `gorm:"column:provider" json:"provider"`
+	BaseURL         string `gorm:"column:base_url" json:"base_url"`
+	ModelName       string `gorm:"column:model_name" json:"model_name"`
+	ContextWindow   int    `gorm:"column:context_window" json:"context_window"`
+	ReasoningEffort string `gorm:"column:reasoning_effort" json:"reasoning_effort"`
+	ThinkingMode    string `gorm:"column:thinking_mode" json:"thinking_mode"`
+	// ThinkingBudget 与 ThinkingLevel 只用于 Gemini；两者可同时填写，由服务商决定是否接受
+	ThinkingBudget   *int      `gorm:"column:thinking_budget" json:"thinking_budget"`
+	ThinkingLevel    string    `gorm:"column:thinking_level" json:"thinking_level"`
 	BodyOverride     string    `gorm:"column:body_override;type:jsonb" json:"body_override"`
 	APIKeyCiphertext []byte    `gorm:"column:api_key_ciphertext" json:"-"`
 	APIKeyNonce      []byte    `gorm:"column:api_key_nonce" json:"-"`
@@ -41,6 +44,7 @@ var (
 	ErrInvalidModel    = errors.New("模型配置无效")
 	ErrVersionConflict = errors.New("模型已被其他页面修改，请刷新后重试")
 	reasoningEfforts   = map[string]bool{"": true, "none": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+	thinkingLevels     = map[string]bool{"": true, "low": true, "medium": true, "high": true}
 )
 
 // Store 管理模型档案
@@ -112,6 +116,8 @@ func (s *Store) Update(ctx context.Context, row Profile, apiKey string) (Profile
 		"model_name":       strings.TrimSpace(row.ModelName),
 		"context_window":   row.ContextWindow,
 		"reasoning_effort": row.ReasoningEffort,
+		"thinking_budget":  row.ThinkingBudget,
+		"thinking_level":   row.ThinkingLevel,
 		"version":          gorm.Expr("version + 1"),
 		"updated_at":       gorm.Expr("now()"),
 	}
@@ -175,7 +181,7 @@ func (s *Store) DecryptKey(row Profile) (string, error) {
 
 // Validate 在保存和切换准备前校验完整档案
 func (row Profile) Validate() error {
-	if row.Provider != llm.ProviderResponses && row.Provider != llm.ProviderChatCompletions {
+	if row.Provider != llm.ProviderResponses && row.Provider != llm.ProviderChatCompletions && row.Provider != llm.ProviderGemini {
 		return fmt.Errorf("%w: unknown model protocol", ErrInvalidModel)
 	}
 	if row.ThinkingMode != "" && row.ThinkingMode != "enabled" && row.ThinkingMode != "disabled" {
@@ -198,6 +204,12 @@ func (row Profile) Validate() error {
 	}
 	if !reasoningEfforts[row.ReasoningEffort] {
 		return fmt.Errorf("%w: reasoning.effort 无效", ErrInvalidModel)
+	}
+	if row.ThinkingBudget != nil && *row.ThinkingBudget < -1 {
+		return fmt.Errorf("%w: 思考预算不能小于 -1", ErrInvalidModel)
+	}
+	if !thinkingLevels[row.ThinkingLevel] {
+		return fmt.Errorf("%w: 思考等级无效", ErrInvalidModel)
 	}
 	return nil
 }

@@ -9,18 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/config"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/logger"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
 
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 type FinishCompactionInput struct {
@@ -30,27 +29,10 @@ type FinishCompactionInput struct {
 }
 
 type CompactionTopic struct {
-	Ref     string              `json:"ref" jsonschema:"description=话题引用号；延续已有话题用 t 开头的编号，新建用 new:a、new:b 依此类推"`
-	Ranges  []string            `json:"ranges,omitempty" jsonschema:"description=该话题覆盖的候选编号区间，如 12-45 或 12；可给多段并按时间排列；已有话题没有新消息时可省略"`
-	Anchors []int               `json:"anchors,omitempty" jsonschema:"description=该话题区间内真正关键的候选编号（行首 [#n] 的数字），必须落在本话题区间内；依据有几条就填几条，简单闲聊可以没有"`
+	Ref     string              `json:"ref" description:"话题引用号；延续已有话题用 t 开头的编号，新建用 new:a、new:b 依此类推"`
+	Ranges  []string            `json:"ranges,omitempty" description:"该话题覆盖的候选编号区间，如 12-45 或 12；可给多段并按时间排列；已有话题没有新消息时可省略"`
+	Anchors []int               `json:"anchors,omitempty" description:"该话题区间内真正关键的候选编号（行首 [#n] 的数字），必须落在本话题区间内；依据有几条就填几条，简单闲聊可以没有"`
 	Summary memory.TopicSummary `json:"summary"`
-}
-
-// compactionStepBudget 让两次压缩尝试共享同一份模型步数
-type compactionStepBudget struct {
-	*adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]
-	remaining *int
-}
-
-func (h *compactionStepBudget) BeforeModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
-	if err := checkSwitchInput(ctx, state.Messages, state.ToolInfos); err != nil {
-		return ctx, state, err
-	}
-	if h == nil || h.remaining == nil || *h.remaining <= 0 {
-		return ctx, state, fmt.Errorf("压缩步数预算已用尽: %w", adk.ErrExceedMaxIterations)
-	}
-	*h.remaining--
-	return ctx, state, nil
 }
 
 // compactionInputError 表示模型提交的 finishCompaction 参数可修正
@@ -176,19 +158,43 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	}
 	compactionCtx := tools.WithToolContext(ctx, tc)
 	compactionCtx = logger.WithSession(compactionCtx, tc.ConversationKind, tc.TargetID, tc.RunID, cfg.Debug.LogAgentContent)
-	compactionCtx = llm.WithTask(compactionCtx, "compaction", generation.modelName)
+
+	instruction := fmt.Sprintf("候选共 %d 条，按时间编号 #1..#%d，行首 [#n] 即引用号。当前尝试第 %d 次。", len(candidate.Refs), len(candidate.Refs), attempt)
+	if len(candidate.Refs) == 0 {
+		instruction = "这次为切换接口整理执行轨迹，没有可归属的真人消息。只更新 overview，topics 和 active_topic_refs 留空；原有活跃话题保持不变。"
+	}
+	if feedback = strings.TrimSpace(feedback); feedback != "" {
+		instruction += "\n上次压缩的反馈：" + feedback
+	}
+	messages := make([]*agentic.Message, 0, len(candidate.Messages)+4)
+	messages = append(messages, agentic.SystemAgenticMessage(compactionPrompt))
+	if checkpointDigest != "" {
+		messages = append(messages, agentic.UserAgenticMessage("【压缩前已有摘要】\n"+checkpointDigest))
+	}
+	if switchState := switchAttemptFrom(ctx); switchState != nil && switchState.portable {
+		materials, err := switchMaterials(candidate.Messages)
+		if err != nil {
+			return err
+		}
+		messages = append(messages, materials...)
+	} else {
+		messages = append(messages, candidate.Messages...)
+	}
+	messages = append(messages, agentic.UserAgenticMessage(instruction+"\n现在调用 finishCompaction。"))
 
 	var finish *FinishCompactionInput
-	finishTool, err := utils.InferTool("finishCompaction", "提交会话概览和话题更新；ranges 用候选编号区间标出每个话题覆盖的消息，anchors 标出关键编号；覆盖过低时系统会要求一次修正。", func(_ context.Context, input *FinishCompactionInput) (any, error) {
-		if input == nil {
-			return nil, fmt.Errorf("缺少压缩结果")
-		}
-		finish = input
-		return map[string]any{"success": true}, nil
-	})
-	if err != nil {
-		return err
-	}
+	finishTool := function.NewFunctionTool(
+		func(_ context.Context, input *FinishCompactionInput) (map[string]any, error) {
+			if input == nil {
+				return nil, fmt.Errorf("缺少压缩结果")
+			}
+			finish = input
+			return map[string]any{"success": true}, nil
+		},
+		function.WithName("finishCompaction"),
+		function.WithDescription("提交会话概览和话题更新；ranges 用候选编号区间标出每个话题覆盖的消息，anchors 标出关键编号；覆盖过低时系统会要求一次修正。"),
+		function.WithSkipSummarization(true),
+	)
 	readToolResult, err := tools.NewReadToolResultTool()
 	if err != nil {
 		return err
@@ -205,64 +211,33 @@ func (a *Agent) runCompaction(ctx context.Context, session *Session, candidate *
 	if err != nil {
 		return err
 	}
-	available := []tool.BaseTool{searchTopics, readTopic, searchHistory, readToolResult, finishTool}
-	compactor, err := adk.NewTypedChatModelAgent[*schema.AgenticMessage](compactionCtx, &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
-		Model: generation.model,
-		ToolsConfig: adk.ToolsConfig{
-			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: available, ExecuteSequentially: true,
-				UnknownToolsHandler: tools.UnknownToolHandler,
-				ToolCallMiddlewares: []compose.ToolMiddleware{
-					tools.ToolResultPreviewMiddleware(a.memory),
-					tools.ToolLogMiddleware(),
-					tools.ToolErrorMiddleware(),
-				},
-			},
-			ReturnDirectly: map[string]bool{"finishCompaction": true},
-		},
-		MaxIterations: maxStep,
-		Handlers: []adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage]{
-			&compactionStepBudget{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, remaining: remainingSteps},
-		},
-	})
-	if err != nil {
-		return err
+	available := []tool.Tool{searchTopics, readTopic, searchHistory, readToolResult, finishTool}
+	compactionBudget := cfg.Compactor.MaxSteps
+	if compactionBudget <= 0 {
+		compactionBudget = 12
 	}
-	instruction := fmt.Sprintf("候选共 %d 条，按时间编号 #1..#%d，行首 [#n] 即引用号。当前尝试第 %d 次。", len(candidate.Refs), len(candidate.Refs), attempt)
-	if len(candidate.Refs) == 0 {
-		instruction = "这次为切换接口整理执行轨迹，没有可归属的真人消息。只更新 overview，topics 和 active_topic_refs 留空；原有活跃话题保持不变。"
-	}
-	if feedback = strings.TrimSpace(feedback); feedback != "" {
-		instruction += "\n上次压缩的反馈：" + feedback
-	}
-	messages := make([]*schema.AgenticMessage, 0, len(candidate.Messages)+4)
-	messages = append(messages, schema.SystemAgenticMessage(compactionPrompt))
-	if checkpointDigest != "" {
-		messages = append(messages, schema.UserAgenticMessage("【压缩前已有摘要】\n"+checkpointDigest))
-	}
-	if switchState := switchAttemptFrom(ctx); switchState != nil && switchState.portable {
-		materials, err := switchMaterials(candidate.Messages)
-		if err != nil {
-			return err
-		}
-		messages = append(messages, materials...)
+	if remainingSteps != nil {
+		tc.CompactionRemaining = remainingSteps
 	} else {
-		messages = append(messages, candidate.Messages...)
+		tc.CompactionRemaining = &compactionBudget
 	}
-	messages = append(messages, schema.UserAgenticMessage(instruction+"\n现在调用 finishCompaction。"))
-	if err := checkSwitchInput(ctx, messages, modelToolInfos(ctx, available)); err != nil {
+	tc.CompactorMessages = messages
+	if err := checkSwitchInput(compactionCtx, messages, toolDeclarations(available)); err != nil {
 		return err
 	}
-	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: compactor})
-	iter := runner.Run(compactionCtx, messages)
-	for {
-		event, ok := iter.Next()
-		if !ok {
-			break
-		}
-		if event.Err != nil {
-			return event.Err
-		}
+
+	callbacks := a.callbacks()
+	compactor := llmagent.New("compactor",
+		llmagent.WithModel(generation.model),
+		llmagent.WithTools(available),
+		llmagent.WithGenerationConfig(generation.config),
+		llmagent.WithEnableParallelTools(false),
+		llmagent.WithModelCallbacks(callbacks.modelCallbacks()),
+		llmagent.WithToolCallbacks(callbacks.toolCallbacks()),
+	)
+	compactionCtx = withModelTask(compactionCtx, "compaction", generation.modelName)
+	if err := a.runAgent(compactionCtx, compactor, available, messages); err != nil {
+		return err
 	}
 	if finish == nil {
 		return &compactionInputError{Err: fmt.Errorf("压缩器未提交 finishCompaction")}

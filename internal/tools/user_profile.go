@@ -14,13 +14,11 @@ import (
 	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type UserProfileInput struct {
-	UserID string `json:"user_id" jsonschema:"description=QQ 号或 self"`
+	UserID string `json:"user_id" description:"QQ 号或 self"`
 }
 
 type UserPinnedMemory struct {
@@ -46,7 +44,7 @@ type UserProfileOutput struct {
 	PinnedMemories []UserPinnedMemory `json:"pinned_memories"`
 }
 
-func getUserProfileFunc(ctx context.Context, input *UserProfileInput) (*schema.ToolResult, error) {
+func getUserProfileFunc(ctx context.Context, input *UserProfileInput) (*Result, error) {
 	tc := GetToolContext(ctx)
 	if tc == nil || tc.Bot == nil || tc.MemoryMgr == nil {
 		return nil, NewTerminalToolError(fmt.Errorf("用户详情能力未初始化"))
@@ -126,7 +124,7 @@ func getUserProfileFunc(ctx context.Context, input *UserProfileInput) (*schema.T
 	if err != nil {
 		return nil, err
 	}
-	return &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: text}}}, nil
+	return &Result{Parts: []Part{{Type: PartTypeText, Text: text}}}, nil
 }
 
 func downloadAvatar(ctx context.Context, url string) ([]byte, string) {
@@ -156,6 +154,6 @@ func downloadAvatar(ctx context.Context, url string) ([]byte, string) {
 	return body, mime
 }
 
-func NewGetUserProfileTool() (tool.EnhancedInvokableTool, error) {
-	return utils.InferEnhancedTool("getUserProfile", "查看用户资料、全部置顶记忆和头像引用；头像不直接进入上下文，需要时用 avatar_ref 调 viewImage。user_id 支持 QQ 号或 self。", getUserProfileFunc)
+func NewGetUserProfileTool() (tool.Tool, error) {
+	return newEnhancedTool("getUserProfile", "查看用户资料、全部置顶记忆和头像引用；头像不直接进入上下文，需要时用 avatar_ref 调 viewImage。user_id 支持 QQ 号或 self。", getUserProfileFunc)
 }

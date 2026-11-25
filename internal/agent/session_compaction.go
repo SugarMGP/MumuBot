@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type compactionEntryRef struct {
@@ -18,7 +19,7 @@ type compactionEntryRef struct {
 }
 
 type compactionCandidate struct {
-	Messages              []*schema.AgenticMessage
+	Messages              []*agentic.Message
 	Refs                  []compactionEntryRef
 	ThroughVisibleSeq     uint64
 	ThroughMessageLogID   uint
@@ -89,7 +90,7 @@ func (s *Session) BuildProtocolCompaction(target ModelTarget) (*compactionCandid
 	entries := orderEntries(append([]sessionEntry(nil), s.seen...))
 	s.mu.Unlock()
 	work := make([]sessionEntry, 0, len(entries))
-	messages := make([]*schema.AgenticMessage, 0, len(entries))
+	messages := make([]*agentic.Message, 0, len(entries))
 	for _, entry := range entries {
 		if entry.msg != nil && !isHeadEntry(entry.msg) {
 			work = append(work, entry)
@@ -149,14 +150,14 @@ func (c *compactionCandidate) messageLogIDs() []uint {
 }
 
 // renumberCompactionMessage 复制一条消息并把行首 OneBot ID 换成候选编号，原 transcript 不受影响
-func renumberCompactionMessage(msg *schema.AgenticMessage, oneBotID int64, ordinal int) *schema.AgenticMessage {
+func renumberCompactionMessage(msg *agentic.Message, oneBotID int64, ordinal int) *agentic.Message {
 	if msg == nil {
 		return nil
 	}
 	marker := fmt.Sprintf("[#%d]", ordinal)
 	oldPrefix := "[" + strconv.FormatInt(oneBotID, 10) + "]"
 	copied := *msg
-	blocks := make([]*schema.ContentBlock, len(msg.ContentBlocks))
+	blocks := make([]*agentic.ContentBlock, len(msg.ContentBlocks))
 	replaced := false
 	for index, block := range msg.ContentBlocks {
 		if block == nil {
@@ -259,7 +260,7 @@ func (s *Session) ClearCompactionFailure() {
 }
 
 // SetTokenBase 记录最后一条 assistant 的完整 usage，供压缩和空闲判断使用
-func (s *Session) SetTokenBase(message *schema.AgenticMessage, usage *schema.TokenUsage, prefix []*schema.AgenticMessage, source roleModel) {
+func (s *Session) SetTokenBase(message *agentic.Message, usage *agentic.TokenUsage, prefix []*agentic.Message, source roleModel) {
 	if message == nil || usage == nil {
 		return
 	}
@@ -306,7 +307,7 @@ func (s *Session) estimateTextTokens(text string) int {
 }
 
 // ObserveResponseUsage 用 provider 的真实 prompt 用量校准文本估算比例
-func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage, tools []*schema.ToolInfo, usage *schema.TokenUsage) {
+func (s *Session) ObserveResponseUsage(requestMessages []*agentic.Message, tools []*tool.Declaration, usage *agentic.TokenUsage) {
 	if usage == nil {
 		return
 	}
@@ -339,7 +340,7 @@ func (s *Session) ObserveResponseUsage(requestMessages []*schema.AgenticMessage,
 }
 
 // estimateSwitchTokens 只复用同一档案、同一版本且仍完整出现在请求中的用量基线
-func (s *Session) estimateSwitchTokens(messages []*schema.AgenticMessage, tools []*schema.ToolInfo, target ModelTarget) int {
+func (s *Session) estimateSwitchTokens(messages []*agentic.Message, tools []*tool.Declaration, target ModelTarget) int {
 	estimated := requestTokens(messages, tools)
 	if !target.ReuseUsage {
 		return estimated
@@ -386,11 +387,11 @@ func (s *Session) ResetCalibration() {
 func (s *Session) RestoreTokenBaseFromSeen() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var message *schema.AgenticMessage
-	var usage *schema.TokenUsage
+	var message *agentic.Message
+	var usage *agentic.TokenUsage
 	for i := range s.seen {
 		item := s.seen[i].msg
-		if item == nil || item.Role != schema.AgenticRoleTypeAssistant || item.ResponseMeta == nil || item.ResponseMeta.TokenUsage == nil {
+		if item == nil || item.Role != agentic.RoleAssistant || item.ResponseMeta == nil || item.ResponseMeta.TokenUsage == nil {
 			continue
 		}
 		itemUsage := item.ResponseMeta.TokenUsage

@@ -6,22 +6,21 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/refstore"
 	"mumu-bot/internal/schedule"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type ReadSessionHistoryInput struct {
-	SessionID string `json:"session_id" jsonschema:"description=例如 group:123、private:456、worker:1 或 life:1"`
-	BeforeID  uint   `json:"before_id,omitempty" jsonschema:"description=向前翻页的 transcript 条目 ID，0 表示最新"`
-	From      string `json:"from,omitempty" jsonschema:"description=条目时间下限，格式 2006-01-02 或 RFC3339"`
-	To        string `json:"to,omitempty" jsonschema:"description=条目时间上限，纯日期包含当天，格式 2006-01-02 或 RFC3339"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"description=默认20，最大50"`
+	SessionID string `json:"session_id" description:"例如 group:123、private:456、worker:1 或 life:1"`
+	BeforeID  uint   `json:"before_id,omitempty" description:"向前翻页的 transcript 条目 ID，0 表示最新"`
+	From      string `json:"from,omitempty" description:"条目时间下限，格式 2006-01-02 或 RFC3339"`
+	To        string `json:"to,omitempty" description:"条目时间上限，纯日期包含当天，格式 2006-01-02 或 RFC3339"`
+	Limit     int    `json:"limit,omitempty" description:"默认20，最大50"`
 }
 
 type SessionHistoryEntry struct {
@@ -258,7 +257,7 @@ func refCounts(payload []byte) (int, int) {
 }
 
 func decodeTranscriptText(payload []byte) string {
-	var msg schema.AgenticMessage
+	var msg agentic.Message
 	if err := sonic.Unmarshal(payload, &msg); err != nil {
 		return ""
 	}
@@ -285,10 +284,10 @@ func decodeTranscriptText(payload []byte) string {
 }
 
 type ReadSessionEntryInput struct {
-	SessionID string `json:"session_id" jsonschema:"description=例如 group:123、private:456、worker:1 或 life:1"`
-	EntryID   uint   `json:"entry_id" jsonschema:"description=readSessionHistory 返回的条目 ID"`
-	Offset    int    `json:"offset,omitempty" jsonschema:"description=按字符读取的起点，默认 0"`
-	Length    int    `json:"length,omitempty" jsonschema:"description=读取字符数，默认 4000，最大 8000"`
+	SessionID string `json:"session_id" description:"例如 group:123、private:456、worker:1 或 life:1"`
+	EntryID   uint   `json:"entry_id" description:"readSessionHistory 返回的条目 ID"`
+	Offset    int    `json:"offset,omitempty" description:"按字符读取的起点，默认 0"`
+	Length    int    `json:"length,omitempty" description:"读取字符数，默认 4000，最大 8000"`
 }
 
 type SessionEntryToolCall struct {
@@ -388,7 +387,7 @@ func ReadSessionEntry(ctx context.Context, mem *memory.Manager, input *ReadSessi
 
 // transcriptToolCalls 提取 assistant 轨迹里的工具调用名称与参数，不倾倒媒体内容
 func transcriptToolCalls(payload []byte) []SessionEntryToolCall {
-	var msg schema.AgenticMessage
+	var msg agentic.Message
 	if err := sonic.Unmarshal(payload, &msg); err != nil {
 		return nil
 	}
@@ -405,10 +404,10 @@ func transcriptToolCalls(payload []byte) []SessionEntryToolCall {
 	return calls
 }
 
-func NewReadSessionEntryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readSessionEntry", "读取指定会话里单条 transcript 的完整正文，按字符窗口返回；readSessionHistory 的预览不完整时用它。result_ref 指向的大工具结果仍用 readToolResult。", readSessionEntry)
+func NewReadSessionEntryTool() (tool.Tool, error) {
+	return newFunctionTool("readSessionEntry", "读取指定会话里单条 transcript 的完整正文，按字符窗口返回；readSessionHistory 的预览不完整时用它。result_ref 指向的大工具结果仍用 readToolResult。", readSessionEntry)
 }
 
-func NewReadSessionHistoryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readSessionHistory", "读取指定会话尚在保留期内的输入和执行轨迹，QQ 原文历史另用 searchHistory/readHistory。entries 是预览，pending_entries 是已入队未处理消息，running_tools 只是尚无回执的工具调用，不代表全部 tmux 任务。参数或正文不完整时用 readSessionEntry，result_ref 用 readToolResult；next_before_id 向前翻页，from/to 限条目时间。别把旧轨迹或排队消息当成需要重新投递的新任务。", readSessionHistory)
+func NewReadSessionHistoryTool() (tool.Tool, error) {
+	return newFunctionTool("readSessionHistory", "读取指定会话尚在保留期内的输入和执行轨迹，QQ 原文历史另用 searchHistory/readHistory。entries 是预览，pending_entries 是已入队未处理消息，running_tools 只是尚无回执的工具调用，不代表全部 tmux 任务。参数或正文不完整时用 readSessionEntry，result_ref 用 readToolResult；next_before_id 向前翻页，from/to 限条目时间。别把旧轨迹或排队消息当成需要重新投递的新任务。", readSessionHistory)
 }

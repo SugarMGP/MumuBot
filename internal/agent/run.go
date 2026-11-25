@@ -4,49 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/logger"
 	"mumu-bot/internal/media"
-	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
 
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/noop"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // errCompactionPending 表示压缩失败或仍在退避，本轮不能继续请求主模型
 var errCompactionPending = errors.New("压缩失败或仍在退避")
 
-// runAgent 跑一轮主模型，模型产生的消息由会话收集器统一写回
-func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*schema.AgenticMessage], messages []*schema.AgenticMessage) (runErr error) {
+// runAgent 跑一轮主模型；模型产生的消息由回调统一写回
+func (a *Agent) runAgent(ctx context.Context, ag agent.Agent, toolsList []tool.Tool, messages []*agentic.Message) (runErr error) {
 	cfg := configFor(ctx)
 	generation := generationFrom(ctx)
-	modelName := ""
-	if generation != nil {
-		modelName = generation.modelName
+	if generation == nil {
+		return fmt.Errorf("模型运行态未初始化")
 	}
+	role := generation.forKind("chat")
 	task := "react"
 	if tc := tools.GetToolContext(ctx); tc != nil {
-		if session, ok := tc.Session.(*Session); ok {
+		role = generation.forKind(tc.ConversationKind)
+		task = taskForKind(tc.ConversationKind)
+		if session, ok := tc.Session.(*Session); ok && llm.TrackerFrom(ctx) == nil {
 			ctx = llm.WithRequestTracker(ctx, session.trackModelRequest)
 			defer session.finishModelRequest(nil)
 		}
-		if generation != nil {
-			modelName = generation.forKind(tc.ConversationKind).modelName
-		}
+		tc.ToolDeclarations = toolDeclarations(toolsList)
 		ctx = logger.WithSession(ctx, tc.ConversationKind, tc.TargetID, tc.RunID, cfg.Debug.LogAgentContent)
-		switch tc.ConversationKind {
-		case memory.ConversationKindWorker:
-			task = "worker"
-		case memory.ConversationKindLife:
-			task = "life"
-		}
+	}
+	if existing := modelTaskFrom(ctx); existing.task != "" {
+		task = existing.task
+	}
+	observer := &llm.ResponseObserver{}
+	ctx = llm.WithResponseObserver(ctx, observer)
+	if modelTaskFrom(ctx).modelName == "" {
+		ctx = withModelTask(ctx, task, role.modelName)
 	}
 	log := logger.FromContext(ctx).With(zap.String("task", task))
 	started := time.Now()
@@ -58,172 +62,137 @@ func (a *Agent) runAgent(ctx context.Context, agent *adk.TypedChatModelAgent[*sc
 			log.Info("Agent 运行完成", zap.Duration("duration", time.Since(started)))
 		}
 	}()
-	ctx = llm.WithTask(ctx, task, modelName)
-	runner := adk.NewTypedRunner[*schema.AgenticMessage](adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent})
-	iter := runner.Run(ctx, messages)
-	for {
-		event, ok := iter.Next()
-		if !ok {
-			return nil
-		}
-		if event.Err != nil {
-			if task == "life" && errors.Is(event.Err, errLifeSleepComplete) {
-				return nil
-			}
-			if errors.Is(event.Err, adk.ErrExceedMaxIterations) {
-				if tc := tools.GetToolContext(ctx); tc != nil && tc.EndAfterSleep && task == "life" {
-					return nil
-				}
-			}
-			if errors.Is(event.Err, adk.ErrExceedMaxIterations) {
-				return fmt.Errorf("本轮步数用完: %w", event.Err)
-			}
-			return event.Err
-		}
-	}
-}
 
-// sessionInjector 把运行期间到达的新消息插到模型调用边界
-type sessionInjector struct {
-	*adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]
-	agent *Agent
-}
-
-// BeforeModelRewriteState 在每次模型调用前补上本轮运行期间到达的消息
-func (h *sessionInjector) BeforeModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], mc *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
-	tc := tools.GetToolContext(ctx)
-	if tc == nil || tc.Session == nil {
-		return ctx, state, nil
+	seed := llm.ToModelMessages(role.provider, role.modelName, messages)
+	runID := "run"
+	if tc := tools.GetToolContext(ctx); tc != nil && tc.RunID != "" {
+		runID = tc.RunID
 	}
-	pending := tc.Session.PendingAfter(tc.ObservedThroughOrder)
-	sort.SliceStable(pending, func(i, j int) bool { return pending[i].Order < pending[j].Order })
-	if err := h.captureToolResults(ctx, state, tc); err != nil {
-		return ctx, state, err
+	r := runner.NewRunner("mumu", ag, runner.WithSessionService(noop.NewService()))
+	defer r.Close()
+	events, err := runner.RunWithMessages(ctx, r, "mumu", runID, seed)
+	if err != nil {
+		return err
 	}
-	if session, ok := tc.Session.(*Session); ok && session.switchPending() {
-		return ctx, state, errModelSwitchPending
-	}
-	// 睡眠工具已经成功落库：工具回执已绑定行号，正常结束这一轮，不再请求模型
-	if tc.EndAfterSleep {
-		return ctx, state, errLifeSleepComplete
-	}
-	messages := make([]*schema.AgenticMessage, 0, len(pending))
-	for _, item := range pending {
-		// 直接复用会话里渲染好的消息，内容进入上下文后不再变化
-		messages = append(messages, item.Msg)
-		tc.ObservedThroughOrder = max(tc.ObservedThroughOrder, item.Order)
-	}
-	state.Messages = append(state.Messages, messages...)
-	if session, ok := tc.Session.(*Session); ok {
-		if session.NeedsCompactionBeforeModel() {
-			if session.CompactionCoolingDown(time.Now()) {
-				return ctx, state, errCompactionPending
+	defer func() {
+		go func() {
+			for range events {
 			}
-			if _, err := h.compactNow(ctx, session, state, tc); err != nil {
-				if session.NeedsCompactionBeforeModel() {
-					return ctx, state, fmt.Errorf("%w: %v", errCompactionPending, err)
-				}
-				return ctx, state, err
-			}
+		}()
+	}()
+	for ev := range events {
+		if ev == nil {
+			continue
 		}
-		update, err := session.syncPinnedMemories(ctx, h.agent.memory, state.Messages)
-		if err != nil {
-			return ctx, state, err
+		if ev.IsRunnerCompletion() {
+			break
 		}
-		if update != nil {
-			state.Messages = append(state.Messages, update)
+		if !ev.IsError() {
+			continue
 		}
-		session.RecordRequestBoundary(state.Messages)
-	}
-	if budget := runStateFrom(ctx); budget != nil && budget.steps != nil && !budget.steps.Consume() {
-		return ctx, state, adk.ErrExceedMaxIterations
-	}
-	tc.ModelRequested = true
-	return ctx, state, nil
-}
-
-func (h *sessionInjector) captureToolResults(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) error {
-	session, ok := tc.Session.(*Session)
-	if !ok || session == nil || state == nil {
+		if err := a.mapRunError(ctx, ev); err != nil {
+			return err
+		}
 		return nil
 	}
-	return session.CaptureStateToolResults(ctx, tc.RunID, state.Messages)
+	return nil
 }
 
-func (h *sessionInjector) compactNow(ctx context.Context, session *Session, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], tc *tools.ToolContext) (bool, error) {
+func (a *Agent) mapRunError(ctx context.Context, ev *event.Event) error {
+	if tc := tools.GetToolContext(ctx); tc != nil && tc.StopReason != "" {
+		switch tc.StopReason {
+		case tools.StopReasonSleep:
+			return nil
+		case tools.StopReasonBudget:
+			return fmt.Errorf("本轮步数用完: %w", errBudgetExhausted)
+		}
+		if tc.StopCause != nil {
+			return tc.StopCause
+		}
+	}
+	if err := llm.TrackerError(ctx); err != nil {
+		return err
+	}
+	if ev.Error != nil && ev.Error.Code != nil {
+		switch *ev.Error.Code {
+		case llm.ErrorCodeIdle:
+			return errors.Join(errModelRequestIdle, &modelRequestError{errors.New(ev.Error.Message)})
+		case llm.ErrorCodeModel:
+			return &modelRequestError{errors.New(ev.Error.Message)}
+		}
+	}
+	// 适配器把服务商错误标成 APIError，切换流程必须按模型故障接管而不是当成本地失败
+	if ev.Error != nil && ev.Error.Type == model.ErrorTypeAPIError {
+		return &modelRequestError{errors.New(ev.Error.Message)}
+	}
+	if ev.Error != nil {
+		return errors.New(ev.Error.Message)
+	}
+	return errors.New("模型运行失败")
+}
+
+// compactNow 在模型边界同步整理旧交互，成功返回后由调用方重新装配
+func (a *Agent) compactNow(ctx context.Context, session *Session, tc *tools.ToolContext) error {
 	cfg := configFor(ctx)
 	generation := generationFrom(ctx)
 	if generation == nil {
-		return false, fmt.Errorf("模型运行态未初始化")
+		return fmt.Errorf("模型运行态未初始化")
 	}
-	window := generation.contextWindow
-	candidate := session.BuildCompactionCandidate(window, cfg.Compactor.RecentTailRatio)
+	candidate := session.BuildCompactionCandidate(generation.forKind(session.kind).contextWindow, cfg.Compactor.RecentTailRatio)
 	if candidate == nil {
 		session.ClearCompactionFailure()
-		if requestTokens(state.Messages, state.ToolInfos) > window {
-			return false, fmt.Errorf("当前输入超过模型窗口，且没有可安全压缩的旧交互")
+		if requestTokens(tc.Assembled, tc.ToolDeclarations) > generation.forKind(session.kind).contextWindow {
+			return fmt.Errorf("当前输入超过模型窗口，且没有可安全压缩的旧交互")
 		}
-		return false, nil
+		return nil
 	}
 	compactionCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
-	stopShutdownWatch := context.AfterFunc(h.agent.ctx, cancel)
+	stopShutdownWatch := context.AfterFunc(a.ctx, cancel)
 	defer stopShutdownWatch()
 	remainingSteps := cfg.Compactor.MaxSteps
 	if remainingSteps <= 0 {
 		remainingSteps = 12
 	}
-	if err := h.agent.runCompactionWithRepair(compactionCtx, session, candidate, &tc.CompactionAttempts, &remainingSteps); err != nil {
+	if err := a.runCompactionWithRepair(compactionCtx, session, candidate, &tc.CompactionAttempts, &remainingSteps); err != nil {
 		session.MarkCompactionFailure(time.Now())
-		return false, err
+		return err
 	}
-	rebuilt, buildErr := h.agent.assembleMessages(compactionCtx, session)
-	if buildErr != nil {
-		session.MarkCompactionFailure(time.Now())
-		return false, buildErr
-	}
-	state.Messages = rebuilt
-	return true, nil
+	return nil
 }
 
 // compactAfterOverflow 在 provider 明确报告上下文溢出时强制尝试一次安全压缩
-func (a *Agent) compactAfterOverflow(ctx context.Context, kind string, targetID int64, toolsList []tool.BaseTool, genInput adk.TypedGenModelInput[*schema.AgenticMessage], session *Session) bool {
+func (a *Agent) compactAfterOverflow(ctx context.Context, kind string, targetID int64, toolsList []tool.Tool, session *Session) bool {
 	retryCtx, err := a.buildConversationToolContext(ctx, kind, targetID, session)
 	if err != nil {
 		zap.L().Warn("构建压缩后工具上下文失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
 		return false
 	}
 	tc := tools.GetToolContext(retryCtx)
-	assembled, err := a.assembleMessages(retryCtx, session)
-	if err != nil {
+	hint, hintErr := a.assembleMessages(retryCtx, session)
+	if hintErr != nil {
 		return false
 	}
-	inputMessages, err := genInput(retryCtx, "", &adk.TypedAgentInput[*schema.AgenticMessage]{Messages: assembled, EnableStreaming: false})
-	if err != nil {
-		return false
-	}
-	state := &adk.TypedChatModelAgentState[*schema.AgenticMessage]{Messages: inputMessages, ToolInfos: modelToolInfos(retryCtx, toolsList)}
-	h := &sessionInjector{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{}, agent: a}
-	compacted, err := h.compactNow(retryCtx, session, state, tc)
-	if err != nil {
+	tc.Assembled = hint
+	tc.ToolDeclarations = toolDeclarations(toolsList)
+	if err := a.compactNow(retryCtx, session, tc); err != nil {
 		zap.L().Warn("上下文溢出后的强制压缩失败", zap.String("conversation_kind", kind), zap.Int64("target_id", targetID), zap.Error(err))
 		return false
 	}
-	return compacted
+	return true
 }
 
-func modelToolInfos(ctx context.Context, toolsList []tool.BaseTool) []*schema.ToolInfo {
-	infos := make([]*schema.ToolInfo, 0, len(toolsList))
+func toolDeclarations(toolsList []tool.Tool) []*tool.Declaration {
+	declarations := make([]*tool.Declaration, 0, len(toolsList))
 	for _, item := range toolsList {
 		if item == nil {
 			continue
 		}
-		info, err := item.Info(ctx)
-		if err == nil && info != nil {
-			infos = append(infos, info)
+		if declaration := item.Declaration(); declaration != nil {
+			declarations = append(declarations, declaration)
 		}
 	}
-	return infos
+	return declarations
 }
 
 func isContextOverflowError(err error) bool {
@@ -231,69 +200,16 @@ func isContextOverflowError(err error) bool {
 		return false
 	}
 	text := strings.ToLower(err.Error())
-	for _, marker := range []string{"context length", "context_length_exceeded", "maximum context", "too many tokens", "input is too long", "prompt is too long", "token limit exceeded"} {
+	for _, marker := range []string{
+		"context length", "context_length_exceeded", "maximum context", "too many tokens",
+		"input is too long", "prompt is too long", "token limit exceeded", "context window",
+		"input token count", "maximum number of tokens", "request too large",
+	} {
 		if strings.Contains(text, marker) {
 			return true
 		}
 	}
 	return false
-}
-
-// sessionPersister 在每次模型成功后保存 assistant 并把本批可见输入标记为 visible
-type sessionPersister struct {
-	*adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]
-}
-
-func (h *sessionPersister) BeforeModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
-	tc := tools.GetToolContext(ctx)
-	if tc == nil || tc.ConversationKind != memory.ConversationKindLife {
-		return ctx, state, nil
-	}
-	session, ok := tc.Session.(*Session)
-	if !ok {
-		return ctx, state, nil
-	}
-	message, err := injectLifeUsageHint(ctx, session)
-	if err != nil {
-		return ctx, state, err
-	}
-	if message != nil {
-		state.Messages = append(state.Messages, message)
-	}
-	return ctx, state, nil
-}
-
-func (h *sessionPersister) AfterModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
-	tc := tools.GetToolContext(ctx)
-	if tc == nil || tc.Session == nil {
-		return ctx, state, nil
-	}
-	session, ok := tc.Session.(*Session)
-	if !ok || session == nil || len(state.Messages) == 0 {
-		return ctx, state, nil
-	}
-	last := state.Messages[len(state.Messages)-1]
-	if last == nil || last.Role != schema.AgenticRoleTypeAssistant {
-		return ctx, state, nil
-	}
-	requestMessages := state.Messages[:len(state.Messages)-1]
-	if _, err := session.AppendAssistant(ctx, tc.RunID, last); err != nil {
-		return ctx, state, err
-	}
-	if last.ResponseMeta != nil && last.ResponseMeta.TokenUsage != nil && last.ResponseMeta.TokenUsage.TotalTokens > 0 {
-		session.ObserveResponseUsage(requestMessages, state.ToolInfos, last.ResponseMeta.TokenUsage)
-		session.SetTokenBase(last, last.ResponseMeta.TokenUsage, requestMessages, generationFrom(ctx).forKind(session.kind))
-	} else {
-		session.ClearTokenBase()
-	}
-	// 新生成的 assistant 轨迹尚未进入任何成功请求，不能在同一事务里标 visible
-	ids := transcriptIDs(requestMessages)
-	seqs, err := session.memory.MarkVisible(ctx, session.kind, session.targetID, ids)
-	if err != nil {
-		return ctx, state, err
-	}
-	session.ApplyVisibleSeqs(seqs)
-	return ctx, state, nil
 }
 
 // markCollectedStickers 标记哪些表情已经在收藏库，消息里据此显示已收藏
@@ -324,12 +240,7 @@ func (a *Agent) markSessionRecalled(kind string, targetID, messageID int64) {
 	a.sessions.get(kind, targetID).MarkRecalledByMessageID(messageID)
 }
 
-// passthroughModelInput 原样返回装配结果，人格与群说明已作为 transcript 行写入
-func (a *Agent) passthroughModelInput(ctx context.Context, _ string, input *adk.TypedAgentInput[*schema.AgenticMessage]) ([]*schema.AgenticMessage, error) {
-	return input.Messages, nil
-}
-
-func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID int64, state *runState, chatTools []tool.BaseTool, session *Session) error {
+func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID int64, state *runState, toolsList []tool.Tool, session *Session) error {
 	if state == nil || state.steps.Remaining() <= 0 {
 		return fmt.Errorf("本轮步数用完")
 	}
@@ -342,7 +253,7 @@ func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID in
 	if generation == nil {
 		return fmt.Errorf("模型运行态未初始化")
 	}
-	chatAgent, err := a.newChatAgent(generation, chatTools, state.steps.Remaining())
+	chatAgent, err := a.newChatAgent(generation, toolsList)
 	if err != nil {
 		return err
 	}
@@ -350,5 +261,5 @@ func (a *Agent) retryAfterOverflow(ctx context.Context, kind string, targetID in
 	if err != nil {
 		return err
 	}
-	return a.runAgent(retryCtx, chatAgent, messages)
+	return a.runAgent(retryCtx, chatAgent, toolsList, messages)
 }

@@ -7,13 +7,12 @@ import (
 
 	projectutils "mumu-bot/internal/utils"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type SendImageInput struct {
-	URL      string `json:"url,omitempty" jsonschema:"description=图片 HTTP/HTTPS 地址，与 image_ref 二选一"`
-	ImageRef string `json:"image_ref,omitempty" jsonschema:"description=消息里的 image_ref，与 url 二选一"`
+	URL      string `json:"url,omitempty" description:"图片 HTTP/HTTPS 地址，与 image_ref 二选一"`
+	ImageRef string `json:"image_ref,omitempty" description:"消息里的 image_ref，与 url 二选一"`
 }
 
 func sendImage(ctx context.Context, input *SendImageInput) (map[string]any, error) {
@@ -55,6 +54,6 @@ func sendImage(ctx context.Context, input *SendImageInput) (map[string]any, erro
 	return map[string]any{"success": true, "message": "图片已发送"}, nil
 }
 
-func NewSendImageTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendImage", "把 HTTP/HTTPS 图片 URL 或消息里的 image_ref 发到当前会话；两者恰选一个，本地表情包请使用 sendSticker。", sendImage)
+func NewSendImageTool() (tool.Tool, error) {
+	return newFunctionTool("sendImage", "把 HTTP/HTTPS 图片 URL 或消息里的 image_ref 发到当前会话；两者恰选一个，本地表情包请使用 sendSticker。", sendImage)
 }

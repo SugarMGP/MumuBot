@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type ReadToolResultInput struct {
 	ResultRef string `json:"result_ref"`
-	Query     string `json:"query,omitempty" jsonschema:"description=可选关键词，区分大小写的字面匹配；返回从 offset 起的首个命中及附近正文"`
-	Offset    int    `json:"offset,omitempty" jsonschema:"description=从0开始的字符位置；搜索时表示从此处查找"`
-	Length    int    `json:"length,omitempty" jsonschema:"description=正文窗口长度，默认4000字符，最大8000"`
+	Query     string `json:"query,omitempty" description:"可选关键词，区分大小写的字面匹配；返回从 offset 起的首个命中及附近正文"`
+	Offset    int    `json:"offset,omitempty" description:"从0开始的字符位置；搜索时表示从此处查找"`
+	Length    int    `json:"length,omitempty" description:"正文窗口长度，默认4000字符，最大8000"`
 }
 
 func readToolResult(ctx context.Context, input *ReadToolResultInput) (any, error) {
@@ -41,6 +40,6 @@ func readToolResult(ctx context.Context, input *ReadToolResultInput) (any, error
 	return output, nil
 }
 
-func NewReadToolResultTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readToolResult", "按字符窗口读取已保存的工具结果，或在指定结果内按 query 搜索；offset 是返回窗口起点，match_offset 是命中位置，next_offset 用于以相同 query 续查，complete 表示已无后续正文或匹配。", readToolResult)
+func NewReadToolResultTool() (tool.Tool, error) {
+	return newFunctionTool("readToolResult", "按字符窗口读取已保存的工具结果，或在指定结果内按 query 搜索；offset 是返回窗口起点，match_offset 是命中位置，next_offset 用于以相同 query 续查，complete 表示已无后续正文或匹配。", readToolResult)
 }

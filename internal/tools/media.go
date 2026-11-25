@@ -8,20 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	workerproto "mumu-bot/worker/proto"
 
-	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // SessionContext 会话上下文能力：消息编号与媒体引用都由会话维护
 type SessionContext interface {
 	BeginToolTranscript(ctx context.Context, runID, toolName, callID, arguments string) (id uint, existingResult string, resumed bool, err error)
-	FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *schema.ToolResult, resultRef string) (string, *schema.ToolResult, error)
+	FinishToolTranscript(ctx context.Context, id uint, status, resultText string, enhanced *Result, resultRef string) (string, *Result, error)
 	RegisterMediaRefs(refs []media.Ref)
 	ResolveMediaByHash(hash string) (media.Ref, bool)
 	PendingAfter(order uint64) []PendingMessage
@@ -30,27 +28,13 @@ type SessionContext interface {
 // PendingMessage 待注入模型上下文的消息
 type PendingMessage struct {
 	Order uint64
-	Msg   *schema.AgenticMessage
-}
-
-// enhancedTool 返回多模态结果的工具
-type enhancedTool struct {
-	info *schema.ToolInfo
-	run  func(ctx context.Context, argument *schema.ToolArgument) (*schema.ToolResult, error)
-}
-
-// Info 返回工具描述
-func (t *enhancedTool) Info(context.Context) (*schema.ToolInfo, error) { return t.info, nil }
-
-// InvokableRun 执行工具并返回多模态结果
-func (t *enhancedTool) InvokableRun(ctx context.Context, argument *schema.ToolArgument, _ ...tool.Option) (*schema.ToolResult, error) {
-	return t.run(ctx, argument)
+	Msg   *agentic.Message
 }
 
 // ViewImageInput 查看图片的参数
 type ViewImageInput struct {
-	Hash     string `json:"hash,omitempty" jsonschema:"description=旧消息里的图片/表情包短哈希标识"`
-	ImageRef string `json:"image_ref,omitempty" jsonschema:"description=消息里的 image_ref，与 hash 二选一"`
+	Hash     string `json:"hash,omitempty" description:"旧消息里的图片/表情包短哈希标识"`
+	ImageRef string `json:"image_ref,omitempty" description:"消息里的 image_ref，与 hash 二选一"`
 }
 
 // ViewImageOutput 查看图片的结果，工具实际把图片本体交给模型
@@ -60,34 +44,12 @@ type ViewImageOutput struct {
 }
 
 // NewViewImageTool 返回可以查看会话内图片的工具
-func NewViewImageTool() (tool.EnhancedInvokableTool, error) {
-	plain, err := utils.InferTool("viewImage", "查看一张图片或表情包的内容。新消息用 image_ref，旧工作集仍可用短哈希；两者恰选一个。", viewImageFunc)
-	if err != nil {
-		return nil, err
-	}
-	info, err := plain.Info(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	return &enhancedTool{info: info, run: viewImageRun}, nil
-}
-
-// viewImageFunc 解析媒体引用
-func viewImageFunc(ctx context.Context, input *ViewImageInput) (*ViewImageOutput, error) {
-	if _, _, err := resolveViewImage(ctx, input); err != nil {
-		return nil, err
-	}
-	return &ViewImageOutput{Success: true, Message: "已取到图片内容"}, nil
+func NewViewImageTool() (tool.Tool, error) {
+	return newEnhancedTool("viewImage", "查看一张图片或表情包的内容。新消息用 image_ref，旧工作集仍可用短哈希；两者恰选一个。", viewImageRun)
 }
 
 // viewImageRun 读取媒体并把图片本体返回给模型
-func viewImageRun(ctx context.Context, argument *schema.ToolArgument) (*schema.ToolResult, error) {
-	input := &ViewImageInput{}
-	if argument != nil && strings.TrimSpace(argument.Text) != "" {
-		if err := sonic.UnmarshalString(argument.Text, input); err != nil {
-			return nil, fmt.Errorf("参数解析失败: %w", err)
-		}
-	}
+func viewImageRun(ctx context.Context, input *ViewImageInput) (*Result, error) {
 	data, mime, err := resolveViewImage(ctx, input)
 	if err != nil {
 		return nil, err
@@ -149,9 +111,9 @@ func resolveMedia(ctx context.Context, input *ViewImageInput) (media.Ref, error)
 
 // SaveStickerInput 收藏表情包的参数
 type SaveStickerInput struct {
-	Hash        string `json:"hash,omitempty" jsonschema:"description=旧消息里的表情包短哈希"`
-	ImageRef    string `json:"image_ref,omitempty" jsonschema:"description=来自表情包的新 image_ref，与 hash 二选一"`
-	Description string `json:"description" jsonschema:"description=表情含义的一句话备注"`
+	Hash        string `json:"hash,omitempty" description:"旧消息里的表情包短哈希"`
+	ImageRef    string `json:"image_ref,omitempty" description:"来自表情包的新 image_ref，与 hash 二选一"`
+	Description string `json:"description" description:"表情含义的一句话备注"`
 }
 
 // SaveStickerOutput 收藏表情包的结果
@@ -162,8 +124,8 @@ type SaveStickerOutput struct {
 }
 
 // NewSaveStickerTool 返回收藏表情包的工具，只接受消息里的表情
-func NewSaveStickerTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveSticker", "把一条表情包收藏进表情包库；hash 用于旧消息，image_ref 用于新消息，两者恰选一个且必须来自表情包。", saveStickerFunc)
+func NewSaveStickerTool() (tool.Tool, error) {
+	return newFunctionTool("saveSticker", "把一条表情包收藏进表情包库；hash 用于旧消息，image_ref 用于新消息，两者恰选一个且必须来自表情包。", saveStickerFunc)
 }
 
 // saveStickerFunc 收藏表情包

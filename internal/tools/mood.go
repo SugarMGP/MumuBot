@@ -6,17 +6,16 @@ import (
 
 	"mumu-bot/internal/memory"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type EmotionChangeInput struct {
-	ID        uint    `json:"id,omitempty" jsonschema:"description=已有感受的条目 ID；新建时省略"`
-	Version   uint64  `json:"version,omitempty" jsonschema:"description=已有感受的当前版本；新建时省略"`
-	Kind      *string `json:"kind,omitempty" jsonschema:"description=自由名称或简短描述，最多100字；新建必填，修改时省略表示沿用"`
-	Fact      *string `json:"fact,omitempty" jsonschema:"description=引发或改变感受的已知经过，最多2000字；新建必填，修改时省略表示沿用"`
-	Reason    *string `json:"reason,omitempty" jsonschema:"description=这件事对你的意义、期待、归因、矛盾和不确定处，最多2000字；新建必填，修改时省略表示沿用"`
-	Intensity string  `json:"intensity,omitempty" jsonschema:"description=轻微/明显/强烈；新建必填。修改时省略表示不重设强度。已平复表示明确结束这条感受，需同时给 reason"`
+	ID        uint    `json:"id,omitempty" description:"已有感受的条目 ID；新建时省略"`
+	Version   uint64  `json:"version,omitempty" description:"已有感受的当前版本；新建时省略"`
+	Kind      *string `json:"kind,omitempty" description:"自由名称或简短描述，最多100字；新建必填，修改时省略表示沿用"`
+	Fact      *string `json:"fact,omitempty" description:"引发或改变感受的已知经过，最多2000字；新建必填，修改时省略表示沿用"`
+	Reason    *string `json:"reason,omitempty" description:"这件事对你的意义、期待、归因、矛盾和不确定处，最多2000字；新建必填，修改时省略表示沿用"`
+	Intensity string  `json:"intensity,omitempty" description:"轻微/明显/强烈；新建必填。修改时省略表示不重设强度。已平复表示明确结束这条感受，需同时给 reason"`
 }
 
 // UpdateMoodInput 是聊天场合的情感入参：精力与交流意愿由 life 统一维护，这里不暴露
@@ -27,8 +26,8 @@ type UpdateMoodInput struct {
 // LifeUpdateMoodInput 是生活主线的情感入参，额外允许改写共享的精力与交流意愿
 type LifeUpdateMoodInput struct {
 	Changes     []EmotionChangeInput `json:"changes,omitempty"`
-	Energy      *string              `json:"energy,omitempty" jsonschema:"description=low/normal/high"`
-	Sociability *string              `json:"sociability,omitempty" jsonschema:"description=low/normal/high"`
+	Energy      *string              `json:"energy,omitempty" description:"low/normal/high"`
+	Sociability *string              `json:"sociability,omitempty" description:"low/normal/high"`
 	Reason      string               `json:"reason,omitempty"`
 }
 
@@ -97,10 +96,10 @@ func lifeUpdateMoodFunc(ctx context.Context, input *LifeUpdateMoodInput) (any, e
 	})
 }
 
-func NewUpdateMoodTool() (tool.InvokableTool, error) {
-	return utils.InferTool("updateMood", "更新具体情感。有真实变化再维护，fact 写已知经过，reason 写意义和不确定处；同一感受先从 getCurrentStatus(include_emotions=true) 取当前 id/version，平复也说明原因。名称可同名、感受可矛盾，不为整理强行清空。精力和交流意愿由 life 统一维护，这个场合不能修改。", updateMoodFunc)
+func NewUpdateMoodTool() (tool.Tool, error) {
+	return newFunctionTool("updateMood", "更新具体情感。有真实变化再维护，fact 写已知经过，reason 写意义和不确定处；同一感受先从 getCurrentStatus(include_emotions=true) 取当前 id/version，平复也说明原因。名称可同名、感受可矛盾，不为整理强行清空。精力和交流意愿由 life 统一维护，这个场合不能修改。", updateMoodFunc)
 }
 
-func NewLifeUpdateMoodTool() (tool.InvokableTool, error) {
-	return utils.InferTool("updateMood", "更新具体情感、精力和交流意愿。情感的 fact 写已知经过、reason 写意义与不确定处；已有感受先用 getCurrentStatus(include_emotions=true) 取 id/version，平复仍说明原因。精力和交流意愿由你统一维护，没有变化就不必更新。", lifeUpdateMoodFunc)
+func NewLifeUpdateMoodTool() (tool.Tool, error) {
+	return newFunctionTool("updateMood", "更新具体情感、精力和交流意愿。情感的 fact 写已知经过、reason 写意义与不确定处；已有感受先用 getCurrentStatus(include_emotions=true) 取 id/version，平复仍说明原因。精力和交流意愿由你统一维护，没有变化就不必更新。", lifeUpdateMoodFunc)
 }

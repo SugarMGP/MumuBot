@@ -12,18 +12,17 @@ import (
 	projectutils "mumu-bot/internal/utils"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const memeAPIBaseURL = "https://cnmeme.wiki/api/v1/public/memes"
 
 // SearchMemeInput 是 searchMeme 的查询参数
 type SearchMemeInput struct {
-	Query  string `json:"query" jsonschema:"description=要搜索的黑话、网络梗或表情包词语，最多 80 字"`
-	Tag    string `json:"tag,omitempty" jsonschema:"description=可选的完整标签，最多 40 字"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"description=返回条数，默认 8，最大 99（上游最多 30）"`
-	Cursor string `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
+	Query  string `json:"query" description:"要搜索的黑话、网络梗或表情包词语，最多 80 字"`
+	Tag    string `json:"tag,omitempty" description:"可选的完整标签，最多 40 字"`
+	Limit  int    `json:"limit,omitempty" description:"返回条数，默认 8，最大 99（上游最多 30）"`
+	Cursor string `json:"cursor,omitempty" description:"上一页返回的 cursor"`
 }
 
 // MemeSearchResult 是 searchMeme 返回的公开梗词条
@@ -148,12 +147,12 @@ func cleanMemeTerm(raw string, limit int) string {
 }
 
 // NewSearchMemeTool 创建梗Wiki搜索工具
-func NewSearchMemeTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchMeme", "搜索梗Wiki中的黑话、网络梗和表情包词条；按标题、标签和正文做子串匹配；返回公开释义、标签和来源，完整正文用 readMeme 读取返回的 slug。", searchMeme)
+func NewSearchMemeTool() (tool.Tool, error) {
+	return newFunctionTool("searchMeme", "搜索梗Wiki中的黑话、网络梗和表情包词条；按标题、标签和正文做子串匹配；返回公开释义、标签和来源，完整正文用 readMeme 读取返回的 slug。", searchMeme)
 }
 
 type ReadMemeInput struct {
-	Slug string `json:"slug" jsonschema:"description=searchMeme 返回的词条 slug"`
+	Slug string `json:"slug" description:"searchMeme 返回的词条 slug"`
 }
 
 func readMeme(ctx context.Context, input *ReadMemeInput) (*WebResult, error) {
@@ -168,6 +167,6 @@ func readMeme(ctx context.Context, input *ReadMemeInput) (*WebResult, error) {
 }
 
 // NewReadMemeTool 只读取固定梗百科来源，不接受任意网页地址
-func NewReadMemeTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readMeme", "读取梗Wiki单个词条的完整正文；slug 来自 searchMeme，不接收网页 URL。长结果用 readToolResult 续读。", readMeme)
+func NewReadMemeTool() (tool.Tool, error) {
+	return newFunctionTool("readMeme", "读取梗Wiki单个词条的完整正文；slug 来自 searchMeme，不接收网页 URL。长结果用 readToolResult 续读。", readMeme)
 }

@@ -11,8 +11,7 @@ import (
 	"mumu-bot/internal/modelstats"
 	"mumu-bot/internal/schedule"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type GetCurrentStatusOutput struct {
@@ -49,11 +48,11 @@ type LifeStatusView struct {
 }
 
 type GetCurrentStatusInput struct {
-	IncludeEmotions bool `json:"include_emotions,omitempty" jsonschema:"description=是否返回全部未平复感受正文，默认 false；数量和精力仍会返回"`
+	IncludeEmotions bool `json:"include_emotions,omitempty" description:"是否返回全部未平复感受正文，默认 false；数量和精力仍会返回"`
 }
 
-func NewGetCurrentStatusTool() (tool.InvokableTool, error) {
-	return utils.InferTool("getCurrentStatus", "读取当前时间、会话、精力、交流意愿、情绪数量和生活状态；只有 include_emotions=true 才返回全部感受正文；life 另返回上海当天生活与工作请求量及软提醒状态，统计失败明确标记不可用。", getCurrentStatusFunc)
+func NewGetCurrentStatusTool() (tool.Tool, error) {
+	return newFunctionTool("getCurrentStatus", "读取当前时间、会话、精力、交流意愿、情绪数量和生活状态；只有 include_emotions=true 才返回全部感受正文；life 另返回上海当天生活与工作请求量及软提醒状态，统计失败明确标记不可用。", getCurrentStatusFunc)
 }
 
 func getCurrentStatusFunc(ctx context.Context, input *GetCurrentStatusInput) (*GetCurrentStatusOutput, error) {

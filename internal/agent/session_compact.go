@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"mumu-bot/internal/agentic"
+
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const estimatedImageTokens = 1200
@@ -60,12 +63,12 @@ func estimateTokens(text string) int {
 }
 
 // messageTokens 估算一条消息占用的 token，图片按固定视觉预算而不是 base64 长度
-func messageTokens(message *schema.AgenticMessage) int {
+func messageTokens(message *agentic.Message) int {
 	return messageTokensScaled(message, 1)
 }
 
 // messageTokensScaled 只缩放文本部分，图片、音频、视频保持固定预算
-func messageTokensScaled(message *schema.AgenticMessage, scale float64) int {
+func messageTokensScaled(message *agentic.Message, scale float64) int {
 	if message == nil {
 		return 0
 	}
@@ -126,7 +129,7 @@ func messageTokensScaled(message *schema.AgenticMessage, scale float64) int {
 }
 
 // requestTokens 估算一次完整请求的输入占用，包含消息和工具 schema
-func requestTokens(messages []*schema.AgenticMessage, toolInfos []*schema.ToolInfo) int {
+func requestTokens(messages []*agentic.Message, toolInfos []*tool.Declaration) int {
 	total := 0
 	for _, msg := range messages {
 		total += messageTokens(msg)
@@ -134,6 +137,23 @@ func requestTokens(messages []*schema.AgenticMessage, toolInfos []*schema.ToolIn
 	if len(toolInfos) > 0 {
 		if raw, err := sonic.MarshalString(toolInfos); err == nil {
 			total += estimateTokens(raw)
+		}
+	}
+	return total
+}
+
+// estimateModelMessages 估算已转换请求的 token，压缩器子步骤的切换窗口检查使用
+func estimateModelMessages(messages []model.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += estimateTokens(message.Content) + 8
+		for _, part := range message.ContentParts {
+			if part.Text != nil {
+				total += estimateTokens(*part.Text)
+			}
+		}
+		for _, call := range message.ToolCalls {
+			total += estimateTokens(call.Function.Name) + estimateTokens(string(call.Function.Arguments)) + 8
 		}
 	}
 	return total

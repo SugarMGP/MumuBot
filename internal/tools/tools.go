@@ -7,14 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/refstore"
 	workerproto "mumu-bot/worker/proto"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // SpeakCallback 发言回调函数类型
@@ -118,7 +117,22 @@ type ToolContext struct {
 	StickerDir            string
 	Session               SessionContext
 	ObservedThroughOrder  uint64
-	RecallCallback        func(messageID int64, arrivalSeq uint64)
+	// StopReason 与 StopCause 由回调写入，事件循环据此还原正常收尾或真实失败
+	StopReason string
+	StopCause  error
+	// ToolTranscriptID 是当前工具调用的 transcript 行号，工具顺序执行时只保留一个
+	ToolTranscriptID uint
+	// Assembled 是本次模型请求实际装配并发送的 canonical 消息
+	Assembled []*agentic.Message
+	// ToolDeclarations 是本轮可用工具的声明，token 估算与用量校准共用
+	ToolDeclarations []*tool.Declaration
+	// CompactionRemaining 是压缩器专用步数；非压缩运行使用 runState 的共享预算
+	CompactionRemaining *int
+	// CompactorMessages 是压缩器第一次模型请求的完整输入，后续步骤由运行时追加工具结果
+	CompactorMessages   []*agentic.Message
+	CompactorStarted    bool
+	CompactorFlowMerged int
+	RecallCallback      func(messageID int64, arrivalSeq uint64)
 
 	memoryMu           sync.Mutex
 	recallMu           sync.Mutex
@@ -235,8 +249,8 @@ func (tc *ToolContext) MemoryVersion(id uint) (uint64, bool) {
 
 // ==================== 获取短期记忆工具 ====================
 
-func NewGetNewMessagesTool() (tool.EnhancedInvokableTool, error) {
-	return utils.InferEnhancedTool("getNewMessages", "刷新本轮上下文；有新消息会作为随后的用户消息出现，不在工具结果里返回。", func(ctx context.Context, _ *struct{}) (*schema.ToolResult, error) {
+func NewGetNewMessagesTool() (tool.Tool, error) {
+	return newEnhancedTool("getNewMessages", "刷新本轮上下文；有新消息会作为随后的用户消息出现，不在工具结果里返回。", func(ctx context.Context, _ *struct{}) (*Result, error) {
 		tc := GetToolContext(ctx)
 		if tc == nil || tc.Session == nil {
 			return nil, NewTerminalToolError(fmt.Errorf("新消息读取能力未初始化"))
@@ -246,14 +260,14 @@ func NewGetNewMessagesTool() (tool.EnhancedInvokableTool, error) {
 		if count > 0 {
 			text = "新消息已随上下文提供（见随后的用户消息）。"
 		}
-		return &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: text}}}, nil
+		return &Result{Parts: []Part{{Type: PartTypeText, Text: text}}}, nil
 	})
 }
 
 // ==================== 获取群公告工具 ====================
 
 type GetGroupNoticesInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认5"`
+	Limit int `json:"limit,omitempty" description:"返回数量，默认5"`
 }
 
 type GroupNoticeSummary struct {
@@ -309,8 +323,8 @@ func getGroupNoticesFunc(ctx context.Context, input *GetGroupNoticesInput) (*Get
 	return &GetGroupNoticesOutput{Success: true, Notices: results}, nil
 }
 
-func NewGetGroupNoticesTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewGetGroupNoticesTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"getGroupNotices",
 		"获取当前群的公告列表。可以了解群规、重要通知等信息。",
 		getGroupNoticesFunc,
@@ -320,7 +334,7 @@ func NewGetGroupNoticesTool() (tool.InvokableTool, error) {
 // ==================== 获取群精华消息工具 ====================
 
 type GetEssenceMessagesInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"description=返回数量，默认8"`
+	Limit int `json:"limit,omitempty" description:"返回数量，默认8"`
 }
 
 type EssenceMessageSummary struct {
@@ -378,8 +392,8 @@ func getEssenceMessagesFunc(ctx context.Context, input *GetEssenceMessagesInput)
 	return &GetEssenceMessagesOutput{Success: true, Messages: results}, nil
 }
 
-func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewGetEssenceMessagesTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"getEssenceMessages",
 		"获取当前群的精华消息。精华消息是被管理员设为精华的重要或有趣的消息。",
 		getEssenceMessagesFunc,
@@ -389,7 +403,7 @@ func NewGetEssenceMessagesTool() (tool.InvokableTool, error) {
 // ==================== 获取消息表情回应工具 ====================
 
 type GetMessageReactionsInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）"`
+	MessageID int64 `json:"message_id" description:"OneBot 消息 ID（完整整数，可为负数）"`
 }
 
 type ReactionSummary struct {
@@ -439,10 +453,19 @@ func getMessageReactionsFunc(ctx context.Context, input *GetMessageReactionsInpu
 	return &GetMessageReactionsOutput{Success: true, Reactions: results}, nil
 }
 
-func NewGetMessageReactionsTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewGetMessageReactionsTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"getMessageReactions",
 		"获取某条消息的表情回应。可以看到大家对这条消息的反应。",
 		getMessageReactionsFunc,
 	)
 }
+
+// 本轮终止原因；回调无法把 Go 错误带出事件循环，用显式字段还原控制流
+const (
+	StopReasonSleep       = "sleep"
+	StopReasonBudget      = "budget"
+	StopReasonModelSwitch = "model_switch"
+	StopReasonCompaction  = "compaction_pending"
+	StopReasonTerminal    = "terminal"
+)

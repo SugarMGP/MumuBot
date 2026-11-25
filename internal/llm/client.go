@@ -8,19 +8,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino-ext/components/model/agenticopenai"
-	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/schema"
-	"github.com/openai/openai-go/v3/responses"
+	"mumu-bot/internal/agentic"
+
+	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
+	chatopenai "trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 )
 
 const handshakeTimeout = 10 * time.Second
 
 const (
 	// ProviderResponses 使用 Responses 接口
-	ProviderResponses = "openai_responses"
+	ProviderResponses = agentic.ProviderResponses
 	// ProviderChatCompletions 使用 Chat Completions 接口
-	ProviderChatCompletions = "openai_chat_completions"
+	ProviderChatCompletions = agentic.ProviderChat
+	// ProviderGemini 使用 Gemini 接口
+	ProviderGemini = agentic.ProviderGemini
 )
 
 // ModelConfig 是一次模型客户端构建所需的非敏感配置
@@ -35,7 +40,7 @@ type ModelConfig struct {
 }
 
 // NewClient 按指定档案创建模型客户端；不做进程级缓存
-func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
+func NewClient(cfg ModelConfig) (model.Model, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	modelName := strings.TrimSpace(cfg.Model)
@@ -55,8 +60,18 @@ func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
 		handler = &bodyOverrideTransport{base: transport, fields: fields}
 	}
 	httpClient := &http.Client{Transport: &requestTransport{base: handler}}
+	httpOpts := []model.HTTPClientOption{model.WithHTTPClientTransport(httpClient.Transport)}
 
-	if cfg.Provider == ProviderChatCompletions {
+	switch cfg.Provider {
+	case ProviderResponses:
+		// 沿用适配器默认 store=false，不向服务端留存响应；历史回放依赖 include 的加密 reasoning
+		return responses.New(modelName,
+			responses.WithAPIKey(apiKey),
+			responses.WithBaseURL(baseURL),
+			responses.WithHTTPClientOptions(httpOpts...),
+		), nil
+	case ProviderChatCompletions:
+		// thinking 形态由档案显式控制；不跟随 BaseURL 推断变体，避免出站字段漂移
 		extra := map[string]any{}
 		if cfg.ThinkingMode != "" {
 			extra["thinking"] = map[string]string{"type": cfg.ThinkingMode}
@@ -64,34 +79,29 @@ func NewClient(cfg ModelConfig) (model.AgenticModel, error) {
 		if cfg.ReasoningEffort != "" {
 			extra["reasoning_effort"] = cfg.ReasoningEffort
 		}
-		client, err := agenticopenai.NewChatModel(context.Background(), &agenticopenai.ChatConfig{
-			BaseURL: baseURL, APIKey: apiKey, Model: modelName, HTTPClient: httpClient, ExtraFields: extra,
-		})
+		return chatopenai.New(modelName,
+			chatopenai.WithVariant(chatopenai.VariantOpenAI),
+			chatopenai.WithAPIKey(apiKey),
+			chatopenai.WithBaseURL(baseURL),
+			chatopenai.WithExtraFields(extra),
+			chatopenai.WithHTTPClientOptions(httpOpts...),
+		), nil
+	case ProviderGemini:
+		client, err := gemini.New(context.Background(), modelName, gemini.WithGeminiClientConfig(&genai.ClientConfig{
+			APIKey:     apiKey,
+			Backend:    genai.BackendGeminiAPI,
+			HTTPClient: httpClient,
+			HTTPOptions: genai.HTTPOptions{
+				BaseURL: baseURL,
+			},
+		}))
 		if err != nil {
 			return nil, fmt.Errorf("创建主模型失败: %w", err)
 		}
-		return &chatCompatibleModel{AgenticModel: client}, nil
-	}
-	if cfg.Provider != ProviderResponses {
+		return client, nil
+	default:
 		return nil, fmt.Errorf("unknown model protocol: %s", cfg.Provider)
 	}
-
-	var reasoning *responses.ReasoningParam
-	if effort := strings.TrimSpace(cfg.ReasoningEffort); effort != "" {
-		reasoning = &responses.ReasoningParam{Effort: responses.ReasoningEffort(effort)}
-	}
-
-	client, err := agenticopenai.NewResponsesModel(context.Background(), &agenticopenai.ResponsesConfig{
-		BaseURL:    baseURL,
-		APIKey:     apiKey,
-		Model:      modelName,
-		HTTPClient: httpClient,
-		Reasoning:  reasoning,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("创建主模型失败: %w", err)
-	}
-	return client, nil
 }
 
 // Test 用极短请求验证模型连接；仅用于后台测试，不参与机器人运行
@@ -100,9 +110,20 @@ func Test(ctx context.Context, cfg ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	_, err = client.Generate(ctx, []*schema.AgenticMessage{schema.UserAgenticMessage("ping")})
+	stream, err := client.GenerateContent(ctx, &model.Request{Messages: []model.Message{model.NewUserMessage("ping")}})
 	if err != nil {
 		return fmt.Errorf("模型测试失败: %w", err)
 	}
-	return nil
+	for response := range stream {
+		if response == nil {
+			continue
+		}
+		if response.Error != nil {
+			return fmt.Errorf("模型测试失败: %s", response.Error.Message)
+		}
+		if len(response.Choices) > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("模型测试失败: 没有返回内容")
 }

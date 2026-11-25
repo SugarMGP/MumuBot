@@ -22,182 +22,85 @@
 > - QQ bots carry account restriction risks. Use at your own discretion.
 > - AI model API calls consume tokens. Control usage as needed.
 
-## 🤔 What is MumuBot
+## 🌱 She lives in QQ
 
-MumuBot is not "an LLM bolted onto QQ".
+MumuBot is an agent that lives in QQ groups and friend DMs. It decides when to speak and when to stay quiet, remembers people and conversations, carries feelings that fade naturally, and runs its own life outside the chat window.
 
-She has a continuous self: one set of memories, the things you have talked about, and a concrete opinion of each person. Right now she lives in a chat app: someone attached QQ to her so she can speak, look at pictures, send stickers, and remember people and events. Later she will get other hands: running errands, visiting other places, sitting on your desktop.
+> Which entrance you meet her through only changes where you see her. Who she is and what she remembers stay the same.
 
-Which entrance you meet her through only changes where you see her. Who she is and what she remembers stay the same.
-
-| | A typical chatbot | MumuBot |
-|---|---|---|
-| Who is speaking | A character generated per request | A continuous self that remembers where it stopped |
-| Sense of time | Wakes only when called | Has her own rhythm, speaks up and holds back |
-| Emotion | Interjections and emoji | Free-form feelings with facts and meaning; they fade and can be settled |
-| Ability | Mostly talks | Looks things up, remembers, acts, keeps growing |
-| Entrances | One | Several, still the same person |
-
-## ✨ Features
+## ✨ What she can do
 
 Core capabilities of this project:
 
-- 🧠 **ReAct Agent** — Autonomously decides whether to respond, look up information, or stay silent through an observe-think-act loop
-- 💬 **Persona Presets** — Five documents for persona, shared rules, QQ chat, life duties, and work duties, switched and cloned together in the admin panel; role name and master are global settings
-- 🧵 **Topic Compression and Layered Recall** — When the context nears its window, the same main model compacts history into a conversation overview and topic summaries; later recalls move from topic search to key messages to surrounding originals
-- 🧩 **Rich Toolset** — Chat tools cover speaking, memory, meme search and full entries, poking, and stickers; general web search and page fetching belong to life and workers, while external MCP capabilities stay with life
-- 🖼️ **Media Coverage** — Images, merged forwards, and stickers are understood; voice transcription and video understanding are not implemented yet, so voice messages remain placeholders
-- 📝 **Long-term Memory** — The main agent maintains profile and experience memories for groups, users, itself, and objects, with pinned selection, revisions, and keyword search
-- 👤 **Member Profiles** — Keeps basic member names and related long-term memories; no participation or intimacy scores
-- 🎭 **Global Feelings** — Free-form, globally shared feelings with a known fact, personal meaning, and a 24-hour half-life; mixed and same-named feelings can coexist
-- 🖼️ **Sticker System** — The agent inspects and collects stickers on demand; originals are kept
-- 🔎 **Active Retrieval** — The agent searches long-term memory, topics, and raw history itself; cross-conversation results identify their conversation and are not injected every turn
-- ⏰ **Time-based Scheduling** — Configurable activity levels for different time periods, with anti-spam rate limiting
-- 🔌 **MCP Extension** — Connect external tools via MCP (SSE / Stdio); they load only into the life session, not chat sessions
-- 🖥️ **Admin Dashboard** — Manage groups, friends, blocks, and extra group prompts; browse remembered knowledge per conversation and group topics
-- 💬 **Friend DMs** — One-on-one chats with a dedicated prompt, conversation queue, and the same topic compaction model used for groups
-- 🌙 **Life Session** — A single `life` session keeps her own time: it plans the next check-in, stores commitments and sleep, and hands execution requests to a worker pool; chat sessions stay independent. While asleep, new messages are logged, and an exact `/wake` from the master's private chat is the only manual forced wake
-- 📔 **Diary** — Before the main sleep she writes the day as standalone Markdown; the admin calendar browses entries by date and leaves missing days empty
-- 🧰 **Worker Session** — Configure a worker pool in Settings; chat sessions hand execution requests to the life session, which dispatches idle workers that execute commands, install tools, and run browsers, then report back through life
-- 🌐 **Social Presence** — The life session can browse friend-feed clues and full account timelines, read complete posts, and continue comment/reply pages. Likes and replies reuse saved native objects; publishing supports text/images and returns the platform timestamp. Publishing uses QQ's default public parameters while account-level audience settings stay in QQ
-- 👤 **Self Profile** — The life session reads its real QQ nickname and signature and can change avatar, nickname, or signature one field at a time; results come from backend receipts
-- 📎 **QQ Files** — File messages keep their real name, size, hash, busid, OneBot message ID, and a pending `file_ref`; bytes are downloaded only on first read or send
-- 📤 **Reference-based transfer** — Chat sessions can read text with `readFile(file_ref)`, send files back with `sendFile(file_ref)`, view images with `viewImage(image_ref)`, and send images with `sendImage(image_ref)` without touching the personal home
-- 📂 **Personal Files** — The life session and workers share `/home/worker`; life can list directories, read/write UTF-8 text, save URLs or attachments, freeze outputs with `createFileRef`, and import snapshots with `saveFile(file_ref)`, while workers exchange files over a streaming HTTP protocol
-- 📊 **Health Check** — Provides a `/health` endpoint for deployment and operations integration
+- 🗣️ **Chat like a group member** — Decides whether to speak or stay silent; short replies, stickers, mentions, replies, recalls, and pokes
+- 🧠 **Remembers** — Long-term memory and topic summaries keep people, groups, and events findable; pinned memories stay
+- 🎭 **Feels** — Feelings have a known fact and personal meaning, and fade with time and interaction; mood and energy shape expression
+- 🌙 **Has her own life** — The life session plans schedules, sleep, and diary entries, and can show up when no one is talking
+- 🧰 **Gets things done** — Meme search; the life session looks up the web; files and images; long tasks go to workers that run commands, install tools, and drive browsers
+- 🌐 **Is social** — Reads friend feeds and full Qzone timelines, likes, comments, publishes, and updates its own nickname, signature, and avatar
+- 🖼️ **Sees** — Understands images, merged forwards, and stickers; voice and video understanding are not connected yet
+- 🔌 **Extends** — MCP connects external tools, so abilities can keep growing
+- 🖥️ **Stays manageable** — The dashboard shows memory, topics, members, conversations, stickers, and logs
+- 🔐 **Has boundaries** — Only the QQ configured in the dashboard is the master; deleting important data, payments, and sensitive posts ask for approval first
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Prepare
 
-| Dependency | Purpose |
-|------|------|
-| Go 1.26.11+ | Build and run |
-| Bun 1.4.4+ | Build frontend assets (only needed for source builds) |
-| PostgreSQL 18 | Stores messages, memory, topics, checkpoints, and emotions using `pg_trgm` |
-| SnowLuma | OneBot 11 protocol implementation |
-| LLM API | Responses (`/responses`) or Chat Completions (`/chat/completions`), with tool calling support |
+- A QQ account and an OneBot 11 implementation (Compose includes SnowLuma)
+- PostgreSQL 18 (Compose includes it)
+- An LLM API with tool calling (OpenAI Responses, Chat Completions, or Gemini compatible)
+- Docker (for Compose)
 
-### Docker Compose
-
-Compose starts MumuBot, standard PostgreSQL 18, and SnowLuma together:
+### Docker Compose (recommended)
 
 ```bash
 cp .env.example .env
-# Fill in database, admin, encryption key, and OneBot connection details
+# Fill in the database DSN, admin key, MUMU_SECRET_KEY, and OneBot connection
 docker compose up -d
 ```
 
-Compose pulls the `latest` image directly from GHCR and starts an additional worker container. Workers run Ubuntu 24.04 with one shared home and Nix; up to 5 parallel workers share `./workspace`, mounted at `/home/worker` in the container, so installed tools, caches, and project files can be reused. Startup only adjusts the home root and required cache directories; it no longer recursively changes existing project ownership. Existing host files must be writable by UID 1000 inside the container. Chrome/Playwright are not preinstalled and are installed by the worker when needed. Set the worker count (0–5) under Settings → Thinking & concurrency. Models, persona, chat behavior, and MCP servers are no longer read from configuration files. After the first start, open the admin dashboard and add/activate a model under Settings → Models.
+Compose starts the main service, PostgreSQL 18, SnowLuma, and a worker. Workers share `./workspace`, so tools, caches, and project files are reused; set the worker count (0–5) in the dashboard.
 
-The main image is published with `v*` version tags. The worker image is published independently, only when its source, Dockerfile, entrypoint, Go dependencies, or related build configuration changes on `main`, with `latest` and `sha-<full commit SHA>` tags. A main release alone does not republish the worker. Compose checks for updated images for both services on startup.
+### First Run
 
-Get the first-start SnowLuma WebUI and noVNC passwords from container logs, sign in to QQ through `http://localhost:6081`, then open `http://localhost:5099` to configure the WebSocket access token. Put the same token in `MUMU_ONEBOT_TOKEN` in `.env` and restart MumuBot.
+1. Read the SnowLuma WebUI and noVNC passwords from the container logs, sign in to QQ at `http://localhost:6081`, configure the WebSocket token at `http://localhost:5099`, put the same token into `MUMU_ONEBOT_TOKEN` in `.env`, and restart MumuBot
+2. Open `http://localhost:7468/admin`, add a model under Settings → Model profiles, and select the models for QQ, life, and work
+3. Adjust her persona under Persona Presets; connect external tools under Settings → MCP servers when needed
 
-### Using Release Packages
+### Release Packages
 
-GitHub Releases provide pre-built packages for Linux and Windows. Each archive contains:
+GitHub Releases provide Linux and Windows packages: executable, Chinese and English READMEs, `LICENSE`, `.env.example`, and `docker-compose.yml`. Dashboard assets are embedded, ready to use.
 
-- Executable binary
-- Chinese and English READMEs, `LICENSE`, `.env.example`, and `docker-compose.yml`
+### Build from Source
 
-No separate frontend deployment is needed — admin dashboard assets are embedded in the binary. The dashboard supports light/dark themes and Chinese/English, with preferences stored per browser.
-
-### Building from Source
+Source builds need Go 1.26.11+ and Bun 1.4.4+:
 
 ```bash
-# 1. Clone the project
 git clone https://github.com/SugarMGP/MumuBot.git
 cd MumuBot
 
-# 2. Install frontend dependencies and build the admin dashboard
 cd web
 bun install --frozen-lockfile
 bun run build
 cd ..
 
-# 3. Build
+# Debian/Ubuntu image transcoding dependency
+sudo apt-get install -y libwebp-dev
+
 go build -o mumu-bot .
 ```
 
-Image transcoding uses cgo to link against libwebp. The Linux and Windows release packages are fully statically linked, so no runtime libraries need to be installed after downloading.
+Image transcoding uses cgo and libwebp; release packages are statically linked.
 
-### Configuration and Launch
+## ⚙️ Configuration
 
-Configuration has two parts:
+`.env` holds bootstrap connections and secrets, with a full example in `.env.example`; persona, chat, models, and MCP live in the dashboard, where API keys and MCP configs are encrypted at rest.
 
-- `.env` only holds bootstrap connections and secrets: `MUMU_DATABASE_DSN`, `MUMU_WEB_ADMIN_KEY`, `MUMU_SECRET_KEY`, `MUMU_ONEBOT_WS_URL`, `MUMU_ONEBOT_TOKEN`, port, media directories, and log level.
-- Persona, prompts, chat, compaction, concurrency, and media settings live in PostgreSQL and are maintained in the admin dashboard. Model API keys and MCP configs are encrypted at rest.
+> [!IMPORTANT]
+> Keep `MUMU_SECRET_KEY` with every database backup. After changing the master key, existing ciphertext still needs the original key.
 
-Keep the matching `MUMU_SECRET_KEY` with every database backup. Changing the master key does not re-encrypt existing model or MCP secrets, and losing the original key makes those settings unrecoverable. Explicitly set but malformed port, reconnect, or boolean environment values now stop startup instead of silently falling back to defaults.
-
-```bash
-# 1. Prepare environment variables
-cp .env.example .env
-# Fill in the database DSN, admin key, MUMU_SECRET_KEY, and OneBot connection
-# Enable MUMU_DATABASE_DSN for direct runs; quote values containing spaces or shell metacharacters
-
-# 2. Export the variables in Bash and launch
-set -a
-source .env
-set +a
-./mumu-bot
-```
-
-Visit `/admin` after startup. The dashboard remains available when no model is configured; add profiles and select models for QQ, life, and worker under Settings → Models. Settings changes do not require a process restart.
-
-QQ chat (groups and DMs), life, and worker each select a model profile and may use different protocols simultaneously. Responses sends `reasoning.effort`; Chat Completions separately configures thinking mode (unspecified/enabled/disabled, sent as `thinking.type`) and `reasoning_effort`. Effort values are unspecified, none, low, medium, high, xhigh, or max, sent unchanged; support depends on the service. Profiles may share a model name with different protocol or reasoning settings. Tool images and Chat `reasoning_content` remain unchanged in the transcript; Chat requests move tool images to a user message after the complete tool-result group, while Responses sends them unchanged.
-
-Each profile accepts a body override JSON object, recursively merged after the standard request. Objects merge by key; arrays, scalars, and null replace the entire value. Null does not delete a field. Overrides have highest priority and may replace any field except top-level `stream`, including model, messages, tools, and reasoning. Empty text means `{}`. Overrides do not change the recorded working set or configured context window; keep overridden core fields consistent yourself. The connection test uses the saved profile and overrides and only verifies connectivity.
-
-Storage uses PostgreSQL 18 with `pg_trgm`; pgvector and embedding models are no longer required. The backend opens the database, validates the schema, loads dynamic config and persona presets, and serves the admin panel before waiting for OneBot login; chat events stay paused until a model is activated. Sessions without old interactions switch directly, and their pending inputs stay queued. Model switches reuse compatible history. When summarization is needed, the original model is tried first; generation failure, invalid output or a 180-second old-model phase limit lets the target model take over. The target model receives visible text, tool results, images and unfinished work, without old reasoning text, reasoning summaries or signature placeholders. Summarization can use batches of complete history segments even when both profiles have the same window. Compatible history that fits is reused directly. The switch stops if the target model makes no generation progress for 360 seconds; an oversized segment or rejected image blocks switching rather than silently dropping content. Affected running turns still share one 60-second wait before their in-flight model requests are canceled; executing tools finish normally. An interrupted worker retains its unfinished task and waits for explicit instructions from life before continuing. This also works while QQ is offline. Pending inputs are normally preserved. When life/worker must cross pending inputs to cover incompatible history, the summary request reads them and marks them visible; unfinished work is retained in the summary, but individual replies or task triggers may no longer run. Failures block switching; summaries already committed for earlier batches or sessions remain valid.
-
-```sql
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-```
-
-This release uses schema v19. Empty databases are initialized; supported v17/v18 databases upgrade in one transaction while preserving profiles, keys, memories, and history. Existing profiles remain on Responses with unspecified thinking mode and an empty body override. The v17 active profile becomes the selection for all three roles, and its prior `thinking.type=disabled` is migrated to `reasoning.effort=none` by v18. Older or incompatible structures are rejected without deleting business data. Back up the database and media before upgrading.
-
-The service listens on port `7468` by default (configurable via `MUMU_SERVER_PORT`).
-
-Visit `/admin` to access the admin dashboard. The dashboard stays disabled until an admin key is configured.
-
-INFO logs include dynamic text context at the start of a think, newly added input, final text output, and tool activity, linked by `session` and `run_id`. Static persona text, full request bodies, tool definitions, and reasoning are excluded from logs; actual model requests and persisted traces remain complete. Binary media is represented by metadata. Content logging can be turned off under Settings → Debug. Treat logs as private conversation data.
-
-The Life page's “Review and plan” button sends one request to check the time and current state, then decide what to do next. It can run during sleep without directly changing the awake state. `planNext` and `sleepUntil` schedule only the next check-in or wake time. Use `manageSchedule` with `cron` for recurring commitments; the program advances them automatically.
-
-## 🧠 Context and Topics
-
-QQ chat and synchronous topic compaction share the QQ profile. Life and worker each use their selected profile for execution and context summaries. Chat, life, and worker step limits are configured separately and read when the next think begins; the compactor has its own step budget. Normal model requests have no overall timeout; only connection and TLS handshakes are capped at 10 seconds. At 90% of the context window, the turn synchronously compacts older interactions; only transcript working-set rows covered by the new summaries are deleted. Originals and chat media are kept for the configured minimum retention (180 days by default); originals still in the working set are deferred, while summaries, memories, and diaries follow their own retention rules.
-
-Topics serve as compressed context, an admin browsing unit, and a layered history index: `searchTopics`, `readTopic`, then `readHistory` around a OneBot message ID. Topics also fade on the shared exponential curve and become unreadable to the agent after `forgotten_at`; pinned memories are the only retention exemption.
-
-## 🎭 Persona Presets
-
-Open Persona Presets in the admin panel to read, edit, clone, and switch. A fresh database ships a single read-only built-in preset that follows releases; clone it and edit the copy.
-
-A preset contains five separate documents: **persona**, **shared rules**, **QQ chat**, **life duties**, and **work duties**. QQ, life, and worker share the same persona and rules, followed by their own duties. Paragraph scope markers are not used. All five documents are saved, cloned, and switched together; the dashboard previews the assembled text for group chat, private chat, life, or work.
-
-The top of the Persona Presets page sets the global **role name** and **master**. The master is picked from current friends and saved with the name at that time; deleting the friend later does not change the master, and only the admin panel can. Prompts can use `<name>`, `<master_name>`, `<master_qq>`, and `<master>`; changes take effect from the next context generation.
-
-The shared rules state the master boundary: only the configured QQ is the master, and the master's private chat is the explicit request channel; ordinary research and workspace edits are autonomous; irreversible deletion or overwriting of important data, spending, sensitive posts or messages, privilege changes, private-data disclosure, and critical configuration changes require specific approval. Everyday Qzone posts, likes, and comments are autonomous; requests in group chats or other people's private chats are references, not master commands.
-
-Switching a preset does not cut into a running conversation: it takes effect after the next conversation summary, so she never changes face mid-chat.
-
-If you find wording that works better, share the use case via [Issues](https://github.com/SugarMGP/MumuBot/issues) or open a Pull Request.
-
-## 🔧 MCP Tool Extension
-
-Add external MCP servers under Settings → MCP Servers, supporting both SSE and Stdio transport. Server configs are encrypted at rest. Loaded tools are available only to the life session; group chats and friend DMs no longer hold life accounts or browser capabilities. Tools are named `mcp-<server>-<tool>` to avoid collisions with built-in tools or other servers. A server that fails to connect or load only makes that server unavailable; it does not block other extensions or the generation, and the system status page reports each server's real result.
-
-## 📎 File and image references
-
-Files and images appear in message bodies as `file_ref` (`file_<id>`) or `image_ref` (`image_<id>`). A reference is an immutable snapshot: bytes are deduplicated by SHA-256 and stored under the media directory without a new database table. The same file can be read through `file_ref` and viewed or sent through `image_ref`; non-images cannot pretend to be images.
-
-- A pending reference keeps only the real QQ message's `file_id`, `file_hash`, `busid`, and necessary metadata. The first real read, save, or send downloads and pins it; failures stay failures.
-- Chat sessions work only through references and never touch the personal home; life/worker `createFileRef` freezes real outputs and `saveFile(file_ref)` streams them back as editable files, up to 32 MiB through the worker's private HTTP endpoint.
-- File bodies survive only while referenced by existing transcript `result_ref`, payload text, or nested `r` content. Deleting the last transcript reference releases the snapshot immediately. Never-attached orphans are kept for at least 24 hours before cleanup. Old paths, short hashes, and temporary URLs cannot revive a reference. Real files in the personal home are unaffected.
-
+The database initializes on first start, and supported older versions upgrade automatically; back up the database and media before upgrading.
 
 ## 🤝 Contributing
 
@@ -209,6 +112,10 @@ Files and images appear in message bodies as `file_ref` (`file_<id>`) or `image_
 
 ## ❤️ Acknowledgements
 
-- **[cloudwego/eino](https://github.com/cloudwego/eino)** — Open-source AI Agent framework by ByteDance
+- **[trpc-group/trpc-agent-go](https://github.com/trpc-group/trpc-agent-go)** — Tencent's open-source AI Agent framework
 - **[SnowLuma/SnowLuma](https://github.com/SnowLuma/SnowLuma)** — Modern OneBot protocol implementation
 - **[Mai-with-u/MaiBot](https://github.com/Mai-with-u/MaiBot)** — Inspiration and design reference
+
+## 📄 License
+
+GPL-3.0, see [LICENSE](LICENSE).

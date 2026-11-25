@@ -3,76 +3,17 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"strings"
 
-	"mumu-bot/internal/memory"
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/adk/middlewares/summarization"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
-func (a *Agent) newWorkerSummarizer(ctx context.Context, generation *Generation) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
-	if generation == nil || generation.workerModel.contextWindow <= 0 {
-		return nil, nil
-	}
-	ratio := configFor(ctx).Compactor.TriggerRatio
-	if ratio <= 0 {
-		return nil, nil
-	}
-	triggerTokens := int(float64(generation.workerModel.contextWindow) * ratio)
-	if triggerTokens <= 0 {
-		return nil, nil
-	}
-	var pendingHead []*schema.AgenticMessage
-	var inputBuilder summarization.TypedGenModelInputFunc[*schema.AgenticMessage]
-	if attempt := switchAttemptFrom(ctx); attempt != nil && attempt.portable {
-		inputBuilder = switchSummaryInput
-	}
-	return summarization.NewTyped(a.ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
-		Model:         generation.workerModel.model,
-		GenModelInput: inputBuilder,
-		Trigger: &summarization.TriggerCondition{
-			ContextTokens: triggerTokens,
-		},
-		UserInstruction: persona.RenderFor(workerSummaryInstruction, configFor(ctx)),
-		Finalize: func(ctx context.Context, _ []*schema.AgenticMessage, summary *schema.AgenticMessage) ([]*schema.AgenticMessage, error) {
-			text := strings.TrimSpace(agenticMessageText(summary))
-			if text == "" {
-				return nil, &compactionInputError{Err: fmt.Errorf("worker 摘要正文为空，保留原上下文")}
-			}
-			tc := tools.GetToolContext(ctx)
-			head := previewSystemMessage(a.personaFor(ctx), memory.ConversationKindWorker, tc.TargetID)
-			pendingHead = []*schema.AgenticMessage{head}
-			note := schema.UserAgenticMessage(systemNote("上下文摘要", text))
-			note.Extra = map[string]any{"kind": kindWorkerSummary}
-			return []*schema.AgenticMessage{head, note}, nil
-		},
-		Callback: func(ctx context.Context, before, after adk.TypedChatModelAgentState[*schema.AgenticMessage]) error {
-			tc := tools.GetToolContext(ctx)
-			if tc == nil || tc.Session == nil || tc.TargetID <= 0 {
-				return fmt.Errorf("worker 摘要缺少工具上下文")
-			}
-			session, ok := tc.Session.(*Session)
-			if !ok || session == nil {
-				return fmt.Errorf("worker 摘要缺少会话")
-			}
-			head := pendingHead
-			pendingHead = nil
-			commitCtx, cancel := switchCommitContext(ctx)
-			defer cancel()
-			return a.saveWorkerContext(commitCtx, uint(tc.TargetID), session, before, after, head)
-		},
-	})
-}
-
-func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *Session, before, after adk.TypedChatModelAgentState[*schema.AgenticMessage], head []*schema.AgenticMessage) error {
-	ids := transcriptIDs(before.Messages)
+func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *Session, before, after, head []*agentic.Message) error {
+	ids := transcriptIDs(before)
 	maxID := uint(0)
 	for _, id := range ids {
 		if id > maxID {
@@ -87,7 +28,7 @@ func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *S
 	if maxID > through {
 		through = maxID
 	}
-	payload, err := sonic.Marshal(stripHeadEntries(after.Messages))
+	payload, err := sonic.Marshal(stripHeadEntries(after))
 	if err != nil {
 		return err
 	}
@@ -111,7 +52,7 @@ func (a *Agent) saveWorkerContext(ctx context.Context, workerID uint, session *S
 }
 
 // transcriptIDs 按消息在请求中的真实顺序收集已持久化行号，供成功后分配 visible_seq
-func transcriptIDs(messages []*schema.AgenticMessage) []uint {
+func transcriptIDs(messages []*agentic.Message) []uint {
 	ids := make([]uint, 0, len(messages))
 	seen := map[uint]bool{}
 	for _, message := range messages {
@@ -125,7 +66,7 @@ func transcriptIDs(messages []*schema.AgenticMessage) []uint {
 	return ids
 }
 
-func transcriptEntryID(message *schema.AgenticMessage) uint {
+func transcriptEntryID(message *agentic.Message) uint {
 	if message == nil || message.Extra == nil {
 		return 0
 	}
@@ -148,7 +89,7 @@ func transcriptEntryID(message *schema.AgenticMessage) uint {
 	}
 }
 
-func tagTranscriptEntryID(message *schema.AgenticMessage, id uint) {
+func tagTranscriptEntryID(message *agentic.Message, id uint) {
 	if message == nil || id == 0 {
 		return
 	}
@@ -158,12 +99,12 @@ func tagTranscriptEntryID(message *schema.AgenticMessage, id uint) {
 	message.Extra["transcript_id"] = id
 }
 
-func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([]*schema.AgenticMessage, error) {
+func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([]*agentic.Message, error) {
 	row, err := a.memory.GetWorkerSessionByID(ctx, uint(session.targetID))
 	if err != nil {
 		return nil, err
 	}
-	checkpoint := make([]*schema.AgenticMessage, 0)
+	checkpoint := make([]*agentic.Message, 0)
 	through := row.ContextThroughID
 	hasCheckpoint := len(row.ContextSummary) > 0 && string(row.ContextSummary) != "[]"
 	if row.ContextStartID > 0 && through < row.ContextStartID {
@@ -186,7 +127,7 @@ func (a *Agent) assembleWorkerMessages(ctx context.Context, session *Session) ([
 	pending := append([]*sessionUser(nil), session.pending...)
 	session.mu.Unlock()
 
-	messages := make([]*schema.AgenticMessage, 0, len(checkpoint)+len(entries)+len(pending))
+	messages := make([]*agentic.Message, 0, len(checkpoint)+len(entries)+len(pending))
 	ordered := orderEntries(entries)
 	for _, entry := range ordered {
 		if entry.msg != nil && isHeadEntry(entry.msg) {

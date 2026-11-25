@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type BashInput struct {
-	Command        string `json:"command" jsonschema:"description=要在 worker 工作区执行的 bash 命令"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"description=超时秒数，默认300，最大1800"`
+	Command        string `json:"command" description:"要在 worker 工作区执行的 bash 命令"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" description:"超时秒数，默认300，最大1800"`
 }
 
 func bashTool(ctx context.Context, input *BashInput) (*BashResult, error) {
@@ -32,6 +31,6 @@ func bashTool(ctx context.Context, input *BashInput) (*BashResult, error) {
 	return result, nil
 }
 
-func NewBashTool() (tool.InvokableTool, error) {
-	return utils.InferTool("bash", "在 worker 的 home 工作区执行一条 bash 命令；每次都是新 shell。", bashTool)
+func NewBashTool() (tool.Tool, error) {
+	return newFunctionTool("bash", "在 worker 的 home 工作区执行一条 bash 命令；每次都是新 shell。", bashTool)
 }

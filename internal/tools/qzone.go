@@ -13,15 +13,14 @@ import (
 	workerproto "mumu-bot/worker/proto"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type ListQzonePostsInput struct {
-	Scope  string `json:"scope" jsonschema:"description=feed 读取好友动态线索索引；user 读取自己或指定账号的完整主页动态"`
-	UserID int64  `json:"user_id,omitempty" jsonschema:"description=scope=user 时的 QQ 号，省略表示自己"`
-	Cursor string `json:"cursor,omitempty" jsonschema:"description=同一 scope 和同一账号上次返回的 next_cursor，原样传回"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"description=仅 scope=feed 使用，默认10，最大50；主页每页数量由平台决定"`
+	Scope  string `json:"scope" description:"feed 读取好友动态线索索引；user 读取自己或指定账号的完整主页动态"`
+	UserID int64  `json:"user_id,omitempty" description:"scope=user 时的 QQ 号，省略表示自己"`
+	Cursor string `json:"cursor,omitempty" description:"同一 scope 和同一账号上次返回的 next_cursor，原样传回"`
+	Limit  int    `json:"limit,omitempty" description:"仅 scope=feed 使用，默认10，最大50；主页每页数量由平台决定"`
 }
 
 func listQzonePosts(ctx context.Context, input *ListQzonePostsInput) (any, error) {
@@ -65,7 +64,7 @@ func listQzonePosts(ctx context.Context, input *ListQzonePostsInput) (any, error
 }
 
 type ReadQzonePostInput struct {
-	PostID string `json:"post_id" jsonschema:"description=真实的24位十六进制说说编号，来自好友动态的 tid、主页的 post_id 或发表回执"`
+	PostID string `json:"post_id" description:"真实的24位十六进制说说编号，来自好友动态的 tid、主页的 post_id 或发表回执"`
 }
 
 func readQzonePost(ctx context.Context, input *ReadQzonePostInput) (any, error) {
@@ -87,10 +86,10 @@ func readQzonePost(ctx context.Context, input *ReadQzonePostInput) (any, error) 
 }
 
 type ReadQzoneCommentsInput struct {
-	FeedRef    string `json:"feed_ref" jsonschema:"description=完整动态返回的 feed_ref"`
-	CommentRef string `json:"comment_ref,omitempty" jsonschema:"description=读取楼中楼时填写父评论的 comment_ref；省略则读取一级评论续页"`
-	Cursor     string `json:"cursor,omitempty" jsonschema:"description=一级评论用详情或上一页的 attach_info；楼中楼用 reply_attach_info，首次可省略；原样传回"`
-	Limit      int    `json:"limit,omitempty" jsonschema:"description=仅楼中楼使用，默认20，最大100"`
+	FeedRef    string `json:"feed_ref" description:"完整动态返回的 feed_ref"`
+	CommentRef string `json:"comment_ref,omitempty" description:"读取楼中楼时填写父评论的 comment_ref；省略则读取一级评论续页"`
+	Cursor     string `json:"cursor,omitempty" description:"一级评论用详情或上一页的 attach_info；楼中楼用 reply_attach_info，首次可省略；原样传回"`
+	Limit      int    `json:"limit,omitempty" description:"仅楼中楼使用，默认20，最大100"`
 }
 
 func readQzoneComments(ctx context.Context, input *ReadQzoneCommentsInput) (any, error) {
@@ -138,8 +137,8 @@ func readQzoneComments(ctx context.Context, input *ReadQzoneCommentsInput) (any,
 }
 
 type PublishQzoneInput struct {
-	Content   string   `json:"content" jsonschema:"description=说说正文"`
-	ImageRefs []string `json:"image_refs,omitempty" jsonschema:"description=配图的 image_ref 列表；不能传路径或普通文件"`
+	Content   string   `json:"content" description:"说说正文"`
+	ImageRefs []string `json:"image_refs,omitempty" description:"配图的 image_ref 列表；不能传路径或普通文件"`
 }
 
 type PublishQzoneOutput struct {
@@ -185,7 +184,7 @@ func publishQzone(ctx context.Context, input *PublishQzoneInput) (*PublishQzoneO
 }
 
 type LikeQzoneInput struct {
-	FeedRef string `json:"feed_ref" jsonschema:"description=完整主页或说说详情返回的 feed_ref"`
+	FeedRef string `json:"feed_ref" description:"完整主页或说说详情返回的 feed_ref"`
 }
 
 func likeQzone(ctx context.Context, input *LikeQzoneInput) (any, error) {
@@ -208,10 +207,10 @@ func likeQzone(ctx context.Context, input *LikeQzoneInput) (any, error) {
 }
 
 type CommentQzoneInput struct {
-	FeedRef    string `json:"feed_ref" jsonschema:"description=完整主页或说说详情返回的 feed_ref"`
-	Content    string `json:"content" jsonschema:"description=评论或回复正文"`
-	CommentRef string `json:"comment_ref,omitempty" jsonschema:"description=回复评论或楼中楼时填写父评论的 comment_ref；省略则发布一级评论"`
-	ReplyRef   string `json:"reply_ref,omitempty" jsonschema:"description=回复楼中楼某人时填写其 reply_ref，同时须提供父 comment_ref"`
+	FeedRef    string `json:"feed_ref" description:"完整主页或说说详情返回的 feed_ref"`
+	Content    string `json:"content" description:"评论或回复正文"`
+	CommentRef string `json:"comment_ref,omitempty" description:"回复评论或楼中楼时填写父评论的 comment_ref；省略则发布一级评论"`
+	ReplyRef   string `json:"reply_ref,omitempty" description:"回复楼中楼某人时填写其 reply_ref，同时须提供父 comment_ref"`
 }
 
 func commentQzone(ctx context.Context, input *CommentQzoneInput) (any, error) {
@@ -341,26 +340,26 @@ func referenceQzoneCellComments(ctx context.Context, tc *ToolContext, object map
 	return nil
 }
 
-func NewListQzonePostsTool() (tool.InvokableTool, error) {
-	return utils.InferTool("listQzonePosts", "scope=user 查看自己或指定账号的主页内容，返回 feed_ref 和可刷新的说说 post_id；完整原始对象可用 readFile(file_ref=feed_ref) 按需读。scope=feed 只提供好友动态线索，完整说说用 readQzonePost(post_id=tid) 读取。两种列表都用各自的 next_cursor 续页，不能混用游标。", listQzonePosts)
+func NewListQzonePostsTool() (tool.Tool, error) {
+	return newFunctionTool("listQzonePosts", "scope=user 查看自己或指定账号的主页内容，返回 feed_ref 和可刷新的说说 post_id；完整原始对象可用 readFile(file_ref=feed_ref) 按需读。scope=feed 只提供好友动态线索，完整说说用 readQzonePost(post_id=tid) 读取。两种列表都用各自的 next_cursor 续页，不能混用游标。", listQzonePosts)
 }
 
-func NewReadQzonePostTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readQzonePost", "按 post_id 读取或刷新说说内容、媒体和内联评论，返回 feed_ref/comment_ref；已有 feed_ref 可直接点赞或评论。完整原始对象保存在引用快照，可用 readFile(file_ref=feed_ref) 按需读。一级评论用 attach_info 继续 readQzoneComments；内联评论不保证完整，媒体地址不代表已经看过媒体。", readQzonePost)
+func NewReadQzonePostTool() (tool.Tool, error) {
+	return newFunctionTool("readQzonePost", "按 post_id 读取或刷新说说内容、媒体和内联评论，返回 feed_ref/comment_ref；已有 feed_ref 可直接点赞或评论。完整原始对象保存在引用快照，可用 readFile(file_ref=feed_ref) 按需读。一级评论用 attach_info 继续 readQzoneComments；内联评论不保证完整，媒体地址不代表已经看过媒体。", readQzonePost)
 }
 
-func NewReadQzoneCommentsTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readQzoneComments", "读取完整动态的评论或楼中楼续页。只传 feed_ref 与 attach_info 读取一级评论，另传 comment_ref 读取该评论的楼中楼；返回 comment_ref/reply_ref，保留平台全部字段和分页状态。按 has_more 与对应游标判断是否继续，不用条数或自己推算 offset。", readQzoneComments)
+func NewReadQzoneCommentsTool() (tool.Tool, error) {
+	return newFunctionTool("readQzoneComments", "读取完整动态的评论或楼中楼续页。只传 feed_ref 与 attach_info 读取一级评论，另传 comment_ref 读取该评论的楼中楼；返回 comment_ref/reply_ref，保留平台全部字段和分页状态。按 has_more 与对应游标判断是否继续，不用条数或自己推算 offset。", readQzoneComments)
 }
 
-func NewPublishQzoneTool() (tool.InvokableTool, error) {
-	return utils.InferTool("publishQzone", "发表一条图文说说，配图只能使用 image_refs；返回 post_id 和平台提供的发表时间，time=0 表示未知。固定使用 QQ 默认公开参数；后续互动先用 readQzonePost(post_id) 取得完整动态的 feed_ref。", publishQzone)
+func NewPublishQzoneTool() (tool.Tool, error) {
+	return newFunctionTool("publishQzone", "发表一条图文说说，配图只能使用 image_refs；返回 post_id 和平台提供的发表时间，time=0 表示未知。固定使用 QQ 默认公开参数；后续互动先用 readQzonePost(post_id) 取得完整动态的 feed_ref。", publishQzone)
 }
 
-func NewLikeQzoneTool() (tool.InvokableTool, error) {
-	return utils.InferTool("likeQzone", "通过完整动态的 feed_ref 点赞，保留平台要求的原始定位信息；无需自行填写作者、时间或拼造 like key，以真实回执为准。", likeQzone)
+func NewLikeQzoneTool() (tool.Tool, error) {
+	return newFunctionTool("likeQzone", "通过完整动态的 feed_ref 点赞，保留平台要求的原始定位信息；无需自行填写作者、时间或拼造 like key，以真实回执为准。", likeQzone)
 }
 
-func NewCommentQzoneTool() (tool.InvokableTool, error) {
-	return utils.InferTool("commentQzone", "通过 feed_ref 发表评论；回复评论时提供父 comment_ref，回复楼中楼某人时再提供 reply_ref。引用来自完整详情或 readQzoneComments，不拼造评论编号和用户身份。成功回执保留全部字段并附新 comment_ref/reply_ref；引用保存失败也不能当成评论未发出而重发。", commentQzone)
+func NewCommentQzoneTool() (tool.Tool, error) {
+	return newFunctionTool("commentQzone", "通过 feed_ref 发表评论；回复评论时提供父 comment_ref，回复楼中楼某人时再提供 reply_ref。引用来自完整详情或 readQzoneComments，不拼造评论编号和用户身份。成功回执保留全部字段并附新 comment_ref/reply_ref；引用保存失败也不能当成评论未发出而重发。", commentQzone)
 }

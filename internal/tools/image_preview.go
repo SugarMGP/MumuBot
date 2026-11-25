@@ -4,20 +4,19 @@ import (
 	"encoding/base64"
 
 	"mumu-bot/internal/media"
-
-	"github.com/cloudwego/eino/schema"
 )
 
-func imagePreviewResult(data []byte, mime string) (*schema.ToolResult, error) {
+func imagePreviewResult(data []byte, mime string) (*Result, error) {
 	data, mime, note, err := media.ImagePreview(data, mime)
 	if err != nil {
 		return nil, err
 	}
-	encoded := base64.StdEncoding.EncodeToString(data)
-	parts := make([]schema.ToolOutputPart, 0, 2)
+	parts := make([]Part, 0, 2)
 	if note != "" {
-		parts = append(parts, schema.ToolOutputPart{Type: schema.ToolPartTypeText, Text: note})
+		parts = append(parts, Part{Type: PartTypeText, Text: note})
 	}
-	parts = append(parts, schema.ToolOutputPart{Type: schema.ToolPartTypeImage, Image: &schema.ToolOutputImage{MessagePartCommon: schema.MessagePartCommon{Base64Data: &encoded, MIMEType: mime}}})
-	return &schema.ToolResult{Parts: parts}, nil
+	parts = append(parts, Part{Type: PartTypeImage, Image: &Image{
+		Base64Data: base64.StdEncoding.EncodeToString(data), MIMEType: mime,
+	}})
+	return &Result{Parts: parts}, nil
 }

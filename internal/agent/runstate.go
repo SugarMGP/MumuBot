@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"mumu-bot/internal/config"
-	"mumu-bot/internal/llm"
 	"mumu-bot/internal/persona"
 
 	"go.uber.org/zap"
@@ -18,7 +17,7 @@ type runState struct {
 	config           *config.RuntimeConfig
 	persona          *persona.Persona
 	steps            *stepBudget
-	logs             *llm.LogState
+	logs             *LogState
 	lifeUsageChecked bool
 }
 
@@ -53,7 +52,7 @@ func (b *stepBudget) Consume() bool {
 type runStateKey struct{}
 
 func withRunState(ctx context.Context, state *runState) context.Context {
-	return llm.WithLogState(context.WithValue(ctx, runStateKey{}, state), state.logs)
+	return WithLogState(context.WithValue(ctx, runStateKey{}, state), state.logs)
 }
 
 func runStateFrom(ctx context.Context) *runState {
@@ -77,7 +76,7 @@ func newRunState(role string) (*runState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("加载人格失败: %w", err)
 	}
-	return &runState{config: cfg, persona: p, steps: &stepBudget{remaining: maxStep}, logs: &llm.LogState{}}, nil
+	return &runState{config: cfg, persona: p, steps: &stepBudget{remaining: maxStep}, logs: &LogState{}}, nil
 }
 
 // personaFor 优先使用本轮快照，其次使用当前配置

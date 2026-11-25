@@ -9,13 +9,12 @@ import (
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/schedule"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type WriteDiaryInput struct {
-	Date     string `json:"date" jsonschema:"description=归属日 YYYY-MM-DD；凌晨写前一天时仍填前一天"`
-	Markdown string `json:"markdown" jsonschema:"description=整篇 Markdown 正文；补记前先读已有正文"`
+	Date     string `json:"date" description:"归属日 YYYY-MM-DD；凌晨写前一天时仍填前一天"`
+	Markdown string `json:"markdown" description:"整篇 Markdown 正文；补记前先读已有正文"`
 }
 
 type WriteDiaryOutput struct {
@@ -51,9 +50,9 @@ func writeDiary(ctx context.Context, input *WriteDiaryInput) (*WriteDiaryOutput,
 }
 
 type ReadDiaryInput struct {
-	Date   string `json:"date,omitempty" jsonschema:"description=YYYY-MM-DD；省略时读最近一篇"`
-	Offset int    `json:"offset,omitempty" jsonschema:"description=按字符读取的起点，默认 0"`
-	Length int    `json:"length,omitempty" jsonschema:"description=读取字符数，默认 4000，最大 8000"`
+	Date   string `json:"date,omitempty" description:"YYYY-MM-DD；省略时读最近一篇"`
+	Offset int    `json:"offset,omitempty" description:"按字符读取的起点，默认 0"`
+	Length int    `json:"length,omitempty" description:"读取字符数，默认 4000，最大 8000"`
 }
 
 type ReadDiaryOutput struct {
@@ -120,11 +119,11 @@ func readDiary(ctx context.Context, input *ReadDiaryInput) (*ReadDiaryOutput, er
 }
 
 type SearchDiaryInput struct {
-	From     string   `json:"from,omitempty" jsonschema:"description=起始日期 YYYY-MM-DD，包含当天"`
-	To       string   `json:"to,omitempty" jsonschema:"description=结束日期 YYYY-MM-DD，包含当天"`
-	Keywords []string `json:"keywords,omitempty" jsonschema:"description=正文精确子串；留空按日期浏览"`
+	From     string   `json:"from,omitempty" description:"起始日期 YYYY-MM-DD，包含当天"`
+	To       string   `json:"to,omitempty" description:"结束日期 YYYY-MM-DD，包含当天"`
+	Keywords []string `json:"keywords,omitempty" description:"正文精确子串；留空按日期浏览"`
 	Cursor   string   `json:"cursor,omitempty"`
-	Limit    int      `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	Limit    int      `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type DiarySearchHit struct {
@@ -190,14 +189,14 @@ func requireDiaryReadContext(ctx context.Context) (*ToolContext, *memory.Manager
 	}
 }
 
-func NewWriteDiaryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("writeDiary", "按归属日保存整篇 Markdown 日记；同日再次保存会整篇替换，首次保存时间不变。", writeDiary)
+func NewWriteDiaryTool() (tool.Tool, error) {
+	return newFunctionTool("writeDiary", "按归属日保存整篇 Markdown 日记；同日再次保存会整篇替换，首次保存时间不变。", writeDiary)
 }
 
-func NewReadDiaryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readDiary", "只读某天的日记正文，可按字符窗口分页；省略日期时读最近一篇，没有日记返回 found=false；不得自动对外披露。", readDiary)
+func NewReadDiaryTool() (tool.Tool, error) {
+	return newFunctionTool("readDiary", "只读某天的日记正文，可按字符窗口分页；省略日期时读最近一篇，没有日记返回 found=false；不得自动对外披露。", readDiary)
 }
 
-func NewSearchDiaryTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchDiary", "只读检索日记的日期范围和正文关键词，日期倒序返回日期、摘录和更新时间。", searchDiary)
+func NewSearchDiaryTool() (tool.Tool, error) {
+	return newFunctionTool("searchDiary", "只读检索日记的日期范围和正文关键词，日期倒序返回日期、摘录和更新时间。", searchDiary)
 }

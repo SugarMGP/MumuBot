@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type CancelWorkerInput struct {
-	WorkerID uint   `json:"worker_id" jsonschema:"description=worker 会话编号"`
-	Reason   string `json:"reason,omitempty" jsonschema:"description=取消的简短原因，便于后续交接"`
+	WorkerID uint   `json:"worker_id" description:"worker 会话编号"`
+	Reason   string `json:"reason,omitempty" description:"取消的简短原因，便于后续交接"`
 }
 
 type CancelWorkerOutput struct {
@@ -35,6 +34,6 @@ func cancelWorker(ctx context.Context, input *CancelWorkerInput) (*CancelWorkerO
 }
 
 // NewCancelWorkerTool 只取消 worker 当前回合，不删除槽位、历史或文件
-func NewCancelWorkerTool() (tool.InvokableTool, error) {
-	return utils.InferTool("cancelWorker", "取消指定 worker 的当前回合；保留会话、历史和文件，不自动重跑。worker_id 来自 listSessions，reason 写简短原因。", cancelWorker)
+func NewCancelWorkerTool() (tool.Tool, error) {
+	return newFunctionTool("cancelWorker", "取消指定 worker 的当前回合；保留会话、历史和文件，不自动重跑。worker_id 来自 listSessions，reason 写简短原因。", cancelWorker)
 }

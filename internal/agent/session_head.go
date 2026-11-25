@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/persona"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +29,7 @@ const (
 )
 
 // assembleMessages 按会话类型取当前预设，并补齐本代头部
-func (a *Agent) assembleMessages(ctx context.Context, session *Session) ([]*schema.AgenticMessage, error) {
+func (a *Agent) assembleMessages(ctx context.Context, session *Session) ([]*agentic.Message, error) {
 	mode := persona.ModeGroup
 	extra := ""
 	if session.kind == memory.ConversationKindPrivate {
@@ -62,7 +62,7 @@ func headPriority(kind string) int {
 }
 
 // messageKind 读取消息上挂载的条目类型
-func messageKind(msg *schema.AgenticMessage) string {
+func messageKind(msg *agentic.Message) string {
 	if msg == nil || msg.Extra == nil {
 		return ""
 	}
@@ -71,7 +71,7 @@ func messageKind(msg *schema.AgenticMessage) string {
 }
 
 // isHeadEntry 判断是否为本代头部行
-func isHeadEntry(msg *schema.AgenticMessage) bool {
+func isHeadEntry(msg *agentic.Message) bool {
 	return headPriority(messageKind(msg)) >= 0
 }
 
@@ -114,7 +114,7 @@ func systemNote(label, text string) string {
 
 type headEntrySpec struct {
 	kind string
-	msg  *schema.AgenticMessage
+	msg  *agentic.Message
 }
 
 // DropHeads 丢弃内存中的本代代头，下一次装配会按当前人格与摘要重建
@@ -146,7 +146,7 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 		return fmt.Errorf("人格预设为空")
 	}
 	specs := make([]headEntrySpec, 0, 4)
-	systemMsg := schema.SystemAgenticMessage(instruction)
+	systemMsg := agentic.SystemAgenticMessage(instruction)
 	systemMsg.Extra = map[string]any{"kind": kindSystemPrompt}
 	specs = append(specs, headEntrySpec{kind: kindSystemPrompt, msg: systemMsg})
 	if s.kind == memory.ConversationKindWorker {
@@ -163,7 +163,7 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 		return err
 	}
 	if text := strings.TrimSpace(groupExtra); text != "" {
-		noteMsg := schema.UserAgenticMessage(systemNote("群说明", text))
+		noteMsg := agentic.UserAgenticMessage(systemNote("群说明", text))
 		noteMsg.Extra = map[string]any{"kind": kindGroupNote, "hash": noteHash(text)}
 		specs = append(specs, headEntrySpec{kind: kindGroupNote, msg: noteMsg})
 	}
@@ -181,12 +181,12 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 		zap.L().Warn("摘要话题超出注入预算", zap.String("kind", s.kind), zap.Int64("target_id", s.targetID), zap.Int("omitted", omitted))
 	}
 	if digestText = strings.TrimSpace(digestText); digestText != "" {
-		digestMsg := schema.UserAgenticMessage(systemNote("上下文摘要", digestText))
+		digestMsg := agentic.UserAgenticMessage(systemNote("上下文摘要", digestText))
 		digestMsg.Extra = map[string]any{"kind": kindContextDigest}
 		specs = append(specs, headEntrySpec{kind: kindContextDigest, msg: digestMsg})
 	}
 	if pinnedText = strings.TrimSpace(pinnedText); pinnedText != "" {
-		pinnedMsg := schema.UserAgenticMessage(systemNote("长期记忆", pinnedText))
+		pinnedMsg := agentic.UserAgenticMessage(systemNote("长期记忆", pinnedText))
 		pinnedMsg.Extra = map[string]any{"kind": kindPinnedMemory}
 		specs = append(specs, headEntrySpec{kind: kindPinnedMemory, msg: pinnedMsg})
 	}
@@ -195,20 +195,20 @@ func (s *Session) ensureGenerationHead(ctx context.Context, mem *memory.Manager,
 }
 
 // buildLifeHead 构造本代生活代头：人格 + 自己的置顶记忆，供首次装配和摘要换代共用
-func buildLifeHead(ctx context.Context, mem *memory.Manager, instruction string) ([]*schema.AgenticMessage, error) {
+func buildLifeHead(ctx context.Context, mem *memory.Manager, instruction string) ([]*agentic.Message, error) {
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" {
 		return nil, fmt.Errorf("人格预设为空")
 	}
-	system := schema.SystemAgenticMessage(instruction)
+	system := agentic.SystemAgenticMessage(instruction)
 	system.Extra = map[string]any{"kind": kindSystemPrompt}
-	messages := []*schema.AgenticMessage{system}
+	messages := []*agentic.Message{system}
 	pinned, err := mem.PinnedMemoriesForSelf(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if text := strings.TrimSpace(renderPinnedMemories(pinned)); text != "" {
-		pinnedMsg := schema.UserAgenticMessage(systemNote("长期记忆", text))
+		pinnedMsg := agentic.UserAgenticMessage(systemNote("长期记忆", text))
 		pinnedMsg.Extra = map[string]any{"kind": kindPinnedMemory}
 		messages = append(messages, pinnedMsg)
 	}
@@ -216,7 +216,7 @@ func buildLifeHead(ctx context.Context, mem *memory.Manager, instruction string)
 }
 
 // appendHeadMessages 把已有的代头消息原样写成 transcript 行，返回可标记 visible 的行号
-func (s *Session) appendHeadMessages(ctx context.Context, mem *memory.Manager, messages []*schema.AgenticMessage) ([]uint, error) {
+func (s *Session) appendHeadMessages(ctx context.Context, mem *memory.Manager, messages []*agentic.Message) ([]uint, error) {
 	specs := make([]headEntrySpec, 0, len(messages))
 	for _, msg := range messages {
 		kind := messageKind(msg)
@@ -229,7 +229,7 @@ func (s *Session) appendHeadMessages(ctx context.Context, mem *memory.Manager, m
 }
 
 // headEntries 把代头消息编码成待写入的 transcript 行
-func headEntries(messages []*schema.AgenticMessage) ([]memory.HeadEntry, error) {
+func headEntries(messages []*agentic.Message) ([]memory.HeadEntry, error) {
 	entries := make([]memory.HeadEntry, 0, len(messages))
 	for _, msg := range messages {
 		kind := messageKind(msg)
@@ -246,7 +246,7 @@ func headEntries(messages []*schema.AgenticMessage) ([]memory.HeadEntry, error) 
 }
 
 // attachHeadMessages 给事务里已写入的代头补上行号并挂到内存
-func (s *Session) attachHeadMessages(messages []*schema.AgenticMessage, ids []uint) {
+func (s *Session) attachHeadMessages(messages []*agentic.Message, ids []uint) {
 	if len(messages) == 0 || len(messages) != len(ids) {
 		return
 	}
@@ -259,8 +259,8 @@ func (s *Session) attachHeadMessages(messages []*schema.AgenticMessage, ids []ui
 }
 
 // stripHeadEntries 去掉代头，供摘要检查点只保留摘要正文
-func stripHeadEntries(messages []*schema.AgenticMessage) []*schema.AgenticMessage {
-	kept := make([]*schema.AgenticMessage, 0, len(messages))
+func stripHeadEntries(messages []*agentic.Message) []*agentic.Message {
+	kept := make([]*agentic.Message, 0, len(messages))
 	for _, message := range messages {
 		if isHeadEntry(message) {
 			continue
@@ -341,7 +341,7 @@ func (s *Session) syncGroupNote(ctx context.Context, mem *memory.Manager, note *
 	if current != "" {
 		content = systemNote("群说明变更", text)
 	}
-	msg := schema.UserAgenticMessage(content)
+	msg := agentic.UserAgenticMessage(content)
 	msg.Extra = map[string]any{"kind": kindSystemNote, "hash": current}
 	return s.appendHeadEntry(ctx, mem, kindSystemNote, msg)
 }
@@ -395,7 +395,7 @@ func (s *Session) appendHeadEntries(ctx context.Context, mem *memory.Manager, sp
 }
 
 // appendHeadEntry 追加单条非人格代头，例如群说明变更
-func (s *Session) appendHeadEntry(ctx context.Context, mem *memory.Manager, kind string, msg *schema.AgenticMessage) error {
+func (s *Session) appendHeadEntry(ctx context.Context, mem *memory.Manager, kind string, msg *agentic.Message) error {
 	_, err := s.appendHeadEntries(ctx, mem, []headEntrySpec{{kind: kind, msg: msg}})
 	return err
 }
@@ -404,4 +404,16 @@ func (s *Session) appendHeadEntry(ctx context.Context, mem *memory.Manager, kind
 func noteHash(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:8])
+}
+
+// assembleForRun 按会话类型装配：life/worker 各有摘要检查点，QQ 走通用代头与 checkpoint
+func (a *Agent) assembleForRun(ctx context.Context, session *Session) ([]*agentic.Message, error) {
+	switch session.kind {
+	case memory.ConversationKindLife:
+		return a.assembleLifeMessages(ctx, session)
+	case memory.ConversationKindWorker:
+		return a.assembleWorkerMessages(ctx, session)
+	default:
+		return a.assembleMessages(ctx, session)
+	}
 }

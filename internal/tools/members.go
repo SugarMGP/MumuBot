@@ -7,8 +7,7 @@ import (
 
 	"mumu-bot/internal/memory"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type MemberRoster struct {
@@ -18,10 +17,10 @@ type MemberRoster struct {
 }
 
 type SearchMembersInput struct {
-	Keyword string `json:"keyword,omitempty" jsonschema:"description=昵称或历史群名片子串，也可填精确 QQ；留空浏览"`
-	GroupID int64  `json:"group_id,omitempty" jsonschema:"description=默认0搜索全部已认识的人；正整数限定该群当前成员并按需补齐名单"`
+	Keyword string `json:"keyword,omitempty" description:"昵称或历史群名片子串，也可填精确 QQ；留空浏览"`
+	GroupID int64  `json:"group_id,omitempty" description:"默认0搜索全部已认识的人；正整数限定该群当前成员并按需补齐名单"`
 	Cursor  string `json:"cursor,omitempty"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	Limit   int    `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type SearchMembersOutput struct {
@@ -83,6 +82,6 @@ func searchMembers(ctx context.Context, input *SearchMembersInput) (*SearchMembe
 	return &SearchMembersOutput{Success: true, MemberSearchPage: page, Roster: roster, Warning: warning}, nil
 }
 
-func NewSearchMembersTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchMembers", "按昵称、历史群名片或 QQ 查找熟人，所有场合默认全局搜索。群聊会按十分钟缓存自动补齐当前群完整名单；group_id 可限定其他可用群的当前成员。结果是身份线索，不代表亲密程度；需要详细背景再用 getUserProfile 或记忆工具。", searchMembers)
+func NewSearchMembersTool() (tool.Tool, error) {
+	return newFunctionTool("searchMembers", "按昵称、历史群名片或 QQ 查找熟人，所有场合默认全局搜索。群聊会按十分钟缓存自动补齐当前群完整名单；group_id 可限定其他可用群的当前成员。结果是身份线索，不代表亲密程度；需要详细背景再用 getUserProfile 或记忆工具。", searchMembers)
 }

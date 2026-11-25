@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ==================== 搜索表情包工具 ====================
 
 type SearchStickersInput struct {
-	Keyword string `json:"keyword" jsonschema:"description=按关键词搜索，如：猫、开心、无语等，关键词之间用空格隔开"`
-	Cursor  string `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	Keyword string `json:"keyword" description:"按关键词搜索，如：猫、开心、无语等，关键词之间用空格隔开"`
+	Cursor  string `json:"cursor,omitempty" description:"上一页返回的 cursor"`
+	Limit   int    `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type StickerSummary struct {
@@ -61,8 +60,8 @@ func searchStickersFunc(ctx context.Context, input *SearchStickersInput) (*Searc
 	return &SearchStickersOutput{Success: true, Stickers: results, NextCursor: page.NextCursor, HasMore: page.HasMore}, nil
 }
 
-func NewSearchStickersTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewSearchStickersTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"searchStickers",
 		"按关键词搜索收藏库里的表情包（如开心、无语、疑惑等），返回表情包 ID 与描述，挑契合当下气氛的再用 sendSticker 发送。",
 		searchStickersFunc,
@@ -72,7 +71,7 @@ func NewSearchStickersTool() (tool.InvokableTool, error) {
 // ==================== 发送表情包工具 ====================
 
 type SendStickerInput struct {
-	StickerID uint `json:"sticker_id" jsonschema:"description=表情包ID（从searchStickers获取）"`
+	StickerID uint `json:"sticker_id" description:"表情包ID（从searchStickers获取）"`
 }
 
 type SendStickerOutput struct {
@@ -112,8 +111,8 @@ func sendStickerFunc(ctx context.Context, input *SendStickerInput) (*SendSticker
 	}, nil
 }
 
-func NewSendStickerTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewSendStickerTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"sendSticker",
 		"发送一张收藏库里的表情包（传 searchStickers 返回的 sticker_id）。单次发送一张，不能附带文字；想配话可先用 speak 单独发一句。",
 		sendStickerFunc,
@@ -123,9 +122,9 @@ func NewSendStickerTool() (tool.InvokableTool, error) {
 // ==================== 维护表情包工具 ====================
 
 type ManageStickerInput struct {
-	Action      string  `json:"action" jsonschema:"description=update 修改备注，delete 删除收藏"`
-	StickerID   uint    `json:"sticker_id" jsonschema:"description=searchStickers 或 saveSticker 返回的表情包 ID"`
-	Description *string `json:"description,omitempty" jsonschema:"description=update 必填，空字符串清空备注；delete 省略"`
+	Action      string  `json:"action" description:"update 修改备注，delete 删除收藏"`
+	StickerID   uint    `json:"sticker_id" description:"searchStickers 或 saveSticker 返回的表情包 ID"`
+	Description *string `json:"description,omitempty" description:"update 必填，空字符串清空备注；delete 省略"`
 }
 
 func manageSticker(ctx context.Context, input *ManageStickerInput) (any, error) {
@@ -154,6 +153,6 @@ func manageSticker(ctx context.Context, input *ManageStickerInput) (any, error) 
 	return map[string]any{"success": true, "sticker_id": input.StickerID, "action": input.Action}, nil
 }
 
-func NewManageStickerTool() (tool.InvokableTool, error) {
-	return utils.InferTool("manageSticker", "修改已收藏表情包的备注或删除收藏；只操作收藏库，不删除聊天原图。", manageSticker)
+func NewManageStickerTool() (tool.Tool, error) {
+	return newFunctionTool("manageSticker", "修改已收藏表情包的备注或删除收藏；只操作收藏库，不删除聊天原图。", manageSticker)
 }

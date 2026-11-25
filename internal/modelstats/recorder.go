@@ -6,9 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cloudwego/eino/callbacks"
-	"github.com/cloudwego/eino/components/model"
-	callbacktpl "github.com/cloudwego/eino/utils/callbacks"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -151,36 +148,13 @@ func mergeAggregate(target *aggregate, source aggregate) {
 	target.UsageReportedCount += source.UsageReportedCount
 }
 
-type startedAtKey struct{}
-
-func Handler(task, modelName string) callbacks.Handler {
+// Record 记录一次模型请求；失败请求也计入时延与失败数
+func Record(task, modelName string, duration time.Duration, failed bool, total, prompt, cached int, usageReported bool) {
 	recorder := defaultRecorder.Load()
-	return callbacktpl.NewHandlerHelper().
-		AgenticModel(&callbacktpl.AgenticModelCallbackHandler{
-			OnStart: func(ctx context.Context, _ *callbacks.RunInfo, _ *model.AgenticCallbackInput) context.Context {
-				return context.WithValue(ctx, startedAtKey{}, time.Now())
-			},
-			OnEnd: func(ctx context.Context, _ *callbacks.RunInfo, output *model.AgenticCallbackOutput) context.Context {
-				total, prompt, cached, reported := 0, 0, 0, false
-				if output != nil && output.TokenUsage != nil {
-					total, prompt, cached, reported = output.TokenUsage.TotalTokens, output.TokenUsage.PromptTokens, output.TokenUsage.PromptTokenDetails.CachedTokens, true
-				}
-				recorder.Record(task, modelName, elapsed(ctx), false, total, prompt, cached, reported)
-				return ctx
-			},
-			OnError: func(ctx context.Context, _ *callbacks.RunInfo, _ error) context.Context {
-				recorder.Record(task, modelName, elapsed(ctx), true, 0, 0, 0, false)
-				return ctx
-			},
-		}).Handler()
-}
-
-func elapsed(ctx context.Context) time.Duration {
-	started, _ := ctx.Value(startedAtKey{}).(time.Time)
-	if started.IsZero() {
-		return 0
+	if recorder == nil {
+		return
 	}
-	return time.Since(started)
+	recorder.Record(task, modelName, duration, failed, total, prompt, cached, usageReported)
 }
 
 type AggregateRow struct {

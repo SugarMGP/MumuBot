@@ -87,7 +87,7 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		zap.L().Warn("私聊本轮步数已用完", zap.Int64("target_id", targetID))
 		return
 	}
-	chatAgent, err := a.newChatAgent(generation, generation.privateTools, state.steps.Remaining())
+	chatAgent, err := a.newChatAgent(generation, generation.privateTools)
 	if err != nil {
 		zap.L().Warn("构建私聊运行态失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
@@ -97,12 +97,12 @@ func (a *Agent) thinkPrivate(targetID int64) {
 		zap.L().Warn("装配私聊上下文失败", zap.Int64("target_id", targetID), zap.Error(err))
 		return
 	}
-	if runErr := a.runAgent(ctx, chatAgent, messages); runErr != nil {
+	if runErr := a.runAgent(ctx, chatAgent, generation.privateTools, messages); runErr != nil {
 		if errors.Is(runErr, errModelSwitchPending) {
 			return
 		}
 		if isContextOverflowError(runErr) {
-			if a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, a.passthroughModelInput, session) {
+			if a.compactAfterOverflow(ctx, memory.ConversationKindPrivate, targetID, generation.privateTools, session) {
 				if tc != nil {
 					tc.TopicMaintained = true
 				}

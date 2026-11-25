@@ -5,11 +5,11 @@ import (
 	"sort"
 	"strings"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 )
 
 // restoreSessions 先恢复持久化工作集，没有工作集时才回退到最近原文
@@ -116,7 +116,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64, afterID ui
 		if msg == nil {
 			continue
 		}
-		var payload schema.AgenticMessage
+		var payload agentic.Message
 		if sonic.Unmarshal(entry.Payload, &payload) != nil {
 			payload = *msgToPayload(msg)
 		}
@@ -136,14 +136,14 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64, afterID ui
 			continue
 		}
 		if entry.EntryKind == "agent_message" {
-			var payload schema.AgenticMessage
+			var payload agentic.Message
 			if sonic.Unmarshal(entry.Payload, &payload) == nil {
 				session.RestorePendingAgentMessage(&payload, entry.ID, payloadWake(&payload), payloadAllowSleep(&payload))
 			}
 			continue
 		}
 		if entry.EntryKind == "observation" {
-			var payload schema.AgenticMessage
+			var payload agentic.Message
 			if sonic.Unmarshal(entry.Payload, &payload) == nil {
 				session.RestorePendingObservation(&payload, entry.ID)
 			}
@@ -160,7 +160,7 @@ func (a *Agent) restoreTranscriptSession(kind string, targetID int64, afterID ui
 		if msg == nil {
 			continue
 		}
-		var payload schema.AgenticMessage
+		var payload agentic.Message
 		if sonic.Unmarshal(entry.Payload, &payload) != nil {
 			payload = *msgToPayload(msg)
 		}
@@ -188,7 +188,7 @@ func (a *Agent) collectMissingToolResults(session *Session, entries []memory.Tra
 		if entry.EntryKind != "assistant" {
 			continue
 		}
-		var message schema.AgenticMessage
+		var message agentic.Message
 		if sonic.Unmarshal(entry.Payload, &message) != nil {
 			continue
 		}
@@ -221,7 +221,7 @@ func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry
 			return err
 		}
 	}
-	var message schema.AgenticMessage
+	var message agentic.Message
 	if sonic.Unmarshal(entry.Payload, &message) == nil {
 		if entry.EntryKind == "system_note" && messageKind(&message) == "maintenance_hint" && entry.VisibleSeq == nil {
 			session.RestorePendingMaintenanceHint(&message, entry.ID)
@@ -232,7 +232,7 @@ func (a *Agent) restoreSeenEntry(session *Session, entry *memory.TranscriptEntry
 		}
 	}
 	for _, extra := range missing[entry.ID] {
-		var repaired schema.AgenticMessage
+		var repaired agentic.Message
 		if sonic.Unmarshal(extra.Payload, &repaired) == nil {
 			session.AppendSeenMessage(&repaired, extra.ID, 0)
 		}
@@ -252,7 +252,7 @@ func valueOrZero(value *uint64) uint64 {
 }
 
 // payloadAllowSleep 读取“允许在睡眠中启动”的持久标记，缺省不允许
-func payloadAllowSleep(payload *schema.AgenticMessage) bool {
+func payloadAllowSleep(payload *agentic.Message) bool {
 	if payload == nil || payload.Extra == nil {
 		return false
 	}
@@ -261,7 +261,7 @@ func payloadAllowSleep(payload *schema.AgenticMessage) bool {
 }
 
 // payloadWake 读取内部消息持久化的唤醒标记，缺省按需要处理
-func payloadWake(payload *schema.AgenticMessage) bool {
+func payloadWake(payload *agentic.Message) bool {
 	if payload == nil || payload.Extra == nil {
 		return true
 	}
@@ -272,7 +272,7 @@ func payloadWake(payload *schema.AgenticMessage) bool {
 	return value
 }
 
-func msgToPayload(msg *onebot.ConversationMessage) *schema.AgenticMessage {
+func msgToPayload(msg *onebot.ConversationMessage) *agentic.Message {
 	if msg == nil {
 		return nil
 	}
@@ -280,7 +280,7 @@ func msgToPayload(msg *onebot.ConversationMessage) *schema.AgenticMessage {
 	if body == "" {
 		body = strings.TrimSpace(msg.Content)
 	}
-	return schema.UserAgenticMessage(fmt.Sprintf("[%d] %s %s(%d): %s", msg.MessageID, msg.Time.Format("2006-01-02 15:04:05"), msg.Nickname, msg.UserID, body))
+	return agentic.UserAgenticMessage(fmt.Sprintf("[%d] %s %s(%d): %s", msg.MessageID, msg.Time.Format("2006-01-02 15:04:05"), msg.Nickname, msg.UserID, body))
 }
 
 // conversationMessageFromLog 恢复消息时补齐引用目标的发送者，供自动参考选择

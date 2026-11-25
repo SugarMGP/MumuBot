@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"mumu-bot/internal/memory"
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"mumu-bot/internal/memory"
+
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // ==================== 发言工具 ====================
@@ -18,17 +19,17 @@ import (
 // SpeakInput 发言的输入参数
 type SpeakInput struct {
 	// Content 你想说的话
-	Content string `json:"content" jsonschema:"description=说话内容"`
+	Content string `json:"content" description:"说话内容"`
 	// ReplyTo 要回复的 OneBot 消息 ID（可选）
-	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"description=要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的完整整数，可为负数）"`
+	ReplyTo int64 `json:"reply_to,omitempty" description:"要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的完整整数，可为负数）"`
 	// Mentions 要提及的用户 QQ 号列表（可选）
-	Mentions []int64 `json:"mentions,omitempty" jsonschema:"description=要@的用户QQ号列表"`
+	Mentions []int64 `json:"mentions,omitempty" description:"要@的用户QQ号列表"`
 }
 
 // PrivateSpeakInput 私聊发言的输入参数
 type PrivateSpeakInput struct {
-	Content string `json:"content" jsonschema:"description=说话内容"`
-	ReplyTo int64  `json:"reply_to,omitempty" jsonschema:"description=要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的完整整数，可为负数）"`
+	Content string `json:"content" description:"说话内容"`
+	ReplyTo int64  `json:"reply_to,omitempty" description:"要回复的真实 OneBot 消息 ID（取自消息行首 [消息ID] 中的完整整数，可为负数）"`
 }
 
 // SpeakOutput 发言的输出
@@ -92,8 +93,8 @@ func privateSpeakFunc(ctx context.Context, input *PrivateSpeakInput) (*SpeakOutp
 }
 
 // NewSpeakTool 创建发言工具
-func NewSpeakTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewSpeakTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"speak",
 		"在群里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 原样填进 reply_to，保留负号（连发多条回同一句时挂第一条即可），需要点名叫人时在 mentions 填对方 QQ 号（正文无需手写 @）。",
 		speakFunc,
@@ -101,8 +102,8 @@ func NewSpeakTool() (tool.InvokableTool, error) {
 }
 
 // NewPrivateSpeakTool 创建私聊发言工具
-func NewPrivateSpeakTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewPrivateSpeakTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"speak",
 		"在私聊里发一条消息。按当前人设与场合提示词的要求，以第一人称“我”的当事人视角自然说话；一条消息只说一句语法和含义完整的话、不换行；回应具体某条消息或之前交代的事时把该消息行首 [消息ID] 中的真实 OneBot 消息 ID 原样填进 reply_to，保留负号。",
 		privateSpeakFunc,
@@ -129,11 +130,12 @@ func stayQuietFunc(_ context.Context, _ *StayQuietInput) (*StayQuietOutput, erro
 }
 
 // NewStayQuietTool 创建保持沉默工具
-func NewStayQuietTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewStayQuietTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"stayQuiet",
 		"安静结束当前这一轮思考：当你决定不接话潜水、或者本轮想说的话已经发完时调用，调用后直接结束本轮，不要在普通文本里写内心戏或事后汇报。",
 		stayQuietFunc,
+		function.WithSkipSummarization(true),
 	)
 }
 
@@ -142,7 +144,7 @@ func NewStayQuietTool() (tool.InvokableTool, error) {
 // PokeInput 戳一戳的输入参数
 type PokeInput struct {
 	// UserID 要戳的群成员 QQ 号
-	UserID int64 `json:"user_id" jsonschema:"description=要戳的群成员QQ号"`
+	UserID int64 `json:"user_id" description:"要戳的群成员QQ号"`
 }
 
 // PrivatePokeInput 私聊戳一戳的输入参数
@@ -191,8 +193,8 @@ func privatePokeFunc(ctx context.Context, _ *PrivatePokeInput) (*PokeOutput, err
 }
 
 // NewPokeTool 创建戳一戳工具
-func NewPokeTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewPokeTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"poke",
 		"戳一戳群里的某个群友（传对方 QQ 号），适合回应别人的戳一戳或偶尔逗一下熟人，不要频繁连戳。",
 		pokeFunc,
@@ -200,8 +202,8 @@ func NewPokeTool() (tool.InvokableTool, error) {
 }
 
 // NewPrivatePokeTool 创建私聊戳一戳工具
-func NewPrivatePokeTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewPrivatePokeTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"poke",
 		"在私聊里戳一戳对方，适合回应戳一戳或偶尔轻松互动，不要频繁连戳。",
 		privatePokeFunc,
@@ -212,9 +214,9 @@ func NewPrivatePokeTool() (tool.InvokableTool, error) {
 
 // ReactToMessageInput 对消息贴表情的输入参数
 type ReactToMessageInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）"`
+	MessageID int64 `json:"message_id" description:"OneBot 消息 ID（完整整数，可为负数）"`
 	// Reaction 要使用的语义表情
-	Reaction string `json:"reaction" jsonschema:"enum=thumbs_up,enum=heart,enum=clap,enum=laugh,enum=hug,enum=ok,enum=question,enum=no,enum=cry,enum=facepalm,enum=cheer,enum=victory,enum=salute,enum=doge,description=要使用的表情回应"`
+	Reaction string `json:"reaction" enum:"thumbs_up,heart,clap,laugh,hug,ok,question,no,cry,facepalm,cheer,victory,salute,doge" description:"要使用的表情回应"`
 }
 
 var messageReactionEmojiIDs = map[string]int{
@@ -269,8 +271,8 @@ func reactToMessageFunc(ctx context.Context, input *ReactToMessageInput) (*React
 }
 
 // NewReactToMessageTool 创建对消息贴表情工具
-func NewReactToMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewReactToMessageTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"reactToMessage",
 		"对某条消息贴表情回应。可以表达认同、喜欢、疑问等情绪，比直接回复更轻量。",
 		reactToMessageFunc,
@@ -281,7 +283,7 @@ func NewReactToMessageTool() (tool.InvokableTool, error) {
 
 // RecallMessageInput 撤回消息的输入参数
 type RecallMessageInput struct {
-	MessageID int64 `json:"message_id" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）"`
+	MessageID int64 `json:"message_id" description:"OneBot 消息 ID（完整整数，可为负数）"`
 }
 
 // RecallMessageOutput 撤回消息的输出
@@ -342,8 +344,8 @@ func recallMessageFunc(ctx context.Context, input *RecallMessageInput) (*RecallM
 }
 
 // NewRecallMessageTool 创建撤回消息工具
-func NewRecallMessageTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewRecallMessageTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"recallMessage",
 		"撤回你自己发的消息。当你发错消息、说错话、或者想收回刚才的发言时使用。",
 		recallMessageFunc,

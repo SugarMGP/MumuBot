@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { modelApi } from "@/api/client-endpoints";
-import type { ModelProfile, ModelSelection, ModelProvider, ThinkingMode } from "@/api/types";
+import type { ModelProfile, ModelSelection, ModelProvider, ThinkingLevel, ThinkingMode } from "@/api/types";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { PageHeader } from "@/components/admin/page-header";
 import { PageSkeleton } from "@/components/admin/loading";
@@ -34,6 +34,8 @@ import { enumLabel } from "@/lib/labels";
 const emptyForm = {
   provider: "openai_responses" as ModelProvider,
   thinking_mode: "" as ThinkingMode,
+  thinking_budget: null as number | null,
+  thinking_level: "" as ThinkingLevel,
   body_override: "{}",
   name: "",
   base_url: "",
@@ -47,6 +49,8 @@ function profileForm(profile: ModelProfile) {
   return {
     provider: profile.provider,
     thinking_mode: profile.thinking_mode,
+    thinking_budget: profile.thinking_budget,
+    thinking_level: profile.thinking_level,
     body_override: profile.body_override,
     name: profile.name,
     base_url: profile.base_url,
@@ -309,8 +313,17 @@ export default function ModelsPage() {
                     {profile.context_window}
                   </TableCell>
                   <TableCell className="text-xs">
-                    {profile.provider === "openai_chat_completions" ? <p>{profile.thinking_mode ? enumLabel(t, "thinkingMode", profile.thinking_mode) : t("models.fields.effortNone")}</p> : null}
-                    <p>{profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")}</p>
+                    {profile.provider === "gemini" ? (
+                      <>
+                        <p>{profile.thinking_budget === null ? t("models.fields.effortNone") : t("models.fields.thinkingBudgetValue", { value: profile.thinking_budget })}</p>
+                        <p>{profile.thinking_level ? enumLabel(t, "thinkingLevel", profile.thinking_level) : t("models.fields.effortNone")}</p>
+                      </>
+                    ) : (
+                      <>
+                        {profile.provider === "openai_chat_completions" ? <p>{profile.thinking_mode ? enumLabel(t, "thinkingMode", profile.thinking_mode) : t("models.fields.effortNone")}</p> : null}
+                        <p>{profile.reasoning_effort ? enumLabel(t, "reasoningEffort", profile.reasoning_effort) : t("models.fields.effortNone")}</p>
+                      </>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-1">
@@ -421,7 +434,7 @@ export default function ModelsPage() {
 
           <Field label={t("models.fields.provider")}>
             <NativeSelect value={form.provider} onChange={(event) => setForm((value) => ({ ...value, provider: event.target.value as ModelProvider }))}>
-              {(["openai_responses", "openai_chat_completions"] as const).map((provider) => <option key={provider} value={provider}>{enumLabel(t, "modelProvider", provider)}</option>)}
+              {(["openai_responses", "openai_chat_completions", "gemini"] as const).map((provider) => <option key={provider} value={provider}>{enumLabel(t, "modelProvider", provider)}</option>)}
             </NativeSelect>
           </Field>
 
@@ -469,7 +482,7 @@ export default function ModelsPage() {
               {t("models.fields.reasoningGroup")}
             </p>
             <div className="admin-form-grid">
-              <Field label={t("models.fields.contextWindow")} className={form.provider === "openai_chat_completions" ? "col-span-2" : undefined}>
+              <Field label={t("models.fields.contextWindow")} className={form.provider === "openai_chat_completions" || form.provider === "gemini" ? "col-span-2" : undefined}>
                 <Input
                   type="number"
                   min={1}
@@ -483,32 +496,62 @@ export default function ModelsPage() {
                   }
                 />
               </Field>
-              {form.provider === "openai_chat_completions" ? (
-                <Field label={t("models.fields.thinkingMode")}>
-                  <NativeSelect value={form.thinking_mode} onChange={(event) => setForm((value) => ({ ...value, thinking_mode: event.target.value as ThinkingMode }))}>
-                    <option value="">{t("models.fields.effortNone")}</option>
-                    {(["enabled", "disabled"] as const).map((mode) => <option key={mode} value={mode}>{enumLabel(t, "thinkingMode", mode)}</option>)}
-                  </NativeSelect>
-                </Field>
-              ) : null}
-              <Field label={t("models.fields.reasoningEffort")}>
-                <NativeSelect
-                  value={form.reasoning_effort}
-                  onChange={(event) =>
-                    setForm((value) => ({
-                      ...value,
-                      reasoning_effort: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">{t("models.fields.effortNone")}</option>
-                  {["none", "low", "medium", "high", "xhigh", "max"].map((value) => (
-                    <option key={value} value={value}>
-                      {enumLabel(t, "reasoningEffort", value)}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </Field>
+              {form.provider === "gemini" ? (
+                <>
+                  <Field label={t("models.fields.thinkingBudget")} hint={t("models.fields.thinkingBudgetHint")}>
+                    <Input
+                      type="number"
+                      min={-1}
+                      step={1}
+                      placeholder={t("models.fields.effortNone")}
+                      value={form.thinking_budget === null ? "" : String(form.thinking_budget)}
+                      onChange={(event) => {
+                        const raw = event.target.value.trim();
+                        const parsed = raw === "" ? null : Number(raw);
+                        setForm((value) => ({
+                          ...value,
+                          thinking_budget: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+                        }));
+                      }}
+                    />
+                  </Field>
+                  <Field label={t("models.fields.thinkingLevel")}>
+                    <NativeSelect value={form.thinking_level} onChange={(event) => setForm((value) => ({ ...value, thinking_level: event.target.value as ThinkingLevel }))}>
+                      <option value="">{t("models.fields.effortNone")}</option>
+                      {(["low", "medium", "high"] as const).map((level) => <option key={level} value={level}>{enumLabel(t, "thinkingLevel", level)}</option>)}
+                    </NativeSelect>
+                  </Field>
+                </>
+              ) : (
+                <>
+                  {form.provider === "openai_chat_completions" ? (
+                    <Field label={t("models.fields.thinkingMode")}>
+                      <NativeSelect value={form.thinking_mode} onChange={(event) => setForm((value) => ({ ...value, thinking_mode: event.target.value as ThinkingMode }))}>
+                        <option value="">{t("models.fields.effortNone")}</option>
+                        {(["enabled", "disabled"] as const).map((mode) => <option key={mode} value={mode}>{enumLabel(t, "thinkingMode", mode)}</option>)}
+                      </NativeSelect>
+                    </Field>
+                  ) : null}
+                  <Field label={t("models.fields.reasoningEffort")}>
+                    <NativeSelect
+                      value={form.reasoning_effort}
+                      onChange={(event) =>
+                        setForm((value) => ({
+                          ...value,
+                          reasoning_effort: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">{t("models.fields.effortNone")}</option>
+                      {["none", "low", "medium", "high", "xhigh", "max"].map((value) => (
+                        <option key={value} value={value}>
+                          {enumLabel(t, "reasoningEffort", value)}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                </>
+              )}
             </div>
           </div>
           <div className="border-t border-border pt-4">

@@ -18,17 +18,31 @@ func WithRequestTracker(ctx context.Context, tracker RequestTracker) context.Con
 	return context.WithValue(ctx, requestTrackerKey{}, tracker)
 }
 
+// TrackerFrom 返回当前上下文登记的请求跟踪器；已有跟踪时运行层不再覆盖
+func TrackerFrom(ctx context.Context) RequestTracker {
+	tracker, _ := ctx.Value(requestTrackerKey{}).(RequestTracker)
+	return tracker
+}
+
 type requestTransport struct{ base http.RoundTripper }
 
 func (t *requestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	observer, _ := request.Context().Value(observerKey{}).(*ResponseObserver)
 	tracker, _ := request.Context().Value(requestTrackerKey{}).(RequestTracker)
 	if tracker == nil {
-		return t.base.RoundTrip(request)
+		response, err := t.base.RoundTrip(request)
+		if observer != nil {
+			observer.record(response, err)
+		}
+		return response, err
 	}
 	ctx, finish, err := tracker(request.Context())
 	if err != nil {
 		if request.Body != nil {
 			request.Body.Close()
+		}
+		if observer != nil {
+			observer.record(nil, err)
 		}
 		return nil, err
 	}
@@ -36,7 +50,14 @@ func (t *requestTransport) RoundTrip(request *http.Request) (*http.Response, err
 	if err != nil {
 		cause := context.Cause(ctx)
 		finish()
-		return nil, errors.Join(err, cause)
+		err = errors.Join(err, cause)
+		if observer != nil {
+			observer.record(nil, err)
+		}
+		return nil, err
+	}
+	if observer != nil {
+		observer.record(response, nil)
 	}
 	response.Body = &trackedResponseBody{ReadCloser: response.Body, ctx: ctx, finish: finish}
 	return response, nil

@@ -4,14 +4,14 @@ import (
 	"context"
 	"strings"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 )
 
 // AppendAssistant 保存一条 assistant 工作集记录
-func (s *Session) AppendAssistant(ctx context.Context, runID string, msg *schema.AgenticMessage) (*memory.TranscriptEntry, error) {
+func (s *Session) AppendAssistant(ctx context.Context, runID string, msg *agentic.Message) (*memory.TranscriptEntry, error) {
 	if msg == nil || s.memory == nil {
 		return nil, nil
 	}
@@ -34,7 +34,7 @@ func (s *Session) AppendAssistant(ctx context.Context, runID string, msg *schema
 	return entry, nil
 }
 
-func agenticMessageText(message *schema.AgenticMessage) string {
+func agenticMessageText(message *agentic.Message) string {
 	if message == nil {
 		return ""
 	}
@@ -53,7 +53,7 @@ func agenticMessageText(message *schema.AgenticMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-func (s *Session) AppendSeenMessage(msg *schema.AgenticMessage, transcriptID uint, visibleSeq uint64) {
+func (s *Session) AppendSeenMessage(msg *agentic.Message, transcriptID uint, visibleSeq uint64) {
 	if msg == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func (s *Session) AppendSeenMessage(msg *schema.AgenticMessage, transcriptID uin
 }
 
 // AppendSeenObservation 恢复已进入模型的观察事件，保留 user 标记供分段和窗口统计
-func (s *Session) AppendSeenObservation(msg *schema.AgenticMessage, transcriptID uint, visibleSeq uint64) {
+func (s *Session) AppendSeenObservation(msg *agentic.Message, transcriptID uint, visibleSeq uint64) {
 	if msg == nil {
 		return
 	}
@@ -121,7 +121,7 @@ func (s *Session) hasTranscriptLocked(transcriptID uint) bool {
 }
 
 // RestorePendingMaintenanceHint 恢复尚未进入模型输入的维护提醒
-func (s *Session) RestorePendingMaintenanceHint(payload *schema.AgenticMessage, transcriptID uint) {
+func (s *Session) RestorePendingMaintenanceHint(payload *agentic.Message, transcriptID uint) {
 	if payload == nil {
 		return
 	}

@@ -8,12 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/onebot"
 	"mumu-bot/internal/tools"
-
-	"github.com/cloudwego/eino/schema"
 )
 
 type sessionUser struct {
@@ -31,7 +30,7 @@ type sessionUser struct {
 	ArrivalSeq        uint64
 	Order             uint64
 	MessageID         int64
-	Msg               *schema.AgenticMessage
+	Msg               *agentic.Message
 	IsObservation     bool
 	IsAgentMessage    bool
 	IsMaintenanceHint bool
@@ -42,7 +41,7 @@ type sessionUser struct {
 
 type sessionEntry struct {
 	user         *sessionUser
-	msg          *schema.AgenticMessage
+	msg          *agentic.Message
 	transcriptID uint
 	visibleSeq   uint64
 }
@@ -85,7 +84,7 @@ type Session struct {
 }
 
 type tokenBase struct {
-	message        *schema.AgenticMessage
+	message        *agentic.Message
 	prompt         int
 	completion     int
 	total          int
@@ -164,7 +163,7 @@ func (s *Session) AppendUser(msg *onebot.ConversationMessage, mediaRefs []media.
 
 // AppendAgentMessage 把另一个会话投递的内部消息加入待处理工作集；
 // wake=false 只保存不触发新回合，allowSleep 表示允许在 life 睡眠时仍启动这一轮
-func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptID uint, at time.Time, wake, allowSleep bool) *sessionUser {
+func (s *Session) AppendAgentMessage(message *agentic.Message, transcriptID uint, at time.Time, wake, allowSleep bool) *sessionUser {
 	if message == nil {
 		return nil
 	}
@@ -191,7 +190,7 @@ func (s *Session) AppendAgentMessage(message *schema.AgenticMessage, transcriptI
 }
 
 // RestoreUser 用 transcript 中保存的原始消息体恢复用户条目
-func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref, transcriptID uint, visibleSeq uint64, visible bool, payload *schema.AgenticMessage) *sessionUser {
+func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, mediaRefs []media.Ref, transcriptID uint, visibleSeq uint64, visible bool, payload *agentic.Message) *sessionUser {
 	if msg == nil {
 		return nil
 	}
@@ -217,7 +216,7 @@ func (s *Session) RestoreUser(msg *onebot.ConversationMessage, logID uint, media
 	return user
 }
 
-func (s *Session) RestorePendingObservation(payload *schema.AgenticMessage, transcriptID uint) {
+func (s *Session) RestorePendingObservation(payload *agentic.Message, transcriptID uint) {
 	if payload == nil {
 		return
 	}
@@ -226,7 +225,7 @@ func (s *Session) RestorePendingObservation(payload *schema.AgenticMessage, tran
 	s.pending = append(s.pending, &sessionUser{Msg: payload, TranscriptID: transcriptID, IsObservation: true, Order: s.nextOrderLocked()})
 }
 
-func (s *Session) RestorePendingAgentMessage(payload *schema.AgenticMessage, transcriptID uint, wake, allowSleep bool) {
+func (s *Session) RestorePendingAgentMessage(payload *agentic.Message, transcriptID uint, wake, allowSleep bool) {
 	if payload == nil {
 		return
 	}
@@ -271,7 +270,7 @@ func (s *Session) newUserLocked(msg *onebot.ConversationMessage, logID uint, med
 		MessageID: msg.MessageID, IsObservation: msg.MessageID == 0, Wake: true, Order: s.nextOrderLocked(),
 	}
 	user.Text = s.renderUserText(msg, ref, mediaRefs)
-	user.Msg = schema.UserAgenticMessage(user.Text)
+	user.Msg = agentic.UserAgenticMessage(user.Text)
 	user.Msg.Extra = map[string]any{"at_other": user.AtOther}
 	for _, item := range mediaRefs {
 		s.media.register(item)
@@ -427,7 +426,7 @@ func (s *Session) RecentWindow(now time.Time, window time.Duration) (total int, 
 }
 
 // Assemble 装配本轮上下文：本代头部（人格、群说明、摘要）已在 transcript 中，这里只按顺序展开
-func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction, groupExtra string) ([]*schema.AgenticMessage, error) {
+func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction, groupExtra string) ([]*agentic.Message, error) {
 	if err := s.ensureGenerationHead(ctx, mem, instruction, groupExtra); err != nil {
 		return nil, err
 	}
@@ -436,7 +435,7 @@ func (s *Session) Assemble(ctx context.Context, mem *memory.Manager, instruction
 	pending := append([]*sessionUser(nil), s.pending...)
 	s.mu.Unlock()
 
-	messages := make([]*schema.AgenticMessage, 0, len(entries)+len(pending)+2)
+	messages := make([]*agentic.Message, 0, len(entries)+len(pending)+2)
 	for _, entry := range orderEntries(entries) {
 		if entry.msg == nil {
 			continue

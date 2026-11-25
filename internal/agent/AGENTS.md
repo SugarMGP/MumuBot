@@ -4,7 +4,7 @@
 
 ## 入口与职责
 
-- `react_agent.go` / `generation.go`：Agent 依赖、工具清单、ADK Agent、generation 构造、启动停止和运行态查询。
+- `react_agent.go` / `generation.go`：Agent 依赖、工具清单、trpc llmagent、generation 构造、启动停止和运行态查询。
 - `session.go`：会话工作集、待处理输入、OneBot 消息 ID、媒体索引和上下文装配。
 - `session_compaction.go`：安全压缩候选、checkpoint 应用、token 校准和失败退避。
 - `session_failure.go`：失败批次标记与压缩前置门，防止同一批输入被周期重跑。
@@ -27,15 +27,15 @@
 - QQ 聊天和压缩共用 QQ 档案，life 与 worker 各自的运行和摘要使用独立所选档案；不要恢复 low、后台 Learner、Embedding 或独立压缩模型。
 - 主聊天是单次 ReAct，不拆 Planner/Replyer；是否发言最终由模型和工具决定，门控只做前置过滤。
 - 每群/每好友只允许一个 think 运行；life 单并发且不占 worker 名额；运行期间新消息进入会话，不创建 rerun，后续正常调度继续消费。
-- 思考从会话起始到达序号开始；`BeforeModelRewriteState` 在新消息到达时注入，同一批消息不合并。聊天首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。
-- 失败批次的上限取自最后一次实际发出的 request state；think 入口 pending 只说明入口收到了什么，不能替代本次请求真正纳入的输入。
+- 思考从会话起始到达序号开始；`BeforeModel` 回调在每个模型边界重新装配并整体替换消息，同一批消息不合并。聊天首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。
+- 失败批次的上限取自最后一次实际发出的请求装配；think 入口 pending 只说明入口收到了什么，不能替代本次请求真正纳入的输入。
 - `conversation_transcript` 是唯一工作集；不要在 `runAgent` 事件流或 `AfterAgent` 另装一套 transcript。
 - user transcript 与消息原文在同一事务创建，成功后才发布到内存；assistant 在模型成功后保存；工具 wrapper 在调用前后保存 running/终态回执。
 - 模型请求成功后才给本次请求实际包含的 transcript 行写 `visible_seq`；请求失败不推进、不回滚；聊天失败批次等新输入，life 由生活时钟按持久状态最多补试两次、间隔五分钟。
 - 模型新返回的 assistant 不在本次请求输入里，不得提前写 `visible_seq`；assistant/tool 的持久化可读性由轨迹本身保证。
 - `visible_seq` 按请求消息顺序分配，不能用数据库 ID 重排；代头在前，工具结果在请求它的 assistant 之后。
-- 消息写入 transcript 后必须把行号标回同一内存消息对象，真实输入从 `state.Messages` 按顺序收集；不要再维护 `VisibleTranscriptIDs` 之类的侧面猜测列表。
-- life/worker 的摘要提交在同一事务内完成 visible 序号、检查点边界（life 还含代头替换）；life 摘要保存在 `life_state.context_summary`，代头由 Finalize 装入当前请求。摘要正文不是 file/ref 生命周期根。
+- 消息写入 transcript 后必须把行号标回同一内存消息对象，真实输入从本次请求实际装配的消息按顺序收集；不要再维护 `VisibleTranscriptIDs` 之类的侧面猜测列表。
+- life/worker 的摘要提交在同一事务内完成 visible 序号、检查点边界（life 还含代头替换）；life 摘要保存在 `life_state.context_summary`，代头在摘要提交后重新装配进当前请求。摘要正文不是 file/ref 生命周期根。
 - `sleepUntil` 只有在睡眠状态、起床安排和工具回执都成功后才允许收尾当前回合；成功回执后的终结不能依赖下一次模型节点或额外步数，失败继续让模型在剩余步数内修正。
 - `readSessionHistory` 的 entries 返回已持久化的 assistant/tool 轨迹，user/observation/agent_message 仍只算实际进入成功请求的输入；单条全文用 `readSessionEntry`。`file_refs` 随消息日志保存，历史返回附件元信息，不把临时 URL 当长期资源。
 - `agent_message` 是独立的会话间内部消息条目，不是真人 user 行；它与真人输入共用会话本地 `Order` 的装配/补入边界，不占用 OneBot `ArrivalSeq`。边界来自实际装配的 pending 快照，压缩重建时同步推进，不靠 ID 集合过滤重复输入。`wake=false` 只保存，不触发新回合，也不作为群门控的强交互。
@@ -47,7 +47,7 @@
 - 生活日程只在事务内推进并投递，提交成功后才写内存；`life_next` 到期且 life 正在睡时机械恢复 awake，主人私聊的精确 `/wake` 是唯一人工机械唤醒，其他内部信不打断睡眠。
 - QQ 睡眠是运行许可：提交时在原文落库后跳过工作集与调度；即时调度、防抖、并发入口、周期扫描和空闲压缩都要检查。
 - worker 程序故障回报 life；failed/cancelled 不因周期扫描自动重跑，等 life 明确投来新指令。所有 worker 共用唯一账号和 `/home/worker`，只是并行子 Agent；运行态并发跟启用数量热更新，0 通过 active 停用，不能把并发组件的 0 当成禁用。
-- 工具中间件只保留 `ToolTranscriptMiddleware`、`ToolErrorMiddleware`、Unknown handler、参数规范和顺序执行；不要恢复全局 ToolAction/ToolDedup 或消费水位。
+- 工具协议层只保留 `BeforeTool`/`AfterTool` 回调、参数规范、顺序执行、未知工具可纠正结果和 `not_executed` 回执修复；不要恢复全局 ToolAction/ToolDedup 或消费水位。
 - 压缩只在一轮 think 完整结束后、最后一条 assistant 的实际用量达到窗口 90% 时触发，不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
 - 模型、人格、MCP 和运行态使用 generation 快照；模型/人格/MCP 等需要热切换的内容替换 generation，并发数与三种单轮步数在下一个 think 生效且不重启进程。每次 think 只取一次配置快照，构造 runner 和连续子步骤都复用它。切换前优先用原模型整理不兼容或超限历史，旧阶段最多 180 秒；生成失败后用目标模型读取兼容材料接管，目标材料不包含旧 reasoning 文本、reasoning 摘要或签名占位，只保留可见正文、工具结果、图片和未完成事项。生成失败与持久化失败分开，后者不能触发模型接管。分批整理必须推进真实检查点；复查通过后保存并替换 generation；普通缩窗保留待处理输入，协议整理按下文的显式规则处理。会话取得维护锁后才获取 generation，排队回合不能继续使用切换前的模型快照。
 - 普通压缩候选只包含完整、已可见、协议闭合的旧交互段，保护当前批次、活动工具链、未闭合 CallID 和最近尾部。协议切换另选覆盖末尾不兼容块的闭合前缀，可包含尚未 visible 的已完成输出；事务提交 visible 后再应用内存检查点，无真人来源时只更新概览并保留活跃话题。

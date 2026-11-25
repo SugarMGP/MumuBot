@@ -6,11 +6,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -180,7 +180,7 @@ func (a *Agent) failWorker(ctx context.Context, workerID uint, epoch uint64, ses
 	if session == nil {
 		return
 	}
-	note := schema.UserAgenticMessage(systemNote("worker 失败", message))
+	note := agentic.UserAgenticMessage(systemNote("worker 失败", message))
 	note.Extra = map[string]any{"kind": "system_note"}
 	payload, marshalErr := sonic.Marshal(note)
 	if marshalErr != nil {

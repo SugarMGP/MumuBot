@@ -8,12 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-const latestSchemaVersion = 19
+const latestSchemaVersion = 20
 
 // LatestSchemaVersion 返回当前程序支持的数据结构版本。
 func LatestSchemaVersion() int { return latestSchemaVersion }
 
-// RunMigrations 初始化空库或将 v17/v18 原子升级到当前版本，不删除业务数据
+// RunMigrations 初始化空库或将 v17/v18/v19 原子升级到当前版本，不删除业务数据
 func RunMigrations(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("PostgreSQL 未初始化")
@@ -61,6 +61,15 @@ func RunMigrations(db *gorm.DB) error {
 				return err
 			}
 			if err := recordSchemaVersion(tx, 19, "dual_model_protocols"); err != nil {
+				return err
+			}
+			version = 19
+		}
+		if version == 19 {
+			if err := upgradeV20(tx); err != nil {
+				return err
+			}
+			if err := recordSchemaVersion(tx, 20, "gemini_thinking_config"); err != nil {
 				return err
 			}
 		}
@@ -206,6 +215,13 @@ func validateSchema(db *gorm.DB, expectedVersion int) error {
 		for _, column := range []string{"thinking_mode", "body_override"} {
 			if !db.Migrator().HasColumn("model_profiles", column) {
 				return fmt.Errorf("v19 缺少 model_profiles.%s", column)
+			}
+		}
+	}
+	if expectedVersion >= 20 {
+		for _, column := range []string{"thinking_budget", "thinking_level"} {
+			if !db.Migrator().HasColumn("model_profiles", column) {
+				return fmt.Errorf("v20 缺少 model_profiles.%s", column)
 			}
 		}
 	}

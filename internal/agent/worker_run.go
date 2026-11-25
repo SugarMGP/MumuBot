@@ -63,7 +63,7 @@ func (a *Agent) thinkWorker(workerID int64) {
 			cancel()
 			return
 		}
-		workerAgent, agentErr := a.newWorkerAgent(ctx, generation, generation.workerTools, state.steps.Remaining())
+		workerAgent, agentErr := a.newWorkerAgent(generation, generation.workerTools)
 		if agentErr != nil {
 			a.failWorker(context.WithoutCancel(ctx), id, epoch, session, agentErr)
 			a.finishWorkerRun(id, epoch)
@@ -79,7 +79,7 @@ func (a *Agent) thinkWorker(workerID int64) {
 			cancel()
 			return
 		}
-		runErr := a.runAgent(ctx, workerAgent, messages)
+		runErr := a.runAgent(ctx, workerAgent, generation.workerTools, messages)
 		if !a.workerRunCurrent(id, epoch) {
 			a.finishWorkerRun(id, epoch)
 			cancel()

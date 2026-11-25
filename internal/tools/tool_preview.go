@@ -6,9 +6,6 @@ import (
 	"unicode/utf8"
 
 	"mumu-bot/internal/memory"
-
-	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/schema"
 )
 
 const ToolResultPreviewRunes = 2000
@@ -37,48 +34,6 @@ func ExternalizeText(ctx context.Context, mgr *memory.Manager, text string) (str
 	}
 	preview := truncatePreviewRunes(text, ToolResultPreviewRunes) + fmt.Sprintf("\n\n[原文共 %d 字符，已截断至 %d 字符；使用 readToolResult 续读或用 query 搜索，result_ref=%s]", total, ToolResultPreviewRunes, ref)
 	return preview, ref, true, nil
-}
-
-// ToolResultPreviewMiddleware 给压缩器等无 transcript 的工具调用提供同样的长文本外置
-func ToolResultPreviewMiddleware(mgr *memory.Manager) compose.ToolMiddleware {
-	preview := func(ctx context.Context, name, text string) (string, error) {
-		if mgr == nil || previewWindowTools[name] {
-			return text, nil
-		}
-		display, _, _, err := ExternalizeText(ctx, mgr, text)
-		return display, err
-	}
-	return compose.ToolMiddleware{
-		Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
-			return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-				output, err := next(ctx, input)
-				if err != nil || output == nil {
-					return output, err
-				}
-				display, previewErr := preview(ctx, input.Name, output.Result)
-				if previewErr != nil {
-					return nil, previewErr
-				}
-				output.Result = display
-				return output, nil
-			}
-		},
-		EnhancedInvokable: func(next compose.EnhancedInvokableToolEndpoint) compose.EnhancedInvokableToolEndpoint {
-			return func(ctx context.Context, input *compose.ToolInput) (*compose.EnhancedInvokableToolOutput, error) {
-				output, err := next(ctx, input)
-				if err != nil || output == nil || output.Result == nil {
-					return output, err
-				}
-				text := toolResultText(output.Result)
-				display, previewErr := preview(ctx, input.Name, text)
-				if previewErr != nil {
-					return nil, previewErr
-				}
-				output.Result = &schema.ToolResult{Parts: []schema.ToolOutputPart{{Type: schema.ToolPartTypeText, Text: display}}}
-				return output, nil
-			}
-		},
-	}
 }
 
 func truncatePreviewRunes(value string, max int) string {

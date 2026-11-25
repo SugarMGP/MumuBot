@@ -696,6 +696,10 @@ const enUS: typeof zhCN = {
       apiKeyRequired: "An API key is required on first save",
 
       reasoningEffort: "Reasoning effort",
+      thinkingBudget: "Thinking budget",
+      thinkingBudgetHint: "Leave empty to leave unspecified; -1 for dynamic thinking, 0 to disable thinking, a positive integer for the token limit.",
+      thinkingLevel: "Thinking level",
+      thinkingBudgetValue: "Budget {{value}}",
 
       effortNone: "Unspecified",
       reasoningGroup: "Context and reasoning",
@@ -982,12 +986,18 @@ const enUS: typeof zhCN = {
       stdio: "Stdio",
     },
     modelProvider: {
+      gemini: "Gemini",
       openai_responses: "Responses",
       openai_chat_completions: "Chat Completions",
     },
     thinkingMode: {
       enabled: "Thinking enabled",
       disabled: "Thinking disabled",
+    },
+    thinkingLevel: {
+      low: "Low (low)",
+      medium: "Medium (medium)",
+      high: "High (high)",
     },
     reasoningEffort: {
       none: "None (none)",

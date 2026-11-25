@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/schedule"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -63,9 +63,9 @@ func (a *Agent) runLifeClock() {
 
 func (a *Agent) deliverLifeRetry(now time.Time) {
 	const text = "上一轮运行失败，现在按五分钟间隔进行有限补试。接续尚未完成的事，不重放已完成的工具；仍然失败时保留真实原因。"
-	var message *schema.AgenticMessage
+	var message *agentic.Message
 	build := func(row *memory.SessionMessage) (json.RawMessage, error) {
-		message = schema.UserAgenticMessage(fmt.Sprintf("[系统消息：生活补试]\n内部消息编号：%d\n投递时间：%s\n%s", row.ID, now.Format("2006-01-02 15:04:05"), text))
+		message = agentic.UserAgenticMessage(fmt.Sprintf("[系统消息：生活补试]\n内部消息编号：%d\n投递时间：%s\n%s", row.ID, now.Format("2006-01-02 15:04:05"), text))
 		message.Extra = map[string]any{"kind": "agent_message", "source": "life_retry", "wake": true}
 		return sonic.Marshal(message)
 	}
@@ -91,14 +91,14 @@ func (a *Agent) deliverSchedule(row memory.Schedule, now time.Time) {
 			extraSummary = a.lifeActivitySummaryText(a.ctx, row.UpdatedAt, now)
 		}
 	}
-	var message *schema.AgenticMessage
+	var message *agentic.Message
 	build := func(msg *memory.SessionMessage) (json.RawMessage, error) {
 		body := scheduleMessageBody(row, now)
 		body += fmt.Sprintf("\n内部消息编号：%d", msg.ID)
 		if extraSummary != "" {
 			body += "\n\n" + extraSummary
 		}
-		message = schema.UserAgenticMessage(body)
+		message = agentic.UserAgenticMessage(body)
 		message.Extra = map[string]any{
 			"source": "schedule", "kind": "schedule", "wake": true, "allow_asleep": true,
 			"internal_id": msg.ID, "schedule_id": row.ID,

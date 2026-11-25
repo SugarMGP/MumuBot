@@ -6,15 +6,14 @@ import (
 
 	"mumu-bot/internal/memory"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type UpdateTopicToolInput struct {
-	TopicID  uint                     `json:"topic_id,omitempty" jsonschema:"description=现有话题 ID；省略则新建，必须同时提供 summary 和至少一条 messages"`
-	Summary  *memory.TopicSummary     `json:"summary,omitempty" jsonschema:"description=完整摘要；新建或提供 messages 时必填，title/gist 不可空，主体和来源按事实填写"`
-	Messages []memory.TopicMessageRef `json:"messages,omitempty" jsonschema:"description=新建必填至少一条本会话真实 OneBot 消息 ID 与 is_anchor；更新已有摘要时省略则沿用上版来源；提供时须同时给完整 summary"`
-	Status   string                   `json:"status,omitempty" jsonschema:"description=active 或 dormant"`
+	TopicID  uint                     `json:"topic_id,omitempty" description:"现有话题 ID；省略则新建，必须同时提供 summary 和至少一条 messages"`
+	Summary  *memory.TopicSummary     `json:"summary,omitempty" description:"完整摘要；新建或提供 messages 时必填，title/gist 不可空，主体和来源按事实填写"`
+	Messages []memory.TopicMessageRef `json:"messages,omitempty" description:"新建必填至少一条本会话真实 OneBot 消息 ID 与 is_anchor；更新已有摘要时省略则沿用上版来源；提供时须同时给完整 summary"`
+	Status   string                   `json:"status,omitempty" description:"active 或 dormant"`
 }
 
 func updateTopicFunc(ctx context.Context, input *UpdateTopicToolInput) (any, error) {
@@ -35,6 +34,6 @@ func updateTopicFunc(ctx context.Context, input *UpdateTopicToolInput) (any, err
 	return map[string]any{"success": true, "topic_id": result.TopicID, "summary_version": result.SummaryVersion, "status": result.Status, "assigned_count": result.AssignedCount}, nil
 }
 
-func NewUpdateTopicTool() (tool.InvokableTool, error) {
-	return utils.InferTool("updateTopic", "维护当前 QQ 会话的话题：新建须给完整 summary 和至少一条真实 messages，不能只存无来源摘要；修订已有摘要时省略 messages 会保留原来源；补充新经过请同时提供新来源消息，也可单独调整 active/dormant。只改变索引，不立即改当前摘要，不为清空提醒硬造话题。", updateTopicFunc)
+func NewUpdateTopicTool() (tool.Tool, error) {
+	return newFunctionTool("updateTopic", "维护当前 QQ 会话的话题：新建须给完整 summary 和至少一条真实 messages，不能只存无来源摘要；修订已有摘要时省略 messages 会保留原来源；补充新经过请同时提供新来源消息，也可单独调整 active/dormant。只改变索引，不立即改当前摘要，不为清空提醒硬造话题。", updateTopicFunc)
 }

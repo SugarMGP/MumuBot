@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 	"gorm.io/gorm"
 )
 
@@ -53,7 +53,7 @@ func (a *Agent) enqueueSessionMessageMode(ctx context.Context, fromKind string, 
 		return nil, fmt.Errorf("当前会话不能向 %s 投信", toKind)
 	}
 	now := time.Now()
-	var message *schema.AgenticMessage
+	var message *agentic.Message
 	build := func(row *memory.SessionMessage) (json.RawMessage, error) {
 		header := "【来自另一个会话｜不是当前用户发言】"
 		source := fmt.Sprintf("%s:%d", fromKind, fromTargetID)
@@ -67,7 +67,7 @@ func (a *Agent) enqueueSessionMessageMode(ctx context.Context, fromKind string, 
 		}
 		body := fmt.Sprintf("%s\n内部消息编号：%d\n来源：%s\n投递时间：%s%s\n%s",
 			header, row.ID, source, now.Format("2006-01-02 15:04:05"), silent, text)
-		message = schema.UserAgenticMessage(body)
+		message = agentic.UserAgenticMessage(body)
 		message.Extra = map[string]any{
 			"source": "agent_message", "kind": "agent_message", "internal_id": row.ID,
 			"from_kind": fromKind, "from_target_id": fromTargetID, "created_at": now,

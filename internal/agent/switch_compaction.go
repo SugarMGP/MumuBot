@@ -6,18 +6,17 @@ import (
 	"fmt"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/memory"
 
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var errSwitchBudgetExhausted = errors.New("模型切换摘要步数预算已用尽")
 
-func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, target ModelTarget, original, destination roleModel, chatTools []tool.BaseTool, unavailable map[uint]bool, report *ModelSwitchReport) error {
+func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, target ModelTarget, original, destination roleModel, chatTools []tool.Tool, unavailable map[uint]bool, report *ModelSwitchReport) error {
 	oldDeadline := time.Now().Add(oldModelSwitchTimeout)
 	steps := configFor(ctx).Compactor.MaxSteps
 	if steps <= 0 {
@@ -28,7 +27,7 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 	usingTarget := unavailable[original.profileID]
 	loaded := original.model != nil
 	compacted := false
-	toolInfos := modelToolInfos(ctx, chatTools)
+	toolInfos := toolDeclarations(chatTools)
 	triggerRatio := configFor(ctx).Compactor.TriggerRatio
 	previewCtx := withGeneration(ctx, &Generation{roleModel: roleModel{contextWindow: target.ContextWindow}})
 	report.Stage = "storage"
@@ -100,13 +99,15 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 			}
 			attempt, selected := oldAttempt, original
 			attemptCtx, cancelAttempt := context.WithCancel(ctx)
+			observer := &llm.ResponseObserver{}
+			attemptCtx = llm.WithResponseObserver(attemptCtx, observer)
 			if usingTarget {
 				attempt, selected = newAttempt, destination
-				selected.model = &requestModel{AgenticModel: selected.model, idleTimeout: switchTargetIdleTimeout}
+				selected.model = &llm.RequestModel{Base: selected.model, IdleTimeout: switchTargetIdleTimeout}
 				report.Fallback = true
 			} else {
 				attemptCtx = llm.WithRequestTracker(attemptCtx, modelRequestDeadline(oldDeadline))
-				selected.model = &requestModel{AgenticModel: selected.model}
+				selected.model = &llm.RequestModel{Base: selected.model}
 			}
 			selected.contextWindow = target.ContextWindow
 			attemptCtx = context.WithValue(attemptCtx, switchAttemptKey{}, attempt)
@@ -150,8 +151,8 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 			}
 			var inputErr *compactionInputError
 			var materialErr *switchMaterialError
-			if !usingTarget && (requestFailed || errors.As(err, &inputErr) || errors.Is(err, adk.ErrExceedMaxIterations) || errors.Is(err, errSwitchBudgetExhausted)) {
-				if unavailableModel(err) {
+			if !usingTarget && (requestFailed || errors.As(err, &inputErr) || errors.Is(err, errBudgetExhausted) || errors.Is(err, errSwitchBudgetExhausted)) {
+				if unavailableModel(observer) {
 					unavailable[original.profileID] = true
 				}
 				zap.L().Warn("原模型整理失败，改用目标模型", zap.String("session", sessionKey(session.kind, session.targetID)), zap.Uint("profile_id", original.profileID), zap.Bool("timeout", !time.Now().Before(oldDeadline)))
@@ -160,7 +161,7 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 			}
 			if errors.Is(err, errModelRequestIdle) {
 				report.Stage = "target_timeout"
-			} else if requestFailed || errors.As(err, &inputErr) || errors.As(err, &materialErr) || errors.Is(err, errSwitchBudgetExhausted) || errors.Is(err, adk.ErrExceedMaxIterations) {
+			} else if requestFailed || errors.As(err, &inputErr) || errors.As(err, &materialErr) || errors.Is(err, errSwitchBudgetExhausted) || errors.Is(err, errBudgetExhausted) {
 				report.Stage = "target"
 			}
 			return err
@@ -184,7 +185,7 @@ func (a *Agent) compactSwitchSession(ctx context.Context, session *Session, targ
 }
 
 // smallerSwitchPrefix 只在下一条输入之前拆段，ID 检查点不能越过尚未读取的较早条目
-func smallerSwitchPrefix(messages []*schema.AgenticMessage, idCheckpoint bool) []*schema.AgenticMessage {
+func smallerSwitchPrefix(messages []*agentic.Message, idCheckpoint bool) []*agentic.Message {
 	suffixMin := make([]uint, len(messages)+1)
 	suffixMin[len(messages)] = ^uint(0)
 	for index := len(messages) - 1; index >= 0; index-- {
@@ -218,7 +219,7 @@ func smallerSwitchPrefix(messages []*schema.AgenticMessage, idCheckpoint bool) [
 			continue
 		}
 		next := messages[index+1]
-		if next == nil || next.Role != schema.AgenticRoleTypeUser {
+		if next == nil || next.Role != agentic.RoleUser {
 			continue
 		}
 		toolResult := false
@@ -237,7 +238,7 @@ func smallerSwitchPrefix(messages []*schema.AgenticMessage, idCheckpoint bool) [
 	return messages[:boundaries[(len(boundaries)-1)/2]]
 }
 
-func (s *Session) compactionForPrefix(messages []*schema.AgenticMessage) (*compactionCandidate, error) {
+func (s *Session) compactionForPrefix(messages []*agentic.Message) (*compactionCandidate, error) {
 	s.mu.Lock()
 	entries := make(map[uint]sessionEntry, len(s.seen))
 	for _, entry := range s.seen {

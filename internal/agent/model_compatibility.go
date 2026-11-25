@@ -3,10 +3,9 @@ package agent
 import (
 	"fmt"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/llm"
 	"mumu-bot/internal/modelprofiles"
-
-	"github.com/cloudwego/eino/schema"
 )
 
 // ModelTarget 保留未保存的目标档案；密钥仅用于本次构建客户端
@@ -19,25 +18,26 @@ type ModelTarget struct {
 	KeyChanged        bool
 }
 
-func lastIncompatibleMessage(messages []*schema.AgenticMessage, target ModelTarget) int {
+func lastIncompatibleMessage(messages []*agentic.Message, target ModelTarget) int {
 	last := -1
 	for index, message := range messages {
-		if message == nil || message.Role != schema.AgenticRoleTypeAssistant {
+		if message == nil || message.Role != agentic.RoleAssistant {
 			continue
 		}
-		fromResponses := message.ResponseMeta != nil && message.ResponseMeta.OpenAIExtension != nil
+		fromProvider := message.EffectiveProvider()
 		for _, block := range message.ContentBlocks {
 			if block == nil {
 				continue
 			}
 			switch block.Type {
-			case schema.ContentBlockTypeReasoning:
-				if target.ConnectionChanged || (target.KeyChanged && block.Reasoning != nil && block.Reasoning.Signature != "") || fromResponses != (target.Provider == llm.ProviderResponses) {
+			case agentic.BlockTypeReasoning:
+				if target.ConnectionChanged || (target.KeyChanged && block.Reasoning != nil && block.Reasoning.Signature != "") || fromProvider != target.Provider {
 					last = index
 				}
-			case schema.ContentBlockTypeAssistantGenText, schema.ContentBlockTypeFunctionToolCall:
+			case agentic.BlockTypeAssistantGenText, agentic.BlockTypeFunctionToolCall:
 			default:
-				if target.ConnectionChanged || target.Provider == llm.ProviderChatCompletions {
+				// 只有 Responses 能原样接管服务端工具块，Chat/Gemini 都要整理
+				if target.ConnectionChanged || target.Provider != llm.ProviderResponses {
 					last = index
 				}
 			}
@@ -47,14 +47,14 @@ func lastIncompatibleMessage(messages []*schema.AgenticMessage, target ModelTarg
 }
 
 // protocolSummaryPrefix 只消费覆盖不兼容内容所需的闭合前缀
-func protocolSummaryPrefix(messages []*schema.AgenticMessage, target ModelTarget) ([]*schema.AgenticMessage, error) {
+func protocolSummaryPrefix(messages []*agentic.Message, target ModelTarget) ([]*agentic.Message, error) {
 	last := lastIncompatibleMessage(messages, target)
 	if last < 0 {
 		return nil, nil
 	}
 	open := map[string]bool{}
 	throughID := uint(0)
-	prefix := make([]*schema.AgenticMessage, 0, len(messages))
+	prefix := make([]*agentic.Message, 0, len(messages))
 	for index, message := range messages {
 		if message == nil || isHeadEntry(message) {
 			continue

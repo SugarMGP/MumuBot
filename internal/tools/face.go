@@ -6,16 +6,15 @@ import (
 
 	"mumu-bot/internal/onebot"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ==================== 查询 QQ 表情工具 ====================
 
 // SearchFacesInput 查询 QQ 表情的参数
 type SearchFacesInput struct {
-	Keyword string `json:"keyword,omitempty" jsonschema:"description=表情名称关键词，留空返回常见表情"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"description=返回数量，默认20，最大99"`
+	Keyword string `json:"keyword,omitempty" description:"表情名称关键词，留空返回常见表情"`
+	Limit   int    `json:"limit,omitempty" description:"返回数量，默认20，最大99"`
 }
 
 // FaceSummary 一条 QQ 自带表情
@@ -54,8 +53,8 @@ func searchFacesFunc(ctx context.Context, input *SearchFacesInput) (*SearchFaces
 }
 
 // NewSearchFacesTool 返回查询 QQ 自带表情的工具
-func NewSearchFacesTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewSearchFacesTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"searchFaces",
 		"查询 QQ 自带小黄脸表情的编号和名称；确认后可在 speak 正文里写成 %qface:名称% 或 %qface:编号% 发送。",
 		searchFacesFunc,

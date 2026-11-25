@@ -2,20 +2,18 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"mumu-bot/internal/refstore"
-	"mumu-bot/internal/version"
 
-	mcptool "github.com/cloudwego/eino-ext/components/tool/mcp"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	mcptool "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
 
 // ServerConfig MCP 服务器配置
@@ -42,238 +40,195 @@ type ServerStatus struct {
 
 // Manager MCP 客户端管理器
 type Manager struct {
-	clients  []*client.Client
-	cancels  []context.CancelFunc
+	toolsets []*mcptool.ToolSet
+	tools    []tool.Tool
+	toolSet  map[string]bool
 	refs     *refstore.Store
-	tools    []tool.BaseTool
 	statuses []ServerStatus
 	mu       sync.RWMutex
 }
 
 // NewMCPManager 创建 MCP 管理器
 func NewMCPManager(refs *refstore.Store) *Manager {
-	return &Manager{refs: refs}
+	return &Manager{refs: refs, toolSet: map[string]bool{}}
 }
 
 // Load 连接指定的 MCP 服务器；单个失败只让该服务不可用，不阻断其它能力
 func (m *Manager) Load(ctx context.Context, servers []ServerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	for _, serverCfg := range servers {
-		if !serverCfg.Enabled {
-			zap.L().Debug("MCP 服务器已禁用，跳过", zap.String("name", serverCfg.Name))
+	const initTimeout = 30 * time.Second
+	usedNames := map[string]int{}
+	for _, server := range servers {
+		if !server.Enabled {
 			continue
 		}
-		toolCount, errorCode, err := m.connectServer(ctx, &serverCfg)
+		status := ServerStatus{Name: server.Name, Enabled: true}
+		if server.Type != "sse" && server.Type != "stdio" {
+			status.ErrorCode = "connect_failed"
+			m.statuses = append(m.statuses, status)
+			continue
+		}
+		initCtx, cancel := context.WithTimeout(ctx, initTimeout)
+		// 函数名只允许安全字符，服务名先规范化并保证唯一，避免模型侧参数校验失败
+		setName := sanitizeName(server.Name)
+		usedNames[setName]++
+		if usedNames[setName] > 1 {
+			setName = fmt.Sprintf("%s-%d", setName, usedNames[setName])
+		}
+		toolset := mcptool.NewMCPToolSet(connectionConfig(server), mcptool.WithName(setName))
+		err := toolset.Init(initCtx)
 		if err != nil {
-			m.statuses = append(m.statuses, ServerStatus{Name: serverCfg.Name, Enabled: true, ErrorCode: errorCode})
-			zap.L().Warn("连接 MCP 服务器失败", zap.String("name", serverCfg.Name), zap.Error(err))
+			cancel()
+			_ = toolset.Close()
+			status.ErrorCode = "connect_failed"
+			m.statuses = append(m.statuses, status)
+			zap.L().Warn("连接 MCP 服务器失败", zap.String("name", server.Name), zap.Error(err))
 			continue
 		}
-		m.statuses = append(m.statuses, ServerStatus{Name: serverCfg.Name, Enabled: true, Connected: true, ToolCount: toolCount})
-		zap.L().Info("已连接 MCP 服务器", zap.String("name", serverCfg.Name))
+		items := toolset.Tools(initCtx)
+		cancel()
+		items = filterTools(ctx, items, setName, server.ToolNameList)
+		m.toolsets = append(m.toolsets, toolset)
+		for _, item := range items {
+			m.tools = append(m.tools, item)
+			m.toolSet[item.Declaration().Name] = true
+		}
+		status.Connected = true
+		status.ToolCount = len(items)
+		m.statuses = append(m.statuses, status)
+		zap.L().Info("已连接 MCP 服务器", zap.String("name", server.Name), zap.Int("tools", len(items)))
 	}
-
 	return nil
 }
 
-// connectServer 连接单个 MCP 服务器
-func (m *Manager) connectServer(ctx context.Context, cfg *ServerConfig) (int, string, error) {
-	var cli *client.Client
-	var err error
-	const initTimeout = 30 * time.Second
-	connectionCtx, cancelConnection := context.WithCancel(ctx)
-	initCtx, cancelInit := context.WithTimeout(ctx, initTimeout)
-	defer cancelInit()
-	stopInitWatch := context.AfterFunc(initCtx, cancelConnection)
-	defer stopInitWatch()
-	connected := false
-	defer func() {
-		if !connected {
-			cancelConnection()
-		}
-	}()
-
-	switch cfg.Type {
+func connectionConfig(server ServerConfig) mcptool.ConnectionConfig {
+	config := mcptool.ConnectionConfig{Transport: server.Type, Timeout: 30 * time.Second}
+	switch server.Type {
 	case "sse":
-		cli, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.CustomHeaders))
-		if err != nil {
-			return 0, "connect_failed", fmt.Errorf("创建 SSE 客户端失败: %w", err)
-		}
+		config.ServerURL = server.URL
+		config.Headers = server.CustomHeaders
 	case "stdio":
-		cli, err = client.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
-		if err != nil {
-			return 0, "connect_failed", fmt.Errorf("创建 Stdio 客户端失败: %w", err)
+		command, args := server.Command, server.Args
+		// trpc toolset 的 stdio 配置不携带环境变量，用 env 前缀保留原有能力
+		if len(server.Env) > 0 {
+			args = append(append(append([]string{}, server.Env...), command), server.Args...)
+			command = "env"
 		}
-	default:
-		return 0, "connect_failed", fmt.Errorf("不支持的 MCP 服务器类型: %s", cfg.Type)
+		config.Command = command
+		config.Args = args
 	}
-
-	// 启动客户端
-	if err := cli.Start(connectionCtx); err != nil {
-		_ = cli.Close()
-		return 0, "connect_failed", fmt.Errorf("启动 MCP 客户端失败: %w", err)
-	}
-
-	// 初始化连接
-	initRequest := mcp.InitializeRequest{}
-	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "mumu-bot",
-		Version: version.String(),
-	}
-
-	if _, err := cli.Initialize(initCtx, initRequest); err != nil {
-		_ = cli.Close()
-		return 0, "initialize_failed", fmt.Errorf("初始化 MCP 连接失败: %w", err)
-	}
-
-	// 获取工具 - 使用 MCPClient 接口
-	mcpToolCfg := &mcptool.Config{
-		Cli:                   cli,
-		ToolNameList:          cfg.ToolNameList,
-		ToolCallResultHandler: m.saveResultImages,
-	}
-
-	baseTools, err := mcptool.GetTools(initCtx, mcpToolCfg)
-	if err != nil {
-		_ = cli.Close()
-		return 0, "tool_discovery_failed", fmt.Errorf("获取 MCP 工具失败: %w", err)
-	}
-
-	renamed, err := renameMCPTools(ctx, baseTools, cfg.Name, m.tools)
-	if err != nil {
-		_ = cli.Close()
-		return 0, "tool_validation_failed", err
-	}
-	m.clients = append(m.clients, cli)
-	m.cancels = append(m.cancels, cancelConnection)
-	m.tools = append(m.tools, renamed...)
-	connected = true
-
-	zap.L().Info("已加载 MCP 工具",
-		zap.String("server", cfg.Name),
-		zap.Int("tool_count", len(baseTools)))
-
-	return len(renamed), "", nil
+	return config
 }
 
-// renamedTool 把 MCP 工具改名成 mcp-服务名-工具名，调用能力原样透传
-// 所有 MCP 工具均进入保留的 mcp- 命名空间，与内置工具的原名隔离
-type renamedTool struct {
-	tool.InvokableTool
-	name string
-}
-
-func (t renamedTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
-	info, err := t.InvokableTool.Info(ctx)
-	if err != nil || info == nil {
-		return info, err
+func filterTools(ctx context.Context, items []tool.Tool, server string, names []string) []tool.Tool {
+	if len(names) == 0 {
+		return items
 	}
-	cloned := *info
-	cloned.Name = t.name
-	return &cloned, nil
-}
-
-// renameMCPTools 规范化后检查所有已加载工具的名字，拒绝重名及未能进入命名空间的工具
-func renameMCPTools(ctx context.Context, items []tool.BaseTool, server string, existing []tool.BaseTool) ([]tool.BaseTool, error) {
-	names := make(map[string]struct{}, len(existing)+len(items))
-	for _, item := range existing {
-		info, err := item.Info(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("读取已加载工具名称失败: %w", err)
-		}
-		if info == nil || info.Name == "" {
-			return nil, fmt.Errorf("已加载工具名称为空")
-		}
-		if _, ok := names[info.Name]; ok {
-			return nil, fmt.Errorf("已加载工具重名: %q", info.Name)
-		}
-		names[info.Name] = struct{}{}
+	allowed := map[string]bool{}
+	for _, name := range names {
+		allowed[strings.TrimSpace(name)] = true
 	}
-	out := make([]tool.BaseTool, 0, len(items))
+	filtered := make([]tool.Tool, 0, len(items))
 	for _, item := range items {
-		if item == nil {
-			return nil, fmt.Errorf("MCP 服务器 %q 返回空工具", server)
+		declaration := item.Declaration()
+		if declaration == nil {
+			continue
 		}
-		info, err := item.Info(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("读取 MCP 服务器 %q 的工具名称失败: %w", server, err)
+		name := strings.TrimPrefix(declaration.Name, server+"_")
+		if allowed[name] || allowed[declaration.Name] {
+			filtered = append(filtered, item)
 		}
-		if info == nil || strings.TrimSpace(info.Name) == "" {
-			return nil, fmt.Errorf("MCP 服务器 %q 返回的工具名称为空", server)
-		}
-		invokable, ok := item.(tool.InvokableTool)
-		if !ok {
-			return nil, fmt.Errorf("MCP 工具 %q 不可调用", info.Name)
-		}
-		name := mcpToolName(server, info.Name)
-		if _, exists := names[name]; exists {
-			return nil, fmt.Errorf("MCP 工具规范化后重名 %q（服务器 %q，原工具 %q）", name, server, info.Name)
-		}
-		names[name] = struct{}{}
-		out = append(out, renamedTool{InvokableTool: invokable, name: name})
 	}
-	return out, nil
+	return filtered
 }
 
-// mcpToolName 生成 mcp-服务名-工具名，非法字符统一替换成连字符
-func mcpToolName(server string, toolName string) string {
-	return "mcp-" + sanitizeMCPName(server) + "-" + sanitizeMCPName(toolName)
-}
-
-func sanitizeMCPName(raw string) string {
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(raw) {
+func sanitizeName(raw string) string {
+	var builder strings.Builder
+	for _, item := range strings.TrimSpace(raw) {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
-			b.WriteRune(r)
+		case item >= 'a' && item <= 'z', item >= 'A' && item <= 'Z', item >= '0' && item <= '9', item == '_':
+			builder.WriteRune(item)
 		default:
-			b.WriteRune('-')
+			builder.WriteRune('-')
 		}
 	}
-	trimmed := strings.Trim(b.String(), "-")
-	if trimmed == "" {
+	name := strings.Trim(builder.String(), "-")
+	if name == "" {
 		return "unknown"
 	}
-	return trimmed
+	return name
 }
 
-// Statuses 返回本次加载的逐个服务实际状态
+// IsTool 判断工具名是否来自已加载的 MCP 服务
+func (m *Manager) IsTool(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.toolSet[name]
+}
+
+// SanitizeResult 把 MCP 图片结果固定为 image_ref，避免 Base64 挤进文本上下文
+func (m *Manager) SanitizeResult(ctx context.Context, name string, raw any) (any, error) {
+	if m == nil || m.refs == nil || !m.IsTool(name) {
+		return raw, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return raw, nil
+	}
+	var items []map[string]any
+	if json.Unmarshal(encoded, &items) != nil {
+		return raw, nil
+	}
+	changed := false
+	for index, item := range items {
+		if item["type"] != "image" {
+			continue
+		}
+		data, _ := item["data"].(string)
+		reader := base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))
+		ref, refErr := m.refs.CreateReady(ctx, name, reader, 10*1024*1024, nil)
+		text := ""
+		switch {
+		case refErr != nil:
+			text = fmt.Sprintf("图片保存失败：%v", refErr)
+		case !ref.Image:
+			text = "图片保存失败：返回内容不是支持的位图"
+		default:
+			text = "图片：" + ref.ImageRef() + "，可用 viewImage 按需查看"
+		}
+		items[index] = map[string]any{"type": "text", "text": text}
+		changed = true
+	}
+	if !changed {
+		return raw, nil
+	}
+	return items, nil
+}
+
+// Statuses 返回当前加载状态
 func (m *Manager) Statuses() []ServerStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return append([]ServerStatus(nil), m.statuses...)
 }
 
-// GetTools 获取所有MCP工具
-func (m *Manager) GetTools() []tool.BaseTool {
+// GetTools 返回已加载的工具
+func (m *Manager) GetTools() []tool.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.tools
+	return append([]tool.Tool(nil), m.tools...)
 }
 
-// Close 关闭所有MCP连接
+// Close 关闭所有 MCP 连接
 func (m *Manager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, cancel := range m.cancels {
-		cancel()
+	if m == nil {
+		return
 	}
-
-	for _, cli := range m.clients {
-		if err := cli.Close(); err != nil {
-			zap.L().Warn("关闭 MCP 客户端失败", zap.Error(err))
-		}
+	for _, toolset := range m.toolsets {
+		_ = toolset.Close()
 	}
-
-	m.clients = nil
-	m.cancels = nil
-	m.tools = nil
-	m.statuses = nil
 }

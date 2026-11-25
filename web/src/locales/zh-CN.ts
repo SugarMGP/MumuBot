@@ -682,6 +682,10 @@ const zhCN = {
       apiKeyRequired: "首次保存必须填写 API Key",
 
       reasoningEffort: "推理强度",
+      thinkingBudget: "思考预算",
+      thinkingBudgetHint: "留空表示不指定；-1 为动态思考，0 为关闭思考，正整数为 token 上限",
+      thinkingLevel: "思考等级",
+      thinkingBudgetValue: "预算 {{value}}",
 
       effortNone: "不指定",
       reasoningGroup: "上下文与推理参数",
@@ -958,12 +962,18 @@ const zhCN = {
       stdio: "Stdio",
     },
     modelProvider: {
+      gemini: "Gemini",
       openai_responses: "Responses",
       openai_chat_completions: "Chat Completions",
     },
     thinkingMode: {
       enabled: "开启推理",
       disabled: "关闭推理",
+    },
+    thinkingLevel: {
+      low: "低（low）",
+      medium: "中（medium）",
+      high: "高（high）",
     },
     reasoningEffort: {
       none: "无（none）",

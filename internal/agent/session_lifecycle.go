@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
 )
 
 // CompleteTurn 在成功完成一次思考后推进维护计数
@@ -50,7 +50,7 @@ func (s *Session) AppendLifeSelfCheck(ctx context.Context, mem *memory.Manager, 
 	if mem == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
-	msg := schema.UserAgenticMessage(systemNote("生活自检", text))
+	msg := agentic.UserAgenticMessage(systemNote("生活自检", text))
 	msg.Extra = map[string]any{"kind": "life_self_check"}
 	payload, err := sonic.Marshal(msg)
 	if err != nil {
@@ -71,7 +71,7 @@ func (s *Session) AppendMaintenanceHint(ctx context.Context, mem *memory.Manager
 	if mem == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
-	msg := schema.UserAgenticMessage(systemNote("维护提醒", text))
+	msg := agentic.UserAgenticMessage(systemNote("维护提醒", text))
 	msg.Extra = map[string]any{"kind": "maintenance_hint"}
 	payload, err := sonic.Marshal(msg)
 	if err != nil {

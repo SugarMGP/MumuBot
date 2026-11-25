@@ -178,9 +178,9 @@ cd worker && go build ./... && go vet ./...
 
 ## 核心架构约束
 
-- QQ 聊天和同步话题压缩共用 QQ 档案；life 和 worker 分别选择自己的档案并用于运行与摘要，可添加同名模型不同推理强度的档案，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
-- 模型档案独立选择 Responses（`/responses`）或 Chat Completions（`/chat/completions`），内部始终使用 `schema.AgenticMessage`。transcript 原样保存工具图片与 CallID；Chat 出站副本把图片移到整组工具回执后的 user 消息，Responses 原样发送。上下文窗口仍用于预算和压缩，程序不自动设置输出上限或固定输出预留。
-- Responses 使用 `reasoning.effort`，Chat 独立配置 `thinking.type` 与 `reasoning_effort`；强度支持省略或 none/low/medium/high/xhigh/max，原值发送。两种协议均支持最高优先级 Body JSON 递归覆盖，仅禁止顶层 `stream`；数组、标量、null 整值替换，null 不删除键。API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
+- QQ 聊天和同步话题压缩共用 QQ 档案；life 和 worker 分别选择自己的档案并用于运行与摘要，可添加同名模型不同推理配置的档案，但不保留 low、Embedding、后台 Memory Agent、`learning` 包或向量检索。
+- 模型档案独立选择 Responses（`/responses`）、Chat Completions（`/chat/completions`）或 Gemini，内部始终使用 `agentic.Message`。transcript 原样保存工具图片与 CallID；三种协议的模型出站副本都把工具结果媒体移到整组工具回执后的 user 消息（适配器不接受工具结果内嵌图片），不回写工作集。上下文窗口仍用于预算和压缩，程序不自动设置输出上限或固定输出预留。
+- Responses 使用 `reasoning.effort`，Chat 独立配置 `thinking.type` 与 `reasoning_effort`（DeepSeek 在携带 tools 时要求完整回传历史 `reasoning_content`，因此 Chat 始终回传），Gemini 独立配置 `thinking_budget` 与 `thinking_level`，两者都填时原样发送；Responses/Chat 强度支持省略或 none/low/medium/high/xhigh/max。三种协议均支持最高优先级 Body JSON 递归覆盖，仅禁止顶层 `stream`；数组、标量、null 整值替换，null 不删除键。API Key 使用 AES-256-GCM 加密落库，主密钥只放 `MUMU_SECRET_KEY`。
 - 回复决策保持单次 ReAct 运行，不拆 Planner/Replyer，不在主 ReAct 前新增模型分类；进入 ReAct 前由发言门控放行，进入后由 `stayQuiet` 或其他工具形成唯一行动结果。
 - 发言门控分两层：v1 按消息内容算意愿分（被提及、问句、纯媒体、自身近期发言占比、距上次发言时长、待处理条数，权重是写死常量），v2 用每会话 1 小时窗口把目标频率换算成放行阈值；直接提及强制放行，私聊不设门控，最终是否发言仍由模型决定。
 - 强提及和回复机器人在群内没有 think 运行时必须进入 ReAct；每群保持单任务串行，运行期间的新触发不创建 rerun，消息保留给后续正常调度。
@@ -204,8 +204,8 @@ cd worker && go build ./... && go vet ./...
 - `visible_seq` 表示模型请求成功时实际纳入的输入；新输入初始 `visible_seq=NULL`，请求失败不回滚；聊天失败批次等新输入，life 的所有运行失败最多补试两次，每次间隔五分钟。
 - 新生成的 assistant/tool 轨迹即使持久化成功也尚无 `visible_seq`；只有它后来真正进入另一个成功模型请求时才推进。不能把“已经产生轨迹”和“已经作为输入被模型读过”混成同一状态。
 - `visible_seq` 必须按模型请求中的真实消息顺序分配：代头在前、待处理输入在后；不要按数据库主键重新排序。
-- 消息写入 transcript 后必须把 `transcript_id` 标回同一内存消息；真实输入从 `state.Messages` 收集，不另维护侧面猜测列表。
-- 首次请求失败时的批次边界必须来自最后一次实际发出请求的 state；think 入口的 pending 快照只描述入口，不是请求事实。
+- 消息写入 transcript 后必须把 `transcript_id` 标回同一内存消息；真实输入从本次请求实际装配的消息收集，不另维护侧面猜测列表。
+- 首次请求失败时的批次边界必须来自最后一次实际发出请求的装配；think 入口的 pending 快照只描述入口，不是请求事实。
 - life/worker 摘要与 visible、检查点（life 还含代头替换）在同一事务提交；life 摘要保存在 `life_state.context_summary`，检查点不保存代头。摘要正文不是 file/ref 生命周期根，提示词必须说明 ref 可能随 transcript 根删除。
 - `sleepUntil` 只有在睡眠、起床安排和工具回执都成功后收尾当前回合；成功终结不能要求再消耗一次模型步数，失败仍保留真实失败并让模型在剩余预算内修正。
 - 聊天、life、worker 的一次 think 各取一份配置快照；连续消费、life 自检和允许的溢出重试共用同一剩余模型步数，换 runner 不补充预算。压缩器保留独立步数。
@@ -217,7 +217,7 @@ cd worker && go build ./... && go vet ./...
 - 消息正文进入上下文后不再变化：首次渲染写入 transcript，时间固定为 `YYYY-MM-DD HH:MM:SS`；当前时间、群信息和情感只由 `getCurrentStatus` 查询。
 - 工作便签已移除；跨轮临时状态由连续 transcript、checkpoint overview 和话题 open_loops 承担，不保留 `saveWorkingNote`、状态查询字段或后台入口。
 - 模型看到的正文就是展示正文，@、QQ 表情、语音、文件、卡片和媒体短哈希都保留；QQ 自带表情写成 `%qface:名称%`，不能退回纯文本或借用其他内部标记。
-- 每轮原样保存 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 使用同一 `schema.AgenticMessage` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。Chat 只在出站副本中移动工具图片，不回写工作集。
+- 每轮原样保存 reasoning、工具调用与全部工具结果，包括 `viewImage` 图片；transcript 使用同一 `agentic.Message` 编码，重启后按 payload 恢复，禁止重新渲染已入库的消息正文。模型出站副本单独移动工具媒体，不回写工作集。
 - 主上下文装配不静默截断 transcript；一轮 think 完整结束后，最后一条 assistant 的实际用量达到窗口 90% 时触发一次完整同步压缩，压缩阶段不设 token 目标或 55% 硬上限；注入阶段按摘要预算和近期原文比例控制占用。
 - 压缩器步数独立配置（默认 12 步），不设置整体模型超时；只能用当前会话的 `searchTopics`、`readTopic`、`searchHistory`、`readToolResult` 和一次 `finishCompaction`；不提供 `readHistory`。
 - 注入预算默认摘要 30%（含 overview、置顶记忆和话题）+ 最近原文 10%；摘要话题按 `active_topic_refs` 从尾部裁剪，固定部分超预算时保留并记录日志。
@@ -225,7 +225,7 @@ cd worker && go build ./... && go vet ./...
 - 压缩失败、参数遗漏、预算超限、数据库失败或提交结果不明时保留旧 transcript；参数不可用要作为可修正输入错误返回；失败后至少退避 60 秒，不能让模型带着超限上下文继续请求。首次模型请求失败后，同一批本地输入没有更新时不周期重跑；新真人消息、明确唤醒或新内部输入才重新调度。压缩需要执行却失败时先阻止主模型请求，冷却后由待处理批次重试压缩，成功才继续。
 - `conversation_tool_calls` 不存在；工具调用和结果直接是 `entry_kind=tool` 的 transcript 行。`run_id + call_id` 幂等，同 CallID 复用已有回执，不同 CallID 的重复搜索或多次发言不拦截。
 - 普通文本工具结果超过 2000 字符时，完整文本保存为内容寻址文件，模型只看到前 2000 字符、原文总长度、截断说明和 `result_ref`；`readToolResult`、`readSessionEntry`、`readDiary` 按显式请求的窗口返回，不二次截断。压缩器的工具结果也走同一外置规则，但没有 transcript 行。只有现存 transcript 的对话/执行轨迹引用闭包是工具结果文件的长期引用根；嵌套 ref 一并展开，最近孤儿只保自己、不为旧嵌套文件续命；最后一个引用删除后即时释放，未挂接孤儿至少保留 24 小时后再按启动/每日补扫清理。
-- 工具中间件只保留协议层：`ToolErrorMiddleware`、`UnknownToolsHandler`、参数规范化、顺序执行、`ReturnDirectly` 和终端错误；不要恢复全局 ToolAction/ToolDedup 或消费水位。
+- 工具协议层只保留 `BeforeTool`/`AfterTool` 回调、参数规范化、顺序执行、未知工具可纠正结果、`not_executed` 回执修复和终端错误；不要恢复全局 ToolAction/ToolDedup 或消费水位。
 - `conversation_targets.active/blocked` 是会话可用性事实源；启动、重连和每 5 分钟兜底同步，允许真实空列表。机器人退群/被踢和好友建立分别由事件即时纠正，好友删除靠兜底同步。
 - 事件直接并发分发；每个会话按到达顺序分配单调 `ArrivalSeq`，主动发言也进入同一序列。提交重排只使用 `ArrivalSeq`，OneBot `message_id` 只做不透明等值键，不能排序或当水位。
 - 解析失败、无效事件、未启用或拉黑会话通过跳过项消费序号，保证重排器不死等；提交等待队列必须有界，越过的序号不留下永久缺口。
@@ -251,7 +251,7 @@ cd worker && go build ./... && go vet ./...
 - 话题用 active/dormant 表示工作状态，所有话题都按同一条指数遗忘曲线计时，另用 `forgotten_at` 表示已遗忘；置顶只适用于记忆。摘要不可变且按版本保存，消息来源用 `is_anchor` 标记关键消息，来源行另存 OneBot 消息 ID 与事件时间；撤回不改写、不使话题失效。
 - `context_compaction_checkpoints.active_topic_versions` 保持稳定顺序；dormant 话题不进入当前摘要块但始终可搜索。话题是否继续保留由遗忘曲线决定，未完成事项不再享受永久保护；程序不把 open_loops 机械搬进 overview 续命，压缩模型只按真实状态保留有意义的未完事项。
 - `overview` 是会话级滚动概览，不是新 Agent；压缩器必须写结论、不确定性、纠正、边界、动作结果和未完成事项，程序不静默截断摘要。
-- 空库初始化到 v18；当前 v17 按显式事务升级到 v18 并保留数据，当前 v18 校验后复用，更早的 schema 明确拒绝；不保留旧迁移、旧证据、关系或学习水位表，也不回填伪造的旧 assistant/tool 轨迹。
+- 空库初始化到 v20；当前 v17/v18/v19 按显式事务链升级并保留数据，已是 v20 时校验后复用，更早的 schema 明确拒绝；不保留旧迁移、旧证据、关系或学习水位表，也不回填伪造的旧 assistant/tool 轨迹。
 - 跨会话检索允许用于记忆、话题和历史；记忆正文不保存来源，历史/话题结果必须带群聊或好友来源；不建立 ACL、visibility 或敏感等级表，披露约束写在系统提示与工具说明中。
 - 人格内容统一走 `persona_presets`（人格 + 共同规则 + QQ 聊天 + 生活职责 + 工作职责），内置预设由代码文本在启动时同步；不再保留 `app_config` 里的人格模板和别名、兴趣字段。
 - 人格保留统一身份、性格、价值观与自然表达；共同规则统一事实、隐私、主人授权和协作边界。三个场合职责各写自己的工作，不复制共用工具手册；文本保留嘱托式语气，不改成机械命令清单。
@@ -270,7 +270,7 @@ cd worker && go build ./... && go vet ./...
 - 长期记忆检索支持 `mode=exact|fuzzy`：exact 用 `content/label/subject_target` 精确子串，fuzzy 用 `pg_trgm` 召回并按 similarity 排序；历史原文使用 `text_content/display_content` 的精确子串召回，`pg_trgm` 只用于排序。空关键词可浏览，失败不伪造结果。
 - Agent 历史查询使用不透明 cursor 和全局 OneBot message ID；话题历史按 `topic_assignments` 和 `topic_summary_sources` 读取，范围不能越过工具快照。历史/话题/记忆工具的时间范围统一走 `internal/schedule.ParseRange`：纯日期上界包含结束日，内部归一到次日零点；单条 transcript 全文用 `readSessionEntry`。
 - 持久化使用 PostgreSQL 18；先打开数据库、完成 schema 迁移、动态配置、人格预设和管理后台，再异步等待 OneBot 取得 `self_id` 并创建 Agent；QQ 未登录时后台仍可配置，首次配置模型且 Agent 激活前事件门保持关闭。
-- schema 由 `schema_migrations` 记录并为 v19；空库初始化，当前 v17/v18 显式事务升级并保留业务数据，已是 v19 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
+- schema 由 `schema_migrations` 记录并为 v20；空库初始化，当前 v17/v18/v19 显式事务升级并保留业务数据，已是 v20 时校验后复用，更早的 schema 明确拒绝。迁移使用 advisory lock、事务和显式 SQL，不使用 AutoMigrate。
 - 项目兼容 NapCat 与 SnowLuma；SnowLuma 的 forward 段由 SDK 回源补拉。OneBot `message_id` 只做等值去重、回复与撤回，不假设递增或稳定排序；所有内部范围使用 `message_logs.id` 或 `ArrivalSeq`。
 - 模型切换前统一检查目标协议兼容性和实际工作集容量；同窗口或扩大窗口只在确实超限时整理，主动缩窗保留提前整理线。切换容量只复用同一档案版本中仍完整对应当前请求前缀的用量。不兼容轨迹先用原模型整理，旧阶段最多 180 秒；模型调用或有效输出失败后由完整目标配置接管，目标模型连续 360 秒无生成进展则停止切换。目标模型只接收可见正文、工具调用结果、图片和未完成事项，不转交旧 reasoning 文本、reasoning 摘要或签名占位。覆盖末尾不兼容块与完整工具链，不做普通运行的 reasoning 出站过滤。通常保留待处理输入；life/worker 必须越过它们才能覆盖不兼容轨迹时，可由真实摘要请求读取并原子记为已读，未完成事项保存进摘要。QQ 协议整理允许未 visible 的已完成输出和无真人来源的概览更新，在同一事务分配 visible、保存检查点并删除覆盖轨迹。QQ 离线和未激活也走同一流程；失败不切换，已成功提交的批次或会话摘要不整体回滚。切换的受影响回合共用一次 60 秒等待期，之后只取消在途模型 HTTP 请求，流读取到结束/关闭才注销取消句柄；不取消工具上下文。切换让路不记作 life 业务失败或 worker 任务完成。被中断的 worker 保留任务，等待 life 明确续办；其他待处理输入在成功切换后按现有许可恢复调度。
 - 管理后台日志与模型统计口径保持现有约束。`message_logs`、合并转发和聊天媒体默认保留 180 天，实际最低期限由后台 `history_days` 决定；仍在 transcript 直接引用的过期原文延后删除，正常压缩解除引用后再清理。摘要、记忆、日记和收藏表情有各自的保留含义，不等同于原文清理。

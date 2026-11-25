@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/persona"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/schema"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func capacityTargets(ctx context.Context, mem *memory.Manager, role string) ([]memory.ConversationTarget, error) {
@@ -42,7 +43,7 @@ func capacityTargets(ctx context.Context, mem *memory.Manager, role string) ([]m
 }
 
 // previewPersistedMessages 只读拼装切换检查用的工作集；没有旧交互时返回空
-func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *persona.Persona, kind string, targetID int64) ([]*schema.AgenticMessage, error) {
+func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *persona.Persona, kind string, targetID int64) ([]*agentic.Message, error) {
 	checkpoint, err := mem.GetCheckpoint(ctx, kind, targetID)
 	if err != nil {
 		return nil, err
@@ -87,12 +88,12 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	if err != nil {
 		return nil, err
 	}
-	messages := make([]*schema.AgenticMessage, 0, len(visible)+len(pending)+6)
+	messages := make([]*agentic.Message, 0, len(visible)+len(pending)+6)
 	hasSystem := false
 	hasDigest := false
 	hasPinned := false
 	for _, entry := range visible {
-		var msg schema.AgenticMessage
+		var msg agentic.Message
 		if err := sonic.Unmarshal(entry.Payload, &msg); err != nil {
 			return nil, fmt.Errorf("解析 %s:%d 持久工作集失败: %w", kind, targetID, err)
 		}
@@ -107,7 +108,7 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 		}
 		messages = append(messages, &msg)
 	}
-	head := make([]*schema.AgenticMessage, 0, 6)
+	head := make([]*agentic.Message, 0, 6)
 	if !hasSystem {
 		head = append(head, previewSystemMessage(p, kind, targetID))
 	}
@@ -130,14 +131,14 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 				digestText = checkpoint.Overview
 			}
 			if text := strings.TrimSpace(digestText); text != "" {
-				note := schema.UserAgenticMessage(systemNote("上下文摘要", text))
+				note := agentic.UserAgenticMessage(systemNote("上下文摘要", text))
 				note.Extra = map[string]any{"kind": kindContextDigest}
 				head = append(head, note)
 			}
 		}
 		if !hasPinned {
 			if strings.TrimSpace(pinnedText) != "" {
-				note := schema.UserAgenticMessage(systemNote("长期记忆", pinnedText))
+				note := agentic.UserAgenticMessage(systemNote("长期记忆", pinnedText))
 				note.Extra = map[string]any{"kind": kindPinnedMemory}
 				head = append(head, note)
 			}
@@ -152,7 +153,7 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 					}
 				}
 				if !hasNote {
-					note := schema.UserAgenticMessage(systemNote("群说明", extra))
+					note := agentic.UserAgenticMessage(systemNote("群说明", extra))
 					note.Extra = map[string]any{"kind": kindGroupNote}
 					head = append(head, note)
 				}
@@ -165,13 +166,13 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 			return nil, pinnedErr
 		}
 		if text := strings.TrimSpace(renderPinnedMemories(pinned)); text != "" {
-			note := schema.UserAgenticMessage(systemNote("长期记忆", text))
+			note := agentic.UserAgenticMessage(systemNote("长期记忆", text))
 			note.Extra = map[string]any{"kind": kindPinnedMemory}
 			head = append(head, note)
 		}
 	}
 	if len(summary) > 0 {
-		var summaryMessages []*schema.AgenticMessage
+		var summaryMessages []*agentic.Message
 		if err := sonic.Unmarshal(summary, &summaryMessages); err != nil {
 			return nil, fmt.Errorf("解析 %s:%d 摘要检查点失败: %w", kind, targetID, err)
 		}
@@ -179,7 +180,7 @@ func previewPersistedMessages(ctx context.Context, mem *memory.Manager, p *perso
 	}
 	messages = append(head, messages...)
 	for _, entry := range pending {
-		var msg schema.AgenticMessage
+		var msg agentic.Message
 		if err := sonic.Unmarshal(entry.Payload, &msg); err != nil {
 			return nil, fmt.Errorf("解析 %s:%d 待处理输入失败: %w", kind, targetID, err)
 		}
@@ -204,14 +205,14 @@ func hasSwitchHistory(entries []memory.TranscriptEntry) bool {
 	return false
 }
 
-func previewSystemMessage(p *persona.Persona, kind string, targetID int64) *schema.AgenticMessage {
-	system := schema.SystemAgenticMessage(p.SessionInstruction(kind, targetID))
+func previewSystemMessage(p *persona.Persona, kind string, targetID int64) *agentic.Message {
+	system := agentic.SystemAgenticMessage(p.SessionInstruction(kind, targetID))
 	system.Extra = map[string]any{"kind": kindSystemPrompt}
 	return system
 }
 
 // switchContextCheck 共用硬窗口限制；提前整理线只适用于主动缩窗
-func (s *Session) switchContextCheck(messages []*schema.AgenticMessage, tools []*schema.ToolInfo, target ModelTarget, triggerRatio float64) (incompatible, needsCapacity bool, tokens int) {
+func (s *Session) switchContextCheck(messages []*agentic.Message, tools []*tool.Declaration, target ModelTarget, triggerRatio float64) (incompatible, needsCapacity bool, tokens int) {
 	if len(messages) == 0 {
 		return false, false, 0
 	}

@@ -202,7 +202,7 @@ func (a *Agent) thinkGroup(groupID int64) {
 		zap.L().Warn("群聊本轮步数已用完", zap.Int64("group_id", groupID))
 		return
 	}
-	chatAgent, err := a.newChatAgent(generation, generation.groupTools, state.steps.Remaining())
+	chatAgent, err := a.newChatAgent(generation, generation.groupTools)
 	if err != nil {
 		zap.L().Warn("构建群聊运行态失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
@@ -212,12 +212,12 @@ func (a *Agent) thinkGroup(groupID int64) {
 		zap.L().Warn("装配群聊上下文失败", zap.Int64("group_id", groupID), zap.Error(err))
 		return
 	}
-	if runErr := a.runAgent(ctx, chatAgent, messages); runErr != nil {
+	if runErr := a.runAgent(ctx, chatAgent, generation.groupTools, messages); runErr != nil {
 		if errors.Is(runErr, errModelSwitchPending) {
 			return
 		}
 		if isContextOverflowError(runErr) {
-			if a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, a.passthroughModelInput, session) {
+			if a.compactAfterOverflow(ctx, memory.ConversationKindGroup, groupID, generation.groupTools, session) {
 				if tc != nil {
 					tc.TopicMaintained = true
 				}

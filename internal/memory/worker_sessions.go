@@ -20,7 +20,7 @@ const (
 	WorkerModelSwitchInterruption = "model_switch_interrupted"
 )
 
-// WorkerSession 保存一个 worker 的元数据和 eino 上下文检查点
+// WorkerSession 保存一个 worker 的元数据和 上下文检查点
 type WorkerSession struct {
 	ID               uint            `gorm:"column:id;primaryKey" json:"id"`
 	Title            string          `gorm:"column:title;type:text;not null" json:"title"`

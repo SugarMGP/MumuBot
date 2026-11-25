@@ -7,14 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/persona"
 	"mumu-bot/internal/tools"
 
 	"github.com/bytedance/sonic"
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/adk/middlewares/summarization"
-	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
 )
 
@@ -95,7 +93,7 @@ func (a *Agent) thinkLife(targetID int64) {
 			failure = fmt.Errorf("本轮步数用完")
 			return
 		}
-		lifeAgent, agentErr := a.newLifeAgent(ctx, generation, generation.lifeTools, state.steps.Remaining())
+		lifeAgent, agentErr := a.newLifeAgent(generation, generation.lifeTools)
 		if agentErr != nil {
 			zap.L().Warn("构建 life 运行态失败", zap.Error(agentErr))
 			failure = agentErr
@@ -107,7 +105,7 @@ func (a *Agent) thinkLife(targetID int64) {
 			failure, failureCode = assembleErr, "life_context_failed"
 			return
 		}
-		if runErr := a.runAgent(ctx, lifeAgent, messages); runErr != nil {
+		if runErr := a.runAgent(ctx, lifeAgent, generation.lifeTools, messages); runErr != nil {
 			if errors.Is(runErr, errModelSwitchPending) {
 				return
 			}
@@ -218,7 +216,7 @@ func (a *Agent) lifeInstructionText(ctx context.Context) string {
 }
 
 // assembleLifeMessages 装配代头 + 摘要检查点 + 检查点之后的 transcript 与待处理输入
-func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*schema.AgenticMessage, error) {
+func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*agentic.Message, error) {
 	row, err := a.memory.GetLifeState(ctx)
 	if err != nil {
 		return nil, err
@@ -227,7 +225,7 @@ func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*
 		return nil, err
 	}
 	through := row.ContextThroughID
-	checkpoint := make([]*schema.AgenticMessage, 0)
+	checkpoint := make([]*agentic.Message, 0)
 	hasCheckpoint := len(row.ContextSummary) > 0 && string(row.ContextSummary) != "[]"
 	if hasCheckpoint {
 		if err := sonic.Unmarshal(row.ContextSummary, &checkpoint); err != nil {
@@ -243,7 +241,7 @@ func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*
 	pending := append([]*sessionUser(nil), session.pending...)
 	session.mu.Unlock()
 
-	messages := make([]*schema.AgenticMessage, 0, len(entries)+len(pending)+len(checkpoint))
+	messages := make([]*agentic.Message, 0, len(entries)+len(pending)+len(checkpoint))
 	heads := make([]sessionEntry, 0, 4)
 	rest := make([]sessionEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -289,67 +287,9 @@ func (a *Agent) assembleLifeMessages(ctx context.Context, session *Session) ([]*
 	return messages, nil
 }
 
-// newLifeSummarizer 使用生活模型的 Eino 摘要；检查点只保存摘要正文，
-// 代头在 Finalize 里装入当前请求，换代后不留旧人格
-func (a *Agent) newLifeSummarizer(ctx context.Context, generation *Generation) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
-	if generation == nil || generation.lifeModel.contextWindow <= 0 {
-		return nil, nil
-	}
-	cfg := configFor(ctx)
-	ratio := cfg.Compactor.TriggerRatio
-	if ratio <= 0 {
-		return nil, nil
-	}
-	triggerTokens := int(float64(generation.lifeModel.contextWindow) * ratio)
-	if triggerTokens <= 0 {
-		return nil, nil
-	}
-	var pendingHead []*schema.AgenticMessage
-	var inputBuilder summarization.TypedGenModelInputFunc[*schema.AgenticMessage]
-	if attempt := switchAttemptFrom(ctx); attempt != nil && attempt.portable {
-		inputBuilder = switchSummaryInput
-	}
-	return summarization.NewTyped(a.ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
-		Model:           generation.lifeModel.model,
-		Trigger:         &summarization.TriggerCondition{ContextTokens: triggerTokens},
-		UserInstruction: persona.Render(lifeSummaryInstruction, persona.IdentityFromConfig(cfg.Identity)),
-		GenModelInput:   inputBuilder,
-		Finalize: func(ctx context.Context, _ []*schema.AgenticMessage, summary *schema.AgenticMessage) ([]*schema.AgenticMessage, error) {
-			text := strings.TrimSpace(agenticMessageText(summary))
-			if text == "" {
-				return nil, &compactionInputError{Err: fmt.Errorf("life 摘要正文为空，保留原上下文")}
-			}
-			head, err := buildLifeHead(ctx, a.memory.WithContext(ctx), a.lifeInstructionText(ctx))
-			if err != nil {
-				return nil, err
-			}
-			pendingHead = head
-			// 摘要作为背景系统行，不再附带“继续旧任务”的默认编码助手收尾
-			note := schema.UserAgenticMessage(systemNote("上下文摘要", text))
-			note.Extra = map[string]any{"kind": kindLifeSummary}
-			return append(append(make([]*schema.AgenticMessage, 0, len(head)+1), head...), note), nil
-		},
-		Callback: func(ctx context.Context, before, after adk.TypedChatModelAgentState[*schema.AgenticMessage]) error {
-			tc := tools.GetToolContext(ctx)
-			if tc == nil || tc.Session == nil {
-				return fmt.Errorf("life 摘要缺少工具上下文")
-			}
-			session, ok := tc.Session.(*Session)
-			if !ok || session == nil {
-				return fmt.Errorf("life 摘要缺少会话")
-			}
-			head := pendingHead
-			pendingHead = nil
-			commitCtx, cancel := switchCommitContext(ctx)
-			defer cancel()
-			return a.saveLifeContext(commitCtx, session, before, after, head)
-		},
-	})
-}
-
 // saveLifeContext 在同一事务里推进摘要边界、可见序号和代头，成功后再同步内存
-func (a *Agent) saveLifeContext(ctx context.Context, session *Session, before, after adk.TypedChatModelAgentState[*schema.AgenticMessage], head []*schema.AgenticMessage) error {
-	ids := transcriptIDs(before.Messages)
+func (a *Agent) saveLifeContext(ctx context.Context, session *Session, before, after, head []*agentic.Message) error {
+	ids := transcriptIDs(before)
 	row, err := a.memory.GetLifeState(ctx)
 	if err != nil {
 		return err
@@ -360,7 +300,7 @@ func (a *Agent) saveLifeContext(ctx context.Context, session *Session, before, a
 			through = id
 		}
 	}
-	payload, err := sonic.Marshal(stripHeadEntries(after.Messages))
+	payload, err := sonic.Marshal(stripHeadEntries(after))
 	if err != nil {
 		return err
 	}

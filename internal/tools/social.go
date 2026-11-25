@@ -9,15 +9,14 @@ import (
 	"mumu-bot/internal/media"
 	workerproto "mumu-bot/worker/proto"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
 	ob "github.com/zjutjh/onebot-sdk"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type SetSelfProfileInput struct {
-	Field    string `json:"field" jsonschema:"description=avatar、nickname 或 signature，一次只改一个"`
-	ImageRef string `json:"image_ref,omitempty" jsonschema:"description=field=avatar 时必填的图片引用"`
-	Value    string `json:"value,omitempty" jsonschema:"description=field=nickname 或 signature 时的新内容"`
+	Field    string `json:"field" description:"avatar、nickname 或 signature，一次只改一个"`
+	ImageRef string `json:"image_ref,omitempty" description:"field=avatar 时必填的图片引用"`
+	Value    string `json:"value,omitempty" description:"field=nickname 或 signature 时的新内容"`
 }
 
 type SetSelfProfileOutput struct {
@@ -93,6 +92,6 @@ func socialError(err error) error {
 	return err
 }
 
-func NewSetSelfProfileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("setSelfProfile", "一次修改自己的一个资料字段：avatar 用 image_ref，nickname 或 signature 用 value；不提交其他字段覆盖旧值。", setSelfProfile)
+func NewSetSelfProfileTool() (tool.Tool, error) {
+	return newFunctionTool("setSelfProfile", "一次修改自己的一个资料字段：avatar 用 image_ref，nickname 或 signature 用 value；不提交其他字段覆盖旧值。", setSelfProfile)
 }

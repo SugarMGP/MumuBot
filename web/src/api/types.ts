@@ -343,8 +343,9 @@ export interface SettingsData {
   secret_configured: boolean;
 }
 
-export type ModelProvider = "openai_responses" | "openai_chat_completions";
+export type ModelProvider = "openai_responses" | "openai_chat_completions" | "gemini";
 export type ThinkingMode = "" | "enabled" | "disabled";
+export type ThinkingLevel = "" | "low" | "medium" | "high";
 
 export interface ModelProfile {
   id: number;
@@ -355,6 +356,8 @@ export interface ModelProfile {
   context_window: number;
   reasoning_effort: string;
   thinking_mode: ThinkingMode;
+  thinking_budget: number | null;
+  thinking_level: ThinkingLevel;
   body_override: string;
   api_key_hint: string;
   version: number;

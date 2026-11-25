@@ -12,8 +12,7 @@ import (
 	"mumu-bot/internal/media"
 	"mumu-bot/internal/refstore"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ensureReadyRef 在首次读取/发送/查看时把 QQ pending ref 固定成快照
@@ -65,9 +64,9 @@ func ensureReadyRef(ctx context.Context, tc *ToolContext, token string) (*refsto
 }
 
 type ChatReadFileInput struct {
-	FileRef string `json:"file_ref" jsonschema:"description=消息正文里的 file_ref 或 image_ref"`
-	Offset  int    `json:"offset,omitempty" jsonschema:"description=从第几个 Unicode 字符开始，默认 0"`
-	Length  int    `json:"length,omitempty" jsonschema:"description=本段最多读取多少字符，默认 4000，最大 8000"`
+	FileRef string `json:"file_ref" description:"消息正文里的 file_ref 或 image_ref"`
+	Offset  int    `json:"offset,omitempty" description:"从第几个 Unicode 字符开始，默认 0"`
+	Length  int    `json:"length,omitempty" description:"本段最多读取多少字符，默认 4000，最大 8000"`
 }
 
 type ChatReadFileOutput struct {
@@ -107,13 +106,13 @@ func chatReadFile(ctx context.Context, input *ChatReadFileInput) (*ChatReadFileO
 	}, nil
 }
 
-func NewChatReadFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readFile", "读取当前会话文件引用的 UTF-8 文本窗口，默认 4000、最大 8000 字符；不能浏览个人 home。", chatReadFile)
+func NewChatReadFileTool() (tool.Tool, error) {
+	return newFunctionTool("readFile", "读取当前会话文件引用的 UTF-8 文本窗口，默认 4000、最大 8000 字符；不能浏览个人 home。", chatReadFile)
 }
 
 type ChatSendFileInput struct {
-	FileRef string `json:"file_ref" jsonschema:"description=要发到当前会话的 file_ref 或 image_ref"`
-	Name    string `json:"name,omitempty" jsonschema:"description=可选发送文件名，不改变旧 ref 的元数据"`
+	FileRef string `json:"file_ref" description:"要发到当前会话的 file_ref 或 image_ref"`
+	Name    string `json:"name,omitempty" description:"可选发送文件名，不改变旧 ref 的元数据"`
 }
 
 type ChatSendFileOutput struct {
@@ -161,8 +160,8 @@ func chatSendFile(ctx context.Context, input *ChatSendFileInput) (*ChatSendFileO
 	return &ChatSendFileOutput{Success: true, FileID: result.FileID, FileRef: ref.FileRef(), ImageRef: imageRef, Name: result.Name, Size: result.Size}, nil
 }
 
-func NewChatSendFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sendFile", "把可用的 file_ref/image_ref 作为文件发到当前 QQ 会话，也可以发送 life 转来的 worker 产物；不接受路径或跨会话目标。首次使用待取引用会真实下载，成功回执只有 file_id，不能伪造 QQ 消息 ID。", chatSendFile)
+func NewChatSendFileTool() (tool.Tool, error) {
+	return newFunctionTool("sendFile", "把可用的 file_ref/image_ref 作为文件发到当前 QQ 会话，也可以发送 life 转来的 worker 产物；不接受路径或跨会话目标。首次使用待取引用会真实下载，成功回执只有 file_id，不能伪造 QQ 消息 ID。", chatSendFile)
 }
 
 // refImageBytes 读取并验证图片资格，file_ref 也不能绕过实际位图检查

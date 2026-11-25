@@ -9,8 +9,7 @@ import (
 	"mumu-bot/internal/memory"
 	"mumu-bot/internal/schedule"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // requireLifeContext 只有生活主线可以读写自己的生活状态
@@ -26,10 +25,10 @@ func requireLifeContext(ctx context.Context) (*ToolContext, *memory.Manager, err
 }
 
 type PlanNextInput struct {
-	At           string `json:"at,omitempty" jsonschema:"description=下一次回来看看的时间，RFC3339 或 2006-01-02 15:04:05；与 after_minutes 二选一"`
-	AfterMinutes int    `json:"after_minutes,omitempty" jsonschema:"description=多少分钟后回来看看；与 at 二选一"`
-	Activity     string `json:"activity" jsonschema:"description=接下来想做什么，一句话"`
-	Note         string `json:"note,omitempty" jsonschema:"description=留给未来自己的话，说明为什么这时回来"`
+	At           string `json:"at,omitempty" description:"下一次回来看看的时间，RFC3339 或 2006-01-02 15:04:05；与 after_minutes 二选一"`
+	AfterMinutes int    `json:"after_minutes,omitempty" description:"多少分钟后回来看看；与 at 二选一"`
+	Activity     string `json:"activity" description:"接下来想做什么，一句话"`
+	Note         string `json:"note,omitempty" description:"留给未来自己的话，说明为什么这时回来"`
 }
 
 type PlanNextOutput struct {
@@ -66,13 +65,13 @@ func planNext(ctx context.Context, input *PlanNextInput) (*PlanNextOutput, error
 }
 
 type ManageScheduleInput struct {
-	Action       string `json:"action" jsonschema:"description=list/create/update/cancel"`
-	ScheduleID   uint   `json:"schedule_id,omitempty" jsonschema:"description=update 与 cancel 需要"`
-	Text         string `json:"text,omitempty" jsonschema:"description=这条时间事项的说明，到点时给未来自己看"`
-	At           string `json:"at,omitempty" jsonschema:"description=一次性时间，RFC3339 或 2006-01-02 15:04:05"`
-	AfterMinutes int    `json:"after_minutes,omitempty" jsonschema:"description=多少分钟后，与 at 二选一"`
-	Cron         string `json:"cron,omitempty" jsonschema:"description=五段重复规则：分 时 日 月 周；如每天 9 点=0 9 * * *，周一 9 点=0 9 * * 1。Asia/Shanghai，到期自动推进；与 at/after_minutes 二选一"`
-	Enabled      *bool  `json:"enabled,omitempty" jsonschema:"description=update 时可选，false 表示停用"`
+	Action       string `json:"action" description:"list/create/update/cancel"`
+	ScheduleID   uint   `json:"schedule_id,omitempty" description:"update 与 cancel 需要"`
+	Text         string `json:"text,omitempty" description:"这条时间事项的说明，到点时给未来自己看"`
+	At           string `json:"at,omitempty" description:"一次性时间，RFC3339 或 2006-01-02 15:04:05"`
+	AfterMinutes int    `json:"after_minutes,omitempty" description:"多少分钟后，与 at 二选一"`
+	Cron         string `json:"cron,omitempty" description:"五段重复规则：分 时 日 月 周；如每天 9 点=0 9 * * *，周一 9 点=0 9 * * 1。Asia/Shanghai，到期自动推进；与 at/after_minutes 二选一"`
+	Enabled      *bool  `json:"enabled,omitempty" description:"update 时可选，false 表示停用"`
 }
 
 type ScheduleView struct {
@@ -250,9 +249,9 @@ func ensureLifeSchedule(ctx context.Context, mem *memory.Manager, id uint) error
 }
 
 type SleepUntilInput struct {
-	Until        string `json:"until,omitempty" jsonschema:"description=睡到什么时候，RFC3339 或 2006-01-02 15:04:05；与 after_minutes 二选一"`
-	AfterMinutes int    `json:"after_minutes,omitempty" jsonschema:"description=睡多少分钟；与 until 二选一"`
-	Note         string `json:"note,omitempty" jsonschema:"description=醒来时留给自己的话"`
+	Until        string `json:"until,omitempty" description:"睡到什么时候，RFC3339 或 2006-01-02 15:04:05；与 after_minutes 二选一"`
+	AfterMinutes int    `json:"after_minutes,omitempty" description:"睡多少分钟；与 until 二选一"`
+	Note         string `json:"note,omitempty" description:"醒来时留给自己的话"`
 }
 
 type SleepUntilOutput struct {
@@ -322,18 +321,18 @@ func wakeUp(ctx context.Context, _ *WakeUpInput) (*WakeUpOutput, error) {
 	return &WakeUpOutput{Success: true, WokeAt: schedule.Format(now), SleepSummary: summary}, nil
 }
 
-func NewPlanNextTool() (tool.InvokableTool, error) {
-	return utils.InferTool("planNext", "更新当前活动，并设置或替换下一次回来看的单次时间；只管下一次，不会自动重复。固定重复事项用 manageSchedule 的 cron。", planNext)
+func NewPlanNextTool() (tool.Tool, error) {
+	return newFunctionTool("planNext", "更新当前活动，并设置或替换下一次回来看的单次时间；只管下一次，不会自动重复。固定重复事项用 manageSchedule 的 cron。", planNext)
 }
 
-func NewManageScheduleTool() (tool.InvokableTool, error) {
-	return utils.InferTool("manageSchedule", "管理独立约定或重复事项：一次性用 at/after_minutes，每天或每周等固定事项用 cron，一次建立后自动推进，不必每回再建。列出、创建、修改或取消日程。purpose 为 next 的是下一次查看（planNext 的固定槽位），wake 是睡眠中的起床安排，commitment 是独立事项；允许统一修改固定槽位，修改或取消后用途会随醒睡状态重新派生。", manageSchedule)
+func NewManageScheduleTool() (tool.Tool, error) {
+	return newFunctionTool("manageSchedule", "管理独立约定或重复事项：一次性用 at/after_minutes，每天或每周等固定事项用 cron，一次建立后自动推进，不必每回再建。列出、创建、修改或取消日程。purpose 为 next 的是下一次查看（planNext 的固定槽位），wake 是睡眠中的起床安排，commitment 是独立事项；允许统一修改固定槽位，修改或取消后用途会随醒睡状态重新派生。", manageSchedule)
 }
 
-func NewSleepUntilTool() (tool.InvokableTool, error) {
-	return utils.InferTool("sleepUntil", "准备睡眠并保存起床时间；到点由程序恢复醒着的状态并提醒你。", sleepUntil)
+func NewSleepUntilTool() (tool.Tool, error) {
+	return newFunctionTool("sleepUntil", "准备睡眠并保存起床时间；到点由程序恢复醒着的状态并提醒你。", sleepUntil)
 }
 
-func NewWakeUpTool() (tool.InvokableTool, error) {
-	return utils.InferTool("wakeUp", "提前结束睡眠，停用起床安排并记录真实醒来时间。", wakeUp)
+func NewWakeUpTool() (tool.Tool, error) {
+	return newFunctionTool("wakeUp", "提前结束睡眠，停用起床安排并记录真实醒来时间。", wakeUp)
 }

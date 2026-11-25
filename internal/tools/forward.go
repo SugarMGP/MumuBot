@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ==================== 读取合并转发工具 ====================
 
 // ReadForwardInput 读取合并转发内容的参数
 type ReadForwardInput struct {
-	ID    string `json:"id" jsonschema:"description=合并转发句柄，来自消息里的合并转发占位"`
-	Index *int   `json:"index,omitempty" jsonschema:"description=要看的第几条消息，从 0 开始；留空先看这份转发里有哪些消息"`
+	ID    string `json:"id" description:"合并转发句柄，来自消息里的合并转发占位"`
+	Index *int   `json:"index,omitempty" description:"要看的第几条消息，从 0 开始；留空先看这份转发里有哪些消息"`
 }
 
 // ForwardMessageSummary 转发里一条消息的概览
@@ -60,8 +59,8 @@ func readForwardFunc(ctx context.Context, input *ReadForwardInput) (any, error) 
 }
 
 // NewReadForwardTool 返回逐层翻阅合并转发内容的工具
-func NewReadForwardTool() (tool.InvokableTool, error) {
-	return utils.InferTool(
+func NewReadForwardTool() (tool.Tool, error) {
+	return newFunctionTool(
 		"readForward",
 		"查看合并转发里的内容。消息里的合并转发占位带着句柄，先用 readForward 列出这份转发里有哪些消息，再带上 index 看某一条的具体内容；转发里如果还有嵌套转发，会给出新的句柄，可以继续往下翻。具体节点的可用附件会给出 file_ref 或 image_ref，可交给现有文件或看图工具；不可取原因会明确返回。",
 		readForwardFunc,

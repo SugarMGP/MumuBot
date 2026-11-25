@@ -12,81 +12,80 @@ import (
 	"mumu-bot/internal/refstore"
 	"mumu-bot/internal/schedule"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type SearchMemoryInputV2 struct {
-	Keywords        []string `json:"keywords,omitempty" jsonschema:"description=按需要提供关键词；匹配正文、标签和主体，不会自动扩展昵称或别名；空数组可浏览"`
-	Match           string   `json:"match,omitempty" jsonschema:"description=or 或 and，默认 or"`
-	Mode            string   `json:"mode,omitempty" jsonschema:"description=exact 或 fuzzy，默认 exact；只有需要放宽匹配时再用 fuzzy"`
-	ExcludeKeywords []string `json:"exclude_keywords,omitempty" jsonschema:"description=排除关键词"`
-	SubjectType     string   `json:"subject_type,omitempty" jsonschema:"description=group/user/self/object"`
-	SubjectTarget   string   `json:"subject_target,omitempty" jsonschema:"description=user 填 QQ 号，group 填群号，object 填新梗/事物/项目名称，self 固定为 self"`
-	MemoryType      string   `json:"memory_type,omitempty" jsonschema:"description=profile 是稳定定义/身份/偏好/结论，experience 是具体经历与约定"`
-	UpdatedFrom     string   `json:"updated_from,omitempty" jsonschema:"description=更新时间下限，格式 2006-01-02 或 RFC3339"`
-	UpdatedTo       string   `json:"updated_to,omitempty" jsonschema:"description=更新时间上限，格式 2006-01-02 或 RFC3339"`
-	Cursor          string   `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
-	Limit           int      `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	Keywords        []string `json:"keywords,omitempty" description:"按需要提供关键词；匹配正文、标签和主体，不会自动扩展昵称或别名；空数组可浏览"`
+	Match           string   `json:"match,omitempty" description:"or 或 and，默认 or"`
+	Mode            string   `json:"mode,omitempty" description:"exact 或 fuzzy，默认 exact；只有需要放宽匹配时再用 fuzzy"`
+	ExcludeKeywords []string `json:"exclude_keywords,omitempty" description:"排除关键词"`
+	SubjectType     string   `json:"subject_type,omitempty" description:"group/user/self/object"`
+	SubjectTarget   string   `json:"subject_target,omitempty" description:"user 填 QQ 号，group 填群号，object 填新梗/事物/项目名称，self 固定为 self"`
+	MemoryType      string   `json:"memory_type,omitempty" description:"profile 是稳定定义/身份/偏好/结论，experience 是具体经历与约定"`
+	UpdatedFrom     string   `json:"updated_from,omitempty" description:"更新时间下限，格式 2006-01-02 或 RFC3339"`
+	UpdatedTo       string   `json:"updated_to,omitempty" description:"更新时间上限，格式 2006-01-02 或 RFC3339"`
+	Cursor          string   `json:"cursor,omitempty" description:"上一页返回的 cursor"`
+	Limit           int      `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type ReadMemoryInputV2 struct {
-	ItemID uint `json:"item_id" jsonschema:"description=searchMemory 或 getUserProfile 返回的记忆条目 ID"`
+	ItemID uint `json:"item_id" description:"searchMemory 或 getUserProfile 返回的记忆条目 ID"`
 }
 
 type ManageMemoryInputV2 struct {
-	Changes []MemoryChangeInput `json:"changes" jsonschema:"description=至少1项，全部成功或全部回滚"`
+	Changes []MemoryChangeInput `json:"changes" description:"至少1项，全部成功或全部回滚"`
 }
 
 type MemoryChangeInput struct {
-	Action        string `json:"action" jsonschema:"description=create/update/archive；归档后不可恢复"`
-	ItemID        uint   `json:"item_id,omitempty" jsonschema:"description=update/archive 必填；update 须先在本轮 readMemory，archive 可直接按 ID；create 省略"`
-	SubjectType   string `json:"subject_type,omitempty" jsonschema:"description=create 必填；update 可纠正主体类型，省略沿用；group/user/self/object"`
-	SubjectTarget string `json:"subject_target,omitempty" jsonschema:"description=create 必填；update 可纠正归属，改变主体类型时同时填写；user 填 QQ，group 填群号，object 填名称，self 固定 self"`
-	MemoryType    string `json:"memory_type,omitempty" jsonschema:"description=create 必填；update 可纠正类型，省略沿用；profile 是稳定身份和偏好，experience 是具体经历"`
-	Label         string `json:"label,omitempty" jsonschema:"description=简短标题；update 省略沿用旧值"`
-	Content       string `json:"content,omitempty" jsonschema:"description=create 必填，最多8000字符；update 仅修订同一事实的措辞，省略沿用；新语义用 create"`
-	Pinned        *bool  `json:"pinned,omitempty" jsonschema:"description=是否常驻上下文并免于自然遗忘；create 默认 false，update 省略沿用"`
-	Reason        string `json:"reason,omitempty" jsonschema:"description=这次修订或归档的真实原因"`
+	Action        string `json:"action" description:"create/update/archive；归档后不可恢复"`
+	ItemID        uint   `json:"item_id,omitempty" description:"update/archive 必填；update 须先在本轮 readMemory，archive 可直接按 ID；create 省略"`
+	SubjectType   string `json:"subject_type,omitempty" description:"create 必填；update 可纠正主体类型，省略沿用；group/user/self/object"`
+	SubjectTarget string `json:"subject_target,omitempty" description:"create 必填；update 可纠正归属，改变主体类型时同时填写；user 填 QQ，group 填群号，object 填名称，self 固定 self"`
+	MemoryType    string `json:"memory_type,omitempty" description:"create 必填；update 可纠正类型，省略沿用；profile 是稳定身份和偏好，experience 是具体经历"`
+	Label         string `json:"label,omitempty" description:"简短标题；update 省略沿用旧值"`
+	Content       string `json:"content,omitempty" description:"create 必填，最多8000字符；update 仅修订同一事实的措辞，省略沿用；新语义用 create"`
+	Pinned        *bool  `json:"pinned,omitempty" description:"是否常驻上下文并免于自然遗忘；create 默认 false，update 省略沿用"`
+	Reason        string `json:"reason,omitempty" description:"这次修订或归档的真实原因"`
 }
 
 type SearchTopicsInput struct {
 	Keywords         []string `json:"keywords,omitempty"`
-	Match            string   `json:"match,omitempty" jsonschema:"description=or 或 and，默认 or"`
+	Match            string   `json:"match,omitempty" description:"or 或 and，默认 or"`
 	ExcludeKeywords  []string `json:"exclude_keywords,omitempty"`
-	ConversationKind string   `json:"conversation_kind,omitempty" jsonschema:"description=可选来源种类：group 或 private；省略默认全局"`
-	TargetID         int64    `json:"target_id,omitempty" jsonschema:"description=可选来源群号或好友 QQ；省略默认全局"`
-	Status           string   `json:"status,omitempty" jsonschema:"description=active 或 dormant，省略搜索两者；它们是话题工作状态，不是永久保留承诺"`
-	From             string   `json:"from,omitempty" jsonschema:"description=来源消息时间下限，格式 2006-01-02 或 RFC3339"`
-	To               string   `json:"to,omitempty" jsonschema:"description=来源消息时间上限，纯日期包含当天，格式 2006-01-02 或 RFC3339"`
+	ConversationKind string   `json:"conversation_kind,omitempty" description:"可选来源种类：group 或 private；省略默认全局"`
+	TargetID         int64    `json:"target_id,omitempty" description:"可选来源群号或好友 QQ；省略默认全局"`
+	Status           string   `json:"status,omitempty" description:"active 或 dormant，省略搜索两者；它们是话题工作状态，不是永久保留承诺"`
+	From             string   `json:"from,omitempty" description:"来源消息时间下限，格式 2006-01-02 或 RFC3339"`
+	To               string   `json:"to,omitempty" description:"来源消息时间上限，纯日期包含当天，格式 2006-01-02 或 RFC3339"`
 	Cursor           string   `json:"cursor,omitempty"`
-	Limit            int      `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	Limit            int      `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type ReadTopicInput struct {
-	TopicID uint `json:"topic_id" jsonschema:"description=searchTopics 返回的话题 ID"`
+	TopicID uint `json:"topic_id" description:"searchTopics 返回的话题 ID"`
 }
 
 type SearchHistoryInputV2 struct {
 	Keywords         []string `json:"keywords,omitempty"`
-	Match            string   `json:"match,omitempty" jsonschema:"description=or 或 and，默认 or"`
+	Match            string   `json:"match,omitempty" description:"or 或 and，默认 or"`
 	ExcludeKeywords  []string `json:"exclude_keywords,omitempty"`
-	UserID           int64    `json:"user_id,omitempty" jsonschema:"description=可选发言人 QQ"`
-	ConversationKind string   `json:"conversation_kind,omitempty" jsonschema:"description=可选来源种类：group 或 private；省略默认全局"`
-	TargetID         int64    `json:"target_id,omitempty" jsonschema:"description=可选来源群号或好友 QQ；省略默认全局"`
-	From             string   `json:"from,omitempty" jsonschema:"description=来源消息时间下限，格式 2006-01-02 或 RFC3339"`
-	To               string   `json:"to,omitempty" jsonschema:"description=消息时间上界；纯日期包含当天，或 RFC3339；无时区按上海时间"`
-	Cursor           string   `json:"cursor,omitempty" jsonschema:"description=上一页返回的 cursor"`
-	Limit            int      `json:"limit,omitempty" jsonschema:"description=默认12，最大99"`
+	UserID           int64    `json:"user_id,omitempty" description:"可选发言人 QQ"`
+	ConversationKind string   `json:"conversation_kind,omitempty" description:"可选来源种类：group 或 private；省略默认全局"`
+	TargetID         int64    `json:"target_id,omitempty" description:"可选来源群号或好友 QQ；省略默认全局"`
+	From             string   `json:"from,omitempty" description:"来源消息时间下限，格式 2006-01-02 或 RFC3339"`
+	To               string   `json:"to,omitempty" description:"消息时间上界；纯日期包含当天，或 RFC3339；无时区按上海时间"`
+	Cursor           string   `json:"cursor,omitempty" description:"上一页返回的 cursor"`
+	Limit            int      `json:"limit,omitempty" description:"默认12，最大99"`
 }
 
 type ReadHistoryInputV2 struct {
-	ConversationKind string `json:"conversation_kind,omitempty" jsonschema:"description=要读取的会话种类；省略默认当前会话"`
-	TargetID         int64  `json:"target_id,omitempty" jsonschema:"description=要读取的群号或好友 QQ；省略默认当前会话"`
-	AroundMessageID  int64  `json:"around_message_id,omitempty" jsonschema:"description=OneBot 消息 ID（完整整数，可为负数）；与 topic_id 二选一"`
-	TopicID          uint   `json:"topic_id,omitempty" jsonschema:"description=话题编号；与 around_message_id 二选一"`
-	Before           int    `json:"before,omitempty" jsonschema:"description=向前读取条数，默认5，最大15"`
-	After            int    `json:"after,omitempty" jsonschema:"description=向后读取条数，默认5，最大15"`
+	ConversationKind string `json:"conversation_kind,omitempty" description:"要读取的会话种类；省略默认当前会话"`
+	TargetID         int64  `json:"target_id,omitempty" description:"要读取的群号或好友 QQ；省略默认当前会话"`
+	AroundMessageID  int64  `json:"around_message_id,omitempty" description:"OneBot 消息 ID（完整整数，可为负数）；与 topic_id 二选一"`
+	TopicID          uint   `json:"topic_id,omitempty" description:"话题编号；与 around_message_id 二选一"`
+	Before           int    `json:"before,omitempty" description:"向前读取条数，默认5，最大15"`
+	After            int    `json:"after,omitempty" description:"向后读取条数，默认5，最大15"`
 }
 
 type HistoryImage struct {
@@ -471,30 +470,30 @@ func historyViewPreview(row memory.MessageLog, ctx context.Context, tc *ToolCont
 	return view
 }
 
-func NewSearchMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("searchMemory", "按关键词、主体、类型和更新时间检索长期记忆；默认精确子串，mode=fuzzy 用相似度召回；支持 or/and 和 cursor 翻页。", searchMemoryV2)
+func NewSearchMemoryToolV2() (tool.Tool, error) {
+	return newFunctionTool("searchMemory", "按关键词、主体、类型和更新时间检索长期记忆；默认精确子串，mode=fuzzy 用相似度召回；支持 or/and 和 cursor 翻页。", searchMemoryV2)
 }
 
-func NewReadMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("readMemory", "读取一条仍有效的记忆及当前版本；搜索只有预览，更新或归档前请在本轮先完整读取。长结果外置时用 readToolResult 续读，不能靠预览猜全文；已归档或遗忘的条目不可读取。", readMemoryV2)
+func NewReadMemoryToolV2() (tool.Tool, error) {
+	return newFunctionTool("readMemory", "读取一条仍有效的记忆及当前版本；搜索只有预览，更新或归档前请在本轮先完整读取。长结果外置时用 readToolResult 续读，不能靠预览猜全文；已归档或遗忘的条目不可读取。", readMemoryV2)
 }
 
-func NewManageMemoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("manageMemory", "批量创建、修订或归档长期记忆（user 存人物偏好/经历，group 存群文化，object 存查明的新梗/事物/项目/复杂结论，self 存自身认知与经验），全部成功或全部回滚。update 必须先在本轮 readMemory；archive 可直接按 ID，若本轮读过同一条则同时校验版本。搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
+func NewManageMemoryToolV2() (tool.Tool, error) {
+	return newFunctionTool("manageMemory", "批量创建、修订或归档长期记忆（user 存人物偏好/经历，group 存群文化，object 存查明的新梗/事物/项目/复杂结论，self 存自身认知与经验），全部成功或全部回滚。update 必须先在本轮 readMemory；archive 可直接按 ID，若本轮读过同一条则同时校验版本。搜索和置顶注入不算已完整读取。语义变化或新经历请新建，措辞、置顶以及存错的类型和主体可修订，省略字段沿用旧值；归档不可恢复。只有需要常驻上下文的稳定事实才置顶，不为避免遗忘全部置顶。版本冲突时重新读取再决定。", manageMemoryV2)
 }
 
-func NewSearchTopicsTool() (tool.InvokableTool, error) {
-	return utils.InferTool("searchTopics", "按关键词检索话题概览，未命中时按相似度补召回。默认全局 QQ 来源，可用 conversation_kind/target_id 收窄；压缩器只能查当前会话。需要完整摘要用 readTopic，原文用 readHistory，保留来源，不把检索到的旧事当新要求。", searchTopics)
+func NewSearchTopicsTool() (tool.Tool, error) {
+	return newFunctionTool("searchTopics", "按关键词检索话题概览，未命中时按相似度补召回。默认全局 QQ 来源，可用 conversation_kind/target_id 收窄；压缩器只能查当前会话。需要完整摘要用 readTopic，原文用 readHistory，保留来源，不把检索到的旧事当新要求。", searchTopics)
 }
 
-func NewReadTopicTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readTopic", "读取一个话题的当前摘要、来源消息和关键消息。", readTopic)
+func NewReadTopicTool() (tool.Tool, error) {
+	return newFunctionTool("readTopic", "读取一个话题的当前摘要、来源消息和关键消息。", readTopic)
 }
 
-func NewSearchHistoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("searchHistory", "搜索 QQ 历史消息，正文是最多300字的预览，不是全文；需要完整内容和前后文用 readHistory。默认全局并带来源，压缩器限当前会话；不搜索 life/worker 的执行轨迹，那些用 readSessionHistory。已知来源或消息 ID 时可以直接读，不必逐级检索。", searchHistoryV2)
+func NewSearchHistoryToolV2() (tool.Tool, error) {
+	return newFunctionTool("searchHistory", "搜索 QQ 历史消息，正文是最多300字的预览，不是全文；需要完整内容和前后文用 readHistory。默认全局并带来源，压缩器限当前会话；不搜索 life/worker 的执行轨迹，那些用 readSessionHistory。已知来源或消息 ID 时可以直接读，不必逐级检索。", searchHistoryV2)
 }
 
-func NewReadHistoryToolV2() (tool.InvokableTool, error) {
-	return utils.InferTool("readHistory", "按 topic_id 或 around_message_id 二选一读取 QQ 原文及前后文。QQ 场合省略来源默认当前会话，life 读取或跨会话读取时请同时给 conversation_kind 和 target_id；它们来自历史或话题结果。消息 ID 是不透明整数，可为负，不能排序或替换成内部条目编号；已过期的原文不会恢复。", readHistoryV2)
+func NewReadHistoryToolV2() (tool.Tool, error) {
+	return newFunctionTool("readHistory", "按 topic_id 或 around_message_id 二选一读取 QQ 原文及前后文。QQ 场合省略来源默认当前会话，life 读取或跨会话读取时请同时给 conversation_kind 和 target_id；它们来自历史或话题结果。消息 ID 是不透明整数，可为负，不能排序或替换成内部条目编号；已过期的原文不会恢复。", readHistoryV2)
 }

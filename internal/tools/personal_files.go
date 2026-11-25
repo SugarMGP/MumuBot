@@ -9,14 +9,13 @@ import (
 
 	workerproto "mumu-bot/worker/proto"
 
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type ListFilesInput struct {
-	Path   string `json:"path,omitempty" jsonschema:"description=相对个人目录的路径，默认 ."`
-	Offset int    `json:"offset,omitempty" jsonschema:"description=从第几个条目开始，默认 0"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"description=本页最多返回多少个条目，默认 50，最大 200"`
+	Path   string `json:"path,omitempty" description:"相对个人目录的路径，默认 ."`
+	Offset int    `json:"offset,omitempty" description:"从第几个条目开始，默认 0"`
+	Limit  int    `json:"limit,omitempty" description:"本页最多返回多少个条目，默认 50，最大 200"`
 }
 
 type FileEntryView struct {
@@ -63,10 +62,10 @@ func listPersonalFiles(ctx context.Context, input *ListFilesInput) (*ListFilesOu
 }
 
 type ReadFileInput struct {
-	Path    string `json:"path,omitempty" jsonschema:"description=相对个人目录的文本路径，与 file_ref 二选一"`
-	FileRef string `json:"file_ref,omitempty" jsonschema:"description=file_ref 或 image_ref，与 path 二选一"`
-	Offset  int    `json:"offset,omitempty" jsonschema:"description=从第几个 Unicode 字符开始，默认 0"`
-	Length  int    `json:"length,omitempty" jsonschema:"description=本段最多读取多少字符，默认 4000，最大 8000"`
+	Path    string `json:"path,omitempty" description:"相对个人目录的文本路径，与 file_ref 二选一"`
+	FileRef string `json:"file_ref,omitempty" description:"file_ref 或 image_ref，与 path 二选一"`
+	Offset  int    `json:"offset,omitempty" description:"从第几个 Unicode 字符开始，默认 0"`
+	Length  int    `json:"length,omitempty" description:"本段最多读取多少字符，默认 4000，最大 8000"`
 }
 
 type ReadFileOutput struct {
@@ -126,9 +125,9 @@ func readPersonalFile(ctx context.Context, input *ReadFileInput) (*ReadFileOutpu
 }
 
 type WriteFileInput struct {
-	Path    string `json:"path" jsonschema:"description=相对个人目录的文件路径"`
-	Content string `json:"content" jsonschema:"description=要写入的 UTF-8 文本"`
-	Mode    string `json:"mode,omitempty" jsonschema:"description=create（默认，存在即报错）、append 或 replace"`
+	Path    string `json:"path" description:"相对个人目录的文件路径"`
+	Content string `json:"content" description:"要写入的 UTF-8 文本"`
+	Mode    string `json:"mode,omitempty" description:"create（默认，存在即报错）、append 或 replace"`
 }
 
 type WriteFileOutput struct {
@@ -158,10 +157,10 @@ func writePersonalFile(ctx context.Context, input *WriteFileInput) (*WriteFileOu
 }
 
 type SaveFileInput struct {
-	Path      string `json:"path" jsonschema:"description=保存到个人目录的相对路径"`
-	URL       string `json:"url,omitempty" jsonschema:"description=HTTP 或 HTTPS 下载地址，与 file_ref 二选一"`
-	FileRef   string `json:"file_ref,omitempty" jsonschema:"description=要导入个人目录的 ref，与 url 二选一"`
-	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"description=目标已存在时是否明确替换，默认 false"`
+	Path      string `json:"path" description:"保存到个人目录的相对路径"`
+	URL       string `json:"url,omitempty" description:"HTTP 或 HTTPS 下载地址，与 file_ref 二选一"`
+	FileRef   string `json:"file_ref,omitempty" description:"要导入个人目录的 ref，与 url 二选一"`
+	Overwrite bool   `json:"overwrite,omitempty" description:"目标已存在时是否明确替换，默认 false"`
 }
 
 type SaveFileOutput struct {
@@ -209,7 +208,7 @@ func savePersonalFile(ctx context.Context, input *SaveFileInput) (*SaveFileOutpu
 }
 
 type CreateFileRefInput struct {
-	Path string `json:"path" jsonschema:"description=个人目录中的真实文件路径"`
+	Path string `json:"path" description:"个人目录中的真实文件路径"`
 }
 
 type CreateFileRefOutput struct {
@@ -238,30 +237,30 @@ func createFileRef(ctx context.Context, input *CreateFileRefInput) (*CreateFileR
 	}, nil
 }
 
-func NewCreateFileRefTool() (tool.InvokableTool, error) {
-	return utils.InferTool("createFileRef", "把 /home/worker 中的真实文件冻结成不可变 file_ref；path 用相对路径，图片另给 image_ref。原文件后续修改不影响快照。交接时同时说清内容和验证；ref 可随轨迹清理失效，需要长期保留的普通文件仍留在 home。", createFileRef)
+func NewCreateFileRefTool() (tool.Tool, error) {
+	return newFunctionTool("createFileRef", "把 /home/worker 中的真实文件冻结成不可变 file_ref；path 用相对路径，图片另给 image_ref。原文件后续修改不影响快照。交接时同时说清内容和验证；ref 可随轨迹清理失效，需要长期保留的普通文件仍留在 home。", createFileRef)
 }
 
-func NewListFilesTool() (tool.InvokableTool, error) {
-	return utils.InferTool("listFiles", "列出个人目录当前一层的内容，不递归。path 默认 .，offset 从 0 开始，limit 默认 50、最大 200。", listPersonalFiles)
+func NewListFilesTool() (tool.Tool, error) {
+	return newFunctionTool("listFiles", "列出个人目录当前一层的内容，不递归。path 默认 .，offset 从 0 开始，limit 默认 50、最大 200。", listPersonalFiles)
 }
 
-func NewReadFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("readFile", "读取个人目录或 file_ref 中的 UTF-8 文本窗口，默认 4000、最大 8000；path 与 file_ref 恰选一个。", readPersonalFile)
+func NewReadFileTool() (tool.Tool, error) {
+	return newFunctionTool("readFile", "读取个人目录或 file_ref 中的 UTF-8 文本窗口，默认 4000、最大 8000；path 与 file_ref 恰选一个。", readPersonalFile)
 }
 
-func NewWriteFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("writeFile", "向个人目录写 UTF-8 文本，mode 为 create（默认，存在即报错）、append 或 replace，成功后返回真实路径和大小。", writePersonalFile)
+func NewWriteFileTool() (tool.Tool, error) {
+	return newFunctionTool("writeFile", "向个人目录写 UTF-8 文本，mode 为 create（默认，存在即报错）、append 或 replace，成功后返回真实路径和大小。", writePersonalFile)
 }
 
-func NewSaveFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveFile", "把 HTTP(S) URL 或真实 file_ref/image_ref 的字节保存为 /home/worker 内的普通文件；path 是相对路径，url 与 file_ref 恰选一个，overwrite 默认 false。待取 QQ 引用会首次下载，失败不会伪装成已保存；副本不会随 ref 回收删除。", savePersonalFile)
+func NewSaveFileTool() (tool.Tool, error) {
+	return newFunctionTool("saveFile", "把 HTTP(S) URL 或真实 file_ref/image_ref 的字节保存为 /home/worker 内的普通文件；path 是相对路径，url 与 file_ref 恰选一个，overwrite 默认 false。待取 QQ 引用会首次下载，失败不会伪装成已保存；副本不会随 ref 回收删除。", savePersonalFile)
 }
 
 type WorkerSaveFileInput struct {
-	Path      string `json:"path" jsonschema:"description=保存到个人目录的相对路径"`
-	FileRef   string `json:"file_ref" jsonschema:"description=要导入的 file_ref 或 image_ref"`
-	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"description=目标已存在时是否明确替换，默认 false"`
+	Path      string `json:"path" description:"保存到个人目录的相对路径"`
+	FileRef   string `json:"file_ref" description:"要导入的 file_ref 或 image_ref"`
+	Overwrite bool   `json:"overwrite,omitempty" description:"目标已存在时是否明确替换，默认 false"`
 }
 
 type WorkerSaveFileOutput struct {
@@ -290,6 +289,6 @@ func workerSaveFile(ctx context.Context, input *WorkerSaveFileInput) (*WorkerSav
 	return &WorkerSaveFileOutput{Success: true, Path: input.Path, FileRef: ref.FileRef(), ImageRef: ref.ImageRef(), Size: ref.Size}, nil
 }
 
-func NewWorkerSaveFileTool() (tool.InvokableTool, error) {
-	return utils.InferTool("saveFile", "把 file_ref/image_ref 导入 /home/worker 的相对 path，生成普通可编辑副本；overwrite 默认 false。待取 QQ 引用由主服务解析，不给 worker QQ 凭据；快照和副本各自保留，不要自己拼 Base64。", workerSaveFile)
+func NewWorkerSaveFileTool() (tool.Tool, error) {
+	return newFunctionTool("saveFile", "把 file_ref/image_ref 导入 /home/worker 的相对 path，生成普通可编辑副本；overwrite 默认 false。待取 QQ 引用由主服务解析，不给 worker QQ 凭据；快照和副本各自保留，不要自己拼 Base64。", workerSaveFile)
 }
