@@ -214,9 +214,7 @@ func truncateHistoryArgs(text string) string {
 }
 
 func transcriptToolArguments(payload []byte) string {
-	var message struct {
-		Extra map[string]any `json:"extra"`
-	}
+	var message agentic.Message
 	if err := sonic.Unmarshal(payload, &message); err != nil {
 		return ""
 	}
@@ -225,9 +223,7 @@ func transcriptToolArguments(payload []byte) string {
 }
 
 func transcriptCompletedAt(payload []byte) *time.Time {
-	var message struct {
-		Extra map[string]any `json:"extra"`
-	}
+	var message agentic.Message
 	if err := sonic.Unmarshal(payload, &message); err != nil {
 		return nil
 	}

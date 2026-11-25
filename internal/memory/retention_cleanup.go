@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
 	"mumu-bot/internal/media"
 
 	"github.com/bytedance/sonic"
@@ -303,21 +304,15 @@ func incompleteToolChains(tx *gorm.DB, kind string, targetID int64, throughID ui
 		return false, err
 	}
 	for _, assistant := range assistants {
-		var message struct {
-			ContentBlocks []struct {
-				FunctionToolCall *struct {
-					CallID string `json:"call_id"`
-				} `json:"function_tool_call"`
-			} `json:"content_blocks"`
-		}
+		var message agentic.Message
 		if err := sonic.Unmarshal(assistant.Payload, &message); err != nil {
 			return true, nil
 		}
 		for _, block := range message.ContentBlocks {
-			callID := ""
-			if block.FunctionToolCall != nil {
-				callID = strings.TrimSpace(block.FunctionToolCall.CallID)
+			if block == nil || block.FunctionToolCall == nil {
+				continue
 			}
+			callID := strings.TrimSpace(block.FunctionToolCall.CallID)
 			if callID == "" {
 				continue
 			}

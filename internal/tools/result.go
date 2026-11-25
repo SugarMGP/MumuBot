@@ -122,6 +122,10 @@ func ResultText(value any) string {
 	if value == nil {
 		return ""
 	}
+	// 字符串本身就是工具结果正文，保持原样；仅结构体等普通值按 JSON 保存
+	if text, ok := value.(string); ok {
+		return text
+	}
 	encoded, err := sonic.MarshalString(value)
 	if err != nil {
 		return fmt.Sprint(value)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"mumu-bot/internal/agentic"
+
 	"github.com/bytedance/sonic"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -209,27 +211,17 @@ func (m *Manager) ResumeToolTranscript(ctx context.Context, kind string, targetI
 }
 
 func payloadToolResultText(payload []byte) string {
-	var message struct {
-		ContentBlocks []struct {
-			FunctionToolResult *struct {
-				Content []struct {
-					Text *struct {
-						Text string `json:"text"`
-					} `json:"text"`
-				} `json:"content"`
-			} `json:"function_tool_result"`
-		} `json:"content_blocks"`
-	}
+	var message agentic.Message
 	if sonic.Unmarshal(payload, &message) != nil {
 		return ""
 	}
 	var parts []string
 	for _, block := range message.ContentBlocks {
-		if block.FunctionToolResult == nil {
+		if block == nil || block.FunctionToolResult == nil {
 			continue
 		}
 		for _, part := range block.FunctionToolResult.Content {
-			if part.Text != nil && part.Text.Text != "" {
+			if part != nil && part.Text != nil && part.Text.Text != "" {
 				parts = append(parts, part.Text.Text)
 			}
 		}

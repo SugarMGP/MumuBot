@@ -74,9 +74,7 @@ func (s *Session) FinishToolTranscript(ctx context.Context, id uint, status, res
 		}
 	}
 	toolArguments := ""
-	var prior struct {
-		Extra map[string]any `json:"extra"`
-	}
+	var prior agentic.Message
 	if sonic.Unmarshal(row.Payload, &prior) == nil {
 		toolArguments, _ = prior.Extra["tool_arguments"].(string)
 	}
@@ -391,13 +389,8 @@ func (s *Session) captureRuntimeToolResults(ctx context.Context, runID string, f
 			// 未知工具按旧契约返回可纠正 JSON，而不是运行时生成的裸错误文本
 			status = "failed"
 			content = tools.ToolErrorResult(fmt.Errorf("没有工具 %s，请使用已提供的工具名称", name))
-		} else {
-			var outcome struct {
-				Success *bool `json:"success"`
-			}
-			if sonic.UnmarshalString(message.Content, &outcome) == nil && outcome.Success != nil && !*outcome.Success {
-				status = "failed"
-			}
+		} else if !tools.ResultSucceeded(message.Content) {
+			status = "failed"
 		}
 		if _, _, err := s.FinishToolTranscript(ctx, id, status, content, nil, ""); err != nil {
 			return changed, err
